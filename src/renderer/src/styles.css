@@ -194,7 +194,6 @@ textarea {
 }
 
 .sidebar .page-list {
-  flex: 0 1 36%;
   min-height: 210px;
 }
 
