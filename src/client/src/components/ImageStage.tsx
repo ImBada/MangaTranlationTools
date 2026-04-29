@@ -39,6 +39,7 @@ type ImageStageProps = {
   inpaintResultToolStrength: number;
   inpaintDisabled: boolean;
   inpaintResultDisabled: boolean;
+  temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -99,6 +100,7 @@ export function ImageStage({
   inpaintResultToolStrength,
   inpaintDisabled,
   inpaintResultDisabled,
+  temporaryPanActive,
   inpaintSelectionRect,
   onInpaintLayerChange,
   onInpaintSelectionChange,
@@ -232,7 +234,7 @@ export function ImageStage({
     <div ref={wrapRef} className="stage-wrap">
       <div
         ref={stageRef}
-        className={`image-stage${panning ? " panning" : ""}`}
+        className={`image-stage${panning || temporaryPanActive ? " panning" : ""}`}
         style={fitSize ? {
           width: `${fitSize.width}px`,
           height: `${fitSize.height}px`,
@@ -306,7 +308,7 @@ export function ImageStage({
                 brushColor={inpaintResultBrushColor}
                 brushHardness={inpaintResultBrushHardness}
                 toolStrength={inpaintResultToolStrength}
-                disabled={inpaintResultDisabled}
+                disabled={inpaintResultDisabled || temporaryPanActive}
                 selectionRect={inpaintSelectionRect}
                 onChange={onInpaintResultLayerChange}
                 onSelectionChange={onInpaintSelectionChange}
@@ -324,7 +326,7 @@ export function ImageStage({
                 style={{
                   zIndex: activeLayer === "inpaintMask" ? 3 : 2,
                   opacity: layerOpacity.inpaintMask,
-                  pointerEvents: activeLayer === "inpaintMask" ? "auto" : "none"
+                  pointerEvents: activeLayer === "inpaintMask" && !temporaryPanActive ? "auto" : "none"
                 }}
               >
                 <InpaintLayerCanvas
@@ -332,7 +334,7 @@ export function ImageStage({
                   pageSize={{ width: page.width, height: page.height }}
                   tool={inpaintTool}
                   brushSize={inpaintBrushSize}
-                  disabled={inpaintDisabled}
+                  disabled={inpaintDisabled || temporaryPanActive}
                   selectionRect={inpaintSelectionRect}
                   onChange={onInpaintLayerChange}
                   onSelectionChange={onInpaintSelectionChange}
@@ -347,13 +349,13 @@ export function ImageStage({
                 className="overlay-layer-preview"
                 style={{
                   opacity: layerOpacity.overlay,
-                  pointerEvents: activeLayer === "overlay" ? "auto" : "none"
+                  pointerEvents: activeLayer === "overlay" && !temporaryPanActive ? "auto" : "none"
                 }}
               >
                 <OverlayRenderCanvas
                   page={page}
                   stageSize={stageSize ?? { width: page.width, height: page.height }}
-                  editingEnabled={activeLayer === "overlay"}
+                  editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                 />
                 {page.blocks.map((block) => (
                   <OverlayBlock
@@ -362,7 +364,7 @@ export function ImageStage({
                     pageSize={{ width: page.width, height: page.height }}
                     stageSize={stageSize ?? { width: page.width, height: page.height }}
                     selected={block.id === selectedBlockId}
-                    editingEnabled={activeLayer === "overlay"}
+                    editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                     visualContentVisible={false}
                     onPointerDown={(event) => onBlockPointerDown(event, block, "move")}
                     onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}

@@ -310,6 +310,7 @@ export default function App(): React.JSX.Element {
   const [focusModeEnabled, setFocusModeEnabled] = useState(true);
   const [statusWidgetOpen, setStatusWidgetOpen] = useState(false);
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>("output");
+  const [temporaryPanActive, setTemporaryPanActive] = useState(false);
   const [libraryWidgetOpen, setLibraryWidgetOpen] = useState(false);
   const workspacePanelRef = useRef<HTMLElement | null>(null);
   const libraryAnchorRef = useRef<HTMLDivElement | null>(null);
@@ -336,6 +337,7 @@ export default function App(): React.JSX.Element {
   const inpaintResultSaveTimerRef = useRef<number | null>(null);
   const inpaintResultSaveStateRef = useRef<PendingInpaintResultSave | null>(null);
   const inpaintResultSavingRef = useRef(false);
+  const temporaryPanHeldRef = useRef(false);
 
   const selectedPage = useMemo(
     () => currentChapter?.pages.find((page) => page.id === selectedPageId) ?? currentChapter?.pages[0] ?? null,
@@ -386,6 +388,8 @@ export default function App(): React.JSX.Element {
   const saveStatusTone = saveFlash ? "saved" : dirty ? "unsaved" : "synced";
   const saveStatusLabel = saveFlash ? "저장 완료" : dirty ? "저장되지 않은 변경 있음" : "최신 상태";
   const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
+  const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
+  const layerToolActive = activeLayer === "overlay" || activeLayer === "inpaintMask" || activeLayer === "inpaintResult";
   const selectedPageInpaintNotice =
     selectedPage?.inpaintStatus === "running"
       ? { tone: "running", title: "인페인트 중", message: selectedPage.name }
@@ -1851,8 +1855,59 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
   }, [libraryWidgetOpen]);
 
   React.useEffect(() => {
+    if (!layerToolActive || modalOpen) {
+      temporaryPanHeldRef.current = false;
+      setTemporaryPanActive(false);
+    }
+  }, [layerToolActive, modalOpen]);
+
+  React.useEffect(() => {
+    const shouldHandleSpacePan = (event: KeyboardEvent) =>
+      layerToolActive &&
+      !modalOpen &&
+      !event.altKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !isEditableTarget(event.target) &&
+      (event.code === "Space" || event.key === " ");
+
     const onKeyDown = (event: KeyboardEvent) => {
-      const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
+      if (!shouldHandleSpacePan(event)) {
+        return;
+      }
+      event.preventDefault();
+      temporaryPanHeldRef.current = true;
+      setTemporaryPanActive(true);
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      if ((event.code !== "Space" && event.key !== " ") || !temporaryPanHeldRef.current) {
+        return;
+      }
+      event.preventDefault();
+      temporaryPanHeldRef.current = false;
+      setTemporaryPanActive(false);
+    };
+
+    const resetTemporaryPan = () => {
+      temporaryPanHeldRef.current = false;
+      setTemporaryPanActive(false);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", resetTemporaryPan);
+    document.addEventListener("visibilitychange", resetTemporaryPan);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", resetTemporaryPan);
+      document.removeEventListener("visibilitychange", resetTemporaryPan);
+    };
+  }, [layerToolActive, modalOpen]);
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
       const editableTarget = isEditableTarget(event.target);
       if (event.key === "Escape" && libraryWidgetOpen) {
         setLibraryWidgetOpen(false);
@@ -1912,7 +1967,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeLayer, clearSelectedInpaintSelection, importPreview, inpaintResultTool, inpaintSelectionRect, inpaintTool, libraryWidgetOpen, pushStatus, renameTarget, selectPageForReading, settingsOpen]);
+  }, [activeLayer, clearSelectedInpaintSelection, inpaintResultTool, inpaintSelectionRect, inpaintTool, libraryWidgetOpen, modalOpen, pushStatus, selectPageForReading]);
 
   const renameWork = useCallback((workId: string) => {
     const work = library.works.find((candidate) => candidate.id === workId);
@@ -2706,6 +2761,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               inpaintResultToolStrength={inpaintResultToolStrength}
               inpaintDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintMask" || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
               inpaintResultDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintResult" || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+              temporaryPanActive={temporaryPanActive}
               inpaintSelectionRect={inpaintSelectionRect}
               onInpaintLayerChange={updateSelectedPageInpaintMask}
               onInpaintSelectionChange={setInpaintSelectionRect}
@@ -2713,7 +2769,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               onStagePointerMove={onStagePointerMove}
               onStagePointerUp={onStagePointerUp}
               onStagePointerDown={() => {
-                if (activeLayer === "overlay") {
+                if (activeLayer === "overlay" && !temporaryPanActive) {
                   setSelectedBlockId(null);
                 }
               }}
