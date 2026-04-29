@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyFontPresetPatchToBlock, isBlockFontPresetValueLinked, isBlockFontSizeLinkedToPreset } from "../src/renderer/src/lib/fontPresets";
+import { applyFontPresetPatchToBlock, isBlockFontPresetValueLinked, isBlockFontSizeLinkedToPreset } from "../src/client/src/lib/fontPresets";
 import type { FontPreset, TranslationBlock } from "../src/shared/types";
 
 describe("font preset block links", () => {

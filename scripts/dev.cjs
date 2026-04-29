@@ -5,7 +5,7 @@ const { prepareRuntimeAssets } = require("./prepare-runtime.cjs");
 
 const root = join(__dirname, "..");
 const backendUrl = "http://127.0.0.1:3000/api/health";
-const rendererUrl = "http://127.0.0.1:5173";
+const clientUrl = "http://127.0.0.1:5173";
 const children = [];
 
 function runSync(command, args) {
@@ -77,11 +77,11 @@ function shutdown() {
 (async () => {
   prepareRuntimeAssets({ root, outputDir: join(root, "out", "app-runtime") });
   runSync(process.execPath, [nodeBin("typescript", "bin", "tsc"), "-p", "tsconfig.server.json"]);
-  spawnChild(process.execPath, ["out/main/index.js"]);
+  spawnChild(process.execPath, ["out/server/index.js"]);
   await waitForUrl(backendUrl);
-  spawnChild(process.execPath, [nodeBin("vite", "bin", "vite.js"), "--config", "vite.renderer.config.ts", "--host", "127.0.0.1"]);
-  await waitForUrl(rendererUrl);
-  console.log(`\nWeb app: ${rendererUrl}\nAPI:     http://127.0.0.1:3000\n`);
+  spawnChild(process.execPath, [nodeBin("vite", "bin", "vite.js"), "--config", "vite.client.config.ts", "--host", "127.0.0.1"]);
+  await waitForUrl(clientUrl);
+  console.log(`\nWeb app: ${clientUrl}\nAPI:     http://127.0.0.1:3000\n`);
 })().catch((error) => {
   console.error(error);
   shutdown();

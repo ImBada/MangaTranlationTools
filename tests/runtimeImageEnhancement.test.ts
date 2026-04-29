@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-const runtimeHelpers = require("../src/main/runtime/simple-page-translate.cjs") as {
+const runtimeHelpers = require("../src/server/runtime/simple-page-translate.cjs") as {
   enhanceBitmapBuffer: (bitmap: Buffer, contrast?: number, grayscale?: boolean) => Buffer;
   getScaledSize: (width: number, height: number, maxLongSide: number) => { width: number; height: number };
 };

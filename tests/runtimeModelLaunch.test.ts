@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 
-const runtimeHelpers = require("../src/main/runtime/simple-page-translate.cjs") as {
+const runtimeHelpers = require("../src/server/runtime/simple-page-translate.cjs") as {
   buildLaunchArgs: (options: { [key: string]: unknown }) => string[];
   buildResponsesRequestBody: (options: { [key: string]: unknown }, imageVariants: Array<{ role: string; dataUrl: string }>) => {
     model: string;

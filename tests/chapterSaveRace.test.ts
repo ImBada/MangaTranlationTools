@@ -26,7 +26,7 @@ describe("chapter save conflict handling", () => {
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { saveChapterSnapshot, updatePageAfterAnalysis } = await import("../src/main/library");
+    const { saveChapterSnapshot, updatePageAfterAnalysis } = await import("../src/server/library");
     const pagePath = join(dataDir, "page.png");
     await writeFile(pagePath, await pngBuffer());
     await seedLibraryIndex(dataDir);

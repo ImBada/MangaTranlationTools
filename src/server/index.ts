@@ -120,7 +120,7 @@ app.get("/api/health", (_req, res) => {
 
 app.post("/api/logs/write", (req, res) => {
   const { level, message, detail } = req.body as { level: "debug" | "info" | "warn" | "error"; message: string; detail?: unknown };
-  writeLog(level, `renderer: ${message}`, detail);
+  writeLog(level, `client: ${message}`, detail);
   res.json({ logged: true });
 });
 
@@ -261,7 +261,7 @@ app.get("/api/jobs/events", (req, res) => {
   });
 });
 
-app.use(express.static(join(appPaths.repoRoot, "out", "renderer")));
+app.use(express.static(join(appPaths.repoRoot, "out", "client")));
 
 const httpServer = createServer(app);
 httpServer.listen(serverPort, "127.0.0.1", async () => {

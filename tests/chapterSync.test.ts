@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChapterSnapshot } from "../src/shared/types";
-import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "../src/renderer/src/lib/chapterSync";
+import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "../src/client/src/lib/chapterSync";
 
 function makeChapter(): ChapterSnapshot {
   return {

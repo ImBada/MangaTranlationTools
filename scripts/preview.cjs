@@ -5,7 +5,7 @@ const { prepareRuntimeAssets } = require("./prepare-runtime.cjs");
 const root = join(__dirname, "..");
 prepareRuntimeAssets({ root, outputDir: join(root, "out", "app-runtime") });
 
-const child = spawn(process.execPath, [join(root, "out", "main", "index.js")], {
+const child = spawn(process.execPath, [join(root, "out", "server", "index.js")], {
   cwd: root,
   stdio: "inherit",
   shell: false

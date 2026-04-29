@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "../src/renderer/src/lib/pageNavigation";
+import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "../src/client/src/lib/pageNavigation";
 
 describe("page navigation helpers", () => {
   const pageIds = ["page-1", "page-2", "page-3"];

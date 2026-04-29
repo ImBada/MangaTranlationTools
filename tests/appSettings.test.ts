@@ -12,7 +12,7 @@ import {
   parseStoredAppSettings,
   resolveRecommendedModelFile,
   resolveDefaultAppSettings
-} from "../src/main/appSettings";
+} from "../src/server/appSettings";
 import type { AppSettings } from "../src/shared/types";
 
 describe("app settings helpers", () => {

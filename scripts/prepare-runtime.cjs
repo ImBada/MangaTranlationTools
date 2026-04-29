@@ -3,7 +3,7 @@ const { join } = require("node:path");
 
 function prepareRuntimeAssets(options = {}) {
   const root = options.root ?? join(__dirname, "..");
-  const sourceDir = join(root, "src", "main", "runtime");
+  const sourceDir = join(root, "src", "server", "runtime");
   const outputDir = options.outputDir ?? join(root, "out", "app-runtime");
 
   if (!existsSync(sourceDir)) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "../src/renderer/src/lib/jobProgress";
+import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "../src/client/src/lib/jobProgress";
 
 describe("job progress helpers", () => {
   it("formats structured page progress into short Korean labels", () => {

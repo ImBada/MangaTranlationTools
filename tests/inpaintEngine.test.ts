@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import sharp from "sharp";
-import { runInpaintEngine } from "../src/main/inpaintEngine";
+import { runInpaintEngine } from "../src/server/inpaintEngine";
 
 describe("inpaint engine", () => {
   it("creates a PNG result by filling masked pixels from neighboring source colors", async () => {

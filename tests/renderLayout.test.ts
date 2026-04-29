@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBlockPaddingPx, resolveBlockTextLayout } from "../src/renderer/src/lib/overlayLayout";
+import { resolveBlockPaddingPx, resolveBlockTextLayout } from "../src/client/src/lib/overlayLayout";
 import type { TranslationBlock } from "../src/shared/types";
 
 const originalDocument = globalThis.document;

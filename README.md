@@ -37,7 +37,7 @@ npm run build
 npm start
 ```
 
-빌드 후에는 Node 서버가 `out/renderer`의 정적 파일을 직접 제공합니다.
+빌드 후에는 Node 서버가 `out/client`의 정적 파일을 직접 제공합니다.
 
 ## 설정
 

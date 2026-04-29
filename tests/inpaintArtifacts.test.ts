@@ -27,7 +27,7 @@ describe("inpaint artifacts", () => {
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { saveChapterSnapshot, saveInpaintResult } = await import("../src/main/library");
+    const { saveChapterSnapshot, saveInpaintResult } = await import("../src/server/library");
     const pagePath = join(dataDir, "page.png");
     await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
     await seedLibraryIndex(dataDir);
@@ -70,7 +70,7 @@ describe("inpaint artifacts", () => {
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { openChapter, saveChapterSnapshot, saveInpaintMask } = await import("../src/main/library");
+    const { openChapter, saveChapterSnapshot, saveInpaintMask } = await import("../src/server/library");
     const pagePath = join(dataDir, "page.png");
     await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
     await seedLibraryIndex(dataDir);
@@ -102,7 +102,7 @@ describe("inpaint artifacts", () => {
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { openChapter, saveChapterSnapshot, saveInpaintMask, saveInpaintResultLayer } = await import("../src/main/library");
+    const { openChapter, saveChapterSnapshot, saveInpaintMask, saveInpaintResultLayer } = await import("../src/server/library");
     const pagePath = join(dataDir, "page.png");
     await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
     await seedLibraryIndex(dataDir);

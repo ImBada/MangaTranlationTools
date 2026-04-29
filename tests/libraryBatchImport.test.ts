@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { previewZipFolder } from "../src/main/library";
+import { previewZipFolder } from "../src/server/library";
 
 const tempDirs: string[] = [];
 

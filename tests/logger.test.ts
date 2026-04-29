@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { serializeLogDetail } from "../src/main/logger";
+import { serializeLogDetail } from "../src/server/logger";
 
 describe("logger serialization", () => {
   it("preserves nested error metadata for AI-friendly diagnostics", () => {
