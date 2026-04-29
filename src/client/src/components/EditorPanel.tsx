@@ -7,6 +7,7 @@ type EditorPanelProps = {
   fontPresetName?: string;
   disabled: boolean;
   onUpdate: (patch: Partial<TranslationBlock>) => void;
+  onCreate: () => void;
   onDelete: () => void;
   onDuplicate: () => void;
   onApplyInpaint: () => void;
@@ -21,6 +22,7 @@ export function EditorPanel({
   fontPresetName,
   disabled,
   onUpdate,
+  onCreate,
   onDelete,
   onDuplicate,
   onApplyInpaint,
@@ -34,6 +36,9 @@ export function EditorPanel({
       <section className="editor-panel muted grid content-start gap-2.5">
         <h2>블록</h2>
         <p>블록을 선택하면 문구와 배치 방향을 바로 조정할 수 있습니다.</p>
+        <button className="primary" onClick={onCreate} disabled={disabled}>
+          빈 블록 생성
+        </button>
         <button className="primary" onClick={onApplyBatchInpaint} disabled={batchInpaintDisabled}>
           전체 블록 인페인트
         </button>
@@ -63,7 +68,17 @@ export function EditorPanel({
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         한국어
-        <textarea value={block.translatedText} disabled={disabled} onChange={(event) => onUpdate({ translatedText: event.target.value })} />
+        <textarea
+          value={block.translatedText}
+          disabled={disabled}
+          onChange={(event) => onUpdate({ translatedText: event.target.value })}
+          onBlur={(event) => {
+            const normalized = normalizeKoreanText(event.target.value);
+            if (normalized !== event.target.value) {
+              onUpdate({ translatedText: normalized });
+            }
+          }}
+        />
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         OCR
@@ -78,38 +93,38 @@ export function EditorPanel({
         >
           <option value="horizontal">horizontal</option>
           <option value="vertical">vertical</option>
-          <option value="rotated">rotated</option>
           <option value="hidden">hidden</option>
         </select>
       </label>
-      <label className="grid gap-1.5 text-xs font-semibold text-soft">
-        회전
-        <input
-          type="range"
-          min="-180"
-          max="180"
-          step="1"
-          value={rotationDeg}
-          style={rangeProgressStyle(rotationDeg, -180, 180)}
-          disabled={disabled}
-          onChange={(event) => onUpdate({ rotationDeg: Number(event.target.value) })}
-        />
-      </label>
-      <div className="rotation-row grid grid-cols-[minmax(72px,1fr)_auto_auto] items-center gap-2">
-        <input
-          type="number"
-          min="-180"
-          max="180"
-          step="1"
-          value={rotationDeg}
-          disabled={disabled}
-          onChange={(event) => onUpdate({ rotationDeg: Number(event.target.value) })}
-          aria-label="회전 각도"
-        />
-        <span>deg</span>
-        <button type="button" disabled={disabled || rotationDeg === 0} onClick={() => onUpdate({ rotationDeg: 0 })}>
-          초기화
-        </button>
+      <div className="rotation-control grid gap-1.5 text-xs font-semibold text-soft">
+        <span>회전</span>
+        <div className="rotation-row">
+          <input
+            type="range"
+            min="-180"
+            max="180"
+            step="1"
+            value={rotationDeg}
+            style={rangeProgressStyle(rotationDeg, -180, 180)}
+            disabled={disabled}
+            onChange={(event) => onUpdate({ rotationDeg: Number(event.target.value) })}
+            aria-label="회전"
+          />
+          <input
+            type="number"
+            min="-180"
+            max="180"
+            step="1"
+            value={rotationDeg}
+            disabled={disabled}
+            onChange={(event) => onUpdate({ rotationDeg: Number(event.target.value) })}
+            aria-label="회전 각도"
+          />
+          <span>deg</span>
+          <button type="button" disabled={disabled || rotationDeg === 0} onClick={() => onUpdate({ rotationDeg: 0 })}>
+            초기화
+          </button>
+        </div>
       </div>
       <div className="padding-row">
         <label className="grid gap-1.5 text-xs font-semibold text-soft">
@@ -144,14 +159,12 @@ export function EditorPanel({
           />
         </label>
       </div>
-      <div className="block-actions grid grid-cols-2 gap-2.5">
-        <button onClick={onApplyInpaint} disabled={disabled}>블록 인페인트 실행</button>
-        <button onClick={onDuplicate} disabled={disabled}>복제</button>
-        <button className="danger" onClick={onDelete} disabled={disabled}>삭제</button>
+      <div className="block-actions">
+        <button className="primary block-action" onClick={onApplyInpaint} disabled={disabled}>인페인트 실행</button>
+        <button className="block-action" onClick={onDuplicate} disabled={disabled}>복제</button>
+        <button className="block-action" onClick={onUndoInpaint} disabled={undoInpaintDisabled}>되돌리기</button>
+        <button className="danger block-action" onClick={onDelete} disabled={disabled}>삭제</button>
       </div>
-      <button onClick={onUndoInpaint} disabled={undoInpaintDisabled}>
-        인페인트 되돌리기
-      </button>
     </section>
   );
 }
@@ -160,4 +173,8 @@ function rangeProgressStyle(value: number, min: number, max: number): React.CSSP
   const ratio = max === min ? 0 : (value - min) / (max - min);
   const percent = Math.min(100, Math.max(0, ratio * 100));
   return { "--range-progress": `${percent}%` } as React.CSSProperties;
+}
+
+function normalizeKoreanText(value: string): string {
+  return value.replace(/\.{3}/g, "…");
 }

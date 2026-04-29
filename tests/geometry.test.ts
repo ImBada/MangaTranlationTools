@@ -105,13 +105,19 @@ describe("geometry helpers", () => {
 
   it("allows vertical render direction for manual editing", () => {
     expect(enforceRenderDirection("speech", "vertical")).toBe("vertical");
-    expect(normalizeRenderDirection("vertical", "horizontal")).toBe("vertical");
+    expect(normalizeRenderDirection("vertical")).toBe("vertical");
   });
 
-  it("clamps manual block rotation and preserves legacy rotated direction", () => {
+  it("defaults unknown render directions to horizontal", () => {
+    expect(enforceRenderDirection("speech", "rotated")).toBe("horizontal");
+    expect(normalizeRenderDirection("rotated")).toBe("horizontal");
+    expect(normalizeRenderDirection("diagonal")).toBe("horizontal");
+  });
+
+  it("clamps manual block rotation", () => {
     expect(clampRotationDeg(220)).toBe(180);
     expect(clampRotationDeg(-220)).toBe(-180);
-    expect(resolveBlockRotationDeg({ renderDirection: "rotated" })).toBe(-8);
-    expect(resolveBlockRotationDeg({ renderDirection: "rotated", rotationDeg: 14 })).toBe(14);
+    expect(resolveBlockRotationDeg({})).toBe(0);
+    expect(resolveBlockRotationDeg({ rotationDeg: 14 })).toBe(14);
   });
 });

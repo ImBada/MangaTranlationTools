@@ -1601,6 +1601,58 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     setSelectedBlockId(copy.id);
   };
 
+  const createEmptyBlock = () => {
+    if (!selectedPage || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+    const sourcePreset = editingFontPreset ?? DEFAULT_FONT_PRESET;
+    const blockId = `${selectedPage.id}-block-manual-${Date.now()}`;
+    const block: TranslationBlock = {
+      id: blockId,
+      type: "speech",
+      bbox: { x: 350, y: 420, w: 300, h: 140 },
+      bboxSpace: "normalized_1000",
+      sourceText: "",
+      translatedText: "",
+      confidence: 1,
+      sourceDirection: "vertical",
+      renderDirection: "horizontal",
+      fontPresetId: editingFontPreset?.id,
+      fontSizeLinkedToPreset: editingFontPreset ? true : undefined,
+      lineHeightLinkedToPreset: editingFontPreset ? true : undefined,
+      outlineColorLinkedToPreset: editingFontPreset ? true : undefined,
+      outlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
+      autoFitTextLinkedToPreset: editingFontPreset ? true : undefined,
+      textColorLinkedToPreset: editingFontPreset ? true : undefined,
+      fontFamily: sourcePreset.fontFamily,
+      fontSizePx: sourcePreset.fontSizePx,
+      lineHeight: sourcePreset.lineHeight,
+      outlineColor: sourcePreset.outlineColor,
+      outlineWidthPx: sourcePreset.outlineWidthPx,
+      autoFitText: sourcePreset.autoFitText,
+      textAlign: "center",
+      textColor: sourcePreset.textColor ?? "#111111",
+      backgroundColor: "#fffdf5",
+      opacity: 0.88
+    };
+
+    updateCurrentChapter(selectedPage.id, (current) => ({
+      ...current,
+      pages: current.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: [...page.blocks, block]
+            }
+          : page
+      )
+    }));
+    setLayerVisibility((current) => ({ ...current, overlay: true }));
+    selectLayer("overlay");
+    setSelectedBlockId(blockId);
+  };
+
   const onBlockPointerDown = (event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => {
     if (!stageRef.current || selectedPageEditLocked || activeLayer !== "overlay") {
       return;
@@ -2669,8 +2721,9 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         <EditorPanel
           block={selectedBlock}
           fontPresetName={selectedFontPreset?.name}
-          disabled={selectedPageEditLocked || inpaintBusy}
+          disabled={selectedPageEditLocked || inpaintBusy || !selectedPage}
           onUpdate={updateSelectedBlock}
+          onCreate={createEmptyBlock}
           onDelete={deleteSelectedBlock}
           onDuplicate={duplicateSelectedBlock}
           onApplyInpaint={() => void applyInpaintSelectedBlock()}

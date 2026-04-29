@@ -31,6 +31,7 @@ import type {
   MangaPage,
   RenderPageResult
 } from "../shared/types";
+import { normalizeRenderDirection } from "../shared/geometry";
 import { getAppPaths } from "./appPaths";
 import { readImageDimensions } from "./imageDimensions";
 
@@ -969,6 +970,7 @@ async function hydrateChapter(chapter: ChapterFile): Promise<ChapterSnapshot> {
       }
       return {
         ...page,
+        blocks: page.blocks.map(normalizeStoredBlock),
         inpaintMaskDataUrl,
         inpaintResultDataUrl: clippedInpaintResultDataUrl,
         inpaintStatus: page.inpaintStatus ?? (clippedInpaintResultDataUrl ? "completed" : "idle"),
@@ -995,8 +997,16 @@ function toStoredChapter(snapshot: ChapterSnapshot): ChapterFile {
       ...page
     }) => ({
       ...page,
+      blocks: page.blocks.map(normalizeStoredBlock),
       inpaintStatus: page.inpaintStatus ?? (page.inpaintResultPath ? "completed" : "idle")
     }))
+  };
+}
+
+function normalizeStoredBlock(block: MangaPage["blocks"][number]): MangaPage["blocks"][number] {
+  return {
+    ...block,
+    renderDirection: normalizeRenderDirection(block.renderDirection)
   };
 }
 

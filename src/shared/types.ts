@@ -1,7 +1,7 @@
 export type BlockType = "speech" | "sfx" | "caption" | "other";
 
 export type SourceTextDirection = "horizontal" | "vertical";
-export type RenderTextDirection = "horizontal" | "vertical" | "rotated" | "hidden";
+export type RenderTextDirection = "horizontal" | "vertical" | "hidden";
 
 export type JobKind = "gemma-analysis";
 export type ModelProvider = "gemma" | "openai-codex" | "openai-compatible";

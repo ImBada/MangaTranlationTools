@@ -66,8 +66,8 @@ export function offsetBlockBboxes(block: TranslationBlock, dx: number, dy: numbe
   };
 }
 
-export function enforceRenderDirection(_type: BlockType, direction: RenderTextDirection): RenderTextDirection {
-  return direction === "vertical" || direction === "rotated" || direction === "hidden" ? direction : "horizontal";
+export function enforceRenderDirection(_type: BlockType, direction: unknown): RenderTextDirection {
+  return direction === "vertical" || direction === "hidden" ? direction : "horizontal";
 }
 
 export function normalizeBlockType(value: unknown): BlockType {
@@ -89,9 +89,9 @@ export function normalizeSourceDirection(value: unknown, fallback: SourceTextDir
   return text === "horizontal" || text === "vertical" ? text : fallback;
 }
 
-export function normalizeRenderDirection(value: unknown, fallback: RenderTextDirection): RenderTextDirection {
+export function normalizeRenderDirection(value: unknown): RenderTextDirection {
   const text = String(value ?? "").trim().toLowerCase();
-  return text === "horizontal" || text === "vertical" || text === "rotated" || text === "hidden" ? text : fallback;
+  return text === "vertical" || text === "hidden" ? text : "horizontal";
 }
 
 export function clampRotationDeg(value: unknown): number {
@@ -108,11 +108,11 @@ export function clampTextPaddingPx(value: unknown): number {
   return Math.round(clamp(value, 0, 80));
 }
 
-export function resolveBlockRotationDeg(block: Pick<TranslationBlock, "renderDirection" | "rotationDeg">): number {
+export function resolveBlockRotationDeg(block: Pick<TranslationBlock, "rotationDeg">): number {
   if (typeof block.rotationDeg === "number") {
     return clampRotationDeg(block.rotationDeg);
   }
-  return block.renderDirection === "rotated" ? -8 : 0;
+  return 0;
 }
 
 export function normalizeTextAlign(value: unknown): "left" | "center" | "right" {

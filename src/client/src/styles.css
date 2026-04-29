@@ -1165,16 +1165,32 @@ textarea {
   padding: 0;
 }
 
-.color-row,
-.block-actions {
+.color-row {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
 
+.block-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.block-action {
+  min-height: 38px;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .rotation-row {
   display: grid;
-  grid-template-columns: minmax(72px, 1fr) auto auto;
+  grid-template-columns: minmax(72px, 1fr) 64px auto auto;
   align-items: center;
   gap: 8px;
 }
