@@ -180,6 +180,86 @@ const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
   tileSize: 1024
 };
 
+type InpaintToolIconName = InpaintResultTool;
+
+type InpaintToolButtonProps = {
+  active: boolean;
+  disabled: boolean;
+  icon: InpaintToolIconName;
+  label: string;
+  onClick: () => void;
+};
+
+function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Element {
+  switch (name) {
+    case "select":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="4" y="4" width="11" height="11" rx="2" strokeDasharray="2.4 2.4" />
+          <path d="M13 12l6 6-3 1-1 3-6-6 4-4z" />
+        </svg>
+      );
+    case "brush":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M14 5l5 5-8.5 8.5a4 4 0 0 1-5.7 0l-.3-.3L14 5z" />
+          <path d="M16 3l5 5" />
+          <path d="M5 18c-.5 1.6-1.5 2.5-3 2.8 2.4 1.1 5 .7 6.7-1" />
+        </svg>
+      );
+    case "eraser":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 15l8.5-8.5a2.1 2.1 0 0 1 3 0l2 2a2.1 2.1 0 0 1 0 3L12 19H7l-3-3 2-1z" />
+          <path d="M10 11l5 5" />
+          <path d="M12 19h8" />
+        </svg>
+      );
+    case "blur":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="12" cy="12" r="3.2" />
+          <circle cx="6" cy="12" r="1.5" />
+          <circle cx="18" cy="12" r="1.5" />
+          <circle cx="12" cy="6" r="1.5" />
+          <circle cx="12" cy="18" r="1.5" />
+        </svg>
+      );
+    case "sharpen":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M12 3l7 17H5L12 3z" />
+          <path d="M12 8v6" />
+          <path d="M9.5 17h5" />
+        </svg>
+      );
+    case "smudge":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M5 7c3-3 6.5-3 9.2-.5 2.5 2.3 1 5.8-2.2 5.4-2.1-.3-2.5-2.3-1-3.2" />
+          <path d="M4 16c3.5-2.5 6.7-2.3 9.5 0 2.1 1.7 4.1 1.7 6.5-.2" />
+          <path d="M4 20c4-1.8 7.2-1.6 10 .5" />
+        </svg>
+      );
+  }
+}
+
+function InpaintToolButton({ active, disabled, icon, label, onClick }: InpaintToolButtonProps): React.JSX.Element {
+  return (
+    <button
+      type="button"
+      className={`tool-option ${active ? "active" : ""}`}
+      aria-pressed={active}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+    >
+      <InpaintToolIcon name={icon} />
+      <span className="tool-option-label">{label}</span>
+    </button>
+  );
+}
+
 export default function App(): React.JSX.Element {
   const [library, setLibrary] = useState<LibraryIndex>({ workOrder: [], works: [] });
   const [currentChapter, setCurrentChapter] = useState<ChapterSnapshot | null>(null);
@@ -2159,28 +2239,28 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         </>
       ) : activeLayer === "inpaintMask" ? (
         <>
-          <div className="segmented-control" role="group" aria-label="인페인트 도구">
-            <button
-              className={inpaintTool === "select" ? "active" : ""}
+          <div className="segmented-control tool-selector mask-tool-selector" role="group" aria-label="인페인트 도구">
+            <InpaintToolButton
+              active={inpaintTool === "select"}
+              icon="select"
+              label="범위 선택"
               onClick={() => selectSharedInpaintTool("select")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-            >
-              범위 선택
-            </button>
-            <button
-              className={inpaintTool === "brush" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintTool === "brush"}
+              icon="brush"
+              label="브러시"
               onClick={() => selectSharedInpaintTool("brush")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-            >
-              브러시
-            </button>
-            <button
-              className={inpaintTool === "eraser" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintTool === "eraser"}
+              icon="eraser"
+              label="지우개"
               onClick={() => selectSharedInpaintTool("eraser")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-            >
-              지우개
-            </button>
+            />
           </div>
           <label>
             브러시 크기 {inpaintBrushSize}px
@@ -2220,49 +2300,49 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         <p className="muted-line">하위 레이어를 선택해 결과를 보거나 마스크를 편집하세요.</p>
       ) : activeLayer === "inpaintResult" ? (
         <>
-          <div className="segmented-control result-tool-grid" role="group" aria-label="인페인트 결과 도구">
-            <button
-              className={inpaintResultTool === "select" ? "active" : ""}
+          <div className="segmented-control tool-selector result-tool-grid" role="group" aria-label="인페인트 결과 도구">
+            <InpaintToolButton
+              active={inpaintResultTool === "select"}
+              icon="select"
+              label="범위 선택"
               onClick={() => selectSharedInpaintTool("select")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              범위 선택
-            </button>
-            <button
-              className={inpaintResultTool === "brush" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintResultTool === "brush"}
+              icon="brush"
+              label="브러시"
               onClick={() => selectSharedInpaintTool("brush")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              브러시
-            </button>
-            <button
-              className={inpaintResultTool === "eraser" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintResultTool === "eraser"}
+              icon="eraser"
+              label="지우개"
               onClick={() => selectSharedInpaintTool("eraser")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              지우개
-            </button>
-            <button
-              className={inpaintResultTool === "blur" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintResultTool === "blur"}
+              icon="blur"
+              label="흐림"
               onClick={() => setInpaintResultTool("blur")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              흐림
-            </button>
-            <button
-              className={inpaintResultTool === "sharpen" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintResultTool === "sharpen"}
+              icon="sharpen"
+              label="선명"
               onClick={() => setInpaintResultTool("sharpen")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              선명
-            </button>
-            <button
-              className={inpaintResultTool === "smudge" ? "active" : ""}
+            />
+            <InpaintToolButton
+              active={inpaintResultTool === "smudge"}
+              icon="smudge"
+              label="뭉개기"
               onClick={() => setInpaintResultTool("smudge")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            >
-              뭉개기
-            </button>
+            />
           </div>
           <label>
             색상
