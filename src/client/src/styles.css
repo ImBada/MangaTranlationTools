@@ -2703,6 +2703,12 @@ input[type="checkbox"] {
   max-height: none;
 }
 
+.left-tool-panel:has(.font-preset-panel) {
+  flex: 0 0 auto;
+  max-height: none;
+  overflow: visible;
+}
+
 .right-rail-layer-panel {
   gap: 8px;
   padding: 12px;
