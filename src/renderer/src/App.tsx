@@ -1,25 +1,54 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AppSettings,
   BBox,
   ChapterSnapshot,
+  ImageRect,
   ImportPreviewResult,
+  InpaintSettings,
   JobState,
   LibraryIndex,
   MangaPage,
+  SystemFont,
   TranslationBlock
 } from "../../shared/types";
-import { applyEditableBlockBbox, clampBbox, enforceRenderDirection, offsetBlockBboxes, resolveEditableBlockBbox } from "../../shared/geometry";
+import {
+  applyEditableBlockBbox,
+  bboxToPixels,
+  clampBbox,
+  clampRotationDeg,
+  clampTextPaddingPx,
+  enforceRenderDirection,
+  offsetBlockBboxes,
+  resolveBlockRotationDeg,
+  resolveBlockRenderBbox,
+  resolveEditableBlockBbox
+} from "../../shared/geometry";
 import { EditorPanel } from "./components/EditorPanel";
 import { ImageStage } from "./components/ImageStage";
+import type { InpaintTool } from "./components/InpaintLayerCanvas";
+import type { InpaintResultTool } from "./components/InpaintResultCanvas";
 import { ImportModal, type ImportModalSubmit } from "./components/ImportModal";
 import { LibraryTree } from "./components/LibraryTree";
 import { PageList } from "./components/PageList";
 import { RenameModal } from "./components/RenameModal";
 import { SettingsModal } from "./components/SettingsModal";
 import { useStageSize } from "./hooks/useStageSize";
+import {
+  applyFontPresetPatchToBlock,
+  buildFontPresetLinkPatch,
+  clearFontPresetLinkFields,
+  createFontPreset,
+  DEFAULT_FONT_PRESET,
+  isBlockFontPresetValueLinked,
+  type BlockFontPatch,
+  type FontPresetPatch,
+  type LinkableFontPresetKey
+} from "./lib/fontPresets";
+import { DEFAULT_OVERLAY_FONT_FAMILY } from "./lib/overlayLayout";
 import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "./lib/chapterSync";
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "./lib/jobProgress";
+import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
 import "./styles.css";
 
@@ -30,7 +59,20 @@ const EMPTY_JOB: JobState = {
   progressText: "대기 중"
 };
 
-type DragMode = "move" | "resize";
+const FONT_FAMILY_OPTIONS = [
+  { label: "맑은 고딕", value: DEFAULT_OVERLAY_FONT_FAMILY },
+  { label: "Apple SD Gothic Neo", value: "\"Apple SD Gothic Neo\", \"Malgun Gothic\", sans-serif" },
+  { label: "본고딕", value: "\"Noto Sans CJK KR\", \"Noto Sans KR\", \"Malgun Gothic\", sans-serif" },
+  { label: "바탕", value: "Batang, \"AppleMyungjo\", serif" },
+  { label: "돋움", value: "Dotum, \"Apple SD Gothic Neo\", sans-serif" }
+];
+
+type FontFamilyOption = {
+  label: string;
+  value: string;
+};
+
+type DragMode = "move" | "resize" | "rotate";
 
 type DragState = {
   mode: DragMode;
@@ -38,6 +80,82 @@ type DragState = {
   startX: number;
   startY: number;
   startBbox: BBox;
+  startRotationDeg: number;
+  startAngleDeg: number;
+  centerX: number;
+  centerY: number;
+};
+
+type LayerVisibility = {
+  image: boolean;
+  inpaint: boolean;
+  inpaintResult: boolean;
+  inpaintMask: boolean;
+  overlay: boolean;
+};
+
+type LayerOpacity = {
+  image: number;
+  inpaint: number;
+  inpaintResult: number;
+  inpaintMask: number;
+  overlay: number;
+};
+
+type ActiveLayer = "output" | "image" | "inpaint" | "inpaintResult" | "inpaintMask" | "overlay";
+type PendingInpaintMaskSave = {
+  chapterId: string;
+  pageId: string;
+  dataUrl: string | undefined;
+};
+
+type PendingInpaintResultSave = {
+  chapterId: string;
+  pageId: string;
+  dataUrl: string | undefined;
+};
+
+const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
+  output: {
+    image: 1,
+    inpaint: 1,
+    inpaintResult: 1,
+    inpaintMask: 0,
+    overlay: 1
+  },
+  image: {
+    image: 1,
+    inpaint: 0.3,
+    inpaintResult: 0.3,
+    inpaintMask: 0.3
+  },
+  inpaint: {
+    image: 0.5,
+    inpaint: 1,
+    inpaintResult: 1,
+    inpaintMask: 0
+  },
+  inpaintResult: {
+    image: 0.5,
+    inpaint: 1,
+    inpaintResult: 1,
+    inpaintMask: 0,
+    overlay: 0.5
+  },
+  inpaintMask: {
+    image: 0.5,
+    inpaint: 1,
+    inpaintResult: 0,
+    inpaintMask: 1,
+    overlay: 0.5
+  },
+  overlay: {
+    image: 1,
+    inpaint: 0.2,
+    inpaintResult: 0.2,
+    inpaintMask: 0,
+    overlay: 1
+  }
 };
 
 type RenameTarget =
@@ -52,6 +170,13 @@ type RenameTarget =
       title: string;
     };
 
+const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
+  engine: "lama",
+  paddingPx: 0,
+  featherPx: 0,
+  tileSize: 1024
+};
+
 export default function App(): React.JSX.Element {
   const [library, setLibrary] = useState<LibraryIndex>({ workOrder: [], works: [] });
   const [currentChapter, setCurrentChapter] = useState<ChapterSnapshot | null>(null);
@@ -61,28 +186,101 @@ export default function App(): React.JSX.Element {
   const [statusLines, setStatusLines] = useState<string[]>([]);
   const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null);
   const [importBusy, setImportBusy] = useState(false);
+  const [renderBusy, setRenderBusy] = useState(false);
+  const [inpaintBusy, setInpaintBusy] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
+  const [saveFlash, setSaveFlash] = useState(false);
+  const [inpaintTool, setInpaintTool] = useState<InpaintTool>("select");
+  const [inpaintSelectionRect, setInpaintSelectionRect] = useState<ImageRect | null>(null);
+  const [inpaintBrushSize, setInpaintBrushSize] = useState(28);
+  const [inpaintResultTool, setInpaintResultTool] = useState<InpaintResultTool>("select");
+  const [inpaintResultBrushSize, setInpaintResultBrushSize] = useState(28);
+  const [inpaintResultBrushColor, setInpaintResultBrushColor] = useState("#ffffff");
+  const [inpaintResultBrushHardness, setInpaintResultBrushHardness] = useState(0.85);
+  const [inpaintResultToolStrength, setInpaintResultToolStrength] = useState(0.55);
+  const [layerVisibility, setLayerVisibility] = useState<LayerVisibility>({
+    image: true,
+    inpaint: true,
+    inpaintResult: true,
+    inpaintMask: true,
+    overlay: true
+  });
+  const [layerOpacity, setLayerOpacity] = useState<LayerOpacity>({
+    image: 1,
+    inpaint: 1,
+    inpaintResult: 1,
+    inpaintMask: 0.75,
+    overlay: 1
+  });
+  const [overlayOpacityEditMode, setOverlayOpacityEditMode] = useState(false);
+  const [fontPresetName, setFontPresetName] = useState("");
+  const [editingFontPresetId, setEditingFontPresetId] = useState<string | null>(null);
+  const [systemFonts, setSystemFonts] = useState<SystemFont[]>([]);
+  const [focusModeEnabled, setFocusModeEnabled] = useState(true);
+  const [statusWidgetOpen, setStatusWidgetOpen] = useState(false);
+  const [activeLayer, setActiveLayer] = useState<ActiveLayer>("output");
+  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
   const workspacePanelRef = useRef<HTMLElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
+  const imageImportInputRef = useRef<HTMLInputElement | null>(null);
+  const folderImportInputRef = useRef<HTMLInputElement | null>(null);
+  const zipImportInputRef = useRef<HTMLInputElement | null>(null);
+  const batchImportInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const saveTimerRef = useRef<number | null>(null);
+  const saveFlashTimerRef = useRef<number | null>(null);
   const dirtyVersionRef = useRef(0);
   const dirtyPageIdsRef = useRef<Set<string>>(new Set());
   const currentChapterRef = useRef<ChapterSnapshot | null>(null);
   const selectedPageIdRef = useRef<string | null>(null);
   const selectedBlockIdRef = useRef<string | null>(null);
+  const inpaintUndoStackRef = useRef<Map<string, (string | undefined)[]>>(new Map());
+  const inpaintResultUndoStackRef = useRef<Map<string, (string | undefined)[]>>(new Map());
+  const inpaintMaskSaveTimerRef = useRef<number | null>(null);
+  const inpaintMaskSaveStateRef = useRef<PendingInpaintMaskSave | null>(null);
+  const inpaintMaskSavingRef = useRef(false);
+  const inpaintResultSaveTimerRef = useRef<number | null>(null);
+  const inpaintResultSaveStateRef = useRef<PendingInpaintResultSave | null>(null);
+  const inpaintResultSavingRef = useRef(false);
 
   const selectedPage = useMemo(
     () => currentChapter?.pages.find((page) => page.id === selectedPageId) ?? currentChapter?.pages[0] ?? null,
     [currentChapter?.pages, selectedPageId]
   );
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+  const fontPresets = currentChapter?.fontPresets ?? [];
+  const selectedFontPreset = selectedBlock?.fontPresetId
+    ? fontPresets.find((preset) => preset.id === selectedBlock.fontPresetId) ?? null
+    : null;
+  const editingFontPreset = editingFontPresetId
+    ? fontPresets.find((preset) => preset.id === editingFontPresetId) ?? null
+    : null;
+  const selectedBlockFontControls = selectedBlock && selectedFontPreset
+    ? applyFontPresetPatchToBlock(selectedBlock, selectedFontPreset)
+    : selectedBlock;
+  const fontControlValues = selectedBlockFontControls ?? editingFontPreset;
+  const selectedBlockFontPresetLinks = selectedBlock
+    ? {
+        fontSizePx: isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"),
+        lineHeight: isBlockFontPresetValueLinked(selectedBlock, "lineHeight"),
+        outlineColor: isBlockFontPresetValueLinked(selectedBlock, "outlineColor"),
+        outlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "outlineWidthPx"),
+        autoFitText: isBlockFontPresetValueLinked(selectedBlock, "autoFitText"),
+        textColor: isBlockFontPresetValueLinked(selectedBlock, "textColor")
+      }
+    : null;
+  const fontFamilyOptions = useMemo(
+    () => buildFontFamilyOptions(systemFonts, fontControlValues?.fontFamily),
+    [fontControlValues?.fontFamily, systemFonts]
+  );
+  const canUndoInpaint = selectedPage ? (inpaintUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
+  const canUndoInpaintResult = selectedPage ? (inpaintResultUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
   const jobActive = ["starting", "running", "cancelling"].includes(jobState.status);
   const selectedPageEditLocked = Boolean(jobActive && selectedPage && selectedPage.analysisStatus !== "completed");
   const selectedPageSize = useMemo(
@@ -92,6 +290,32 @@ export default function App(): React.JSX.Element {
   const stageSize = useStageSize(imageRef, selectedPageSize);
   const progressSnapshot = useMemo(() => resolveProgressSnapshot(jobState), [jobState]);
   const showProgressBar = jobState.status !== "idle" && !!progressSnapshot;
+  const saveStatusTone = saveFlash ? "saved" : dirty ? "unsaved" : "synced";
+  const saveStatusLabel = saveFlash ? "저장 완료" : dirty ? "저장되지 않은 변경 있음" : "최신 상태";
+  const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
+  const overlayBackgroundOpacity = selectedPage?.blocks[0]?.opacity ?? 1;
+  const stageLayerOpacity = useMemo(
+    () => ({
+      ...layerOpacity,
+      overlay: overlayOpacityEditMode ? 1 : layerOpacity.overlay
+    }),
+    [layerOpacity, overlayOpacityEditMode]
+  );
+  const selectLayer = useCallback((nextLayer: ActiveLayer) => {
+    setActiveLayer(nextLayer);
+    if (!focusModeEnabled) {
+      return;
+    }
+    setLayerOpacity((current) => ({
+      ...current,
+      ...LAYER_FOCUS_OPACITY[nextLayer]
+    }));
+  }, [focusModeEnabled]);
+
+  const selectSharedInpaintTool = useCallback((tool: InpaintTool) => {
+    setInpaintTool(tool);
+    setInpaintResultTool(tool);
+  }, []);
 
   const refreshLibrary = useCallback(async () => {
     const next = await window.mangaApi.getLibrary();
@@ -115,11 +339,24 @@ export default function App(): React.JSX.Element {
   }, [refreshSettings]);
 
   React.useEffect(() => {
+    void window.mangaApi
+      .getSystemFonts()
+      .then(setSystemFonts)
+      .catch((error) => {
+        console.error(error);
+      });
+  }, []);
+
+  React.useEffect(() => {
     currentChapterRef.current = currentChapter;
   }, [currentChapter]);
 
   React.useEffect(() => {
     selectedPageIdRef.current = selectedPageId;
+  }, [selectedPageId]);
+
+  useEffect(() => {
+    setInpaintSelectionRect(null);
   }, [selectedPageId]);
 
   React.useEffect(() => {
@@ -160,6 +397,25 @@ export default function App(): React.JSX.Element {
       }
       return [next, ...lines].slice(0, 16);
     });
+  }, []);
+
+  const signalSaveComplete = useCallback(() => {
+    if (saveFlashTimerRef.current) {
+      window.clearTimeout(saveFlashTimerRef.current);
+    }
+    setSaveFlash(true);
+    saveFlashTimerRef.current = window.setTimeout(() => {
+      saveFlashTimerRef.current = null;
+      setSaveFlash(false);
+    }, 1200);
+  }, []);
+
+  React.useEffect(() => {
+    return () => {
+      if (saveFlashTimerRef.current) {
+        window.clearTimeout(saveFlashTimerRef.current);
+      }
+    };
   }, []);
 
   React.useEffect(() => {
@@ -204,17 +460,19 @@ export default function App(): React.JSX.Element {
   }, [appendStatusLine, mergeLiveChapter, refreshLibrary]);
 
   React.useEffect(() => {
-    if (!dirty || !currentChapter || jobActive) {
+    if (!dirty || !currentChapter) {
       return;
     }
 
     const version = dirtyVersionRef.current;
+    const dirtyPageIds = [...dirtyPageIdsRef.current];
     saveTimerRef.current = window.setTimeout(async () => {
       try {
-        await window.mangaApi.saveChapter(currentChapter);
+        await window.mangaApi.saveChapter(currentChapter, dirtyPageIds.length > 0 ? dirtyPageIds : undefined);
         if (dirtyVersionRef.current === version) {
           dirtyPageIdsRef.current.clear();
           setDirty(false);
+          signalSaveComplete();
         }
       } catch (error) {
         console.error(error);
@@ -228,7 +486,7 @@ export default function App(): React.JSX.Element {
         window.clearTimeout(saveTimerRef.current);
       }
     };
-  }, [currentChapter, dirty, jobActive]);
+  }, [currentChapter, dirty, signalSaveComplete]);
 
   const pushStatus = useCallback(
     (line: string) => {
@@ -254,15 +512,145 @@ export default function App(): React.JSX.Element {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
     }
-    await window.mangaApi.saveChapter(currentChapter);
+    const dirtyPageIds = [...dirtyPageIdsRef.current];
+    await window.mangaApi.saveChapter(currentChapter, dirtyPageIds.length > 0 ? dirtyPageIds : undefined);
     dirtyPageIdsRef.current.clear();
     setDirty(false);
-  }, [currentChapter]);
+    signalSaveComplete();
+  }, [currentChapter, signalSaveComplete]);
+
+  const flushInpaintMaskSave = useCallback(async () => {
+    if (inpaintMaskSavingRef.current) {
+      return;
+    }
+
+    const pending = inpaintMaskSaveStateRef.current;
+    if (!pending) {
+      return;
+    }
+
+    inpaintMaskSaveStateRef.current = null;
+    inpaintMaskSavingRef.current = true;
+    try {
+      if (dirty && currentChapterRef.current?.id === pending.chapterId) {
+        await saveNow();
+      }
+      const result = await window.mangaApi.saveInpaintMask({
+        chapterId: pending.chapterId,
+        pageId: pending.pageId,
+        maskDataUrl: pending.dataUrl
+      });
+
+      if (!inpaintMaskSaveStateRef.current) {
+        mergeLiveChapter(result.chapter);
+        signalSaveComplete();
+        void refreshLibrary();
+      }
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "인페인트 마스크 저장에 실패했습니다.");
+    } finally {
+      inpaintMaskSavingRef.current = false;
+      if (inpaintMaskSaveStateRef.current) {
+        void flushInpaintMaskSave();
+      }
+    }
+  }, [dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
+
+  const scheduleInpaintMaskSave = useCallback((pending: PendingInpaintMaskSave) => {
+    inpaintMaskSaveStateRef.current = pending;
+    if (inpaintMaskSaveTimerRef.current) {
+      window.clearTimeout(inpaintMaskSaveTimerRef.current);
+    }
+    inpaintMaskSaveTimerRef.current = window.setTimeout(() => {
+      inpaintMaskSaveTimerRef.current = null;
+      void flushInpaintMaskSave();
+    }, 250);
+  }, [flushInpaintMaskSave]);
+
+  const flushInpaintResultSave = useCallback(async () => {
+    if (inpaintResultSavingRef.current) {
+      return;
+    }
+
+    const pending = inpaintResultSaveStateRef.current;
+    if (!pending) {
+      return;
+    }
+
+    inpaintResultSaveStateRef.current = null;
+    inpaintResultSavingRef.current = true;
+    try {
+      if (dirty && currentChapterRef.current?.id === pending.chapterId) {
+        await saveNow();
+      }
+      const result = await window.mangaApi.saveInpaintResultLayer({
+        chapterId: pending.chapterId,
+        pageId: pending.pageId,
+        resultDataUrl: pending.dataUrl
+      });
+
+      if (!inpaintResultSaveStateRef.current) {
+        mergeLiveChapter(result.chapter);
+        signalSaveComplete();
+        void refreshLibrary();
+      }
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "인페인트 결과 레이어 저장에 실패했습니다.");
+    } finally {
+      inpaintResultSavingRef.current = false;
+      if (inpaintResultSaveStateRef.current) {
+        void flushInpaintResultSave();
+      }
+    }
+  }, [dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
+
+  const scheduleInpaintResultSave = useCallback((pending: PendingInpaintResultSave) => {
+    inpaintResultSaveStateRef.current = pending;
+    if (inpaintResultSaveTimerRef.current) {
+      window.clearTimeout(inpaintResultSaveTimerRef.current);
+    }
+    inpaintResultSaveTimerRef.current = window.setTimeout(() => {
+      inpaintResultSaveTimerRef.current = null;
+      void flushInpaintResultSave();
+    }, 250);
+  }, [flushInpaintResultSave]);
+
+  const updatePageInpaintStatus = useCallback((pageId: string, status: MangaPage["inpaintStatus"]) => {
+    setCurrentChapter((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = {
+        ...current,
+        pages: current.pages.map((page) =>
+          page.id === pageId
+            ? {
+                ...page,
+                inpaintStatus: status,
+                updatedAt: new Date().toISOString()
+              }
+            : page
+        )
+      };
+      currentChapterRef.current = next;
+      return next;
+    });
+  }, []);
 
   const clearCurrentChapter = useCallback(() => {
     if (saveTimerRef.current) {
       window.clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
+    }
+    if (inpaintMaskSaveTimerRef.current) {
+      window.clearTimeout(inpaintMaskSaveTimerRef.current);
+      inpaintMaskSaveTimerRef.current = null;
+    }
+    if (inpaintResultSaveTimerRef.current) {
+      window.clearTimeout(inpaintResultSaveTimerRef.current);
+      inpaintResultSaveTimerRef.current = null;
     }
     setCurrentChapter(null);
     currentChapterRef.current = null;
@@ -313,20 +701,41 @@ export default function App(): React.JSX.Element {
     setSelectedBlockId(null);
   }, []);
 
-  const openImportPreview = useCallback(async (mode: "images" | "folder" | "zip" | "zip-folder") => {
+  const openImportPreview = useCallback(async (mode: "images" | "folder" | "zip" | "zip-folder", files: File[]) => {
     const preview =
       mode === "images"
-        ? await window.mangaApi.previewImagesImport()
+        ? await window.mangaApi.previewImagesImport(files)
         : mode === "folder"
-          ? await window.mangaApi.previewFolderImport()
+          ? await window.mangaApi.previewFolderImport(files)
           : mode === "zip"
-            ? await window.mangaApi.previewZipImport()
-            : await window.mangaApi.previewZipFolderImport();
+            ? await window.mangaApi.previewZipImport(files)
+            : await window.mangaApi.previewZipFolderImport(files);
     if (!preview) {
       return;
     }
     setImportPreview(preview);
   }, []);
+
+  const selectImportFiles = useCallback((mode: "images" | "folder" | "zip" | "zip-folder") => {
+    const input =
+      mode === "images"
+        ? imageImportInputRef.current
+        : mode === "folder"
+          ? folderImportInputRef.current
+          : mode === "zip"
+            ? zipImportInputRef.current
+            : batchImportInputRef.current;
+    input?.click();
+  }, []);
+
+  const handleImportInputChange = useCallback(
+    async (mode: "images" | "folder" | "zip" | "zip-folder", event: React.ChangeEvent<HTMLInputElement>) => {
+      const files = Array.from(event.target.files ?? []);
+      event.target.value = "";
+      await openImportPreview(mode, files);
+    },
+    [openImportPreview]
+  );
 
   const runAnalysis = useCallback(
     async (runMode: "pending" | "all" | "single-page", pageId?: string) => {
@@ -366,6 +775,87 @@ export default function App(): React.JSX.Element {
     [applyChapter, currentChapter, jobActive, pushStatus, refreshLibrary, saveNow]
   );
 
+  const renderSelectedPage = useCallback(async () => {
+    const chapter = currentChapterRef.current;
+    const pageId = selectedPageIdRef.current;
+    if (!chapter || !pageId || renderBusy) {
+      return;
+    }
+
+    setRenderBusy(true);
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+      // saveNow 이후 chapter가 서버/다른 동기화로 교체될 수 있으므로
+      // 현재 ref에서 최신 페이지를 다시 조회한다
+      const page = currentChapterRef.current?.pages.find((p) => p.id === pageId) ?? null;
+      if (!page) {
+        return;
+      }
+      const dataUrl = await renderPageToPngDataUrl(page, {
+        layerVisibility: {
+          image: true,
+          inpaint: true,
+          inpaintResult: true,
+          inpaintMask: false,
+          overlay: true
+        },
+        layerOpacity: {
+          image: 1,
+          inpaint: 1,
+          inpaintResult: 1,
+          inpaintMask: 1,
+          overlay: 1
+        },
+        activeLayer: "output"
+      });
+      const result = await window.mangaApi.renderPage({
+        chapterId: currentChapterRef.current!.id,
+        pageId,
+        dataUrl
+      });
+      signalSaveComplete();
+      pushStatus(`페이지 렌더 저장: ${result.outputPath}`);
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "페이지 렌더에 실패했습니다.");
+    } finally {
+      setRenderBusy(false);
+    }
+  }, [dirty, pushStatus, renderBusy, saveNow, signalSaveComplete]);
+
+  const runInpaintForPage = useCallback(async (page: MangaPage, maskDataUrl: string, statusMessage = "인페인트 결과를 저장했습니다.") => {
+    if (!currentChapter || inpaintBusy) {
+      return;
+    }
+
+    setInpaintBusy(true);
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+      updatePageInpaintStatus(page.id, "running");
+      const result = await window.mangaApi.inpaintPage({
+        chapterId: currentChapter.id,
+        pageId: page.id,
+        sourceDataUrl: page.dataUrl,
+        maskDataUrl,
+        settings: DEFAULT_INPAINT_SETTINGS
+      });
+      applyChapter(result.chapter);
+      signalSaveComplete();
+      void refreshLibrary();
+      pushStatus(result.engine === "local-fill-fallback" ? "로컬 인페인트 결과를 저장했습니다." : statusMessage);
+    } catch (error) {
+      console.error(error);
+      updatePageInpaintStatus(page.id, "failed");
+      pushStatus(error instanceof Error ? error.message : "인페인트 실행에 실패했습니다.");
+    } finally {
+      setInpaintBusy(false);
+    }
+  }, [applyChapter, currentChapter, dirty, inpaintBusy, pushStatus, refreshLibrary, saveNow, signalSaveComplete, updatePageInpaintStatus]);
+
   const submitImport = useCallback(
     async ({ target, selections }: ImportModalSubmit) => {
       if (!importPreview) {
@@ -403,7 +893,7 @@ export default function App(): React.JSX.Element {
     [applyChapter, importPreview, openChapter, refreshLibrary]
   );
 
-  const updateCurrentChapter = useCallback((pageId: string, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => {
+  const updateCurrentChapter = useCallback((pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => {
     setCurrentChapter((current) => {
       if (!current) {
         return current;
@@ -488,6 +978,13 @@ export default function App(): React.JSX.Element {
                   ...patch,
                   type: nextType,
                   renderDirection: enforceRenderDirection(nextType, patch.renderDirection ?? block.renderDirection),
+                  rotationDeg: patch.rotationDeg !== undefined ? clampRotationDeg(patch.rotationDeg) : block.rotationDeg,
+                  textPaddingPx:
+                    patch.textPaddingPx !== undefined
+                      ? clampTextPaddingPx(patch.textPaddingPx)
+                      : Object.prototype.hasOwnProperty.call(patch, "textPaddingPx")
+                        ? undefined
+                        : block.textPaddingPx,
                   bbox: patch.bbox ? clampBbox(patch.bbox) : block.bbox,
                   renderBbox: patch.renderBbox ? clampBbox(patch.renderBbox) : block.renderBbox
                 };
@@ -495,6 +992,191 @@ export default function App(): React.JSX.Element {
             }
       )
     }));
+  };
+
+  const updateAssignedFontPreset = (presetId: string, patch: FontPresetPatch) => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      fontPresets: (current.fontPresets ?? []).map((preset) => (preset.id === presetId ? { ...preset, ...patch } : preset)),
+      pages: current.pages.map((page) => ({
+        ...page,
+        updatedAt: page.blocks.some((block) => block.fontPresetId === presetId) ? new Date().toISOString() : page.updatedAt,
+        blocks: page.blocks.map((block) => (block.fontPresetId === presetId ? applyFontPresetPatchToBlock(block, patch) : block))
+      }))
+    }));
+  };
+
+  const updateSelectedBlockFontSetting = (patch: BlockFontPatch) => {
+    if ("textAlign" in patch) {
+      if (patch.textAlign) {
+        updateSelectedBlock({ textAlign: patch.textAlign });
+      }
+      return;
+    }
+    if (selectedBlock?.fontPresetId) {
+      const presetPatch: FontPresetPatch = {};
+      const blockPatch: Partial<TranslationBlock> = {};
+      for (const key of Object.keys(patch) as (keyof FontPresetPatch)[]) {
+        const value = patch[key];
+        if (value === undefined) {
+          continue;
+        }
+        if (key === "fontFamily" || isBlockFontPresetValueLinked(selectedBlock, key)) {
+          Object.assign(presetPatch, { [key]: value });
+        } else {
+          Object.assign(blockPatch, { [key]: value });
+        }
+      }
+      if (Object.keys(blockPatch).length > 0) {
+        updateSelectedBlock(blockPatch);
+      }
+      if (Object.keys(presetPatch).length > 0) {
+        updateAssignedFontPreset(selectedBlock.fontPresetId, presetPatch);
+      }
+      return;
+    }
+    if (!selectedBlock && editingFontPreset) {
+      updateAssignedFontPreset(editingFontPreset.id, patch);
+      return;
+    }
+    updateSelectedBlock(patch);
+  };
+
+  const toggleSelectedBlockFontPresetLink = (key: LinkableFontPresetKey) => {
+    if (!selectedBlock || !selectedFontPreset) {
+      return;
+    }
+
+    const nextLinked = !isBlockFontPresetValueLinked(selectedBlock, key);
+    updateSelectedBlock({
+      ...buildFontPresetLinkPatch(key, nextLinked),
+      ...(nextLinked ? { [key]: selectedFontPreset[key] } : {})
+    });
+  };
+
+  const renderFontPresetLinkButton = (key: LinkableFontPresetKey, label: string) => {
+    if (!selectedBlock?.fontPresetId || !selectedFontPreset || !selectedBlockFontPresetLinks) {
+      return null;
+    }
+
+    const linked = selectedBlockFontPresetLinks[key];
+    return (
+      <button
+        type="button"
+        className={`font-preset-link-toggle ${linked ? "linked" : "unlinked"}`}
+        disabled={selectedPageEditLocked}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          toggleSelectedBlockFontPresetLink(key);
+        }}
+        aria-label={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
+        title={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
+      >
+        <FontPresetLinkIcon linked={linked} />
+      </button>
+    );
+  };
+
+  const createFontPresetFromSelectedBlock = () => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+
+    const presetName = fontPresetName.trim() || `프리셋 ${(currentChapter?.fontPresets?.length ?? 0) + 1}`;
+    const preset = createFontPreset(presetName, selectedBlock ?? DEFAULT_FONT_PRESET);
+updateCurrentChapter(selectedPage?.id, (current) => ({
+      ...current,
+      fontPresets: [...(current.fontPresets ?? []), preset],
+      pages: current.pages.map((page) =>
+        selectedPage && selectedBlock && page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: page.blocks.map((block) =>
+                block.id === selectedBlock.id
+                  ? {
+                      ...applyFontPresetPatchToBlock(block, preset, { forceLinkedValues: true }),
+                      fontPresetId: preset.id,
+                      fontSizeLinkedToPreset: true,
+                      lineHeightLinkedToPreset: true,
+                      outlineColorLinkedToPreset: true,
+                      outlineWidthLinkedToPreset: true,
+                      autoFitTextLinkedToPreset: true,
+                      textColorLinkedToPreset: true
+                    }
+                  : block
+              )
+            }
+          : page
+      )
+    }));    
+    setEditingFontPresetId(preset.id);
+    setFontPresetName("");
+  };
+
+  const selectFontPreset = (presetId: string) => {
+    if (selectedPageEditLocked) {
+      return;
+    }
+    const preset = fontPresets.find((candidate) => candidate.id === presetId);
+    if (!preset) {
+      return;
+    }
+    setEditingFontPresetId(presetId);
+    if (!selectedPage || !selectedBlock) {
+      return;
+    }
+    updateSelectedBlock({
+      ...applyFontPresetPatchToBlock(selectedBlock, preset, { forceLinkedValues: true }),
+      fontPresetId: preset.id,
+      fontSizeLinkedToPreset: true,
+      lineHeightLinkedToPreset: true,
+      outlineColorLinkedToPreset: true,
+      outlineWidthLinkedToPreset: true,
+      autoFitTextLinkedToPreset: true,
+      textColorLinkedToPreset: true
+    });
+  };
+
+  const clearSelectedBlockFontPreset = () => {
+    if (!selectedBlock) {
+      return;
+    }
+    updateSelectedBlock({
+      fontPresetId: undefined,
+      fontSizeLinkedToPreset: undefined,
+      lineHeightLinkedToPreset: undefined,
+      outlineColorLinkedToPreset: undefined,
+      outlineWidthLinkedToPreset: undefined,
+      autoFitTextLinkedToPreset: undefined,
+      textColorLinkedToPreset: undefined
+    });
+  };
+
+  const deleteFontPreset = (presetId: string) => {
+    if (selectedPageEditLocked) {
+      return;
+    }
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      fontPresets: (current.fontPresets ?? []).filter((preset) => preset.id !== presetId),
+      pages: current.pages.map((page) => ({
+        ...page,
+        blocks: page.blocks.map((block) => {
+          if (block.fontPresetId !== presetId) {
+            return block;
+          }
+          const { fontPresetId: _fontPresetId, ...rest } = block;
+          return clearFontPresetLinkFields(rest);
+        })
+      }))
+    }));
+    setEditingFontPresetId((current) => (current === presetId ? null : current));
   };
 
   const deleteSelectedBlock = () => {
@@ -515,6 +1197,358 @@ export default function App(): React.JSX.Element {
     }));
     setSelectedBlockId(null);
   };
+
+  const updateSelectedPageInpaintMask = useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
+    if (!currentChapter || !selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    const previousDataUrl = selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
+    if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
+      const stack = inpaintUndoStackRef.current.get(selectedPage.id) ?? [];
+      stack.push(previousDataUrl);
+      inpaintUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
+    }
+
+    const updatedAt = new Date().toISOString();
+    setCurrentChapter((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = {
+        ...current,
+        updatedAt,
+        pages: current.pages.map((page) =>
+          page.id === selectedPage.id
+            ? {
+                ...page,
+                updatedAt,
+                inpaintMaskPath: dataUrl ? page.inpaintMaskPath : undefined,
+                inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
+                inpaintMaskDataUrl: dataUrl,
+                inpaintResultDataUrl: dataUrl ? page.inpaintResultDataUrl : undefined,
+                inpaintStatus: "idle" as const
+              }
+            : page
+        )
+      };
+      currentChapterRef.current = next;
+      return next;
+    });
+
+    if (options.persist !== false) {
+      scheduleInpaintMaskSave({
+        chapterId: currentChapter.id,
+        pageId: selectedPage.id,
+        dataUrl
+      });
+    }
+  }, [currentChapter, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked]);
+
+  const updateSelectedPageInpaintResult = useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
+    if (!currentChapter || !selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    const previousDataUrl = selectedPage.inpaintResultDataUrl;
+    if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
+      const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
+      stack.push(previousDataUrl);
+      inpaintResultUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
+    }
+
+    const updatedAt = new Date().toISOString();
+    setCurrentChapter((current) => {
+      if (!current) {
+        return current;
+      }
+      const next = {
+        ...current,
+        updatedAt,
+        pages: current.pages.map((page) =>
+          page.id === selectedPage.id
+            ? {
+                ...page,
+                updatedAt,
+                inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
+                inpaintResultDataUrl: dataUrl,
+                inpaintStatus: dataUrl ? "completed" as const : "idle" as const
+              }
+            : page
+        )
+      };
+      currentChapterRef.current = next;
+      return next;
+    });
+
+    if (options.persist !== false) {
+      scheduleInpaintResultSave({
+        chapterId: currentChapter.id,
+        pageId: selectedPage.id,
+        dataUrl
+      });
+    }
+  }, [currentChapter, scheduleInpaintResultSave, selectedPage, selectedPageEditLocked]);
+
+  const undoSelectedPageInpaint = useCallback(() => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    const stack = inpaintUndoStackRef.current.get(selectedPage.id) ?? [];
+    if (stack.length === 0) {
+      return;
+    }
+    const previousDataUrl = stack.pop();
+    inpaintUndoStackRef.current.set(selectedPage.id, stack);
+    updateSelectedPageInpaintMask(previousDataUrl, { recordUndo: false });
+  }, [selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+
+  const undoSelectedPageInpaintResult = useCallback(() => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
+    if (stack.length === 0) {
+      return;
+    }
+    const previousDataUrl = stack.pop();
+    inpaintResultUndoStackRef.current.set(selectedPage.id, stack);
+    updateSelectedPageInpaintResult(previousDataUrl, { recordUndo: false });
+  }, [selectedPage, selectedPageEditLocked, updateSelectedPageInpaintResult]);
+
+  const applyInpaintSelectedBlock = useCallback(async () => {
+    if (!selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const maskDataUrl = await drawBlocksOnInpaintMask(selectedPage, [selectedBlock]);
+    updateSelectedPageInpaintMask(maskDataUrl, { persist: false });
+    await runInpaintForPage({ ...selectedPage, inpaintMaskDataUrl: maskDataUrl }, maskDataUrl, "선택 블록 인페인트 결과를 저장했습니다.");
+  }, [inpaintBusy, runInpaintForPage, selectedBlock, selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+
+  const applyInpaintAllBlocks = useCallback(async () => {
+    if (!selectedPage || selectedPage.blocks.length === 0 || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const maskDataUrl = await drawBlocksOnInpaintMask(selectedPage, selectedPage.blocks);
+    updateSelectedPageInpaintMask(maskDataUrl, { persist: false });
+    await runInpaintForPage({ ...selectedPage, inpaintMaskDataUrl: maskDataUrl }, maskDataUrl, "전체 블록 인페인트 결과를 저장했습니다.");
+  }, [inpaintBusy, runInpaintForPage, selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+
+  const rerunInpaintWithCurrentMask = useCallback(async () => {
+    if (selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const pageId = selectedPageIdRef.current;
+    const page = pageId ? currentChapterRef.current?.pages.find((candidate) => candidate.id === pageId) : null;
+    if (!page) {
+      return;
+    }
+
+    const maskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+    if (!maskDataUrl) {
+      pushStatus("다시 인페인트할 마스크가 없습니다.");
+      return;
+    }
+
+    await runInpaintForPage(page, maskDataUrl, "현재 마스크 기준으로 인페인트 결과를 다시 저장했습니다.");
+  }, [inpaintBusy, pushStatus, runInpaintForPage, selectedPageEditLocked]);
+
+  const rerunInpaintForSelection = useCallback(async () => {
+    if (!currentChapter || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const pageId = selectedPageIdRef.current;
+    const page = pageId ? currentChapterRef.current?.pages.find((candidate) => candidate.id === pageId) : null;
+    if (!page) {
+      return;
+    }
+
+    const maskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+    if (!maskDataUrl) {
+      pushStatus("다시 인페인트할 마스크가 없습니다.");
+      return;
+    }
+    if (!inpaintSelectionRect) {
+      pushStatus("부분 인페인트할 범위를 먼저 선택하세요.");
+      return;
+    }
+
+    setInpaintBusy(true);
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+      const selectionMaskDataUrl = await maskDataUrlForSelection(maskDataUrl, page.width, page.height, inpaintSelectionRect);
+      if (!selectionMaskDataUrl) {
+        pushStatus("선택 범위 안에 마스크 픽셀이 없습니다.");
+        return;
+      }
+
+      updatePageInpaintStatus(page.id, "running");
+      const result = await window.mangaApi.inpaintPage({
+        chapterId: currentChapter.id,
+        pageId: page.id,
+        sourceDataUrl: page.dataUrl,
+        maskDataUrl: selectionMaskDataUrl,
+        settings: DEFAULT_INPAINT_SETTINGS,
+        persistResult: false
+      });
+      const mergedResultDataUrl = await mergePartialInpaintResult(
+        page.inpaintResultDataUrl,
+        result.resultDataUrl,
+        selectionMaskDataUrl,
+        page.width,
+        page.height
+      );
+      updateSelectedPageInpaintResult(mergedResultDataUrl, { persist: false });
+      const saved = await window.mangaApi.saveInpaintResultLayer({
+        chapterId: currentChapter.id,
+        pageId: page.id,
+        resultDataUrl: mergedResultDataUrl
+      });
+      applyChapter(saved.chapter);
+      signalSaveComplete();
+      void refreshLibrary();
+      pushStatus(result.engine === "local-fill-fallback" ? "선택 범위 로컬 인페인트 결과를 저장했습니다." : "선택 범위만 다시 인페인트했습니다.");
+    } catch (error) {
+      console.error(error);
+      updatePageInpaintStatus(page.id, "failed");
+      pushStatus(error instanceof Error ? error.message : "부분 인페인트 실행에 실패했습니다.");
+    } finally {
+      setInpaintBusy(false);
+    }
+  }, [
+    applyChapter,
+    currentChapter,
+    dirty,
+    inpaintBusy,
+    inpaintSelectionRect,
+    pushStatus,
+    refreshLibrary,
+    saveNow,
+    selectedPageEditLocked,
+    signalSaveComplete,
+    updatePageInpaintStatus,
+    updateSelectedPageInpaintResult
+  ]);
+
+  const clearSelectedInpaintSelection = useCallback(async () => {
+    if (selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect) {
+      return false;
+    }
+
+    const pageId = selectedPageIdRef.current;
+    const page = pageId ? currentChapterRef.current?.pages.find((candidate) => candidate.id === pageId) : null;
+    if (!page) {
+      return false;
+    }
+
+    if (activeLayer === "inpaintMask" && inpaintTool === "select") {
+      const maskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+      if (!maskDataUrl) {
+        return false;
+      }
+      const nextDataUrl = await clearImageDataUrlRect(maskDataUrl, page.width, page.height, inpaintSelectionRect);
+      updateSelectedPageInpaintMask(nextDataUrl);
+      pushStatus("선택 범위의 인페인트 마스크를 지웠습니다.");
+      return true;
+    }
+
+    if (activeLayer === "inpaintResult" && inpaintResultTool === "select") {
+      if (!page.inpaintResultDataUrl) {
+        return false;
+      }
+      const nextDataUrl = await clearImageDataUrlRect(page.inpaintResultDataUrl, page.width, page.height, inpaintSelectionRect);
+      updateSelectedPageInpaintResult(nextDataUrl);
+      pushStatus("선택 범위의 인페인트 결과를 지웠습니다.");
+      return true;
+    }
+
+    return false;
+  }, [
+    activeLayer,
+    inpaintBusy,
+    inpaintResultTool,
+    inpaintSelectionRect,
+    inpaintTool,
+    pushStatus,
+    selectedPageEditLocked,
+    updateSelectedPageInpaintMask,
+    updateSelectedPageInpaintResult
+  ]);
+
+  const fillSelectedInpaintSelection = useCallback(async () => {
+    if (selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect) {
+      return;
+    }
+
+    const pageId = selectedPageIdRef.current;
+    const page = pageId ? currentChapterRef.current?.pages.find((candidate) => candidate.id === pageId) : null;
+    if (!page) {
+      return;
+    }
+
+    if (activeLayer === "inpaintMask" && inpaintTool === "select") {
+      const nextDataUrl = await fillImageDataUrlRect({
+        dataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
+        width: page.width,
+        height: page.height,
+        rect: inpaintSelectionRect,
+        fillStyle: "#ffffff"
+      });
+      updateSelectedPageInpaintMask(nextDataUrl);
+      pushStatus("선택 범위를 인페인트 마스크로 채웠습니다.");
+      return;
+    }
+
+    if (activeLayer === "inpaintResult" && inpaintResultTool === "select") {
+      const nextDataUrl = await fillImageDataUrlRect({
+        dataUrl: page.inpaintResultDataUrl,
+        width: page.width,
+        height: page.height,
+        rect: inpaintSelectionRect,
+        fillStyle: inpaintResultBrushColor
+      });
+      updateSelectedPageInpaintResult(nextDataUrl);
+      pushStatus("선택 범위를 인페인트 결과 색상으로 채웠습니다.");
+    }
+  }, [
+    activeLayer,
+    inpaintBusy,
+    inpaintResultBrushColor,
+    inpaintResultTool,
+    inpaintSelectionRect,
+    inpaintTool,
+    pushStatus,
+    selectedPageEditLocked,
+    updateSelectedPageInpaintMask,
+    updateSelectedPageInpaintResult
+  ]);
+
+  const updateSelectedPageBlockOpacity = useCallback((opacity: number) => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    updateCurrentChapter(selectedPage.id, (current) => ({
+      ...current,
+      pages: current.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: page.blocks.map((block) => ({ ...block, opacity }))
+            }
+          : page
+      )
+    }));
+  }, [selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
   const duplicateSelectedBlock = () => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
@@ -540,19 +1574,26 @@ export default function App(): React.JSX.Element {
   };
 
   const onBlockPointerDown = (event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => {
-    if (!stageRef.current || selectedPageEditLocked) {
+    if (!stageRef.current || selectedPageEditLocked || activeLayer !== "overlay") {
       return;
     }
     event.preventDefault();
     event.stopPropagation();
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
+    const stageRect = stageRef.current.getBoundingClientRect();
+    const centerX = stageRect.left + ((target.bbox.x + target.bbox.w / 2) / 1000) * stageRect.width;
+    const centerY = stageRect.top + ((target.bbox.y + target.bbox.h / 2) / 1000) * stageRect.height;
     dragRef.current = {
       mode,
       blockId: block.id,
       startX: event.clientX,
       startY: event.clientY,
-      startBbox: target.bbox
+      startBbox: target.bbox,
+      startRotationDeg: resolveBlockRotationDeg(block),
+      startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
+      centerX,
+      centerY
     };
     stageRef.current.setPointerCapture(event.pointerId);
   };
@@ -574,11 +1615,17 @@ export default function App(): React.JSX.Element {
             x: drag.startBbox.x + dx,
             y: drag.startBbox.y + dy
           }
-        : {
-            ...drag.startBbox,
-            w: drag.startBbox.w + dx,
-            h: drag.startBbox.h + dy
-          };
+        : drag.mode === "resize"
+          ? {
+              ...drag.startBbox,
+              w: drag.startBbox.w + dx,
+              h: drag.startBbox.h + dy
+            }
+          : drag.startBbox;
+    const nextRotationDeg =
+      drag.mode === "rotate"
+        ? clampRotationDeg(drag.startRotationDeg + angleBetweenPointsDeg(drag.centerX, drag.centerY, event.clientX, event.clientY) - drag.startAngleDeg)
+        : null;
 
     updateCurrentChapter(page.id, (chapter) => ({
       ...chapter,
@@ -588,7 +1635,13 @@ export default function App(): React.JSX.Element {
           : {
               ...candidate,
               updatedAt: new Date().toISOString(),
-              blocks: candidate.blocks.map((block) => (block.id === drag.blockId ? applyEditableBlockBbox(block, next) : block))
+              blocks: candidate.blocks.map((block) =>
+                block.id === drag.blockId
+                  ? nextRotationDeg === null
+                    ? applyEditableBlockBbox(block, next)
+                    : { ...block, rotationDeg: nextRotationDeg }
+                  : block
+              )
             }
       )
     }));
@@ -603,14 +1656,38 @@ export default function App(): React.JSX.Element {
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
+      const editableTarget = isEditableTarget(event.target);
+      const selectionClearShortcut =
+        (event.key === "Delete" || event.key === "Backspace") &&
+        !modalOpen &&
+        !editableTarget &&
+        Boolean(inpaintSelectionRect) &&
+        ((activeLayer === "inpaintMask" && inpaintTool === "select") || (activeLayer === "inpaintResult" && inpaintResultTool === "select"));
+      if (selectionClearShortcut) {
+        event.preventDefault();
+        void clearSelectedInpaintSelection().then((handled) => {
+          if (!handled) {
+            pushStatus("선택 범위에서 지울 레이어 내용이 없습니다.");
+          }
+        });
+        return;
+      }
+
+      if ((event.key === "Delete" || event.key === "Backspace") && !modalOpen && !editableTarget) {
+        if (inpaintSelectionRect) {
+          return;
+        }
+      }
+
       const chapter = currentChapterRef.current;
       const pageIds = chapter?.pages.map((page) => page.id) ?? [];
       const activeElement = typeof document !== "undefined" ? document.activeElement : null;
       const navigation = resolveKeyboardPageNavigation({
         key: event.key,
         hasPages: pageIds.length > 0,
-        modalOpen: Boolean(importPreview || renameTarget || settingsOpen),
-        editableTarget: isEditableTarget(event.target),
+        modalOpen,
+        editableTarget,
         centerPanelFocused: Boolean(workspacePanelRef.current && activeElement && workspacePanelRef.current.contains(activeElement))
       });
 
@@ -634,7 +1711,7 @@ export default function App(): React.JSX.Element {
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [importPreview, renameTarget, selectPageForReading, settingsOpen]);
+  }, [activeLayer, clearSelectedInpaintSelection, importPreview, inpaintResultTool, inpaintSelectionRect, inpaintTool, pushStatus, renameTarget, selectPageForReading, settingsOpen]);
 
   const renameWork = useCallback((workId: string) => {
     const work = library.works.find((candidate) => candidate.id === workId);
@@ -772,32 +1849,450 @@ export default function App(): React.JSX.Element {
     }
   }, [pushStatus]);
 
+  const layerToolPanel = (
+    <section className="layer-tool-panel left-tool-panel">
+      <h2>{activeLayer === "overlay" ? "폰트 설정" : activeLayer === "inpaintMask" ? "마스크 도구" : activeLayer === "inpaintResult" ? "결과 레이어 도구" : "도구"}</h2>
+      {activeLayer === "overlay" ? (
+        <>
+          {fontControlValues ? (
+            <>
+              <div className="font-picker-field">
+                <span>서체</span>
+                <FontFamilyPicker
+                  options={fontFamilyOptions}
+                  value={fontControlValues.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}
+                  disabled={selectedPageEditLocked}
+                  onChange={(fontFamily) => updateSelectedBlockFontSetting({ fontFamily })}
+                />
+              </div>
+              <div className="font-metrics-row">
+                <div className="font-size-control">
+                  <label>
+                    <span className="preset-link-label">
+                      폰트 크기
+                      {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
+                    </span>
+                    <input
+                      type="number"
+                      min={8}
+                      max={120}
+                      step={1}
+                      value={fontControlValues.fontSizePx}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ fontSizePx: Number(event.target.value) })}
+                    />
+                  </label>
+                </div>
+                <label>
+                  <span className="preset-link-label">
+                    줄 간격
+                    {renderFontPresetLinkButton("lineHeight", "줄 간격")}
+                  </span>
+                  <input
+                    type="number"
+                    min={0.8}
+                    max={2}
+                    step={0.05}
+                    value={fontControlValues.lineHeight}
+                    disabled={selectedPageEditLocked}
+                    onChange={(event) => updateSelectedBlockFontSetting({ lineHeight: Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+              <div className="font-outline-row">
+                <label>
+                  <span className="preset-link-label">
+                    외곽선 색
+                    {renderFontPresetLinkButton("outlineColor", "외곽선 색")}
+                  </span>
+                  <input
+                    type="color"
+                    className="outline-color-input"
+                    value={fontControlValues.outlineColor ?? "#000000"}
+                    style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}
+                    disabled={selectedPageEditLocked}
+                    onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
+                  />
+                </label>
+                <label>
+                  <span className="preset-link-label">
+                    외곽선 두께
+                    {renderFontPresetLinkButton("outlineWidthPx", "외곽선 두께")}
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={24}
+                    step={0.5}
+                    value={fontControlValues.outlineWidthPx ?? 0}
+                    disabled={selectedPageEditLocked}
+                    onChange={(event) => updateSelectedBlockFontSetting({ outlineWidthPx: Number(event.target.value) })}
+                  />
+                </label>
+              </div>
+              <label>
+                <span className="preset-link-label">
+                  글자색
+                  {renderFontPresetLinkButton("textColor", "글자색")}
+                </span>
+                <input
+                  type="color"
+                  className="outline-color-input"
+                  value={fontControlValues.textColor ?? "#111111"}
+                  style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}
+                  disabled={selectedPageEditLocked}
+                  onChange={(event) => updateSelectedBlockFontSetting({ textColor: event.target.value })}
+                />
+              </label>
+              {selectedBlock ? (
+                <div className="tool-field">
+                  <span>정렬</span>
+                  <div className="text-align-control" role="group" aria-label="텍스트 정렬">
+                    <button
+                      className={selectedBlock.textAlign === "left" ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      onClick={() => updateSelectedBlockFontSetting({ textAlign: "left" })}
+                    >
+                      좌
+                    </button>
+                    <button
+                      className={selectedBlock.textAlign === "center" ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      onClick={() => updateSelectedBlockFontSetting({ textAlign: "center" })}
+                    >
+                      중앙
+                    </button>
+                    <button
+                      className={selectedBlock.textAlign === "right" ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      onClick={() => updateSelectedBlockFontSetting({ textAlign: "right" })}
+                    >
+                      우
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              <label className="tool-checkbox">
+                <input
+                  type="checkbox"
+                  checked={fontControlValues.autoFitText ?? true}
+                  disabled={selectedPageEditLocked}
+                  onChange={(event) => updateSelectedBlockFontSetting({ autoFitText: event.target.checked })}
+                />
+                <span className="preset-link-label">
+                  자동 맞춤
+                  {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
+                </span>
+              </label>
+            </>
+          ) : (
+            <p className="muted-line">블록이나 프리셋을 선택하면 폰트값을 조정할 수 있습니다.</p>
+          )}
+          <div className="font-preset-panel">
+            <div className="font-preset-create">
+              <input
+                value={fontPresetName}
+                disabled={selectedPageEditLocked || !currentChapter}
+                placeholder="새 프리셋 이름"
+                onChange={(event) => setFontPresetName(event.target.value)}
+              />
+              <button type="button" disabled={selectedPageEditLocked || !currentChapter} onClick={createFontPresetFromSelectedBlock}>
+                만들기
+              </button>
+            </div>
+            <div className="font-preset-tags" aria-label="폰트 프리셋">
+              {fontPresets.map((preset) => (
+                <span
+                  key={preset.id}
+                  className={`font-preset-tag ${
+                    selectedBlock?.fontPresetId === preset.id || (!selectedBlock && editingFontPresetId === preset.id) ? "active" : ""
+                  }`}
+                >
+                  <button
+                    type="button"
+                    className="font-preset-tag-name"
+                    disabled={selectedPageEditLocked}
+                    onClick={() => selectFontPreset(preset.id)}
+                    title={selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
+                  >
+                    {preset.name}
+                  </button>
+                  <button
+                    type="button"
+                    className="font-preset-tag-remove"
+                    disabled={selectedPageEditLocked}
+                    onClick={() => deleteFontPreset(preset.id)}
+                    aria-label={`${preset.name} 삭제`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              {selectedBlock?.fontPresetId ? (
+                <button type="button" className="font-preset-clear" disabled={selectedPageEditLocked} onClick={clearSelectedBlockFontPreset}>
+                  프리셋 해제
+                </button>
+              ) : null}
+            </div>
+          </div>
+        </>
+      ) : activeLayer === "inpaintMask" ? (
+        <>
+          <div className="segmented-control" role="group" aria-label="인페인트 도구">
+            <button
+              className={inpaintTool === "select" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("select")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+            >
+              범위 선택
+            </button>
+            <button
+              className={inpaintTool === "brush" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("brush")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+            >
+              브러시
+            </button>
+            <button
+              className={inpaintTool === "eraser" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("eraser")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+            >
+              지우개
+            </button>
+          </div>
+          <label>
+            브러시 크기 {inpaintBrushSize}px
+            <input
+              type="range"
+              min={4}
+              max={96}
+              step={1}
+              value={inpaintBrushSize}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+              onChange={(event) => setInpaintBrushSize(Number(event.target.value))}
+            />
+          </label>
+          <button onClick={undoSelectedPageInpaint} disabled={selectedPageEditLocked || !canUndoInpaint}>
+            되돌리기
+          </button>
+          <button onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
+            선택 해제
+          </button>
+          <button
+            onClick={() => void fillSelectedInpaintSelection()}
+            disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintTool !== "select"}
+          >
+            선택 범위 채우기
+          </button>
+          <button
+            onClick={() => updateSelectedPageInpaintMask(undefined)}
+            disabled={selectedPageEditLocked || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+          >
+            인페인트 마스크 비우기
+          </button>
+        </>
+      ) : activeLayer === "image" ? (
+        <p className="muted-line">원본 이미지 레이어에는 사용할 도구가 없습니다.</p>
+      ) : activeLayer === "inpaint" ? (
+        <p className="muted-line">하위 레이어를 선택해 결과를 보거나 마스크를 편집하세요.</p>
+      ) : activeLayer === "inpaintResult" ? (
+        <>
+          <div className="segmented-control result-tool-grid" role="group" aria-label="인페인트 결과 도구">
+            <button
+              className={inpaintResultTool === "select" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("select")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              범위 선택
+            </button>
+            <button
+              className={inpaintResultTool === "brush" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("brush")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              브러시
+            </button>
+            <button
+              className={inpaintResultTool === "eraser" ? "active" : ""}
+              onClick={() => selectSharedInpaintTool("eraser")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              지우개
+            </button>
+            <button
+              className={inpaintResultTool === "blur" ? "active" : ""}
+              onClick={() => setInpaintResultTool("blur")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              흐림
+            </button>
+            <button
+              className={inpaintResultTool === "sharpen" ? "active" : ""}
+              onClick={() => setInpaintResultTool("sharpen")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              선명
+            </button>
+            <button
+              className={inpaintResultTool === "smudge" ? "active" : ""}
+              onClick={() => setInpaintResultTool("smudge")}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+            >
+              뭉개기
+            </button>
+          </div>
+          <label>
+            색상
+            <input
+              type="color"
+              className="outline-color-input"
+              value={inpaintResultBrushColor}
+              style={{ backgroundColor: inpaintResultBrushColor }}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool !== "brush"}
+              onChange={(event) => setInpaintResultBrushColor(event.target.value)}
+            />
+          </label>
+          <label>
+            브러시 크기 {inpaintResultBrushSize}px
+            <input
+              type="range"
+              min={2}
+              max={128}
+              step={1}
+              value={inpaintResultBrushSize}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+              onChange={(event) => setInpaintResultBrushSize(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            가장자리 {Math.round(inpaintResultBrushHardness * 100)}%
+            <input
+              type="range"
+              min={0}
+              max={1}
+              step={0.01}
+              value={inpaintResultBrushHardness}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+              onChange={(event) => setInpaintResultBrushHardness(Number(event.target.value))}
+            />
+          </label>
+          <label>
+            강도 {Math.round(inpaintResultToolStrength * 100)}%
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.01}
+              value={inpaintResultToolStrength}
+              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool === "brush" || inpaintResultTool === "eraser"}
+              onChange={(event) => setInpaintResultToolStrength(Number(event.target.value))}
+            />
+          </label>
+          <button onClick={undoSelectedPageInpaintResult} disabled={selectedPageEditLocked || !canUndoInpaintResult}>
+            되돌리기
+          </button>
+          <button onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
+            선택 해제
+          </button>
+          <button
+            onClick={() => void fillSelectedInpaintSelection()}
+            disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintResultTool !== "select"}
+          >
+            선택 범위 채우기
+          </button>
+          <button
+            onClick={() => updateSelectedPageInpaintResult(undefined)}
+            disabled={selectedPageEditLocked || !selectedPage?.inpaintResultDataUrl}
+          >
+            인페인트 결과 비우기
+          </button>
+          <button
+            onClick={() => void rerunInpaintWithCurrentMask()}
+            disabled={selectedPageEditLocked || inpaintBusy || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+          >
+            마스크 유지하고 인페인트 다시하기
+          </button>
+          <button
+            onClick={() => void rerunInpaintForSelection()}
+            disabled={selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+          >
+            선택 범위만 다시 인페인트
+          </button>
+        </>
+      ) : (
+        <p className="muted-line">최종 아웃풋 레이어에는 사용할 도구가 없습니다.</p>
+      )}
+    </section>
+  );
+
   return (
     <main className="app-shell">
+      <input
+        ref={imageImportInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        multiple
+        hidden
+        onChange={(event) => void handleImportInputChange("images", event)}
+      />
+      <input
+        ref={folderImportInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp"
+        multiple
+        hidden
+        {...{ webkitdirectory: "" }}
+        onChange={(event) => void handleImportInputChange("folder", event)}
+      />
+      <input
+        ref={zipImportInputRef}
+        type="file"
+        accept=".zip,application/zip"
+        hidden
+        onChange={(event) => void handleImportInputChange("zip", event)}
+      />
+      <input
+        ref={batchImportInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,.zip,application/zip"
+        multiple
+        hidden
+        {...{ webkitdirectory: "" }}
+        onChange={(event) => void handleImportInputChange("zip-folder", event)}
+      />
       <aside className="sidebar">
         <section className="toolbar">
-          <button onClick={() => void openImportPreview("images")} disabled={jobActive}>
-            이미지 열기
-          </button>
-          <button onClick={() => void openImportPreview("folder")} disabled={jobActive}>
-            폴더 열기
-          </button>
-          <button onClick={() => void openImportPreview("zip")} disabled={jobActive}>
-            압축파일 열기
-          </button>
-          <button onClick={() => void openImportPreview("zip-folder")} disabled={jobActive}>
-            작품 일괄 번역
-          </button>
-          <button onClick={() => void openSettings()} disabled={settingsBusy && !settingsOpen}>
-            설정
-          </button>
-          <button onClick={() => void window.mangaApi.openLibraryFolder()}>보관함 폴더</button>
+          <div className="toolbar-header">
+            <span>가져오기</span>
+            <button className="ghost-button" onClick={() => void openSettings()} disabled={settingsBusy && !settingsOpen}>
+              설정
+            </button>
+          </div>
+          <div className="import-actions">
+            <button onClick={() => selectImportFiles("images")} disabled={jobActive}>
+              이미지
+            </button>
+            <button onClick={() => selectImportFiles("folder")} disabled={jobActive}>
+              폴더
+            </button>
+            <button onClick={() => selectImportFiles("zip")} disabled={jobActive}>
+              압축파일
+            </button>
+            <button onClick={() => selectImportFiles("zip-folder")} disabled={jobActive}>
+              일괄 번역
+            </button>
+          </div>
         </section>
+
+        {layerToolPanel}
 
         <LibraryTree
           library={library}
           currentChapterId={currentChapter?.id ?? null}
           jobActive={jobActive}
+          collapsed={libraryCollapsed}
+          onToggleCollapsed={() => setLibraryCollapsed((current) => !current)}
           onOpenChapter={(chapterId) => void openChapter(chapterId)}
           onRenameWork={(workId) => void renameWork(workId)}
           onRenameChapter={(chapterId) => void renameChapter(chapterId)}
@@ -846,9 +2341,29 @@ export default function App(): React.JSX.Element {
               stageRef={stageRef}
               stageSize={stageSize}
               selectedBlockId={selectedBlockId}
+              layerVisibility={layerVisibility}
+              layerOpacity={stageLayerOpacity}
+              activeLayer={activeLayer}
+              inpaintTool={inpaintTool}
+              inpaintBrushSize={inpaintBrushSize}
+              inpaintResultTool={inpaintResultTool}
+              inpaintResultBrushSize={inpaintResultBrushSize}
+              inpaintResultBrushColor={inpaintResultBrushColor}
+              inpaintResultBrushHardness={inpaintResultBrushHardness}
+              inpaintResultToolStrength={inpaintResultToolStrength}
+              inpaintDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintMask" || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+              inpaintResultDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintResult" || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+              inpaintSelectionRect={inpaintSelectionRect}
+              onInpaintLayerChange={updateSelectedPageInpaintMask}
+              onInpaintSelectionChange={setInpaintSelectionRect}
+              onInpaintResultLayerChange={updateSelectedPageInpaintResult}
               onStagePointerMove={onStagePointerMove}
               onStagePointerUp={onStagePointerUp}
-              onStagePointerDown={() => setSelectedBlockId(null)}
+              onStagePointerDown={() => {
+                if (activeLayer === "overlay") {
+                  setSelectedBlockId(null);
+                }
+              }}
               onBlockPointerDown={onBlockPointerDown}
             />
           </div>
@@ -857,32 +2372,68 @@ export default function App(): React.JSX.Element {
             <h2>보관함에서 화를 열거나 새로 가져오세요.</h2>
             <p>작품과 화 단위로 저장해두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.</p>
             <div className="empty-actions">
-              <button onClick={() => void openImportPreview("images")}>이미지 열기</button>
-              <button onClick={() => void openImportPreview("folder")}>폴더 열기</button>
-              <button onClick={() => void openImportPreview("zip")}>압축파일 열기</button>
-              <button onClick={() => void openImportPreview("zip-folder")}>작품 일괄 번역</button>
+              <button onClick={() => selectImportFiles("images")}>이미지 열기</button>
+              <button onClick={() => selectImportFiles("folder")}>폴더 열기</button>
+              <button onClick={() => selectImportFiles("zip")}>압축파일 열기</button>
+              <button onClick={() => selectImportFiles("zip-folder")}>작품 일괄 번역</button>
             </div>
           </div>
         )}
+        <div className={statusWidgetOpen ? "status-widget open" : "status-widget"}>
+          {statusWidgetOpen ? (
+            <section className={`status-widget-panel ${statusWidgetTone}`} aria-label="상태">
+              <div className="status-widget-header">
+                <h2>상태</h2>
+                <button type="button" className="status-widget-close" onClick={() => setStatusWidgetOpen(false)} aria-label="상태 닫기">
+                  ×
+                </button>
+              </div>
+              <div className={`job-pill ${jobState.status}`}>{jobState.progressText}</div>
+              <div className="status-log-scroll">
+                {statusLines.length ? (
+                  statusLines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
+                ) : (
+                  <p className="muted-line">아직 표시할 상태가 없습니다.</p>
+                )}
+              </div>
+            </section>
+          ) : (
+            <button
+              type="button"
+              className={`status-widget-toggle ${statusWidgetTone}`}
+              onClick={() => setStatusWidgetOpen(true)}
+              aria-label={`상태 열기: ${saveStatusLabel}`}
+              title={saveStatusLabel}
+            >
+              <span className="status-widget-dot" aria-hidden="true" />
+              <span className="status-widget-icon" aria-hidden="true">i</span>
+            </button>
+          )}
+        </div>
       </section>
 
       <aside className="right-rail">
-        <section className="run-panel">
-          <div className="run-title">
-            <h2>{currentChapter?.title ?? "현재 화 없음"}</h2>
-            <small>{currentChapter ? `${currentChapter.pages.length}페이지` : "보관함에서 화를 열어 주세요."}</small>
+        <section className="right-rail-quickbar" aria-label="번역 실행">
+          <div className="right-rail-chapter-chip" title={currentChapter?.title ?? "현재 화 없음"}>
+            <strong>{currentChapter?.title ?? "현재 화 없음"}</strong>
+            <span>{currentChapter ? `${currentChapter.pages.length}p` : "대기"}</span>
           </div>
-          <button className="primary" onClick={() => void runAnalysis("pending")} disabled={!currentChapter || jobActive}>
-            이어서 번역
-          </button>
-          <button onClick={() => void runAnalysis("all")} disabled={!currentChapter || jobActive}>
-            전체 다시 번역
-          </button>
-          {jobActive ? (
-            <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
-              취소
+          <div className="run-actions">
+            <button className="primary" onClick={() => void runAnalysis("pending")} disabled={!currentChapter || jobActive}>
+              이어서
             </button>
-          ) : null}
+            <button onClick={() => void runAnalysis("all")} disabled={!currentChapter || jobActive}>
+              전체
+            </button>
+            <button onClick={() => void renderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
+              {renderBusy ? "출력 중" : "출력"}
+            </button>
+            {jobActive ? (
+              <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
+                취소
+              </button>
+            ) : null}
+          </div>
           {showProgressBar && progressSnapshot ? (
             <div className="progress-card">
               <div className="progress-meta">
@@ -913,24 +2464,119 @@ export default function App(): React.JSX.Element {
           ) : null}
         </section>
 
-        <section className="status-panel">
-          <h2>상태</h2>
-          <div className={`job-pill ${jobState.status}`}>{jobState.progressText}</div>
-          <div className="status-log-scroll">
-            {statusLines.length ? (
-              statusLines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
-            ) : (
-              <p className="muted-line">아직 표시할 상태가 없습니다.</p>
-            )}
+        <section className="layer-panel right-rail-layer-panel">
+            <div className="layer-panel-header">
+              <h2>레이어</h2>
+              <label className="focus-mode-toggle">
+                <span>FOCUS MODE</span>
+                <input
+                  type="checkbox"
+                  checked={focusModeEnabled}
+                  onChange={(event) => setFocusModeEnabled(event.target.checked)}
+                />
+                <span className="focus-mode-switch" aria-hidden="true" />
+              </label>
+            </div>
+            <LayerControl
+              label="최종 아웃풋"
+              active={activeLayer === "output"}
+              visible={true}
+              opacity={1}
+              onSelect={() => selectLayer("output")}
+              onVisibleChange={() => undefined}
+              onOpacityChange={() => undefined}
+              viewOnly
+            />
+          <LayerControl
+            label="번역 블록"
+            active={activeLayer === "overlay"}
+            visible={layerVisibility.overlay}
+            opacity={overlayOpacityEditMode ? overlayBackgroundOpacity : layerOpacity.overlay}
+            opacityEditMode={overlayOpacityEditMode}
+            opacityEditModeLabel="배경 투명도 편집"
+            onSelect={() => selectLayer("overlay")}
+            onVisibleChange={(visible) => setLayerVisibility((current) => ({ ...current, overlay: visible }))}
+            onOpacityEditModeChange={(enabled) => {
+              setOverlayOpacityEditMode(enabled);
+              if (enabled) {
+                setLayerOpacity((current) => ({ ...current, overlay: 1 }));
+              }
+            }}
+            onOpacityChange={(opacity) => {
+              if (overlayOpacityEditMode) {
+                updateSelectedPageBlockOpacity(opacity);
+                return;
+              }
+              setLayerOpacity((current) => ({ ...current, overlay: opacity }));
+            }}
+          />
+          <LayerControl
+            label="인페인트 레이어"
+            active={activeLayer === "inpaint" || activeLayer === "inpaintResult" || activeLayer === "inpaintMask"}
+            visible={layerVisibility.inpaint}
+            opacity={layerOpacity.inpaint}
+            onSelect={() => {
+              selectLayer("inpaint");
+            }}
+            onVisibleChange={(visible) =>
+              setLayerVisibility((current) => ({
+                ...current,
+                inpaint: visible,
+                inpaintResult: visible ? current.inpaintResult : false,
+                inpaintMask: visible ? current.inpaintMask : false
+              }))
+            }
+            onOpacityChange={(opacity) => setLayerOpacity((current) => ({ ...current, inpaint: opacity }))}
+          />
+          <div className="layer-subgroup">
+            <LayerControl
+              label="인페인트 결과"
+              active={activeLayer === "inpaintResult"}
+              visible={layerVisibility.inpaint && layerVisibility.inpaintResult}
+              opacity={layerOpacity.inpaintResult}
+              onSelect={() => {
+                selectLayer("inpaintResult");
+              }}
+              onVisibleChange={(visible) => setLayerVisibility((current) => ({ ...current, inpaint: current.inpaint || visible, inpaintResult: visible }))}
+              onOpacityChange={(opacity) => setLayerOpacity((current) => ({ ...current, inpaintResult: opacity }))}
+              nested
+            />
+            <LayerControl
+              label="인페인트 마스크"
+              active={activeLayer === "inpaintMask"}
+              visible={layerVisibility.inpaint && layerVisibility.inpaintMask}
+              opacity={layerOpacity.inpaintMask}
+              onSelect={() => {
+                selectLayer("inpaintMask");
+              }}
+              onVisibleChange={(visible) => setLayerVisibility((current) => ({ ...current, inpaint: current.inpaint || visible, inpaintMask: visible }))}
+              onOpacityChange={(opacity) => setLayerOpacity((current) => ({ ...current, inpaintMask: opacity }))}
+              nested
+            />
           </div>
+          <LayerControl
+            label="원본 이미지"
+            active={activeLayer === "image"}
+            visible={layerVisibility.image}
+            opacity={layerOpacity.image}
+            onSelect={() => selectLayer("image")}
+            onVisibleChange={(visible) => setLayerVisibility((current) => ({ ...current, image: visible }))}
+            onOpacityChange={(opacity) => setLayerOpacity((current) => ({ ...current, image: opacity }))}
+          />
         </section>
 
         <EditorPanel
           block={selectedBlock}
-          disabled={selectedPageEditLocked}
+          fontPresetName={selectedFontPreset?.name}
+          disabled={selectedPageEditLocked || inpaintBusy}
           onUpdate={updateSelectedBlock}
           onDelete={deleteSelectedBlock}
           onDuplicate={duplicateSelectedBlock}
+          onApplyInpaint={() => void applyInpaintSelectedBlock()}
+          onApplyBatchInpaint={() => void applyInpaintAllBlocks()}
+          onUndoInpaint={undoSelectedPageInpaint}
+          batchInpaintDisabled={selectedPageEditLocked || inpaintBusy || !selectedPage || selectedPage.blocks.length === 0}
+          undoInpaintDisabled={selectedPageEditLocked || !canUndoInpaint}
         />
       </aside>
 
@@ -963,9 +2609,6 @@ export default function App(): React.JSX.Element {
               setSettingsOpen(false);
             }
           }}
-          onOpenLogFolder={() => {
-            void window.mangaApi.openLogFolder();
-          }}
           onReset={() => void resetSettings()}
           onSubmit={(nextSettings) => void submitSettings(nextSettings)}
         />
@@ -996,4 +2639,537 @@ function isEditableTarget(target: EventTarget | null): boolean {
   }
 
   return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only']"));
+}
+
+function FontPresetLinkIcon({ linked }: { linked: boolean }): React.JSX.Element {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path d="M10 13a5 5 0 0 0 7.5.5l2.1-2.1a5 5 0 0 0-7.1-7.1l-1.2 1.2" />
+      <path d="M14 11a5 5 0 0 0-7.5-.5l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.2-1.2" />
+      {linked ? null : <path d="M3 3l18 18" />}
+    </svg>
+  );
+}
+
+function buildFontFamilyOptions(systemFonts: SystemFont[], selectedFontFamily?: string): FontFamilyOption[] {
+  const options = new Map<string, FontFamilyOption>();
+  for (const option of FONT_FAMILY_OPTIONS) {
+    options.set(option.value, option);
+  }
+  for (const font of systemFonts) {
+    if (!options.has(font.cssFamily)) {
+      options.set(font.cssFamily, { label: font.family, value: font.cssFamily });
+    }
+  }
+  if (selectedFontFamily && !options.has(selectedFontFamily)) {
+    options.set(selectedFontFamily, { label: selectedFontFamily, value: selectedFontFamily });
+  }
+  return [...options.values()];
+}
+
+type FontFamilyPickerProps = {
+  options: FontFamilyOption[];
+  value: string;
+  disabled: boolean;
+  onChange: (value: string) => void;
+};
+
+function FontFamilyPicker({ options, value, disabled, onChange }: FontFamilyPickerProps): React.JSX.Element {
+  const [open, setOpen] = React.useState(false);
+  const [query, setQuery] = React.useState("");
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
+  const inputRef = React.useRef<HTMLInputElement | null>(null);
+  const selectedOption = options.find((option) => option.value === value) ?? { label: value, value };
+  const normalizedQuery = normalizeFontSearchText(query);
+  const filteredOptions = normalizedQuery
+    ? options.filter((option) => normalizeFontSearchText(option.label).includes(normalizedQuery))
+    : options;
+
+  React.useEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    const handlePointerDown = (event: PointerEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    };
+    window.addEventListener("pointerdown", handlePointerDown);
+    window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => window.removeEventListener("pointerdown", handlePointerDown);
+  }, [open]);
+
+  return (
+    <div className="font-picker" ref={rootRef}>
+      <button
+        type="button"
+        className="font-picker-trigger"
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="font-picker-current-name">{selectedOption.label}</span>
+        <span className="font-picker-current-preview" style={{ fontFamily: selectedOption.value }}>
+          번역 미리보기 Aa
+        </span>
+      </button>
+      {open ? (
+        <div className="font-picker-popover">
+          <input
+            ref={inputRef}
+            className="font-picker-search"
+            type="search"
+            value={query}
+            placeholder="폰트 검색"
+            onChange={(event) => setQuery(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Escape") {
+                setOpen(false);
+              }
+            }}
+          />
+          <div className="font-picker-count">{filteredOptions.length.toLocaleString()}개</div>
+          <div className="font-picker-list" role="listbox">
+            {filteredOptions.length > 0 ? (
+              filteredOptions.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={option.value === value ? "font-picker-option active" : "font-picker-option"}
+                  role="option"
+                  aria-selected={option.value === value}
+                  onClick={() => {
+                    onChange(option.value);
+                    setOpen(false);
+                    setQuery("");
+                  }}
+                >
+                  <span className="font-picker-option-name">{option.label}</span>
+                  <span className="font-picker-option-preview" style={{ fontFamily: option.value }}>
+                    오늘의 번역 Aa 123
+                  </span>
+                </button>
+              ))
+            ) : (
+              <div className="font-picker-empty">검색 결과 없음</div>
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function normalizeFontSearchText(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "");
+}
+
+type LayerControlProps = {
+  label: string;
+  active: boolean;
+  visible: boolean;
+  opacity: number;
+  viewOnly?: boolean;
+  nested?: boolean;
+  opacityEditMode?: boolean;
+  opacityEditModeLabel?: string;
+  onSelect: () => void;
+  onVisibleChange: (visible: boolean) => void;
+  onOpacityEditModeChange?: (enabled: boolean) => void;
+  onOpacityChange: (opacity: number) => void;
+};
+
+function LayerControl({
+  label,
+  active,
+  visible,
+  opacity,
+  viewOnly,
+  nested,
+  opacityEditMode,
+  opacityEditModeLabel,
+  onSelect,
+  onVisibleChange,
+  onOpacityEditModeChange,
+  onOpacityChange
+}: LayerControlProps): React.JSX.Element {
+  return (
+    <div
+      className={`layer-control${active ? " active" : ""}${nested ? " nested" : ""}`}
+      role="button"
+      tabIndex={0}
+      onClick={onSelect}
+      onKeyDown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelect();
+        }
+      }}
+    >
+      <div className="layer-toggle">
+        <span className="layer-select-grip" aria-hidden="true">::</span>
+        {viewOnly ? null : (
+          <input
+            type="checkbox"
+            checked={visible}
+            onClick={(event) => event.stopPropagation()}
+            onChange={(event) => onVisibleChange(event.target.checked)}
+          />
+        )}
+        <span className="layer-label-text">{label}</span>
+        {viewOnly ? <span className="layer-active-badge">보기</span> : <span className="layer-opacity-value">{Math.round(opacity * 100)}%</span>}
+      </div>
+      {onOpacityEditModeChange && opacityEditModeLabel ? (
+        <label className="layer-edit-toggle" onClick={(event) => event.stopPropagation()}>
+          <input
+            type="checkbox"
+            checked={Boolean(opacityEditMode)}
+            onChange={(event) => onOpacityEditModeChange(event.target.checked)}
+          />
+          {opacityEditModeLabel}
+        </label>
+      ) : null}
+      {viewOnly ? null : (
+        <input
+          className="layer-opacity-slider"
+          type="range"
+          min={0}
+          max={1}
+          step={0.01}
+          value={opacity}
+          disabled={!visible}
+          aria-label={`${label} 투명도`}
+          onClick={(event) => event.stopPropagation()}
+          onChange={(event) => onOpacityChange(Number(event.target.value))}
+        />
+      )}
+    </div>
+  );
+}
+
+async function drawBlocksOnInpaintMask(page: MangaPage, blocks: TranslationBlock[]): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = page.width;
+  canvas.height = page.height;
+
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl ?? "";
+  }
+
+  const sourceCanvas = document.createElement("canvas");
+  sourceCanvas.width = page.width;
+  sourceCanvas.height = page.height;
+  const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
+  if (!sourceContext) {
+    return canvas.toDataURL("image/png");
+  }
+
+  const sourceImage = await loadImage(page.dataUrl);
+  sourceContext.drawImage(sourceImage, 0, 0, page.width, page.height);
+  const sourcePixels = sourceContext.getImageData(0, 0, page.width, page.height);
+
+  for (const block of blocks) {
+    paintSourceTextPixelsOnMask(context, sourcePixels, page, block);
+  }
+  expandCanvasMask(context, page.width, page.height, 1);
+
+  return canvas.toDataURL("image/png");
+}
+
+async function maskDataUrlForSelection(maskDataUrl: string, width: number, height: number, rect: ImageRect): Promise<string | null> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return null;
+  }
+
+  const maskImage = await loadImage(maskDataUrl);
+  context.drawImage(maskImage, 0, 0, width, height);
+  const pixels = context.getImageData(0, 0, width, height);
+  const selection = clampImageRect(rect, width, height);
+  let hasMaskPixel = false;
+
+  for (let y = 0; y < height; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      const insideSelection = x >= selection.x && x < selection.x + selection.width && y >= selection.y && y < selection.y + selection.height;
+      const alpha = pixels.data[offset + 3] / 255;
+      const luma = (pixels.data[offset] * 0.299 + pixels.data[offset + 1] * 0.587 + pixels.data[offset + 2] * 0.114) / 255;
+      const active = insideSelection && alpha * luma > 0.03;
+      if (active) {
+        hasMaskPixel = true;
+        continue;
+      }
+      pixels.data[offset] = 0;
+      pixels.data[offset + 1] = 0;
+      pixels.data[offset + 2] = 0;
+      pixels.data[offset + 3] = 0;
+    }
+  }
+
+  if (!hasMaskPixel) {
+    return null;
+  }
+  context.putImageData(pixels, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+async function clearImageDataUrlRect(dataUrl: string, width: number, height: number, rect: ImageRect): Promise<string | undefined> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return dataUrl;
+  }
+
+  const image = await loadImage(dataUrl);
+  context.drawImage(image, 0, 0, width, height);
+  const selection = clampImageRect(rect, width, height);
+  context.clearRect(selection.x, selection.y, selection.width, selection.height);
+  return canvasHasVisiblePixels(canvas) ? canvas.toDataURL("image/png") : undefined;
+}
+
+async function fillImageDataUrlRect({
+  dataUrl,
+  width,
+  height,
+  rect,
+  fillStyle
+}: {
+  dataUrl: string | undefined;
+  width: number;
+  height: number;
+  rect: ImageRect;
+  fillStyle: string;
+}): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return dataUrl ?? "";
+  }
+
+  if (dataUrl) {
+    const image = await loadImage(dataUrl);
+    context.drawImage(image, 0, 0, width, height);
+  }
+
+  const selection = clampImageRect(rect, width, height);
+  context.fillStyle = fillStyle;
+  context.fillRect(selection.x, selection.y, selection.width, selection.height);
+  return canvas.toDataURL("image/png");
+}
+
+async function mergePartialInpaintResult(
+  previousDataUrl: string | undefined,
+  patchDataUrl: string,
+  patchMaskDataUrl: string,
+  width: number,
+  height: number
+): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return patchDataUrl;
+  }
+
+  if (previousDataUrl) {
+    const previousImage = await loadImage(previousDataUrl);
+    context.drawImage(previousImage, 0, 0, width, height);
+  }
+
+  const maskImage = await loadImage(patchMaskDataUrl);
+  context.save();
+  context.globalCompositeOperation = "destination-out";
+  context.drawImage(maskImage, 0, 0, width, height);
+  context.restore();
+
+  const patchImage = await loadImage(patchDataUrl);
+  context.drawImage(patchImage, 0, 0, width, height);
+  return canvas.toDataURL("image/png");
+}
+
+function clampImageRect(rect: ImageRect, width: number, height: number): ImageRect {
+  const x = Math.max(0, Math.min(width, Math.floor(rect.x)));
+  const y = Math.max(0, Math.min(height, Math.floor(rect.y)));
+  const right = Math.max(x, Math.min(width, Math.ceil(rect.x + rect.width)));
+  const bottom = Math.max(y, Math.min(height, Math.ceil(rect.y + rect.height)));
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y
+  };
+}
+
+function canvasHasVisiblePixels(canvas: HTMLCanvasElement): boolean {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return false;
+  }
+
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  for (let offset = 3; offset < pixels.length; offset += 4) {
+    if (pixels[offset] > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function paintSourceTextPixelsOnMask(
+  context: CanvasRenderingContext2D,
+  sourcePixels: ImageData,
+  page: MangaPage,
+  block: TranslationBlock
+): void {
+  const rect = textMaskScanRect(block, page.width, page.height);
+  if (rect.width <= 0 || rect.height <= 0) {
+    return;
+  }
+
+  const maskPixels = context.getImageData(rect.x, rect.y, rect.width, rect.height);
+  let painted = 0;
+
+  for (let y = 0; y < rect.height; y += 1) {
+    for (let x = 0; x < rect.width; x += 1) {
+      const sourceOffset = ((rect.y + y) * page.width + rect.x + x) * 4;
+      const alpha = sourcePixels.data[sourceOffset + 3];
+      if (alpha < 48) {
+        continue;
+      }
+
+      const red = sourcePixels.data[sourceOffset];
+      const green = sourcePixels.data[sourceOffset + 1];
+      const blue = sourcePixels.data[sourceOffset + 2];
+      const luma = red * 0.299 + green * 0.587 + blue * 0.114;
+      if (luma > 205) {
+        continue;
+      }
+
+      const targetOffset = (y * rect.width + x) * 4;
+      maskPixels.data[targetOffset] = 255;
+      maskPixels.data[targetOffset + 1] = 255;
+      maskPixels.data[targetOffset + 2] = 255;
+      maskPixels.data[targetOffset + 3] = 255;
+      painted += 1;
+    }
+  }
+
+  if (painted > 0) {
+    context.putImageData(maskPixels, rect.x, rect.y);
+  }
+}
+
+function textMaskScanRect(block: TranslationBlock, pageWidth: number, pageHeight: number): { x: number; y: number; width: number; height: number } {
+  const rect = bboxToPixels(block.bbox, pageWidth, pageHeight);
+  const blockShortSide = Math.max(1, Math.min(rect.w, rect.h));
+  const pageShortSide = Math.min(pageWidth, pageHeight);
+  const padding = Math.max(2, Math.min(10, Math.round(Math.min(blockShortSide * 0.08, pageShortSide * 0.004))));
+  const x = Math.max(0, Math.floor(rect.x - padding));
+  const y = Math.max(0, Math.floor(rect.y - padding));
+  const right = Math.min(pageWidth, Math.ceil(rect.x + rect.w + padding));
+  const bottom = Math.min(pageHeight, Math.ceil(rect.y + rect.h + padding));
+
+  return {
+    x,
+    y,
+    width: Math.max(0, right - x),
+    height: Math.max(0, bottom - y)
+  };
+}
+
+function expandCanvasMask(context: CanvasRenderingContext2D, width: number, height: number, radius: number): void {
+  if (radius <= 0) {
+    return;
+  }
+
+  const imageData = context.getImageData(0, 0, width, height);
+  const sourceMask = new Uint8Array(width * height);
+  for (let index = 0; index < sourceMask.length; index += 1) {
+    const offset = index * 4;
+    sourceMask[index] = imageData.data[offset + 3] > 0 ? 255 : 0;
+  }
+
+  const expanded = expandMask(sourceMask, width, height, radius);
+  for (let index = 0; index < expanded.length; index += 1) {
+    if (expanded[index] <= 0) {
+      continue;
+    }
+    const offset = index * 4;
+    imageData.data[offset] = 255;
+    imageData.data[offset + 1] = 255;
+    imageData.data[offset + 2] = 255;
+    imageData.data[offset + 3] = 255;
+  }
+  context.putImageData(imageData, 0, 0);
+}
+
+function expandMask(mask: Uint8Array, width: number, height: number, radius: number): Uint8Array {
+  const horizontal = new Uint8Array(mask.length);
+  const output = new Uint8Array(mask.length);
+
+  for (let y = 0; y < height; y += 1) {
+    let activeCount = 0;
+    for (let x = -radius; x <= radius; x += 1) {
+      if (x >= 0 && x < width && mask[y * width + x] > 0) {
+        activeCount += 1;
+      }
+    }
+    for (let x = 0; x < width; x += 1) {
+      horizontal[y * width + x] = activeCount > 0 ? 255 : 0;
+      const removeX = x - radius;
+      const addX = x + radius + 1;
+      if (removeX >= 0 && mask[y * width + removeX] > 0) {
+        activeCount -= 1;
+      }
+      if (addX < width && mask[y * width + addX] > 0) {
+        activeCount += 1;
+      }
+    }
+  }
+
+  for (let x = 0; x < width; x += 1) {
+    let activeCount = 0;
+    for (let y = -radius; y <= radius; y += 1) {
+      if (y >= 0 && y < height && horizontal[y * width + x] > 0) {
+        activeCount += 1;
+      }
+    }
+    for (let y = 0; y < height; y += 1) {
+      output[y * width + x] = activeCount > 0 ? 255 : 0;
+      const removeY = y - radius;
+      const addY = y + radius + 1;
+      if (removeY >= 0 && horizontal[removeY * width + x] > 0) {
+        activeCount -= 1;
+      }
+      if (addY < height && horizontal[addY * width + x] > 0) {
+        activeCount += 1;
+      }
+    }
+  }
+
+  return output;
+}
+
+function angleBetweenPointsDeg(centerX: number, centerY: number, x: number, y: number): number {
+  return (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
+}
+
+function loadImage(src: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error("인페인트 레이어 이미지를 불러오지 못했습니다."));
+    image.src = src;
+  });
 }

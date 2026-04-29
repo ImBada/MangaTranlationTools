@@ -4,6 +4,7 @@ import {
   mkdir,
   readFile,
   readdir,
+  rename,
   rm,
   stat,
   unlink,
@@ -11,7 +12,7 @@ import {
 } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
-import { nativeImage } from "electron";
+import sharp from "sharp";
 import type {
   ChapterSnapshot,
   CreateImportRequest,
@@ -20,15 +21,18 @@ import type {
   ImportPageDraft,
   ImportPreviewResult,
   ImportSourceKind,
+  InpaintSettings,
   LibraryChapter,
   LibraryChapterSummary,
   LibraryIndex,
   LibraryPageRecord,
   LibraryWork,
   LibraryWorkSummary,
-  MangaPage
+  MangaPage,
+  RenderPageResult
 } from "../shared/types";
 import { getAppPaths } from "./appPaths";
+import { readImageDimensions } from "./imageDimensions";
 
 type ZipEntryLike = {
   entryName: string;
@@ -49,6 +53,8 @@ const AdmZip = require("adm-zip") as {
   new (archivePath: string): AdmZipLike;
 };
 
+const chapterWriteQueues = new Map<string, Promise<void>>();
+
 type StoredIndexFile = {
   workOrder: string[];
 };
@@ -57,9 +63,19 @@ type WorkFile = LibraryWork;
 
 type ChapterFile = LibraryChapter;
 
+type SaveChapterSnapshotOptions = {
+  dirtyPageIds?: string[];
+};
+
 export type ChapterRunPaths = {
   chapterDir: string;
   runDir: string;
+};
+
+export type UploadedImportFile = {
+  path: string;
+  name: string;
+  relativePath?: string;
 };
 
 export function getLibraryRoot(): string {
@@ -104,10 +120,180 @@ export async function openChapter(chapterId: string): Promise<ChapterSnapshot> {
   return hydrateChapter(chapter);
 }
 
-export async function saveChapterSnapshot(snapshot: ChapterSnapshot): Promise<ChapterSnapshot> {
-  const stored = toStoredChapter(snapshot);
-  await writeChapterFile(stored);
-  return hydrateChapter(stored);
+export async function saveChapterSnapshot(snapshot: ChapterSnapshot, options: SaveChapterSnapshotOptions = {}): Promise<ChapterSnapshot> {
+  const saved = await enqueueChapterMutation(snapshot.id, async () => {
+    const current = await readChapterFile(snapshot.workId, snapshot.id);
+    const stored = toStoredChapter(snapshot);
+    const next = current ? mergeChapterSnapshotForSave(stored, current, options.dirtyPageIds) : stored;
+    await writeChapterFile(next);
+    return next;
+  });
+  return hydrateChapter(saved);
+}
+
+export async function saveRenderedPage(chapterId: string, pageId: string, dataUrl: string): Promise<RenderPageResult> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
+  const buffer = dataUrlToBuffer(dataUrl);
+  const outputDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "renders");
+  await mkdir(outputDir, { recursive: true });
+  const outputPath = join(outputDir, `${sanitizeFileBasename(page.name, page.id)}-${page.id}.png`);
+  await writeFile(outputPath, buffer);
+  return { outputPath };
+}
+
+export async function saveInpaintResult(
+  chapterId: string,
+  pageId: string,
+  maskDataUrl: string,
+  resultDataUrl: string,
+  settings: InpaintSettings
+): Promise<ChapterSnapshot> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+
+  const now = new Date().toISOString();
+  const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
+  await mkdir(inpaintDir, { recursive: true });
+  const maskPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-mask.png`);
+  const resultPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-result.png`);
+  const normalizedResultDataUrl = await clipOpaqueInpaintResultToMask(resultDataUrl, maskDataUrl);
+  await writeFile(maskPath, dataUrlToBuffer(maskDataUrl));
+  await writeFile(resultPath, dataUrlToBuffer(normalizedResultDataUrl));
+
+  let found = false;
+  chapter.pages = chapter.pages.map((page) => {
+    if (page.id !== pageId) {
+      return page;
+    }
+    found = true;
+    return {
+      ...page,
+      inpaintMaskPath: maskPath,
+      inpaintResultPath: resultPath,
+      inpaintMaskDataUrl: undefined,
+      inpaintResultDataUrl: undefined,
+      inpaintStatus: "completed",
+      inpaintSettings: settings,
+      updatedAt: now
+    };
+  });
+  if (!found) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
+  chapter.updatedAt = now;
+  await writeChapterFile(chapter);
+  await touchWork(locator.workId, now);
+  return hydrateChapter(chapter);
+}
+
+export async function saveInpaintMask(chapterId: string, pageId: string, maskDataUrl: string | undefined): Promise<ChapterSnapshot> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
+  const now = new Date().toISOString();
+  const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
+  const maskPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-mask.png`);
+
+  if (maskDataUrl) {
+    await mkdir(inpaintDir, { recursive: true });
+    await writeFile(maskPath, dataUrlToBuffer(maskDataUrl));
+  } else {
+    await safeUnlink(page.inpaintMaskPath ?? maskPath);
+    if (page.inpaintResultPath) {
+      await safeUnlink(page.inpaintResultPath);
+    }
+  }
+
+  chapter.pages = chapter.pages.map((candidate) =>
+    candidate.id === pageId
+      ? {
+          ...candidate,
+          inpaintMaskPath: maskDataUrl ? maskPath : undefined,
+          inpaintResultPath: maskDataUrl ? candidate.inpaintResultPath : undefined,
+          inpaintMaskDataUrl: undefined,
+          inpaintResultDataUrl: undefined,
+          inpaintStatus: "idle",
+          updatedAt: now
+        }
+      : candidate
+  );
+  chapter.updatedAt = now;
+  await writeChapterFile(chapter);
+  await touchWork(locator.workId, now);
+  return hydrateChapter(chapter);
+}
+
+export async function saveInpaintResultLayer(chapterId: string, pageId: string, resultDataUrl: string | undefined): Promise<ChapterSnapshot> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
+  const now = new Date().toISOString();
+  const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
+  const resultPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-result.png`);
+
+  if (resultDataUrl) {
+    await mkdir(inpaintDir, { recursive: true });
+    await writeFile(resultPath, dataUrlToBuffer(resultDataUrl));
+  } else {
+    await safeUnlink(page.inpaintResultPath ?? resultPath);
+  }
+
+  chapter.pages = chapter.pages.map((candidate) =>
+    candidate.id === pageId
+      ? {
+          ...candidate,
+          inpaintResultPath: resultDataUrl ? resultPath : undefined,
+          inpaintResultDataUrl: undefined,
+          inpaintStatus: resultDataUrl ? "completed" : "idle",
+          updatedAt: now
+        }
+      : candidate
+  );
+  chapter.updatedAt = now;
+  await writeChapterFile(chapter);
+  await touchWork(locator.workId, now);
+  return hydrateChapter(chapter);
 }
 
 export async function renameWork(workId: string, title: string): Promise<LibraryIndex> {
@@ -356,6 +542,76 @@ export async function previewZipFolder(folderPath: string): Promise<ImportPrevie
   };
 }
 
+export async function previewUploadedFiles(kind: ImportSourceKind, files: UploadedImportFile[]): Promise<ImportPreviewResult> {
+  const normalized = files
+    .map((file) => ({
+      ...file,
+      relativePath: normalizePathSeparators(file.relativePath || file.name),
+      name: basename(file.name)
+    }))
+    .sort((left, right) => (left.relativePath || left.name).localeCompare(right.relativePath || right.name, undefined, { numeric: true, sensitivity: "base" }));
+
+  if (kind === "images") {
+    return previewUploadedImageChapter("images", DEFAULT_WORK_TITLE, "제목없음", normalized.filter((file) => isSupportedImagePath(file.name)));
+  }
+
+  if (kind === "folder") {
+    const imageFiles = normalized.filter((file) => isSupportedImagePath(file.name));
+    const title = firstPathSegment(imageFiles[0]?.relativePath) || DEFAULT_WORK_TITLE;
+    return previewUploadedImageChapter("folder", DEFAULT_WORK_TITLE, title, imageFiles);
+  }
+
+  if (kind === "zip") {
+    const zipFile = normalized.find((file) => isZipPath(file.name));
+    if (!zipFile) {
+      return emptyPreview("zip", "single", DEFAULT_WORK_TITLE);
+    }
+    const preview = await previewZip(zipFile.path);
+    return {
+      ...preview,
+      chapters: preview.chapters.map((chapter) => ({
+        ...chapter,
+        pages: chapter.pages.map((page) => ({ ...page, sourcePath: zipFile.path }))
+      }))
+    };
+  }
+
+  const chapters: ImportChapterDraft[] = [];
+  for (const zipFile of normalized.filter((file) => isZipPath(file.name))) {
+    const preview = await previewZip(zipFile.path);
+    chapters.push(
+      ...preview.chapters.map((chapter) => ({
+        ...chapter,
+        sourceKind: "zip-folder" as const,
+        pages: chapter.pages.map((page) => ({ ...page, sourceKind: "zip-entry" as const, sourcePath: zipFile.path }))
+      }))
+    );
+  }
+
+  const groups = new Map<string, UploadedImportFile[]>();
+  for (const imageFile of normalized.filter((file) => isSupportedImagePath(file.name))) {
+    const groupKey = dirname(imageFile.relativePath || imageFile.name);
+    const key = groupKey === "." ? "images" : groupKey;
+    groups.set(key, [...(groups.get(key) ?? []), imageFile]);
+  }
+
+  for (const [groupName, groupFiles] of groups) {
+    chapters.push({
+      draftId: randomUUID(),
+      title: normalizeImportPageName(groupName),
+      sourceKind: "folder",
+      pages: groupFiles.map(uploadedFileToPageDraft)
+    });
+  }
+
+  return {
+    mode: "batch",
+    sourceKind: "zip-folder",
+    suggestedWorkTitle: firstPathSegment(normalized[0]?.relativePath) || DEFAULT_WORK_TITLE,
+    chapters
+  };
+}
+
 export async function createImport(request: CreateImportRequest): Promise<CreateImportResult> {
   const target = request.target.mode === "new" ? await createWork(request.target.title || request.preview.suggestedWorkTitle) : await ensureExistingWork(request.target.workId);
   const selections = new Map(request.selections.map((selection) => [selection.draftId, selection]));
@@ -387,59 +643,43 @@ export async function createImport(request: CreateImportRequest): Promise<Create
 }
 
 export async function markChapterPagesRunning(chapterId: string, pageIds: string[]): Promise<ChapterSnapshot> {
-  const locator = await findChapterLocation(chapterId);
-  if (!locator) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-  const chapter = await readChapterFile(locator.workId, locator.chapterId);
-  if (!chapter) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-
-  const now = new Date().toISOString();
-  chapter.pages = chapter.pages.map((page) =>
-    pageIds.includes(page.id)
-      ? {
-          ...page,
-          analysisStatus: "running",
-          lastError: undefined,
-          updatedAt: now
-        }
-      : page
-  );
-  chapter.status = resolveChapterStatus(chapter.pages);
-  chapter.updatedAt = now;
-  await writeChapterFile(chapter);
-  await touchWork(locator.workId, now);
+  const chapter = await mutateExistingChapterFile(chapterId, (chapter) => {
+    const now = new Date().toISOString();
+    chapter.pages = chapter.pages.map((page) =>
+      pageIds.includes(page.id)
+        ? {
+            ...page,
+            analysisStatus: "running",
+            lastError: undefined,
+            updatedAt: now
+          }
+        : page
+    );
+    chapter.status = resolveChapterStatus(chapter.pages);
+    chapter.updatedAt = now;
+    return chapter;
+  });
   return hydrateChapter(chapter);
 }
 
 export async function updatePageAfterAnalysis(chapterId: string, page: MangaPage, warnings: string[], status: "completed" | "failed"): Promise<void> {
-  const locator = await findChapterLocation(chapterId);
-  if (!locator) {
-    return;
-  }
-  const chapter = await readChapterFile(locator.workId, locator.chapterId);
-  if (!chapter) {
-    return;
-  }
-
-  const now = new Date().toISOString();
-  chapter.pages = chapter.pages.map((record) =>
-    record.id === page.id
-      ? {
-          ...record,
-          blocks: page.blocks,
-          analysisStatus: status,
-          lastError: status === "failed" ? warnings[warnings.length - 1] : undefined,
-          updatedAt: now
-        }
-      : record
-  );
-  chapter.updatedAt = now;
-  chapter.status = resolveChapterStatus(chapter.pages);
-  await writeChapterFile(chapter);
-  await touchWork(locator.workId, now);
+  await mutateExistingChapterFile(chapterId, (chapter) => {
+    const now = new Date().toISOString();
+    chapter.pages = chapter.pages.map((record) =>
+      record.id === page.id
+        ? {
+            ...record,
+            blocks: page.blocks,
+            analysisStatus: status,
+            lastError: status === "failed" ? warnings[warnings.length - 1] : undefined,
+            updatedAt: now
+          }
+        : record
+    );
+    chapter.updatedAt = now;
+    chapter.status = resolveChapterStatus(chapter.pages);
+    return chapter;
+  }).catch(() => undefined);
 }
 
 export async function finalizeRunningPages(
@@ -448,61 +688,45 @@ export async function finalizeRunningPages(
   status: "idle" | "failed",
   errorMessage?: string
 ): Promise<void> {
-  const locator = await findChapterLocation(chapterId);
-  if (!locator) {
-    return;
-  }
-  const chapter = await readChapterFile(locator.workId, locator.chapterId);
-  if (!chapter) {
-    return;
-  }
-
-  const now = new Date().toISOString();
-  chapter.pages = chapter.pages.map((page) =>
-    pageIds.includes(page.id) && page.analysisStatus === "running"
-      ? {
-          ...page,
-          analysisStatus: status,
-          lastError: status === "failed" ? errorMessage : undefined,
-          updatedAt: now
-        }
-      : page
-  );
-  chapter.updatedAt = now;
-  chapter.status = resolveChapterStatus(chapter.pages);
-  await writeChapterFile(chapter);
-  await touchWork(locator.workId, now);
+  await mutateExistingChapterFile(chapterId, (chapter) => {
+    const now = new Date().toISOString();
+    chapter.pages = chapter.pages.map((page) =>
+      pageIds.includes(page.id) && page.analysisStatus === "running"
+        ? {
+            ...page,
+            analysisStatus: status,
+            lastError: status === "failed" ? errorMessage : undefined,
+            updatedAt: now
+          }
+        : page
+    );
+    chapter.updatedAt = now;
+    chapter.status = resolveChapterStatus(chapter.pages);
+    return chapter;
+  }).catch(() => undefined);
 }
 
 export async function updatePagesAfterAnalysis(chapterId: string, pages: MangaPage[]): Promise<ChapterSnapshot> {
-  const locator = await findChapterLocation(chapterId);
-  if (!locator) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-  const chapter = await readChapterFile(locator.workId, locator.chapterId);
-  if (!chapter) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-
   const pageMap = new Map(pages.map((page) => [page.id, page]));
-  const now = new Date().toISOString();
-  chapter.pages = chapter.pages.map((record) => {
-    const next = pageMap.get(record.id);
-    if (!next) {
-      return record;
-    }
-    return {
-      ...record,
-      blocks: next.blocks,
-      analysisStatus: next.analysisStatus,
-      lastError: next.lastError,
-      updatedAt: now
-    };
+  const chapter = await mutateExistingChapterFile(chapterId, (chapter) => {
+    const now = new Date().toISOString();
+    chapter.pages = chapter.pages.map((record) => {
+      const next = pageMap.get(record.id);
+      if (!next) {
+        return record;
+      }
+      return {
+        ...record,
+        blocks: next.blocks,
+        analysisStatus: next.analysisStatus,
+        lastError: next.lastError,
+        updatedAt: now
+      };
+    });
+    chapter.updatedAt = now;
+    chapter.status = resolveChapterStatus(chapter.pages);
+    return chapter;
   });
-  chapter.updatedAt = now;
-  chapter.status = resolveChapterStatus(chapter.pages);
-  await writeChapterFile(chapter);
-  await touchWork(locator.workId, now);
   return hydrateChapter(chapter);
 }
 
@@ -534,6 +758,10 @@ export function getRunPaths(chapterId: string, runId: string): Promise<ChapterRu
     const runDir = join(chapterDir, "runs", runId);
     return { chapterDir, runDir };
   })();
+}
+
+export function isZipPath(path: string): boolean {
+  return extname(path).toLowerCase() === ".zip";
 }
 
 async function createWork(title: string): Promise<LibraryWork> {
@@ -610,8 +838,7 @@ async function materializePageRecord(pageDraft: ImportPageDraft, pagesDir: strin
     await copyFile(pageDraft.sourcePath, outputPath);
   }
 
-  const image = nativeImage.createFromPath(outputPath);
-  const size = image.getSize();
+  const size = await readImageDimensions(outputPath);
   const now = new Date().toISOString();
 
   return {
@@ -627,12 +854,127 @@ async function materializePageRecord(pageDraft: ImportPageDraft, pagesDir: strin
   };
 }
 
+function previewUploadedImageChapter(
+  sourceKind: ImportSourceKind,
+  suggestedWorkTitle: string,
+  title: string,
+  files: UploadedImportFile[]
+): ImportPreviewResult {
+  return {
+    mode: "single",
+    sourceKind,
+    suggestedWorkTitle,
+    chapters: [
+      {
+        draftId: randomUUID(),
+        title,
+        sourceKind,
+        pages: files.map(uploadedFileToPageDraft)
+      }
+    ]
+  };
+}
+
+function uploadedFileToPageDraft(file: UploadedImportFile): ImportPageDraft {
+  return {
+    name: basename(file.relativePath || file.name),
+    sourceKind: "file",
+    sourcePath: file.path
+  };
+}
+
+function emptyPreview(sourceKind: ImportSourceKind, mode: "single" | "batch", suggestedWorkTitle: string): ImportPreviewResult {
+  return {
+    mode,
+    sourceKind,
+    suggestedWorkTitle,
+    chapters: []
+  };
+}
+
+function normalizePathSeparators(value: string): string {
+  return value.replace(/\\/g, "/").replace(/^\/+/, "");
+}
+
+function dataUrlToBuffer(dataUrl: string): Buffer {
+  const match = /^data:image\/png;base64,(.+)$/u.exec(dataUrl);
+  if (!match) {
+    throw new Error("PNG 데이터 URL이 아닙니다.");
+  }
+  return Buffer.from(match[1], "base64");
+}
+
+async function clipOpaqueInpaintResultToMask(resultDataUrl: string, maskDataUrl: string): Promise<string> {
+  const result = await sharp(dataUrlToBuffer(resultDataUrl)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const resultData = Buffer.from(result.data);
+  let hasTransparentPixel = false;
+  for (let offset = 3; offset < resultData.length; offset += 4) {
+    if (resultData[offset] < 255) {
+      hasTransparentPixel = true;
+      break;
+    }
+  }
+  if (hasTransparentPixel) {
+    return resultDataUrl;
+  }
+
+  const mask = await sharp(dataUrlToBuffer(maskDataUrl))
+    .ensureAlpha()
+    .resize(result.info.width, result.info.height, { fit: "fill" })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  for (let offset = 0; offset < resultData.length; offset += 4) {
+    const alpha = mask.data[offset + 3] / 255;
+    const luma = (mask.data[offset] * 0.299 + mask.data[offset + 1] * 0.587 + mask.data[offset + 2] * 0.114) / 255;
+    resultData[offset + 3] = Math.round(255 * alpha * luma);
+  }
+
+  const buffer = await sharp(resultData, {
+    raw: {
+      width: result.info.width,
+      height: result.info.height,
+      channels: 4
+    }
+  }).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+function sanitizeFileBasename(value: string, fallback: string): string {
+  const base = basename(value, extname(value)).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
+  return base || fallback;
+}
+
+function firstPathSegment(value: string | undefined): string {
+  if (!value) {
+    return "";
+  }
+  return normalizeImportPageName(normalizePathSeparators(value).split("/").filter(Boolean)[0] || "");
+}
+
 async function hydrateChapter(chapter: ChapterFile): Promise<ChapterSnapshot> {
   const pages = await Promise.all(
-    reorderRecords(chapter.pages, chapter.pageOrder).map(async (page) => ({
-      ...page,
-      dataUrl: await fileToDataUrl(page.imagePath)
-    }))
+    reorderRecords(chapter.pages, chapter.pageOrder).map(async (page) => {
+      const inpaintMaskDataUrl = page.inpaintMaskPath && existsSync(page.inpaintMaskPath)
+        ? await fileToDataUrl(page.inpaintMaskPath)
+        : page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+      const inpaintResultDataUrl = page.inpaintResultPath && existsSync(page.inpaintResultPath)
+        ? await fileToDataUrl(page.inpaintResultPath)
+        : page.inpaintResultDataUrl;
+      const clippedInpaintResultDataUrl = inpaintMaskDataUrl && inpaintResultDataUrl
+        ? await clipOpaqueInpaintResultToMask(inpaintResultDataUrl, inpaintMaskDataUrl)
+        : inpaintResultDataUrl;
+      if (page.inpaintResultPath && inpaintResultDataUrl && clippedInpaintResultDataUrl && clippedInpaintResultDataUrl !== inpaintResultDataUrl) {
+        await writeFile(page.inpaintResultPath, dataUrlToBuffer(clippedInpaintResultDataUrl));
+      }
+      return {
+        ...page,
+        inpaintMaskDataUrl,
+        inpaintResultDataUrl: clippedInpaintResultDataUrl,
+        inpaintStatus: page.inpaintStatus ?? (clippedInpaintResultDataUrl ? "completed" : "idle"),
+        dataUrl: await fileToDataUrl(page.imagePath)
+      };
+    })
   );
 
   return {
@@ -645,8 +987,67 @@ async function hydrateChapter(chapter: ChapterFile): Promise<ChapterSnapshot> {
 function toStoredChapter(snapshot: ChapterSnapshot): ChapterFile {
   return {
     ...snapshot,
-    pages: snapshot.pages.map(({ dataUrl: _dataUrl, ...page }) => page)
+    pages: snapshot.pages.map(({
+      dataUrl: _dataUrl,
+      inpaintMaskDataUrl: _inpaintMaskDataUrl,
+      inpaintResultDataUrl: _inpaintResultDataUrl,
+      inpaintLayerDataUrl: _inpaintLayerDataUrl,
+      ...page
+    }) => ({
+      ...page,
+      inpaintStatus: page.inpaintStatus ?? (page.inpaintResultPath ? "completed" : "idle")
+    }))
   };
+}
+
+function mergeChapterSnapshotForSave(incoming: ChapterFile, current: ChapterFile, dirtyPageIds?: string[]): ChapterFile {
+  const dirtyPageIdSet = dirtyPageIds && dirtyPageIds.length > 0 ? new Set(dirtyPageIds) : null;
+  const incomingPages = new Map(incoming.pages.map((page) => [page.id, page]));
+  const currentPages = new Map(current.pages.map((page) => [page.id, page]));
+  const pageOrder = incoming.pageOrder.length > 0 ? incoming.pageOrder : current.pageOrder;
+
+  const mergedPages = pageOrder.map((pageId) => {
+    const incomingPage = incomingPages.get(pageId);
+    const currentPage = currentPages.get(pageId);
+    if (!incomingPage) {
+      return currentPage;
+    }
+    if (!currentPage) {
+      return incomingPage;
+    }
+    if (dirtyPageIdSet) {
+      return dirtyPageIdSet.has(pageId) ? incomingPage : currentPage;
+    }
+    return isAtLeastAsNew(incomingPage.updatedAt, currentPage.updatedAt) ? incomingPage : currentPage;
+  }).filter((page): page is LibraryPageRecord => Boolean(page));
+
+  for (const page of incoming.pages) {
+    if (!pageOrder.includes(page.id) && !currentPages.has(page.id)) {
+      mergedPages.push(page);
+    }
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    status: resolveChapterStatus(mergedPages),
+    updatedAt: maxIsoTimestamp(incoming.updatedAt, current.updatedAt, ...mergedPages.map((page) => page.updatedAt)),
+    pageOrder: mergedPages.map((page) => page.id),
+    pages: mergedPages
+  };
+}
+
+function maxIsoTimestamp(...values: string[]): string {
+  return values.reduce((max, value) => (isAtLeastAsNew(value, max) ? value : max), values[0] ?? new Date().toISOString());
+}
+
+function isAtLeastAsNew(left: string, right: string): boolean {
+  const leftTime = Date.parse(left);
+  const rightTime = Date.parse(right);
+  if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
+    return left >= right;
+  }
+  return leftTime >= rightTime;
 }
 
 async function readIndexFile(): Promise<StoredIndexFile> {
@@ -695,6 +1096,44 @@ async function readChapterFile(workId: string, chapterId: string): Promise<Chapt
 async function writeChapterFile(chapter: ChapterFile): Promise<void> {
   await mkdir(dirname(chapterFilePath(chapter.workId, chapter.id)), { recursive: true });
   await writeJsonFile(chapterFilePath(chapter.workId, chapter.id), chapter);
+}
+
+async function enqueueChapterMutation<T>(chapterId: string, task: () => Promise<T>): Promise<T> {
+  const previous = chapterWriteQueues.get(chapterId) ?? Promise.resolve();
+  let release: Promise<void> | null = null;
+  const run = previous.catch(() => undefined).then(task);
+  release = run.then(
+    () => undefined,
+    () => undefined
+  );
+  chapterWriteQueues.set(chapterId, release);
+  try {
+    return await run;
+  } finally {
+    if (chapterWriteQueues.get(chapterId) === release) {
+      chapterWriteQueues.delete(chapterId);
+    }
+  }
+}
+
+async function mutateExistingChapterFile(
+  chapterId: string,
+  mutator: (chapter: ChapterFile) => ChapterFile | Promise<ChapterFile>
+): Promise<ChapterFile> {
+  return enqueueChapterMutation(chapterId, async () => {
+    const locator = await findChapterLocation(chapterId);
+    if (!locator) {
+      throw new Error("화를 찾지 못했습니다.");
+    }
+    const chapter = await readChapterFile(locator.workId, locator.chapterId);
+    if (!chapter) {
+      throw new Error("화를 찾지 못했습니다.");
+    }
+    const next = await mutator(chapter);
+    await writeChapterFile(next);
+    await touchWork(locator.workId, next.updatedAt);
+    return next;
+  });
 }
 
 async function findChapterLocation(chapterId: string): Promise<{ workId: string; chapterId: string } | null> {
@@ -804,7 +1243,9 @@ function mimeFromPath(filePath: string): string {
 }
 
 async function writeJsonFile(path: string, payload: unknown): Promise<void> {
-  await writeFile(path, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  const tempPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  await writeFile(tempPath, `${JSON.stringify(payload, null, 2)}\n`, "utf8");
+  await rename(tempPath, path);
 }
 
 async function readJsonFile<T>(path: string, fallback?: T): Promise<T> {
@@ -889,6 +1330,16 @@ async function safeUnlink(path: string): Promise<void> {
 }
 
 async function removePageArtifacts(workId: string, chapterId: string, pageId: string): Promise<void> {
+  const inpaintRoot = join(WORKS_ROOT, workId, "chapters", chapterId, "inpaint");
+  if (existsSync(inpaintRoot)) {
+    const entries = await readdir(inpaintRoot, { withFileTypes: true });
+    await Promise.all(
+      entries
+        .filter((entry) => entry.isFile() && entry.name.startsWith(pageId))
+        .map((entry) => safeUnlink(join(inpaintRoot, entry.name)))
+    );
+  }
+
   const runsRoot = join(WORKS_ROOT, workId, "chapters", chapterId, "runs");
   if (!existsSync(runsRoot)) {
     return;

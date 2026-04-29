@@ -1,64 +1,94 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from "electron";
+import express from "express";
+import multer from "multer";
 import { randomUUID } from "node:crypto";
-import { existsSync, readdirSync } from "node:fs";
-import { createServer } from "node:net";
-import { dirname, extname, join } from "node:path";
+import { mkdirSync } from "node:fs";
+import { createServer } from "node:http";
+import { join } from "node:path";
 import { ensureWritableAppDirectories } from "./appPaths";
 import { buildBaseTranslationOptions } from "./appSettings";
+import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
 import {
   cleanupLegacyLogs,
-  deleteChapter,
-  deleteWork,
   createImport,
+  deleteChapter,
   deletePage,
+  deleteWork,
   finalizeRunningPages,
   getLibraryRoot,
   getRunPaths,
   listLibrary,
   markChapterPagesRunning,
   openChapter,
-  previewFolder,
-  previewImages,
-  previewZip,
-  previewZipFolder,
+  previewUploadedFiles,
   renameChapter,
   renameWork,
   reorderChapters,
   reorderPages,
   resolvePagesForRun,
+  saveInpaintMask,
+  saveInpaintResult,
+  saveInpaintResultLayer,
+  saveRenderedPage,
   saveChapterSnapshot,
-  updatePageAfterAnalysis
+  updatePageAfterAnalysis,
+  type UploadedImportFile
 } from "./library";
 import { getLogPath, logError, logInfo, resetAppLog, writeLog } from "./logger";
+import { createOpenAICompatibleEndpoint, stopOpenAICompatibleEndpoint, type OpenAICompatibleEndpoint } from "./openaiCompatibleEndpoint";
 import { startOpenAIOAuthEndpoint, stopOpenAIOAuthEndpoint, type OpenAIOAuthEndpoint } from "./openaiOauthEndpoint";
 import { getAppSettings, resetAppSettings, saveAppSettings } from "./settingsStore";
+import { listSystemFonts } from "./systemFonts";
 import { runWholePagePipeline } from "./wholePagePipeline";
 import type {
   AppSettings,
   CreateImportRequest,
-  ImportPreviewResult,
+  InpaintEngine,
+  InpaintPageRequest,
+  InpaintPageResult,
+  ImportSourceKind,
   JobEvent,
-  LocalModelPickResult,
   ModelTestResult,
+  RenderPageRequest,
+  SaveInpaintResultLayerRequest,
+  SaveInpaintResultLayerResult,
+  SaveInpaintMaskRequest,
+  SaveInpaintMaskResult,
   StartAnalysisRequest,
   StartAnalysisResult
 } from "../shared/types";
 
 const appPaths = ensureWritableAppDirectories();
+const serverPort = Number(process.env.PORT || process.env.MANGA_TRANSLATOR_PORT || 3000);
+const uploadDir = join(appPaths.dataRoot, "uploads");
+mkdirSync(uploadDir, { recursive: true });
 resetAppLog();
 
-logInfo("Application process starting", {
+type SimplePageRuntime = {
+  startServer: (options: Record<string, unknown>) => Promise<{ baseUrl: string; child: unknown; startedByScript: boolean }>;
+  stopServer: (server: { baseUrl: string; child: unknown; startedByScript: boolean } | null | undefined) => Promise<void>;
+  testModelReply: (server: { baseUrl: string }, options: Record<string, unknown>) => Promise<{
+    outputText: string;
+    launchTarget: { launchMode: string; modelPath?: string | null; mmprojPath?: string | null };
+  }>;
+};
+
+let activeJob: {
+  id: string;
+  abortController: AbortController;
+  cleanup?: () => Promise<void>;
+  lastEvent?: JobEvent;
+} | null = null;
+const eventClients = new Set<express.Response>();
+let cachedSimplePageRuntime: SimplePageRuntime | null = null;
+
+logInfo("Web server starting", {
   cwd: process.cwd(),
-  isPackaged: app.isPackaged,
-  processExecPath: process.execPath,
   logPath: getLogPath(),
   libraryPath: getLibraryRoot(),
   settingsPath: appPaths.settingsPath,
   dataRoot: appPaths.dataRoot,
   runtimeDir: appPaths.runtimeDir,
-  llamaServerPath: appPaths.llamaServerPath,
-  hfHomeDir: appPaths.hfHomeDir ?? null,
-  electronRunAsNode: process.env.ELECTRON_RUN_AS_NODE ?? null
+  port: serverPort
 });
 
 process.on("uncaughtException", (error) => {
@@ -69,521 +99,458 @@ process.on("unhandledRejection", (reason) => {
   logError("Unhandled rejection", reason);
 });
 
-let mainWindow: BrowserWindow | null = null;
-let activeJob: {
-  id: string;
-  abortController: AbortController;
-  cleanup?: () => Promise<void>;
-  lastEvent?: JobEvent;
-} | null = null;
+const app = express();
+const upload = multer({ dest: uploadDir });
 
-type SimplePageRuntime = {
-  startServer: (options: Record<string, unknown>) => Promise<{ baseUrl: string; child: unknown; startedByScript: boolean }>;
-  stopServer: (server: { child: unknown } | null | undefined) => Promise<void>;
-  testModelReply: (server: { baseUrl: string }, options: Record<string, unknown>) => Promise<{
-    outputText: string;
-    launchTarget: { launchMode: "huggingface" | "cached-hf" | "local" | "openai-codex"; modelPath?: string | null; mmprojPath?: string | null };
-  }>;
-};
-
-let cachedSimplePageRuntime: SimplePageRuntime | null = null;
-
-function createWindow(): void {
-  mainWindow = new BrowserWindow({
-    width: 1600,
-    height: 980,
-    minWidth: 1240,
-    minHeight: 760,
-    backgroundColor: "#101114",
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: join(__dirname, "../preload/index.js"),
-      sandbox: false,
-      contextIsolation: true,
-      nodeIntegration: false
-    }
-  });
-
-  mainWindow.webContents.on("console-message", (details) => {
-    const level =
-      details.level === "warning" ? "warn" : details.level === "error" ? "error" : details.level === "debug" ? "debug" : "info";
-    writeLog(level, "renderer console", {
-      message: details.message,
-      line: details.lineNumber,
-      sourceId: details.sourceId
-    });
-  });
-
-  mainWindow.webContents.on("did-fail-load", (_event, errorCode, errorDescription, validatedURL) => {
-    logError("Renderer failed to load", { errorCode, errorDescription, validatedURL });
-  });
-
-  mainWindow.setMenuBarVisibility(false);
-
-  if (process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL);
-  } else {
-    void mainWindow.loadFile(join(__dirname, "../renderer/index.html"));
+app.use(express.json({ limit: "120mb" }));
+app.use((req, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", req.headers.origin || "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+  res.setHeader("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS");
+  if (req.method === "OPTIONS") {
+    res.sendStatus(204);
+    return;
   }
-}
+  next();
+});
 
-app.whenReady().then(async () => {
+app.get("/api/health", (_req, res) => {
+  res.json({ ok: true });
+});
+
+app.post("/api/logs/write", (req, res) => {
+  const { level, message, detail } = req.body as { level: "debug" | "info" | "warn" | "error"; message: string; detail?: unknown };
+  writeLog(level, `renderer: ${message}`, detail);
+  res.json({ logged: true });
+});
+
+app.get("/api/settings", asyncHandler(async (_req, res) => {
+  res.json(await getAppSettings());
+}));
+
+app.get("/api/fonts", asyncHandler(async (_req, res) => {
+  res.json(await listSystemFonts());
+}));
+
+app.post("/api/settings", asyncHandler(async (req, res) => {
+  res.json(await saveAppSettings(req.body));
+}));
+
+app.post("/api/settings/reset", asyncHandler(async (_req, res) => {
+  res.json(await resetAppSettings());
+}));
+
+app.post("/api/settings/test-model", asyncHandler(async (req, res) => {
+  res.json(await testModelSettings(req.body));
+}));
+
+app.get("/api/library", asyncHandler(async (_req, res) => {
+  res.json(await listLibrary());
+}));
+
+app.get("/api/library/chapters/:chapterId", asyncHandler(async (req, res) => {
+  res.json(await openChapter(String(req.params.chapterId)));
+}));
+
+app.post("/api/library/chapters", asyncHandler(async (req, res) => {
+  const body = req.body;
+  const chapter = body?.chapter ?? body;
+  const dirtyPageIds = Array.isArray(body?.dirtyPageIds) ? body.dirtyPageIds.filter((id: unknown) => typeof id === "string") : undefined;
+  res.json(await saveChapterSnapshot(chapter, { dirtyPageIds }));
+}));
+
+app.post("/api/render/page", asyncHandler(async (req, res) => {
+  const request = req.body as RenderPageRequest;
+  res.json(await saveRenderedPage(request.chapterId, request.pageId, request.dataUrl));
+}));
+
+app.post("/api/inpaint/page", asyncHandler(async (req, res) => {
+  res.json(await inpaintPage(req.body as InpaintPageRequest));
+}));
+
+app.post("/api/inpaint/mask", asyncHandler(async (req, res) => {
+  res.json(await saveInpaintMaskRequest(req.body as SaveInpaintMaskRequest));
+}));
+
+app.post("/api/inpaint/result-layer", asyncHandler(async (req, res) => {
+  res.json(await saveInpaintResultLayerRequest(req.body as SaveInpaintResultLayerRequest));
+}));
+
+app.post("/api/library/works/:workId/rename", asyncHandler(async (req, res) => {
+  res.json(await renameWork(String(req.params.workId), String(req.body.title ?? "")));
+}));
+
+app.post("/api/library/chapters/:chapterId/rename", asyncHandler(async (req, res) => {
+  res.json(await renameChapter(String(req.params.chapterId), String(req.body.title ?? "")));
+}));
+
+app.delete("/api/library/works/:workId", asyncHandler(async (req, res) => {
+  res.json(await deleteWork(String(req.params.workId)));
+}));
+
+app.delete("/api/library/chapters/:chapterId", asyncHandler(async (req, res) => {
+  res.json(await deleteChapter(String(req.params.chapterId)));
+}));
+
+app.post("/api/library/works/:workId/reorder-chapters", asyncHandler(async (req, res) => {
+  res.json(await reorderChapters(String(req.params.workId), req.body.chapterIds));
+}));
+
+app.post("/api/library/chapters/:chapterId/reorder-pages", asyncHandler(async (req, res) => {
+  res.json(await reorderPages(String(req.params.chapterId), req.body.pageIds));
+}));
+
+app.delete("/api/library/chapters/:chapterId/pages/:pageId", asyncHandler(async (req, res) => {
+  res.json(await deletePage(String(req.params.chapterId), String(req.params.pageId)));
+}));
+
+app.post("/api/import/preview/:kind", upload.array("files"), asyncHandler(async (req, res) => {
+  const kind = req.params.kind as ImportSourceKind;
+  const relativePaths = parseRelativePaths(req.body.relativePaths);
+  const files = ((req.files as Express.Multer.File[] | undefined) ?? []).map((file, index): UploadedImportFile => ({
+    path: file.path,
+    name: file.originalname,
+    relativePath: relativePaths[index] || file.originalname
+  }));
+  const preview = await previewUploadedFiles(kind, files);
+  res.json(preview.chapters.length ? preview : null);
+}));
+
+app.post("/api/import/create", asyncHandler(async (req, res) => {
+  res.json(await createImport(req.body as CreateImportRequest));
+}));
+
+app.post("/api/jobs/start-analysis", asyncHandler(async (req, res) => {
+  res.json(await startAnalysis(req.body as StartAnalysisRequest));
+}));
+
+app.post("/api/jobs/cancel", asyncHandler(async (_req, res) => {
+  if (!activeJob) {
+    res.json({ cancelled: false });
+    return;
+  }
+
+  const job = activeJob;
+  emitJobEvent({
+    id: job.id,
+    kind: "gemma-analysis",
+    status: "cancelling",
+    progressText: "작업 취소 중",
+    progressCurrent: job.lastEvent?.progressCurrent,
+    progressTotal: job.lastEvent?.progressTotal,
+    pageIndex: job.lastEvent?.pageIndex,
+    pageTotal: job.lastEvent?.pageTotal,
+    attempt: job.lastEvent?.attempt,
+    attemptTotal: job.lastEvent?.attemptTotal
+  });
+  job.abortController.abort();
+  await job.cleanup?.();
+  res.json({ cancelled: true });
+}));
+
+app.get("/api/jobs/events", (req, res) => {
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache, no-transform",
+    Connection: "keep-alive"
+  });
+  res.write("\n");
+  eventClients.add(res);
+  req.on("close", () => {
+    eventClients.delete(res);
+  });
+});
+
+app.use(express.static(join(appPaths.repoRoot, "out", "renderer")));
+
+const httpServer = createServer(app);
+httpServer.listen(serverPort, "127.0.0.1", async () => {
   await cleanupLegacyLogs();
-  Menu.setApplicationMenu(null);
-  registerIpc();
-  createWindow();
-
-  app.on("activate", () => {
-    if (BrowserWindow.getAllWindows().length === 0) {
-      createWindow();
-    }
-  });
+  logInfo("Manga translator web app ready", { url: `http://127.0.0.1:${serverPort}` });
 });
 
-app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
-});
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
-app.on("before-quit", () => {
+async function startAnalysis(request: StartAnalysisRequest): Promise<StartAnalysisResult> {
   if (activeJob) {
-    activeJob.abortController.abort();
-    void activeJob.cleanup?.();
+    return { status: "failed", error: "이미 실행 중인 작업이 있습니다." };
   }
-});
 
-function registerIpc(): void {
-  ipcMain.handle("logs:get-path", () => getLogPath());
+  const resolved = await resolvePagesForRun(request.chapterId, request.runMode, request.pageId);
+  if (resolved.pages.length === 0) {
+    return { status: "completed", chapter: resolved.chapter, warnings: [] };
+  }
 
-  ipcMain.handle("logs:open-folder", async () => {
-    await shell.showItemInFolder(getLogPath());
-    return { opened: true, logPath: getLogPath() };
-  });
+  const id = randomUUID();
+  const abortController = new AbortController();
+  const pageIds = resolved.pages.map((page) => page.id);
+  let runPaths: Awaited<ReturnType<typeof getRunPaths>> | null = null;
+  await markChapterPagesRunning(request.chapterId, pageIds);
+  activeJob = { id, abortController };
 
-  ipcMain.handle("logs:write", async (_event, level: "debug" | "info" | "warn" | "error", message: string, detail?: unknown) => {
-    writeLog(level, `renderer: ${message}`, detail);
-    return { logged: true };
-  });
+  const emit = (event: JobEvent) => {
+    if (activeJob?.id === id) {
+      activeJob.lastEvent = event;
+    }
+    writeLog(event.status === "failed" ? "error" : event.status === "cancelled" ? "warn" : "info", `job:${event.kind}:${event.status}`, event);
+    emitJobEvent(event);
+  };
 
-  ipcMain.handle("settings:get", async () => getAppSettings());
-  ipcMain.handle("settings:save", async (_event, settings: AppSettings) => saveAppSettings(settings));
-  ipcMain.handle("settings:reset", async () => resetAppSettings());
-  ipcMain.handle("settings:pick-local-model", async (): Promise<LocalModelPickResult | null> => {
-    const options = {
-      title: "로컬 GGUF 모델 선택",
-      properties: ["openFile"],
-      filters: [{ name: "GGUF Model", extensions: ["gguf"] }]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
+  try {
+    runPaths = await getRunPaths(request.chapterId, id);
+    const result = await runWholePagePipeline({
+      jobId: id,
+      emit,
+      onCleanupReady: (cleanup) => {
+        if (activeJob?.id === id) {
+          activeJob.cleanup = cleanup;
+        }
+      },
+      onPageComplete: async (page) => updatePageAfterAnalysis(request.chapterId, page, [], "completed"),
+      onPageFailed: async (page, errorMessage) => updatePageAfterAnalysis(request.chapterId, page, [errorMessage], "failed"),
+      pages: resolved.pages,
+      runPaths,
+      signal: abortController.signal
+    });
+
+    if (abortController.signal.aborted) {
+      throw new DOMException("Aborted", "AbortError");
     }
 
-    const modelPath = result.filePaths[0];
-    const detectedMmprojPath = detectSiblingMmprojPath(modelPath);
-    return {
-      modelPath,
-      ...(detectedMmprojPath ? { detectedMmprojPath } : {})
-    };
-  });
-  ipcMain.handle("settings:pick-local-mmproj", async (): Promise<string | null> => {
-    const options = {
-      title: "mmproj 파일 선택",
-      properties: ["openFile"],
-      filters: [{ name: "GGUF Model", extensions: ["gguf"] }]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
-    }
-    return result.filePaths[0];
-  });
-  ipcMain.handle("settings:test-model", async (_event, settings: AppSettings): Promise<ModelTestResult> => {
-    if (activeJob) {
-      return {
-        ok: false,
-        message: "번역 작업 중에는 모델 테스트를 실행할 수 없습니다.",
-        launchMode: resolveSettingsLaunchMode(settings)
-      };
-    }
+    emit({
+      id,
+      kind: "gemma-analysis",
+      status: "completed",
+      progressText: "번역 작업 완료",
+      phase: "done",
+      progressCurrent: resolved.pages.length,
+      progressTotal: resolved.pages.length,
+      pageTotal: resolved.pages.length
+    });
 
-    const runtime = loadSimplePageRuntime();
-    const testId = randomUUID();
-    const port = await reserveFreePort();
-    const options = {
-      ...buildBaseTranslationOptions({
-        jobId: `settings-test-${testId}`,
-        runDir: join(appPaths.dataRoot, "model-tests", testId),
-        paths: appPaths,
-        settings
-      }),
-      reuseServer: false,
-      port,
-      label: `settings-test-${testId}`
-    };
-
-    let server: Awaited<ReturnType<SimplePageRuntime["startServer"]>> | OpenAIOAuthEndpoint | null = null;
-    try {
-      server = options.modelProvider === "openai-codex" ? await startOpenAIOAuthEndpoint(options) : await runtime.startServer(options);
-      const result = await runtime.testModelReply(server, options);
-      return {
-        ok: true,
-        message: `모델 로드 및 텍스트 응답 확인 완료: ${result.outputText}`,
-        launchMode: options.modelProvider === "openai-codex" ? "openai-codex" : result.launchTarget.launchMode,
-        resolvedModelPath: result.launchTarget.modelPath ?? null,
-        resolvedMmprojPath: result.launchTarget.mmprojPath ?? null,
-        resolvedEndpoint: options.modelProvider === "openai-codex" ? server.baseUrl : null
-      };
-    } catch (error) {
-      return {
-        ok: false,
-        message: formatModelTestError(error),
-        launchMode: resolveSettingsLaunchMode(settings)
-      };
-    } finally {
-      if (isOpenAIOAuthEndpoint(server)) {
-        await stopOpenAIOAuthEndpoint(server);
-      } else {
-        await runtime.stopServer(server);
-      }
-    }
-  });
-
-  ipcMain.handle("dialogs:confirm", async (_event, title: string, message: string, detail?: string) => {
-    const options = {
-      type: "warning",
-      buttons: ["확인", "취소"],
-      defaultId: 1,
-      cancelId: 1,
-      title,
-      message,
-      detail,
-      noLink: true
-    } satisfies Electron.MessageBoxOptions;
-    const result = mainWindow ? await dialog.showMessageBox(mainWindow, options) : await dialog.showMessageBox(options);
-    return result.response === 0;
-  });
-
-  ipcMain.handle("library:get-index", async () => listLibrary());
-  ipcMain.handle("library:open-folder", async () => {
-    await shell.openPath(getLibraryRoot());
-    return { opened: true, libraryPath: getLibraryRoot() };
-  });
-  ipcMain.handle("library:open-chapter", async (_event, chapterId: string) => openChapter(chapterId));
-  ipcMain.handle("library:save-chapter", async (_event, chapter) => saveChapterSnapshot(chapter));
-  ipcMain.handle("library:rename-work", async (_event, workId: string, title: string) => renameWork(workId, title));
-  ipcMain.handle("library:rename-chapter", async (_event, chapterId: string, title: string) => renameChapter(chapterId, title));
-  ipcMain.handle("library:delete-work", async (_event, workId: string) => deleteWork(workId));
-  ipcMain.handle("library:delete-chapter", async (_event, chapterId: string) => deleteChapter(chapterId));
-  ipcMain.handle("library:reorder-chapters", async (_event, workId: string, chapterIds: string[]) => reorderChapters(workId, chapterIds));
-  ipcMain.handle("library:reorder-pages", async (_event, chapterId: string, pageIds: string[]) => reorderPages(chapterId, pageIds));
-  ipcMain.handle("library:delete-page", async (_event, chapterId: string, pageId: string) => deletePage(chapterId, pageId));
-
-  ipcMain.handle("import:preview-images", async () => {
-    const options = {
-      title: "이미지 열기",
-      properties: ["openFile", "multiSelections"],
-      filters: [{ name: "Images", extensions: ["png", "jpg", "jpeg", "webp"] }]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || result.filePaths.length === 0) {
-      return null;
-    }
-    const preview = await previewImages(result.filePaths);
-    return preview.chapters[0]?.pages.length ? preview : null;
-  });
-
-  ipcMain.handle("import:preview-folder", async () => {
-    const options = {
-      title: "이미지 폴더 열기",
-      properties: ["openDirectory"]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
-    }
-    const preview = await previewFolder(result.filePaths[0]);
-    return preview.chapters[0]?.pages.length ? preview : null;
-  });
-
-  ipcMain.handle("import:preview-zip", async () => {
-    const options = {
-      title: "압축파일 열기",
-      properties: ["openFile"],
-      filters: [{ name: "ZIP Archive", extensions: ["zip"] }]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
-    }
-    const preview = await previewZip(result.filePaths[0]);
-    return preview.chapters[0]?.pages.length ? preview : null;
-  });
-
-  ipcMain.handle("import:preview-zip-folder", async () => {
-    const options = {
-      title: "작품 일괄 번역",
-      properties: ["openDirectory"]
-    } satisfies Electron.OpenDialogOptions;
-    const result = mainWindow ? await dialog.showOpenDialog(mainWindow, options) : await dialog.showOpenDialog(options);
-    if (result.canceled || !result.filePaths[0]) {
-      return null;
-    }
-    const preview = await previewZipFolder(result.filePaths[0]);
-    return preview.chapters.length ? preview : null;
-  });
-
-  ipcMain.handle("import:create", async (_event, request: CreateImportRequest) => createImport(request));
-
-  ipcMain.handle("job:start-analysis", async (_event, request: StartAnalysisRequest): Promise<StartAnalysisResult> => {
-    if (activeJob) {
-      return { status: "failed", error: "이미 실행 중인 작업이 있습니다." };
-    }
-
-    const resolved = await resolvePagesForRun(request.chapterId, request.runMode, request.pageId);
-    if (resolved.pages.length === 0) {
-      return {
-        status: "completed",
-        chapter: resolved.chapter,
-        warnings: []
-      };
-    }
-
-    const id = randomUUID();
-    const abortController = new AbortController();
-    const pageIds = resolved.pages.map((page) => page.id);
-    let runPaths: Awaited<ReturnType<typeof getRunPaths>> | null = null;
-    await markChapterPagesRunning(request.chapterId, pageIds);
-    activeJob = { id, abortController };
-
-    const emit = (event: JobEvent) => {
-      if (activeJob?.id === id) {
-        activeJob.lastEvent = event;
-      }
-      writeLog(event.status === "failed" ? "error" : event.status === "cancelled" ? "warn" : "info", `job:${event.kind}:${event.status}`, {
-        id: event.id,
-        progressText: event.progressText,
-        phase: event.phase,
-        progressCurrent: event.progressCurrent,
-        progressTotal: event.progressTotal,
-        pageIndex: event.pageIndex,
-        pageTotal: event.pageTotal,
-        attempt: event.attempt,
-        attemptTotal: event.attemptTotal,
-        detail: event.detail
-      });
-      mainWindow?.webContents.send("job:event", event);
-    };
-
-    try {
-      runPaths = await getRunPaths(request.chapterId, id);
-      const result = await runWholePagePipeline({
-        jobId: id,
-        emit,
-        onCleanupReady: (cleanup) => {
-          if (activeJob?.id === id) {
-            activeJob.cleanup = cleanup;
-          }
-        },
-        onPageComplete: async (page) => {
-          await updatePageAfterAnalysis(request.chapterId, page, [], "completed");
-        },
-        onPageFailed: async (page, errorMessage) => {
-          await updatePageAfterAnalysis(request.chapterId, page, [errorMessage], "failed");
-        },
-        pages: resolved.pages,
-        runPaths,
-        signal: abortController.signal
-      });
-
-      if (abortController.signal.aborted) {
-        throw new DOMException("Aborted", "AbortError");
-      }
-
+    return { status: "completed", chapter: await openChapter(request.chapterId), warnings: result.warnings };
+  } catch (error) {
+    const lastEvent = activeJob?.id === id ? activeJob.lastEvent : undefined;
+    if (isAbortError(error) || abortController.signal.aborted) {
+      await finalizeRunningPages(request.chapterId, pageIds, "idle");
       emit({
         id,
         kind: "gemma-analysis",
-        status: "completed",
-        progressText: "번역 작업 완료",
-        phase: "done",
-        progressCurrent: resolved.pages.length,
-        progressTotal: resolved.pages.length,
-        pageTotal: resolved.pages.length
-      });
-
-      return {
-        status: "completed",
-        chapter: await openChapter(request.chapterId),
-        warnings: result.warnings
-      };
-    } catch (error) {
-      const lastEvent = activeJob?.id === id ? activeJob.lastEvent : undefined;
-      if (isAbortError(error) || abortController.signal.aborted) {
-        await finalizeRunningPages(request.chapterId, pageIds, "idle");
-        emit({
-          id,
-          kind: "gemma-analysis",
-          status: "cancelled",
-          progressText: "작업이 취소되었습니다.",
-          phase: "cancelled",
-          progressCurrent: lastEvent?.progressCurrent,
-          progressTotal: lastEvent?.progressTotal,
-          pageIndex: lastEvent?.pageIndex,
-          pageTotal: lastEvent?.pageTotal,
-          attempt: lastEvent?.attempt,
-          attemptTotal: lastEvent?.attemptTotal
-        });
-        return { status: "cancelled", chapter: await openChapter(request.chapterId) };
-      }
-
-      const message = error instanceof Error ? error.message : String(error);
-      await finalizeRunningPages(request.chapterId, pageIds, "failed", message);
-      logError("Analysis job failed", {
-        jobId: id,
-        request,
-        chapterId: request.chapterId,
-        runMode: request.runMode,
-        pageIds,
-        resolvedPageCount: resolved.pages.length,
-        resolvedPageNames: resolved.pages.map((page) => page.name),
-        runPaths,
-        lastEvent,
-        error
-      });
-      emit({
-        id,
-        kind: "gemma-analysis",
-        status: "failed",
-        progressText: "작업 실패",
-        phase: "failed",
+        status: "cancelled",
+        progressText: "작업이 취소되었습니다.",
+        phase: "cancelled",
         progressCurrent: lastEvent?.progressCurrent,
         progressTotal: lastEvent?.progressTotal,
         pageIndex: lastEvent?.pageIndex,
         pageTotal: lastEvent?.pageTotal,
         attempt: lastEvent?.attempt,
-        attemptTotal: lastEvent?.attemptTotal,
-        detail: message
+        attemptTotal: lastEvent?.attemptTotal
       });
-      return {
-        status: "failed",
-        error: message,
-        chapter: await openChapter(request.chapterId)
-      };
-    } finally {
-      activeJob = null;
-    }
-  });
-
-  ipcMain.handle("job:cancel", async () => {
-    if (!activeJob) {
-      return { cancelled: false };
+      return { status: "cancelled", chapter: await openChapter(request.chapterId) };
     }
 
-    const job = activeJob;
-    mainWindow?.webContents.send("job:event", {
-      id: job.id,
+    const message = error instanceof Error ? error.message : String(error);
+    await finalizeRunningPages(request.chapterId, pageIds, "failed", message);
+    logError("Analysis job failed", { jobId: id, request, runPaths, lastEvent, error });
+    emit({
+      id,
       kind: "gemma-analysis",
-      status: "cancelling",
-      progressText: "작업 취소 중",
-      progressCurrent: job.lastEvent?.progressCurrent,
-      progressTotal: job.lastEvent?.progressTotal,
-      pageIndex: job.lastEvent?.pageIndex,
-      pageTotal: job.lastEvent?.pageTotal,
-      attempt: job.lastEvent?.attempt,
-      attemptTotal: job.lastEvent?.attemptTotal
-    } satisfies JobEvent);
-    job.abortController.abort();
-    await job.cleanup?.();
-    return { cancelled: true };
+      status: "failed",
+      progressText: "작업 실패",
+      phase: "failed",
+      detail: message
+    });
+    return { status: "failed", error: message, chapter: await openChapter(request.chapterId) };
+  } finally {
+    activeJob = null;
+  }
+}
+
+async function inpaintPage(request: InpaintPageRequest): Promise<InpaintPageResult> {
+  if (activeJob) {
+    throw new Error("번역 작업 중에는 인페인트를 실행할 수 없습니다.");
+  }
+
+  if (!request.chapterId || !request.pageId) {
+    throw new Error("인페인트할 페이지 정보가 없습니다.");
+  }
+  assertImageDataUrl(request.sourceDataUrl, "원본 이미지");
+  assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
+
+  const engine = resolveAvailableInpaintEngine(request.settings.engine);
+  const settings = {
+    ...request.settings,
+    engine
+  };
+  const resultDataUrl = await runInpaintEngine(request.sourceDataUrl, request.maskDataUrl, engine, {
+    ...resolveLamaCommandFromEnv(process.env),
+    settings
   });
+  if (request.persistResult === false) {
+    return {
+      chapter: await openChapter(request.chapterId),
+      resultDataUrl,
+      engine
+    };
+  }
+  const chapter = await saveInpaintResult(request.chapterId, request.pageId, request.maskDataUrl, resultDataUrl, settings);
+  return {
+    chapter,
+    resultDataUrl,
+    engine
+  };
+}
+
+async function saveInpaintMaskRequest(request: SaveInpaintMaskRequest): Promise<SaveInpaintMaskResult> {
+  if (!request.chapterId || !request.pageId) {
+    throw new Error("저장할 인페인트 마스크 페이지 정보가 없습니다.");
+  }
+  if (request.maskDataUrl) {
+    assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
+  }
+
+  return {
+    chapter: await saveInpaintMask(request.chapterId, request.pageId, request.maskDataUrl)
+  };
+}
+
+async function saveInpaintResultLayerRequest(request: SaveInpaintResultLayerRequest): Promise<SaveInpaintResultLayerResult> {
+  if (!request.chapterId || !request.pageId) {
+    throw new Error("저장할 인페인트 결과 레이어 페이지 정보가 없습니다.");
+  }
+  if (request.resultDataUrl) {
+    assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
+  }
+
+  return {
+    chapter: await saveInpaintResultLayer(request.chapterId, request.pageId, request.resultDataUrl)
+  };
+}
+
+function resolveAvailableInpaintEngine(requested: InpaintEngine): InpaintEngine {
+  if (requested === "lama" && process.env.MANGA_TRANSLATOR_LAMA_COMMAND?.trim()) {
+    return "lama";
+  }
+  return "local-fill-fallback";
+}
+
+function assertImageDataUrl(value: string, label: string): void {
+  if (!/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/u.test(value)) {
+    throw new Error(`${label} 데이터 URL이 올바르지 않습니다.`);
+  }
+}
+
+async function testModelSettings(settings: AppSettings): Promise<ModelTestResult> {
+  if (activeJob) {
+    return { ok: false, message: "번역 작업 중에는 모델 테스트를 실행할 수 없습니다.", launchMode: modelProviderToTestLaunchMode(settings.modelProvider) };
+  }
+
+  const testId = randomUUID();
+  const options = buildBaseTranslationOptions({
+    jobId: `settings-test-${testId}`,
+    runDir: join(appPaths.dataRoot, "model-tests", testId),
+    paths: appPaths,
+    settings
+  });
+  let server: OpenAIOAuthEndpoint | OpenAICompatibleEndpoint | { baseUrl: string; child: unknown; startedByScript: boolean } | null = null;
+
+  try {
+    server = options.modelProvider === "openai-compatible"
+      ? await createOpenAICompatibleEndpoint(options)
+      : options.modelProvider === "openai-codex"
+        ? await startOpenAIOAuthEndpoint(options)
+        : await loadSimplePageRuntime().startServer(options);
+    const result = await loadSimplePageRuntime().testModelReply(server, options);
+    return {
+      ok: true,
+      message: `모델 응답 확인 완료: ${result.outputText}`,
+      launchMode: result.launchTarget.launchMode as ModelTestResult["launchMode"],
+      resolvedEndpoint: server.baseUrl
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      message: error instanceof Error ? error.message : String(error),
+      launchMode: modelProviderToTestLaunchMode(options.modelProvider)
+    };
+  } finally {
+    if (server) {
+      if (isOpenAICompatibleEndpoint(server)) {
+        await stopOpenAICompatibleEndpoint(server);
+      } else if (isOpenAIOAuthEndpoint(server)) {
+        await stopOpenAIOAuthEndpoint(server);
+      } else {
+        await loadSimplePageRuntime().stopServer(server);
+      }
+    }
+  }
+}
+
+function isOpenAICompatibleEndpoint(
+  server: OpenAIOAuthEndpoint | OpenAICompatibleEndpoint | { baseUrl: string; child: unknown; startedByScript: boolean }
+): server is OpenAICompatibleEndpoint {
+  return "provider" in server && server.provider === "openai-compatible";
+}
+
+function isOpenAIOAuthEndpoint(
+  server: OpenAIOAuthEndpoint | OpenAICompatibleEndpoint | { baseUrl: string; child: unknown; startedByScript: boolean }
+): server is OpenAIOAuthEndpoint {
+  return "provider" in server && server.provider === "openai-codex";
+}
+
+function modelProviderToTestLaunchMode(modelProvider: AppSettings["modelProvider"]): ModelTestResult["launchMode"] {
+  if (modelProvider === "openai-compatible" || modelProvider === "openai-codex") {
+    return modelProvider;
+  }
+  return "huggingface";
+}
+
+function loadSimplePageRuntime(): SimplePageRuntime {
+  if (!cachedSimplePageRuntime) {
+    cachedSimplePageRuntime = require(join(appPaths.runtimeDir, "simple-page-translate.cjs")) as SimplePageRuntime;
+  }
+  return cachedSimplePageRuntime;
+}
+
+function emitJobEvent(event: JobEvent): void {
+  for (const client of eventClients) {
+    client.write(`data: ${JSON.stringify(event)}\n\n`);
+  }
+}
+
+function parseRelativePaths(value: unknown): string[] {
+  if (typeof value !== "string") {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(value);
+    return Array.isArray(parsed) ? parsed.map(String) : [];
+  } catch {
+    return [];
+  }
+}
+
+function asyncHandler(handler: express.RequestHandler): express.RequestHandler {
+  return (req, res, next) => {
+    Promise.resolve(handler(req, res, next)).catch(next);
+  };
 }
 
 function isAbortError(error: unknown): boolean {
   return error instanceof DOMException && error.name === "AbortError";
 }
 
-export function isZipPath(path: string): boolean {
-  return extname(path).toLowerCase() === ".zip";
-}
-
-function loadSimplePageRuntime(): SimplePageRuntime {
-  if (cachedSimplePageRuntime) {
-    return cachedSimplePageRuntime;
+function shutdown(): void {
+  if (activeJob) {
+    activeJob.abortController.abort();
+    void activeJob.cleanup?.();
   }
-
-  cachedSimplePageRuntime = require(join(appPaths.runtimeDir, "simple-page-translate.cjs")) as SimplePageRuntime;
-  return cachedSimplePageRuntime;
+  httpServer.close(() => process.exit(0));
 }
 
-function detectSiblingMmprojPath(modelPath: string): string | null {
-  const folder = dirname(modelPath);
-  if (!existsSync(folder)) {
-    return null;
-  }
-
-  const preferredNames = ["mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf", "mmproj.gguf"];
-  for (const name of preferredNames) {
-    const candidate = join(folder, name);
-    if (existsSync(candidate)) {
-      return candidate;
-    }
-  }
-
-  const match = readdirSync(folder, { withFileTypes: true }).find(
-    (entry) => entry.isFile() && /^mmproj.*\.gguf$/i.test(entry.name)
-  );
-  return match ? join(folder, match.name) : null;
-}
-
-function resolveSettingsLaunchMode(settings: AppSettings): ModelTestResult["launchMode"] {
-  if (settings.modelProvider === "openai-codex") {
-    return "openai-codex";
-  }
-  return settings.gemma.modelSource === "local" ? "local" : "huggingface";
-}
-
-function isOpenAIOAuthEndpoint(server: Awaited<ReturnType<SimplePageRuntime["startServer"]>> | OpenAIOAuthEndpoint | null): server is OpenAIOAuthEndpoint {
-  return Boolean(server && "provider" in server && server.provider === "openai-codex");
-}
-
-async function reserveFreePort(): Promise<number> {
-  return await new Promise((resolve, reject) => {
-    const server = createServer();
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        server.close();
-        reject(new Error("모델 테스트용 포트를 확보하지 못했습니다."));
-        return;
-      }
-      const port = address.port;
-      server.close((error) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(port);
-      });
-    });
-  });
-}
-
-function formatModelTestError(error: unknown): string {
-  if (!(error instanceof Error)) {
-    return String(error);
-  }
-
-  const details = [
-    error.message,
-    "recentStderr" in error && typeof error.recentStderr === "string" && error.recentStderr.trim()
-      ? error.recentStderr.trim()
-      : null,
-    "rawTextPreview" in error && typeof error.rawTextPreview === "string" && error.rawTextPreview.trim()
-      ? error.rawTextPreview.trim()
-      : null
-  ].filter(Boolean);
-
-  return details.join("\n\n");
-}
+app.use((error: unknown, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
+  const message = error instanceof Error ? error.message : String(error);
+  logError("HTTP request failed", error);
+  res.status(500).json({ error: message });
+});

@@ -4,33 +4,23 @@ const { spawn, spawnSync } = require("node:child_process");
 const { prepareRuntimeAssets } = require("./prepare-runtime.cjs");
 
 const root = join(__dirname, "..");
+const backendUrl = "http://127.0.0.1:3000/api/health";
 const rendererUrl = "http://127.0.0.1:5173";
 const children = [];
 
 function runSync(command, args) {
-  const result = spawnSync(command, args, {
-    cwd: root,
-    stdio: "inherit",
-    shell: false
-  });
+  const result = spawnSync(command, args, { cwd: root, stdio: "inherit", shell: false });
   if (result.status !== 0) {
     process.exit(result.status ?? 1);
   }
 }
 
 function spawnChild(command, args, env = {}) {
-  const mergedEnv = { ...process.env, ...env };
-  for (const [key, value] of Object.entries(mergedEnv)) {
-    if (value === undefined) {
-      delete mergedEnv[key];
-    }
-  }
-
   const child = spawn(command, args, {
     cwd: root,
     stdio: "inherit",
     shell: false,
-    env: mergedEnv
+    env: { ...process.env, ...env }
   });
   children.push(child);
   child.on("exit", () => {
@@ -86,13 +76,12 @@ function shutdown() {
 
 (async () => {
   prepareRuntimeAssets({ root, outputDir: join(root, "out", "app-runtime") });
-  runSync(process.execPath, [nodeBin("typescript", "bin", "tsc"), "-p", "tsconfig.electron.json"]);
+  runSync(process.execPath, [nodeBin("typescript", "bin", "tsc"), "-p", "tsconfig.server.json"]);
+  spawnChild(process.execPath, ["out/main/index.js"]);
+  await waitForUrl(backendUrl);
   spawnChild(process.execPath, [nodeBin("vite", "bin", "vite.js"), "--config", "vite.renderer.config.ts", "--host", "127.0.0.1"]);
   await waitForUrl(rendererUrl);
-  spawnChild(process.execPath, [nodeBin("electron", "cli.js"), "."], {
-    ELECTRON_RENDERER_URL: rendererUrl,
-    ELECTRON_RUN_AS_NODE: undefined
-  });
+  console.log(`\nWeb app: ${rendererUrl}\nAPI:     http://127.0.0.1:3000\n`);
 })().catch((error) => {
   console.error(error);
   shutdown();

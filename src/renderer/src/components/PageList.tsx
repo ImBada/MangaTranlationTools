@@ -35,7 +35,10 @@ export function PageList({
   return (
     <section className="page-list">
       <div className="panel-header">
-        <h2>페이지</h2>
+        <h2>
+          페이지
+          <span className="panel-count">{pages.length}</span>
+        </h2>
       </div>
       <div className="page-list-scroll">
         {pages.length ? (

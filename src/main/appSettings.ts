@@ -6,10 +6,12 @@ export const DEFAULT_GEMMA_MODEL_FILE = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf";
 export const DEFAULT_GEMMA_MODEL_FILE_Q6 = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf";
 export const MAX_GEMMA_GPU_LAYERS = 30;
 export const DEFAULT_GEMMA_GPU_LAYERS = 30;
-export const DEFAULT_MODEL_PROVIDER: ModelProvider = "gemma";
+export const DEFAULT_MODEL_PROVIDER: ModelProvider = "openai-codex";
 export const DEFAULT_CODEX_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = "medium";
 export const DEFAULT_CODEX_OAUTH_PORT = 10531;
+export const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:11434/v1";
+export const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:31b";
 export const DEFAULT_TRANSLATION_MODE: TranslationMode = "fast";
 export const DEFAULT_MODEL_SOURCE: ModelSource = "huggingface";
 
@@ -70,6 +72,9 @@ export type TranslationOptions = {
   codexModel: string;
   codexReasoningEffort: CodexReasoningEffort;
   codexOauthPort: number;
+  openAICompatibleBaseUrl: string;
+  openAICompatibleApiKey: string;
+  openAICompatibleModel: string;
   hfHomeDir?: string;
   hfHubCacheDir?: string;
   label: string;
@@ -79,7 +84,6 @@ export type TranslationOptions = {
 export type TranslationOptionPaths = {
   dataRoot: string;
   toolsDir: string;
-  llamaServerPath: string;
   hfHomeDir?: string;
   hfHubCacheDir?: string;
 };
@@ -101,6 +105,11 @@ export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env, 
       ),
       oauthPort: resolvePortNumber(env.MANGA_TRANSLATOR_CODEX_OAUTH_PORT, DEFAULT_CODEX_OAUTH_PORT)
     },
+    openAICompatible: {
+      baseUrl: resolveBaseUrl(env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_BASE_URL, DEFAULT_OPENAI_COMPATIBLE_BASE_URL),
+      apiKey: resolveString(env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_API_KEY, ""),
+      model: resolveNonEmptyString(env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_MODEL)
+    },
     translationMode: DEFAULT_TRANSLATION_MODE,
     nsfwMode: false
   };
@@ -110,6 +119,7 @@ export function normalizeAppSettings(raw: unknown, defaults = resolveDefaultAppS
   const record = asRecord(raw);
   const gemma = record?.gemma;
   const codex = record?.codex;
+  const openAICompatible = record?.openAICompatible;
   const localModelPath = resolveOptionalString(asRecord(gemma)?.localModelPath);
   const localMmprojPath = resolveOptionalString(asRecord(gemma)?.localMmprojPath);
   return {
@@ -126,6 +136,11 @@ export function normalizeAppSettings(raw: unknown, defaults = resolveDefaultAppS
       model: resolveNonEmptyString(asRecord(codex)?.model, defaults.codex.model),
       reasoningEffort: resolveCodexReasoningEffort(asRecord(codex)?.reasoningEffort, defaults.codex.reasoningEffort),
       oauthPort: resolvePortNumber(asRecord(codex)?.oauthPort, defaults.codex.oauthPort)
+    },
+    openAICompatible: {
+      baseUrl: resolveBaseUrl(asRecord(openAICompatible)?.baseUrl, defaults.openAICompatible.baseUrl),
+      apiKey: resolveString(asRecord(openAICompatible)?.apiKey, defaults.openAICompatible.apiKey),
+      model: resolveNonEmptyString(asRecord(openAICompatible)?.model, defaults.openAICompatible.model)
     },
     translationMode: resolveTranslationMode(record?.translationMode, defaults.translationMode),
     nsfwMode: resolveBoolean(record?.nsfwMode, defaults.nsfwMode)
@@ -183,7 +198,7 @@ export function buildBaseTranslationOptions({
     reuseServer: true,
     workingDir: paths.dataRoot,
     toolsDir: paths.toolsDir,
-    serverPath: paths.llamaServerPath,
+    serverPath: "",
     modelSource: settings.gemma.modelSource,
     modelRepo: settings.gemma.modelRepo,
     modelFile: settings.gemma.modelFile,
@@ -192,6 +207,9 @@ export function buildBaseTranslationOptions({
     codexModel: settings.codex.model,
     codexReasoningEffort: settings.codex.reasoningEffort,
     codexOauthPort: settings.codex.oauthPort,
+    openAICompatibleBaseUrl: settings.openAICompatible.baseUrl,
+    openAICompatibleApiKey: settings.openAICompatible.apiKey,
+    openAICompatibleModel: settings.openAICompatible.model,
     hfHomeDir: paths.hfHomeDir,
     hfHubCacheDir: paths.hfHubCacheDir,
     label: `app-${jobId}`
@@ -208,7 +226,7 @@ function resolveTranslationMode(value: unknown, fallback: TranslationMode): Tran
 }
 
 function resolveModelProvider(value: unknown, fallback: ModelProvider): ModelProvider {
-  return value === "openai-codex" || value === "gemma" ? value : fallback;
+  return value === "gemma" || value === "openai-codex" || value === "openai-compatible" ? value : fallback;
 }
 
 function resolveModelSource(value: unknown, fallback: ModelSource): ModelSource {
@@ -230,6 +248,15 @@ function resolveTranslationModeDefaults(mode: TranslationMode): TranslationModeD
 
 function resolveNonEmptyString(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
+}
+
+function resolveString(value: unknown, fallback: string): string {
+  return typeof value === "string" ? value.trim() : fallback;
+}
+
+function resolveBaseUrl(value: unknown, fallback: string): string {
+  const raw = resolveNonEmptyString(value, fallback);
+  return raw.replace(/\/+$/, "");
 }
 
 function resolveOptionalString(value: unknown): string | undefined {

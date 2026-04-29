@@ -1,5 +1,5 @@
 import type { TranslationBlock } from "../../../shared/types";
-import { bboxToPixels, clamp, resolveBlockRenderBbox } from "../../../shared/geometry";
+import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from "../../../shared/geometry";
 
 const MIN_FONT_SIZE_PX = 2;
 const MAX_AUTOFIT_FONT_SIZE_PX = 256;
@@ -9,6 +9,7 @@ const MIN_INNER_SIZE_PX = 1;
 const BLOCK_BORDER_PX = 1;
 const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
+export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif";
 
 let measureCanvas: HTMLCanvasElement | null = null;
 
@@ -39,7 +40,13 @@ export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, 
   return resolveBlockTextLayout(block, text, pageSize, stageSize).fontSizePx;
 }
 
-export function resolveBlockPaddingPx(rect: PixelRect): number {
+export function resolveWrappedTextLines(block: TranslationBlock, text: string, fontSize: number, maxWidth: number): string[] {
+  const context = getMeasureContext();
+  context.font = buildFont(fontSize, block.fontFamily);
+  return wrapTextToWidth(context, text, maxWidth);
+}
+
+function resolveAutoBlockPaddingPx(rect: PixelRect): number {
   const shortestSide = Math.min(rect.width, rect.height);
   if (shortestSide <= 48) {
     return 0;
@@ -61,7 +68,7 @@ export function resolveBlockTextLayout(
   stageSize: ViewportSize
 ): BlockTextLayout {
   const rect = resolveBlockRectPx(block, pageSize, stageSize);
-  const paddingPx = resolveBlockPaddingPx(rect);
+  const paddingPx = resolveBlockPaddingPx(block, rect, pageSize, stageSize);
   const borderInsetPx = BLOCK_BORDER_PX * 2;
   const innerWidth = Math.max(MIN_INNER_SIZE_PX, rect.width - paddingPx * 2 - borderInsetPx);
   const innerHeight = Math.max(MIN_INNER_SIZE_PX, rect.height - paddingPx * 2 - borderInsetPx);
@@ -95,6 +102,35 @@ export function resolveBlockRectPx(block: TranslationBlock, pageSize: ViewportSi
     width: pixelRect.w * scaleX,
     height: pixelRect.h * scaleY
   };
+}
+
+export function resolveBlockPaddingPx(
+  rect: PixelRect,
+  pageSize?: ViewportSize,
+  stageSize?: ViewportSize
+): number;
+export function resolveBlockPaddingPx(
+  block: Pick<TranslationBlock, "textPaddingPx">,
+  rect: PixelRect,
+  pageSize: ViewportSize,
+  stageSize: ViewportSize
+): number;
+export function resolveBlockPaddingPx(
+  blockOrRect: Pick<TranslationBlock, "textPaddingPx"> | PixelRect,
+  rectOrPageSize?: PixelRect | ViewportSize,
+  pageSize?: ViewportSize,
+  stageSize?: ViewportSize
+): number {
+  if ("textPaddingPx" in blockOrRect && rectOrPageSize && pageSize && stageSize) {
+    const block = blockOrRect;
+    if (typeof block.textPaddingPx === "number" && Number.isFinite(block.textPaddingPx)) {
+      const scale = Math.min(stageSize.width / Math.max(1, pageSize.width), stageSize.height / Math.max(1, pageSize.height));
+      return clampTextPaddingPx(block.textPaddingPx) * scale;
+    }
+    return resolveAutoBlockPaddingPx(rectOrPageSize as PixelRect);
+  }
+
+  return resolveAutoBlockPaddingPx(blockOrRect as PixelRect);
 }
 
 export function hexToRgba(hex: string, alpha: number): string {
@@ -138,7 +174,7 @@ function doesTextFit(block: TranslationBlock, text: string, fontSize: number, in
   }
 
   const context = getMeasureContext();
-  context.font = buildFont(fontSize);
+  context.font = buildFont(fontSize, block.fontFamily);
   const measured = measureWrappedText(context, text, innerWidth, fontSize * block.lineHeight);
   return measured.totalHeight <= innerHeight && measured.maxLineWidth <= innerWidth;
 }
@@ -154,20 +190,21 @@ function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWid
       continue;
     }
 
-    let current = "";
-    for (const char of [...normalized]) {
-      const candidate = `${current}${char}`;
-      if (!current || context.measureText(candidate).width <= maxWidth) {
+    const words = normalized.split(" ");
+    let current = words[0] ?? "";
+    for (const word of words.slice(1)) {
+      const candidate = `${current} ${word}`;
+      if (context.measureText(candidate).width <= maxWidth) {
         current = candidate;
         continue;
       }
 
-      lines.push(current.trimEnd());
-      current = /\s/u.test(char) ? "" : char;
+      lines.push(current);
+      current = word;
     }
 
     if (current) {
-      lines.push(current.trimEnd());
+      lines.push(current);
     }
   }
 
@@ -230,6 +267,6 @@ function getMeasureContext(): CanvasRenderingContext2D {
   return context;
 }
 
-function buildFont(fontSize: number): string {
-  return `600 ${fontSize}px "Malgun Gothic", "Apple SD Gothic Neo", sans-serif`;
+function buildFont(fontSize: number, fontFamily = DEFAULT_OVERLAY_FONT_FAMILY): string {
+  return `700 ${fontSize}px ${fontFamily}`;
 }

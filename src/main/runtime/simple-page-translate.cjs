@@ -10,6 +10,7 @@ const DEFAULT_MODEL_HF = "unsloth/gemma-4-26B-A4B-it-GGUF";
 const DEFAULT_HF_FILE = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf";
 const DEFAULT_CODEX_MODEL = "gpt-5.5";
 const DEFAULT_CODEX_REASONING_EFFORT = "medium";
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:31b";
 const DEFAULT_API_KEY = "local-llama-server";
 const MAX_LOG_PREVIEW_LENGTH = 8000;
 const MM_PROJ_CANDIDATE_NAMES = ["mmproj-BF16.gguf", "mmproj-F16.gguf", "mmproj-F32.gguf", "mmproj.gguf"];
@@ -68,6 +69,8 @@ function buildOptionSummary(options = {}) {
     codexModel: resolveConfiguredCodexModel(options),
     codexReasoningEffort: resolveConfiguredCodexReasoningEffort(options),
     codexOauthPort: options.codexOauthPort,
+    openAICompatibleBaseUrl: options.openAICompatibleBaseUrl,
+    openAICompatibleModel: resolveConfiguredOpenAICompatibleModel(options),
     launchMode: launchTarget.launchMode,
     hfHomeDir: resolveHfHomeDir(options),
     hfHubCacheDir: resolveHubCacheDir(options)
@@ -158,24 +161,6 @@ function enhanceBitmapBuffer(bitmap, contrast = 1, grayscale = false) {
   }
 
   return output;
-}
-
-function resolveElectronNativeImage() {
-  try {
-    const electronModule = require("electron");
-    if (
-      electronModule &&
-      typeof electronModule === "object" &&
-      electronModule.nativeImage &&
-      typeof electronModule.nativeImage.createFromPath === "function"
-    ) {
-      return electronModule.nativeImage;
-    }
-  } catch {
-    // Ignore node-only contexts and fall back to the PowerShell pipeline.
-  }
-
-  return null;
 }
 
 function resolveToolsDir(options = {}) {
@@ -314,15 +299,26 @@ function resolveConfiguredModelSource(options = {}) {
 }
 
 function resolveModelProvider(options = {}) {
-  return String(options.modelProvider ?? "").trim() === "openai-codex" ? "openai-codex" : "gemma";
+  const value = String(options.modelProvider ?? "").trim();
+  if (value === "openai-codex" || value === "openai-compatible") {
+    return value;
+  }
+  return "gemma";
 }
 
 function isOpenAICodexProvider(options = {}) {
   return resolveModelProvider(options) === "openai-codex";
 }
 
+function isOpenAICompatibleProvider(options = {}) {
+  return resolveModelProvider(options) === "openai-compatible";
+}
+
 function resolveProviderDisplayName(options = {}) {
-  return isOpenAICodexProvider(options) ? "OpenAI Codex" : "Gemma";
+  if (isOpenAICodexProvider(options)) {
+    return "OpenAI Codex";
+  }
+  return isOpenAICompatibleProvider(options) ? "OpenAI Compatible" : "Gemma";
 }
 
 function resolveConfiguredCodexModel(options = {}) {
@@ -335,6 +331,10 @@ function resolveConfiguredCodexReasoningEffort(options = {}) {
     return "low";
   }
   return ["none", "low", "medium", "high", "xhigh"].includes(value) ? value : DEFAULT_CODEX_REASONING_EFFORT;
+}
+
+function resolveConfiguredOpenAICompatibleModel(options = {}) {
+  return String(options.openAICompatibleModel ?? process.env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_MODEL ?? "").trim() || DEFAULT_OPENAI_COMPATIBLE_MODEL;
 }
 
 function resolveConfiguredLocalModelPath(options = {}) {
@@ -425,6 +425,13 @@ function inspectModelLaunch(options = {}) {
       requiresDownload: false
     };
   }
+  if (isOpenAICompatibleProvider(options)) {
+    return {
+      launchMode: "openai-compatible",
+      model: resolveConfiguredOpenAICompatibleModel(options),
+      requiresDownload: false
+    };
+  }
 
   if (resolveConfiguredModelSource(options) === "local") {
     const modelPath = resolveConfiguredLocalModelPath(options);
@@ -450,6 +457,9 @@ function inspectModelLaunch(options = {}) {
 function isModelCached(options = {}) {
   const launchTarget = inspectModelLaunch(options);
   if (launchTarget.launchMode === "openai-codex") {
+    return true;
+  }
+  if (launchTarget.launchMode === "openai-compatible") {
     return true;
   }
   if (launchTarget.launchMode === "local") {
@@ -649,106 +659,7 @@ async function fileToModelAsset(filePath) {
 }
 
 async function buildEnhancedVariant(options) {
-  const nativeImage = resolveElectronNativeImage();
-  let electronError = null;
-
-  if (nativeImage) {
-    try {
-      return await buildEnhancedVariantWithElectron(options, nativeImage);
-    } catch (error) {
-      electronError = error;
-    }
-  }
-
-  try {
-    return await buildEnhancedVariantWithPowerShell(options);
-  } catch (error) {
-    if (!electronError) {
-      throw error;
-    }
-
-    throw createDetailedError(
-      "Enhanced variant generation failed in both Electron and PowerShell pipelines.",
-      {
-        imagePath: options.imagePath,
-        outputDir: options.outputDir,
-        electronError
-      },
-      error
-    );
-  }
-}
-
-async function buildEnhancedVariantWithElectron(options, nativeImage) {
-  const outputPath = path.join(options.outputDir, "input-enhanced.png");
-  const image = nativeImage.createFromPath(options.imagePath);
-  if (!image || image.isEmpty()) {
-    throw createDetailedError("Electron nativeImage could not decode the source image.", {
-      imagePath: options.imagePath,
-      outputPath,
-      format: path.extname(options.imagePath).toLowerCase()
-    });
-  }
-
-  const sourceSize = image.getSize();
-  if (!sourceSize.width || !sourceSize.height) {
-    throw createDetailedError("Electron nativeImage returned an empty size for the source image.", {
-      imagePath: options.imagePath,
-      outputPath,
-      format: path.extname(options.imagePath).toLowerCase(),
-      sourceSize
-    });
-  }
-
-  const scaled = getScaledSize(sourceSize.width, sourceSize.height, options.enhancedMaxLongSide);
-  const resized =
-    scaled.width === sourceSize.width && scaled.height === sourceSize.height
-      ? image
-      : image.resize({
-          width: scaled.width,
-          height: scaled.height,
-          quality: "best"
-        });
-
-  if (!resized || resized.isEmpty()) {
-    throw createDetailedError("Electron nativeImage resize returned an empty image.", {
-      imagePath: options.imagePath,
-      outputPath,
-      format: path.extname(options.imagePath).toLowerCase(),
-      sourceSize,
-      scaled
-    });
-  }
-
-  const bitmap = resized.toBitmap();
-  if (!bitmap || bitmap.length === 0) {
-    throw createDetailedError("Electron nativeImage returned an empty bitmap buffer.", {
-      imagePath: options.imagePath,
-      outputPath,
-      format: path.extname(options.imagePath).toLowerCase(),
-      sourceSize,
-      scaled
-    });
-  }
-
-  const enhancedBitmap = enhanceBitmapBuffer(bitmap, options.enhancedContrast, true);
-  const enhancedImage = nativeImage.createFromBitmap(enhancedBitmap, {
-    width: scaled.width,
-    height: scaled.height
-  });
-  if (!enhancedImage || enhancedImage.isEmpty()) {
-    throw createDetailedError("Electron nativeImage could not create the enhanced bitmap.", {
-      imagePath: options.imagePath,
-      outputPath,
-      format: path.extname(options.imagePath).toLowerCase(),
-      sourceSize,
-      scaled
-    });
-  }
-
-  await mkdir(options.outputDir, { recursive: true });
-  await writeFile(outputPath, enhancedImage.toPNG());
-  return outputPath;
+  return await buildEnhancedVariantWithPowerShell(options);
 }
 
 async function buildEnhancedVariantWithPowerShell(options) {
@@ -924,6 +835,9 @@ function resolveRequestModelName(options = {}) {
   if (isOpenAICodexProvider(options)) {
     return resolveConfiguredCodexModel(options);
   }
+  if (isOpenAICompatibleProvider(options)) {
+    return resolveConfiguredOpenAICompatibleModel(options);
+  }
   const launchTarget = inspectModelLaunch(options);
   if (launchTarget.launchMode === "local" && launchTarget.modelPath) {
     return path.basename(launchTarget.modelPath);
@@ -935,7 +849,12 @@ function buildChatRequestHeaders(options = {}) {
   const headers = {
     "Content-Type": "application/json"
   };
-  if (!isOpenAICodexProvider(options)) {
+  if (isOpenAICompatibleProvider(options)) {
+    const apiKey = String(options.openAICompatibleApiKey ?? process.env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_API_KEY ?? "").trim();
+    if (apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`;
+    }
+  } else if (!isOpenAICodexProvider(options)) {
     headers.Authorization = `Bearer ${DEFAULT_API_KEY}`;
   }
   return headers;
@@ -951,18 +870,23 @@ function buildChatRequestBody(options, messages, maxTokens = options.maxTokens) 
     };
   }
 
-  return {
+  const body = {
     model: resolveRequestModelName(options),
     temperature: options.temperature,
     top_p: options.topP,
-    top_k: options.topK,
     presence_penalty: 0,
     frequency_penalty: 0,
     max_tokens: maxTokens,
-    reasoning_budget: 0,
-    enable_thinking: false,
     messages
   };
+
+  if (!isOpenAICompatibleProvider(options)) {
+    body.reasoning_budget = 0;
+    body.enable_thinking = false;
+    body.top_k = options.topK;
+  }
+
+  return body;
 }
 
 function buildResponsesRequestBody(options, imageVariants) {

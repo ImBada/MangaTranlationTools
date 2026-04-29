@@ -94,6 +94,27 @@ export function normalizeRenderDirection(value: unknown, fallback: RenderTextDir
   return text === "horizontal" || text === "vertical" || text === "rotated" || text === "hidden" ? text : fallback;
 }
 
+export function clampRotationDeg(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return clamp(value, -180, 180);
+}
+
+export function clampTextPaddingPx(value: unknown): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    return 0;
+  }
+  return Math.round(clamp(value, 0, 80));
+}
+
+export function resolveBlockRotationDeg(block: Pick<TranslationBlock, "renderDirection" | "rotationDeg">): number {
+  if (typeof block.rotationDeg === "number") {
+    return clampRotationDeg(block.rotationDeg);
+  }
+  return block.renderDirection === "rotated" ? -8 : 0;
+}
+
 export function normalizeTextAlign(value: unknown): "left" | "center" | "right" {
   const text = String(value ?? "").trim().toLowerCase();
   return text === "left" || text === "right" ? text : "center";

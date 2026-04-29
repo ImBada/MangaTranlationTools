@@ -4,7 +4,7 @@ export type SourceTextDirection = "horizontal" | "vertical";
 export type RenderTextDirection = "horizontal" | "vertical" | "rotated" | "hidden";
 
 export type JobKind = "gemma-analysis";
-export type ModelProvider = "gemma" | "openai-codex";
+export type ModelProvider = "gemma" | "openai-codex" | "openai-compatible";
 export type ModelSource = "huggingface" | "local";
 export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
 
@@ -23,12 +23,19 @@ export type CodexSettings = {
   oauthPort: number;
 };
 
+export type OpenAICompatibleSettings = {
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+};
+
 export type TranslationMode = "fast" | "accuracy";
 
 export type AppSettings = {
   modelProvider: ModelProvider;
   gemma: GemmaSettings;
   codex: CodexSettings;
+  openAICompatible: OpenAICompatibleSettings;
   translationMode: TranslationMode;
   nsfwMode: boolean;
 };
@@ -82,13 +89,45 @@ export type TranslationBlock = {
   confidence: number;
   sourceDirection: SourceTextDirection;
   renderDirection: RenderTextDirection;
+  rotationDeg?: number;
+  fontPresetId?: string;
+  fontSizeLinkedToPreset?: boolean;
+  lineHeightLinkedToPreset?: boolean;
+  outlineColorLinkedToPreset?: boolean;
+  outlineWidthLinkedToPreset?: boolean;
+  autoFitTextLinkedToPreset?: boolean;
+  textColorLinkedToPreset?: boolean;
+  fontFamily?: string;
   fontSizePx: number;
   lineHeight: number;
+  outlineColor?: string;
+  outlineWidthPx?: number;
+  textPaddingPx?: number;
   textAlign: "left" | "center" | "right";
   textColor: string;
   backgroundColor: string;
   opacity: number;
   autoFitText?: boolean;
+  inpainted?: boolean;
+};
+
+export type FontPreset = {
+  id: string;
+  name: string;
+  fontFamily?: string;
+  fontSizePx: number;
+  lineHeight: number;
+  outlineColor?: string;
+  outlineWidthPx?: number;
+  autoFitText?: boolean;
+  textColor?: string;
+};
+
+export type SystemFont = {
+  family: string;
+  fullName?: string;
+  postScriptName?: string;
+  cssFamily: string;
 };
 
 export type MangaPage = {
@@ -96,6 +135,14 @@ export type MangaPage = {
   name: string;
   imagePath: string;
   dataUrl: string;
+  inpaintMaskPath?: string;
+  inpaintResultPath?: string;
+  inpaintMaskDataUrl?: string;
+  inpaintResultDataUrl?: string;
+  inpaintStatus?: "idle" | "running" | "completed" | "failed";
+  inpaintSettings?: InpaintSettings;
+  /** @deprecated Use inpaintMaskDataUrl or inpaintResultDataUrl. */
+  inpaintLayerDataUrl?: string;
   width: number;
   height: number;
   blocks: TranslationBlock[];
@@ -113,6 +160,7 @@ export type LibraryChapter = {
   title: string;
   sourceKind: ImportSourceKind;
   status: ChapterStatus;
+  fontPresets?: FontPreset[];
   pageOrder: string[];
   pages: LibraryPageRecord[];
   createdAt: string;
@@ -121,6 +169,11 @@ export type LibraryChapter = {
 
 export type ChapterSnapshot = Omit<LibraryChapter, "pages"> & {
   pages: MangaPage[];
+};
+
+export type SaveChapterSnapshotRequest = {
+  chapter: ChapterSnapshot;
+  dirtyPageIds?: string[];
 };
 
 export type LibraryChapterSummary = Pick<LibraryChapter, "id" | "workId" | "title" | "status" | "createdAt" | "updatedAt"> & {
@@ -142,6 +195,67 @@ export type LibraryWorkSummary = LibraryWork & {
 export type LibraryIndex = {
   workOrder: string[];
   works: LibraryWorkSummary[];
+};
+
+export type RenderPageRequest = {
+  chapterId: string;
+  pageId: string;
+  dataUrl: string;
+};
+
+export type RenderPageResult = {
+  outputPath: string;
+};
+
+export type InpaintEngine = "lama" | "opencv-fallback" | "local-fill-fallback" | "mask-fill-fallback";
+
+export type InpaintSettings = {
+  engine: InpaintEngine;
+  paddingPx: number;
+  featherPx: number;
+  tileSize: number;
+};
+
+export type ImageRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+export type InpaintPageRequest = {
+  chapterId: string;
+  pageId: string;
+  sourceDataUrl: string;
+  maskDataUrl: string;
+  settings: InpaintSettings;
+  persistResult?: boolean;
+};
+
+export type InpaintPageResult = {
+  chapter: ChapterSnapshot;
+  resultDataUrl: string;
+  engine: InpaintEngine;
+};
+
+export type SaveInpaintMaskRequest = {
+  chapterId: string;
+  pageId: string;
+  maskDataUrl?: string;
+};
+
+export type SaveInpaintMaskResult = {
+  chapter: ChapterSnapshot;
+};
+
+export type SaveInpaintResultLayerRequest = {
+  chapterId: string;
+  pageId: string;
+  resultDataUrl?: string;
+};
+
+export type SaveInpaintResultLayerResult = {
+  chapter: ChapterSnapshot;
 };
 
 export type ImportPageDraft = {
@@ -220,7 +334,7 @@ export type LocalModelPickResult = {
 export type ModelTestResult = {
   ok: boolean;
   message: string;
-  launchMode: "huggingface" | "cached-hf" | "local" | "openai-codex";
+  launchMode: "huggingface" | "cached-hf" | "local" | "openai-codex" | "openai-compatible";
   resolvedModelPath?: string | null;
   resolvedMmprojPath?: string | null;
   resolvedEndpoint?: string | null;

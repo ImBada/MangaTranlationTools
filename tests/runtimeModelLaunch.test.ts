@@ -80,6 +80,20 @@ describe("runtime model launch helpers", () => {
     expect(isModelCached({ modelProvider: "openai-codex" })).toBe(true);
   });
 
+  it("treats custom OpenAI-compatible providers as remote endpoints", () => {
+    const launch = inspectModelLaunch({
+      modelProvider: "openai-compatible",
+      openAICompatibleModel: "local-vision-model"
+    });
+
+    expect(launch).toEqual({
+      launchMode: "openai-compatible",
+      model: "local-vision-model",
+      requiresDownload: false
+    });
+    expect(isModelCached({ modelProvider: "openai-compatible" })).toBe(true);
+  });
+
   it("builds Codex Responses requests with input_image data URLs", () => {
     const requestBody = buildResponsesRequestBody(
       {

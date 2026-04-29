@@ -1,4 +1,4 @@
-import type { MangaApi } from "../../preload";
+import type { MangaApi } from "./apiClient";
 
 declare global {
   interface Window {

@@ -1,12 +1,9 @@
-import { app } from "electron";
 import { mkdirSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 
 export type AppPaths = {
-  isPackaged: boolean;
   repoRoot: string;
   executableDir: string;
-  resourcesDir: string;
   dataRoot: string;
   settingsPath: string;
   libraryDir: string;
@@ -14,38 +11,26 @@ export type AppPaths = {
   logFile: string;
   runtimeDir: string;
   toolsDir: string;
-  llamaRuntimeDir: string;
-  llamaServerPath: string;
   hfHomeDir?: string;
   hfHubCacheDir?: string;
 };
 
-function isRunningPackaged(): boolean {
-  return app.isPackaged || __dirname.includes("app.asar");
-}
-
 export function getAppPaths(): AppPaths {
-  const isPackaged = isRunningPackaged();
   const repoRoot = resolve(__dirname, "../..");
   const executableDir = dirname(process.execPath);
-  const resourcesDir = process.resourcesPath;
-  const dataRoot = isPackaged ? join(executableDir, "data") : repoRoot;
-  const libraryDir = isPackaged ? join(dataRoot, "library") : join(repoRoot, "library");
-  const logsDir = isPackaged ? join(dataRoot, "logs") : join(repoRoot, "logs");
-  const runtimeDir = isPackaged ? join(resourcesDir, "app-runtime") : join(repoRoot, "out", "app-runtime");
-  const toolsDir = isPackaged ? join(resourcesDir, "tools") : join(repoRoot, "tools");
-  const llamaRuntimeDir = join(toolsDir, "llama-b8833-cuda12.4");
-  const llamaServerBinary = process.platform === "win32" ? "llama-server.exe" : "llama-server";
+  const dataRoot = process.env.MANGA_TRANSLATOR_DATA_DIR?.trim() || repoRoot;
+  const libraryDir = join(dataRoot, "library");
+  const logsDir = join(dataRoot, "logs");
+  const runtimeDir = join(repoRoot, "out", "app-runtime");
+  const toolsDir = join(repoRoot, "tools");
   const explicitHfHome = process.env.MANGA_TRANSLATOR_HF_HOME?.trim();
   const explicitHubCache = process.env.HF_HUB_CACHE?.trim() || process.env.HUGGINGFACE_HUB_CACHE?.trim();
-  const hfHomeDir = isPackaged ? join(dataRoot, "hf-cache") : explicitHfHome || undefined;
-  const hfHubCacheDir = isPackaged ? join(dataRoot, "hf-cache", "hub") : explicitHubCache || undefined;
+  const hfHomeDir = explicitHfHome || undefined;
+  const hfHubCacheDir = explicitHubCache || undefined;
 
   return {
-    isPackaged,
     repoRoot,
     executableDir,
-    resourcesDir,
     dataRoot,
     settingsPath: join(dataRoot, "settings.json"),
     libraryDir,
@@ -53,8 +38,6 @@ export function getAppPaths(): AppPaths {
     logFile: join(logsDir, "app.log"),
     runtimeDir,
     toolsDir,
-    llamaRuntimeDir,
-    llamaServerPath: join(llamaRuntimeDir, llamaServerBinary),
     hfHomeDir,
     hfHubCacheDir
   };

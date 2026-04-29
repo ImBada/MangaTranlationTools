@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buildBaseTranslationOptions, type TranslationOptions } from "./appSettings";
 import { logError, logInfo, logWarn } from "./logger";
+import { createOpenAICompatibleEndpoint, stopOpenAICompatibleEndpoint, type OpenAICompatibleEndpoint } from "./openaiCompatibleEndpoint";
 import { startOpenAIOAuthEndpoint, stopOpenAIOAuthEndpoint, type OpenAIOAuthEndpoint } from "./openaiOauthEndpoint";
 import { estimateBlockFontSizePx, clampBbox, normalizeBlockType } from "../shared/geometry";
 import type { AppSettings, BBox, BlockType, JobEvent, MangaPage, TranslationBlock } from "../shared/types";
@@ -26,7 +27,7 @@ type ServerHandle = {
   startedByScript: boolean;
 };
 
-type ModelEndpointHandle = ServerHandle | OpenAIOAuthEndpoint;
+type ModelEndpointHandle = ServerHandle | OpenAIOAuthEndpoint | OpenAICompatibleEndpoint;
 
 type TranslationResult = {
   outputText: string;
@@ -97,9 +98,7 @@ export async function runWholePagePipeline({
   const runtime = loadRuntimeModules();
   const baseOptions = buildBaseOptions(jobId, runPaths.runDir, appSettings, paths);
   const progressTotal = pages.length;
-  const codexSelected = baseOptions.modelProvider === "openai-codex";
-  const modelCached = codexSelected || runtime.simplePage.isModelCached(baseOptions);
-  const localModelSelected = !codexSelected && baseOptions.modelSource === "local";
+  const modelCached = true;
 
   logInfo("Analysis pipeline initialized", {
     jobId,
@@ -113,24 +112,12 @@ export async function runWholePagePipeline({
     id: jobId,
     kind: "gemma-analysis",
     status: "starting",
-    progressText: localModelSelected
-      ? "로컬 모델/서버 준비 중"
-      : codexSelected
-        ? "OpenAI Codex 엔드포인트 준비 중"
-        : modelCached
-          ? "Gemma 4 서버 시작 중"
-          : "모델 다운로드/서버 준비 중",
-    phase: localModelSelected || modelCached || codexSelected ? "booting" : "model_downloading",
+    progressText: "번역 API 엔드포인트 준비 중",
+    phase: "booting",
     progressCurrent: 0,
     progressTotal,
     pageTotal: pages.length,
-    detail: localModelSelected
-      ? "선택한 로컬 모델을 불러오는 중입니다. 큰 모델은 시작까지 시간이 걸릴 수 있습니다."
-      : codexSelected
-        ? `${baseOptions.codexModel}, thinking ${baseOptions.codexReasoningEffort}`
-        : modelCached
-          ? `gpu layers ${baseOptions.gpuLayers}, ${baseOptions.modelFile}`
-          : "로컬 모델 자산이 없거나 부족해 다운로드/갱신이 필요할 수 있습니다."
+    detail: describeEndpoint(baseOptions)
   });
 
   const server = await startModelEndpoint(runtime, baseOptions);
@@ -147,7 +134,7 @@ export async function runWholePagePipeline({
     progressCurrent: 0,
     progressTotal,
     pageTotal: pages.length,
-    detail: codexSelected ? `openai-oauth ready at ${server.baseUrl}` : `server ready on port ${baseOptions.port}`
+    detail: `endpoint ready at ${server.baseUrl}`
   });
 
   try {
@@ -383,6 +370,8 @@ function overlayItemToBlock(item: OverlayItem, page: MangaPage, index: number): 
     renderDirection: "horizontal",
     fontSizePx: estimateBlockFontSizePx(translatedText || sourceText || "...", { bbox }, { width: page.width, height: page.height }),
     lineHeight: 1.18,
+    outlineColor: "#000000",
+    outlineWidthPx: 0,
     textAlign: "center",
     textColor: DEFAULT_TEXT_COLOR,
     backgroundColor: type === "sfx" ? "#fff4ea" : DEFAULT_BACKGROUND_COLOR,
@@ -462,12 +451,17 @@ function summarizeTranslationOptions(options: TranslationOptions): Record<string
     codexModel: options.codexModel,
     codexReasoningEffort: options.codexReasoningEffort,
     codexOauthPort: options.codexOauthPort,
+    openAICompatibleBaseUrl: options.openAICompatibleBaseUrl,
+    openAICompatibleModel: options.openAICompatibleModel,
     hfHomeDir: options.hfHomeDir ?? null,
     hfHubCacheDir: options.hfHubCacheDir ?? null
   };
 }
 
 async function startModelEndpoint(runtime: RuntimeModules, options: TranslationOptions): Promise<ModelEndpointHandle> {
+  if (options.modelProvider === "openai-compatible") {
+    return createOpenAICompatibleEndpoint(options);
+  }
   if (options.modelProvider === "openai-codex") {
     return startOpenAIOAuthEndpoint(options);
   }
@@ -479,11 +473,26 @@ async function stopModelEndpoint(runtime: RuntimeModules, endpoint: ModelEndpoin
     await stopOpenAIOAuthEndpoint(endpoint);
     return;
   }
+  if (isOpenAICompatibleEndpoint(endpoint)) {
+    await stopOpenAICompatibleEndpoint(endpoint);
+    return;
+  }
   await runtime.simplePage.stopServer(endpoint);
 }
 
 function isOpenAIOAuthEndpoint(endpoint: ModelEndpointHandle | null | undefined): endpoint is OpenAIOAuthEndpoint {
   return Boolean(endpoint && "provider" in endpoint && endpoint.provider === "openai-codex");
+}
+
+function isOpenAICompatibleEndpoint(endpoint: ModelEndpointHandle | null | undefined): endpoint is OpenAICompatibleEndpoint {
+  return Boolean(endpoint && "provider" in endpoint && endpoint.provider === "openai-compatible");
+}
+
+function describeEndpoint(options: TranslationOptions): string {
+  if (options.modelProvider === "openai-compatible") {
+    return `${options.openAICompatibleModel} at ${options.openAICompatibleBaseUrl}`;
+  }
+  return `${options.codexModel}, thinking ${options.codexReasoningEffort}`;
 }
 
 function summarizePage(page: MangaPage): Record<string, unknown> {

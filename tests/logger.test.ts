@@ -1,10 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
-
-vi.mock("electron", () => ({
-  app: {
-    isPackaged: false
-  }
-}));
+import { describe, expect, it } from "vitest";
 
 import { serializeLogDetail } from "../src/main/logger";
 

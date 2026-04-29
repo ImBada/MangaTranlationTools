@@ -20,6 +20,17 @@ describe("render layout padding", () => {
     expect(resolveBlockPaddingPx({ left: 0, top: 0, width: 240, height: 240 })).toBe(14);
   });
 
+  it("uses block text padding when explicitly set", () => {
+    expect(
+      resolveBlockPaddingPx(
+        { textPaddingPx: 12 },
+        { left: 0, top: 0, width: 240, height: 240 },
+        { width: 1000, height: 1000 },
+        { width: 500, height: 500 }
+      )
+    ).toBe(6);
+  });
+
   it("shrinks horizontal single-character text to fit narrow block width", () => {
     installCanvasMeasureMock();
 

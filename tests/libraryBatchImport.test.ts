@@ -1,18 +1,7 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
-vi.mock("electron", () => ({
-  app: {
-    isPackaged: false
-  },
-  nativeImage: {
-    createFromPath: () => ({
-      getSize: () => ({ width: 0, height: 0 })
-    })
-  }
-}));
 
 import { previewZipFolder } from "../src/main/library";
 

@@ -9,6 +9,8 @@ import type {
 
 const MAX_GPU_LAYERS = 30;
 const DEFAULT_GEMMA_MODEL_REPO = "unsloth/gemma-4-26B-A4B-it-GGUF";
+const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:11434/v1";
+const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:31b";
 const MODEL_PRESETS = {
   q3: {
     label: "Q3_K_XL",
@@ -92,14 +94,14 @@ const MODEL_SOURCE_OPTIONS: ModelSourceOption[] = [
 
 const MODEL_PROVIDER_OPTIONS: ModelProviderOption[] = [
   {
-    id: "gemma",
-    label: "Gemma 4",
-    description: "로컬 llama-server로 Gemma 4 비전 모델을 실행합니다."
+    id: "openai-codex",
+    label: "OpenAI API",
+    description: "Codex 로그인 토큰을 쓰는 openai-oauth 엔드포인트로 요청합니다."
   },
   {
-    id: "openai-codex",
-    label: "OpenAI Codex",
-    description: "Codex 로그인 토큰을 쓰는 openai-oauth 엔드포인트로 요청합니다."
+    id: "openai-compatible",
+    label: "커스텀",
+    description: "OpenAI 호환 /v1/chat/completions 엔드포인트로 요청합니다."
   }
 ];
 
@@ -136,7 +138,6 @@ type SettingsModalProps = {
   busy: boolean;
   jobActive: boolean;
   onCancel: () => void;
-  onOpenLogFolder: () => void;
   onReset: () => void;
   onSubmit: (settings: AppSettings) => void;
 };
@@ -146,27 +147,30 @@ export function SettingsModal({
   busy,
   jobActive,
   onCancel,
-  onOpenLogFolder,
   onReset,
   onSubmit
 }: SettingsModalProps): React.JSX.Element {
-  const [modelProvider, setModelProvider] = React.useState<ModelProvider>(initialSettings.modelProvider);
-  const [modelSource, setModelSource] = React.useState<ModelSource>(initialSettings.gemma.modelSource);
+  const safeInitialSettings = React.useMemo(() => withSettingsDefaults(initialSettings), [initialSettings]);
+  const [modelProvider, setModelProvider] = React.useState<ModelProvider>(safeInitialSettings.modelProvider);
+  const [modelSource, setModelSource] = React.useState<ModelSource>(safeInitialSettings.gemma.modelSource);
   const [selectedPreset, setSelectedPreset] = React.useState<ModelPresetId>(() =>
-    resolveModelPreset(initialSettings.gemma.modelRepo, initialSettings.gemma.modelFile)
+    resolveModelPreset(safeInitialSettings.gemma.modelRepo, safeInitialSettings.gemma.modelFile)
   );
-  const [customModelRepo, setCustomModelRepo] = React.useState(initialSettings.gemma.modelRepo);
-  const [customModelFile, setCustomModelFile] = React.useState(initialSettings.gemma.modelFile);
-  const [localModelPath, setLocalModelPath] = React.useState(initialSettings.gemma.localModelPath ?? "");
-  const [localMmprojPath, setLocalMmprojPath] = React.useState(initialSettings.gemma.localMmprojPath ?? "");
-  const [gpuLayers, setGpuLayers] = React.useState(String(clampGpuLayers(initialSettings.gemma.gpuLayers)));
-  const [codexModel, setCodexModel] = React.useState(initialSettings.codex.model);
+  const [customModelRepo, setCustomModelRepo] = React.useState(safeInitialSettings.gemma.modelRepo);
+  const [customModelFile, setCustomModelFile] = React.useState(safeInitialSettings.gemma.modelFile);
+  const [localModelPath, setLocalModelPath] = React.useState(safeInitialSettings.gemma.localModelPath ?? "");
+  const [localMmprojPath, setLocalMmprojPath] = React.useState(safeInitialSettings.gemma.localMmprojPath ?? "");
+  const [gpuLayers, setGpuLayers] = React.useState(String(clampGpuLayers(safeInitialSettings.gemma.gpuLayers)));
+  const [codexModel, setCodexModel] = React.useState(safeInitialSettings.codex.model);
   const [codexReasoningEffort, setCodexReasoningEffort] = React.useState<CodexReasoningEffort>(
-    initialSettings.codex.reasoningEffort
+    safeInitialSettings.codex.reasoningEffort
   );
-  const [codexOauthPort, setCodexOauthPort] = React.useState(String(initialSettings.codex.oauthPort));
-  const [translationMode, setTranslationMode] = React.useState<TranslationMode>(initialSettings.translationMode);
-  const [nsfwMode, setNsfwMode] = React.useState(initialSettings.nsfwMode);
+  const [codexOauthPort, setCodexOauthPort] = React.useState(String(safeInitialSettings.codex.oauthPort));
+  const [compatibleBaseUrl, setCompatibleBaseUrl] = React.useState(safeInitialSettings.openAICompatible.baseUrl);
+  const [compatibleApiKey, setCompatibleApiKey] = React.useState(safeInitialSettings.openAICompatible.apiKey);
+  const [compatibleModel, setCompatibleModel] = React.useState(safeInitialSettings.openAICompatible.model);
+  const [translationMode, setTranslationMode] = React.useState<TranslationMode>(safeInitialSettings.translationMode);
+  const [nsfwMode, setNsfwMode] = React.useState(safeInitialSettings.nsfwMode);
   const [localActionBusy, setLocalActionBusy] = React.useState(false);
   const [testState, setTestState] = React.useState<TestState>({ status: "idle", message: null, detail: null });
   const modelRepoInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -174,21 +178,24 @@ export function SettingsModal({
   const gpuSliderRef = React.useRef<HTMLInputElement | null>(null);
 
   React.useEffect(() => {
-    setModelProvider(initialSettings.modelProvider);
-    setModelSource(initialSettings.gemma.modelSource);
-    setSelectedPreset(resolveModelPreset(initialSettings.gemma.modelRepo, initialSettings.gemma.modelFile));
-    setCustomModelRepo(initialSettings.gemma.modelRepo);
-    setCustomModelFile(initialSettings.gemma.modelFile);
-    setLocalModelPath(initialSettings.gemma.localModelPath ?? "");
-    setLocalMmprojPath(initialSettings.gemma.localMmprojPath ?? "");
-    setGpuLayers(String(clampGpuLayers(initialSettings.gemma.gpuLayers)));
-    setCodexModel(initialSettings.codex.model);
-    setCodexReasoningEffort(initialSettings.codex.reasoningEffort);
-    setCodexOauthPort(String(initialSettings.codex.oauthPort));
-    setTranslationMode(initialSettings.translationMode);
-    setNsfwMode(initialSettings.nsfwMode);
+    setModelProvider(safeInitialSettings.modelProvider);
+    setModelSource(safeInitialSettings.gemma.modelSource);
+    setSelectedPreset(resolveModelPreset(safeInitialSettings.gemma.modelRepo, safeInitialSettings.gemma.modelFile));
+    setCustomModelRepo(safeInitialSettings.gemma.modelRepo);
+    setCustomModelFile(safeInitialSettings.gemma.modelFile);
+    setLocalModelPath(safeInitialSettings.gemma.localModelPath ?? "");
+    setLocalMmprojPath(safeInitialSettings.gemma.localMmprojPath ?? "");
+    setGpuLayers(String(clampGpuLayers(safeInitialSettings.gemma.gpuLayers)));
+    setCodexModel(safeInitialSettings.codex.model);
+    setCodexReasoningEffort(safeInitialSettings.codex.reasoningEffort);
+    setCodexOauthPort(String(safeInitialSettings.codex.oauthPort));
+    setCompatibleBaseUrl(safeInitialSettings.openAICompatible.baseUrl);
+    setCompatibleApiKey(safeInitialSettings.openAICompatible.apiKey);
+    setCompatibleModel(safeInitialSettings.openAICompatible.model);
+    setTranslationMode(safeInitialSettings.translationMode);
+    setNsfwMode(safeInitialSettings.nsfwMode);
     setTestState({ status: "idle", message: null, detail: null });
-  }, [initialSettings]);
+  }, [safeInitialSettings]);
 
   React.useEffect(() => {
     if (modelProvider === "openai-codex") {
@@ -214,16 +221,22 @@ export function SettingsModal({
   const trimmedLocalModelPath = localModelPath.trim();
   const trimmedLocalMmprojPath = localMmprojPath.trim();
   const trimmedCodexModel = codexModel.trim();
+  const trimmedCompatibleBaseUrl = compatibleBaseUrl.trim().replace(/\/+$/, "");
+  const trimmedCompatibleApiKey = compatibleApiKey.trim();
+  const trimmedCompatibleModel = compatibleModel.trim();
   const parsedGpuLayers = Number(gpuLayers);
   const parsedCodexOauthPort = Number(codexOauthPort);
   const gpuLayersValid =
     Number.isInteger(parsedGpuLayers) && parsedGpuLayers >= 0 && parsedGpuLayers <= MAX_GPU_LAYERS;
   const codexOauthPortValid =
     Number.isInteger(parsedCodexOauthPort) && parsedCodexOauthPort >= 0 && parsedCodexOauthPort <= 65535;
+  const compatibleBaseUrlValid = /^https?:\/\/.+/i.test(trimmedCompatibleBaseUrl);
   const canSubmit = Boolean(
     modelProvider === "openai-codex"
       ? trimmedCodexModel && codexOauthPortValid
-      : gpuLayersValid && (modelSource === "local" ? trimmedLocalModelPath : trimmedModelRepo && trimmedModelFile)
+      : modelProvider === "openai-compatible"
+        ? trimmedCompatibleBaseUrl && compatibleBaseUrlValid && trimmedCompatibleModel
+        : gpuLayersValid && (modelSource === "local" ? trimmedLocalModelPath : trimmedModelRepo && trimmedModelFile)
   );
   const sliderValue =
     Number.isFinite(parsedGpuLayers) ? clampGpuLayers(Math.trunc(parsedGpuLayers)) : 0;
@@ -242,12 +255,47 @@ export function SettingsModal({
           modelFile: trimmedModelFile || MODEL_PRESETS.q4.modelFile,
           ...(trimmedLocalModelPath ? { localModelPath: trimmedLocalModelPath } : {}),
           ...(trimmedLocalMmprojPath ? { localMmprojPath: trimmedLocalMmprojPath } : {}),
-          gpuLayers: gpuLayersValid ? parsedGpuLayers : initialSettings.gemma.gpuLayers
+          gpuLayers: gpuLayersValid ? parsedGpuLayers : safeInitialSettings.gemma.gpuLayers
         },
         codex: {
           model: trimmedCodexModel,
           reasoningEffort: codexReasoningEffort,
           oauthPort: parsedCodexOauthPort
+        },
+        openAICompatible: {
+          baseUrl: trimmedCompatibleBaseUrl || safeInitialSettings.openAICompatible.baseUrl,
+          apiKey: trimmedCompatibleApiKey,
+          model: trimmedCompatibleModel || safeInitialSettings.openAICompatible.model
+        },
+        translationMode,
+        nsfwMode
+      };
+    }
+
+    if (modelProvider === "openai-compatible") {
+      if (!trimmedCompatibleBaseUrl || !compatibleBaseUrlValid || !trimmedCompatibleModel) {
+        return null;
+      }
+
+      return {
+        modelProvider,
+        gemma: {
+          modelSource,
+          modelRepo: trimmedModelRepo || DEFAULT_GEMMA_MODEL_REPO,
+          modelFile: trimmedModelFile || MODEL_PRESETS.q4.modelFile,
+          ...(trimmedLocalModelPath ? { localModelPath: trimmedLocalModelPath } : {}),
+          ...(trimmedLocalMmprojPath ? { localMmprojPath: trimmedLocalMmprojPath } : {}),
+          gpuLayers: gpuLayersValid ? parsedGpuLayers : safeInitialSettings.gemma.gpuLayers
+        },
+        codex: {
+          model: trimmedCodexModel || safeInitialSettings.codex.model,
+          reasoningEffort: codexReasoningEffort,
+          oauthPort: codexOauthPortValid ? parsedCodexOauthPort : safeInitialSettings.codex.oauthPort
+        },
+        openAICompatible: {
+          baseUrl: trimmedCompatibleBaseUrl,
+          apiKey: trimmedCompatibleApiKey,
+          model: trimmedCompatibleModel
         },
         translationMode,
         nsfwMode
@@ -269,9 +317,14 @@ export function SettingsModal({
         gpuLayers: parsedGpuLayers
       },
       codex: {
-        model: trimmedCodexModel || initialSettings.codex.model,
+        model: trimmedCodexModel || safeInitialSettings.codex.model,
         reasoningEffort: codexReasoningEffort,
-        oauthPort: codexOauthPortValid ? parsedCodexOauthPort : initialSettings.codex.oauthPort
+        oauthPort: codexOauthPortValid ? parsedCodexOauthPort : safeInitialSettings.codex.oauthPort
+      },
+      openAICompatible: {
+        baseUrl: trimmedCompatibleBaseUrl || safeInitialSettings.openAICompatible.baseUrl,
+        apiKey: trimmedCompatibleApiKey,
+        model: trimmedCompatibleModel || safeInitialSettings.openAICompatible.model
       },
       translationMode,
       nsfwMode
@@ -286,12 +339,18 @@ export function SettingsModal({
     trimmedLocalModelPath,
     trimmedLocalMmprojPath,
     trimmedCodexModel,
+    trimmedCompatibleBaseUrl,
+    trimmedCompatibleApiKey,
+    trimmedCompatibleModel,
     parsedGpuLayers,
     parsedCodexOauthPort,
+    compatibleBaseUrlValid,
     codexReasoningEffort,
-    initialSettings.gemma.gpuLayers,
-    initialSettings.codex.model,
-    initialSettings.codex.oauthPort,
+    safeInitialSettings.gemma.gpuLayers,
+    safeInitialSettings.codex.model,
+    safeInitialSettings.codex.oauthPort,
+    safeInitialSettings.openAICompatible.baseUrl,
+    safeInitialSettings.openAICompatible.model,
     translationMode,
     nsfwMode
   ]);
@@ -333,37 +392,6 @@ export function SettingsModal({
     }
 
     setGpuLayers(nextValue);
-  };
-
-  const pickLocalModelFile = async () => {
-    setLocalActionBusy(true);
-    try {
-      const picked = await window.mangaApi.pickLocalModelFile();
-      if (!picked) {
-        return;
-      }
-      clearTestState();
-      setLocalModelPath(picked.modelPath);
-      if (picked.detectedMmprojPath) {
-        setLocalMmprojPath(picked.detectedMmprojPath);
-      }
-    } finally {
-      setLocalActionBusy(false);
-    }
-  };
-
-  const pickLocalMmprojFile = async () => {
-    setLocalActionBusy(true);
-    try {
-      const picked = await window.mangaApi.pickLocalMmprojFile();
-      if (!picked) {
-        return;
-      }
-      clearTestState();
-      setLocalMmprojPath(picked);
-    } finally {
-      setLocalActionBusy(false);
-    }
   };
 
   const runModelTest = async () => {
@@ -577,9 +605,6 @@ export function SettingsModal({
                       }
                     }}
                   />
-                  <button type="button" onClick={() => void pickLocalModelFile()} disabled={controlsBusy}>
-                    파일 선택
-                  </button>
                 </div>
               </div>
 
@@ -600,9 +625,6 @@ export function SettingsModal({
                       }
                     }}
                   />
-                  <button type="button" onClick={() => void pickLocalMmprojFile()} disabled={controlsBusy}>
-                    파일 선택
-                  </button>
                 </div>
                 <p className="muted-line modal-note">
                   mmproj는 같은 폴더에서 자동으로 찾아보고, 안 잡히면 직접 지정할 수 있습니다.
@@ -647,7 +669,7 @@ export function SettingsModal({
             <p className="muted-line modal-note">0부터 30까지 설정할 수 있습니다.</p>
           </div>
             </>
-          ) : (
+          ) : modelProvider === "openai-codex" ? (
             <>
               <label>
                 Codex 모델
@@ -712,6 +734,63 @@ export function SettingsModal({
                 />
               </label>
             </>
+          ) : (
+            <>
+              <label>
+                Base URL
+                <input
+                  value={compatibleBaseUrl}
+                  disabled={controlsBusy}
+                  onChange={(event) => {
+                    clearTestState();
+                    setCompatibleBaseUrl(event.target.value);
+                  }}
+                  placeholder="http://127.0.0.1:1234/v1"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      submit();
+                    }
+                  }}
+                />
+              </label>
+
+              <label>
+                API Key
+                <input
+                  type="password"
+                  value={compatibleApiKey}
+                  disabled={controlsBusy}
+                  onChange={(event) => {
+                    clearTestState();
+                    setCompatibleApiKey(event.target.value);
+                  }}
+                  placeholder="로컬 서버면 비워둘 수 있습니다"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      submit();
+                    }
+                  }}
+                />
+              </label>
+
+              <label>
+                모델
+                <input
+                  value={compatibleModel}
+                  disabled={controlsBusy}
+                  onChange={(event) => {
+                    clearTestState();
+                    setCompatibleModel(event.target.value);
+                  }}
+                  placeholder="gpt-4o-mini"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      submit();
+                    }
+                  }}
+                />
+              </label>
+            </>
           )}
 
           <div className="settings-field-stack">
@@ -743,12 +822,12 @@ export function SettingsModal({
           {modelProvider === "openai-codex" && !codexOauthPortValid ? (
             <p className="muted-line">openai-oauth 포트는 0 이상 65535 이하의 정수여야 합니다.</p>
           ) : null}
+          {modelProvider === "openai-compatible" && !compatibleBaseUrlValid ? (
+            <p className="muted-line">Base URL은 http:// 또는 https://로 시작해야 합니다.</p>
+          ) : null}
         </section>
 
         <div className="modal-actions settings-actions">
-          <button className="ghost-button" onClick={onOpenLogFolder} disabled={controlsBusy}>
-            로그 폴더 열기
-          </button>
           <button onClick={onReset} disabled={controlsBusy}>
             기본값 복원
           </button>
@@ -793,6 +872,17 @@ function matchesPreset(
 
 function clampGpuLayers(value: number): number {
   return Math.min(MAX_GPU_LAYERS, Math.max(0, value));
+}
+
+function withSettingsDefaults(settings: AppSettings): AppSettings {
+  return {
+    ...settings,
+    openAICompatible: {
+      baseUrl: settings.openAICompatible?.baseUrl || DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
+      apiKey: settings.openAICompatible?.apiKey || "",
+      model: settings.openAICompatible?.model || DEFAULT_OPENAI_COMPATIBLE_MODEL
+    }
+  };
 }
 
 function buildTestDetail(

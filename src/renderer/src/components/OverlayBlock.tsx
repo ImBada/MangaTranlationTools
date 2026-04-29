@@ -1,14 +1,24 @@
 import React from "react";
 import type { TranslationBlock } from "../../../shared/types";
-import { hexToRgba, resolveBlockTextLayout, type ViewportSize } from "../lib/overlayLayout";
+import { resolveBlockRotationDeg } from "../../../shared/geometry";
+import {
+  DEFAULT_OVERLAY_FONT_FAMILY,
+  hexToRgba,
+  resolveBlockTextLayout,
+  resolveWrappedTextLines,
+  type ViewportSize
+} from "../lib/overlayLayout";
 
 type OverlayBlockProps = {
   block: TranslationBlock;
   pageSize: ViewportSize;
   stageSize: ViewportSize;
   selected: boolean;
+  editingEnabled: boolean;
+  visualContentVisible?: boolean;
   onPointerDown: (event: React.PointerEvent) => void;
   onResizePointerDown: (event: React.PointerEvent) => void;
+  onRotatePointerDown: (event: React.PointerEvent) => void;
 };
 
 export function OverlayBlock({
@@ -16,8 +26,11 @@ export function OverlayBlock({
   pageSize,
   stageSize,
   selected,
+  editingEnabled,
+  visualContentVisible = true,
   onPointerDown,
-  onResizePointerDown
+  onResizePointerDown,
+  onRotatePointerDown
 }: OverlayBlockProps): React.JSX.Element | null {
   if (block.renderDirection === "hidden") {
     return null;
@@ -25,6 +38,12 @@ export function OverlayBlock({
 
   const displayText = block.translatedText || block.sourceText || "...";
   const layout = resolveBlockTextLayout(block, displayText, pageSize, stageSize);
+  const horizontalLines =
+    visualContentVisible && block.renderDirection === "horizontal"
+      ? resolveWrappedTextLines(block, displayText, layout.fontSizePx, layout.fitInnerWidth)
+      : [];
+  const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const rotationDeg = resolveBlockRotationDeg(block);
   const style: React.CSSProperties = {
     left: layout.rect.left,
     top: layout.rect.top,
@@ -33,11 +52,17 @@ export function OverlayBlock({
     boxSizing: "border-box",
     padding: layout.paddingPx,
     overflow: "hidden",
-    color: block.textColor,
-    backgroundColor: hexToRgba(block.backgroundColor, block.opacity),
+    color: visualContentVisible ? block.textColor : "transparent",
+    backgroundColor: visualContentVisible ? hexToRgba(block.backgroundColor, editingEnabled ? block.opacity : 0) : "transparent",
+    borderColor: editingEnabled ? undefined : "transparent",
+    boxShadow: editingEnabled ? undefined : "none",
+    fontFamily: block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
     fontSize: `${layout.fontSizePx}px`,
     lineHeight: block.lineHeight,
-    textAlign: block.textAlign
+    textAlign: block.textAlign,
+    pointerEvents: editingEnabled ? undefined : "none",
+    transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
+    transformOrigin: "center center"
   };
   const textWrapStyle: React.CSSProperties = {
     boxSizing: "border-box",
@@ -51,27 +76,38 @@ export function OverlayBlock({
     boxSizing: "border-box",
     writingMode: block.renderDirection === "vertical" ? "vertical-rl" : "horizontal-tb",
     textOrientation: block.renderDirection === "vertical" ? "upright" : undefined,
-    transform: block.renderDirection === "rotated" ? "rotate(-8deg)" : undefined,
-    transformOrigin: "center center",
-    width: `${layout.fitInnerWidth}px`,
+    width: `${block.renderDirection === "vertical" ? layout.fitInnerWidth : layout.innerWidth}px`,
     height: block.renderDirection === "vertical" ? `${layout.fitInnerHeight}px` : undefined,
     maxWidth: "100%",
-    maxHeight: "100%"
+    maxHeight: "100%",
+    WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${block.outlineColor ?? "#000000"}` : undefined
+  };
+  const lineStyle: React.CSSProperties = {
+    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center"
   };
 
   return (
     <div
-      className={`${selected ? "overlay-block selected" : "overlay-block"}${layout.overflow ? " overflowing" : ""}`}
+      className={`${selected && editingEnabled ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
       style={style}
-      title={layout.overflow ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
+      title={layout.overflow && editingEnabled ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
       onPointerDown={onPointerDown}
     >
-      <div className="overlay-text" style={textWrapStyle}>
-        <span className="overlay-text-content" style={contentStyle}>
-          {displayText}
-        </span>
-      </div>
-      {selected ? <button className="resize-handle" onPointerDown={onResizePointerDown} aria-label="Resize" /> : null}
+      {visualContentVisible ? (
+        <div className="overlay-text" style={textWrapStyle}>
+          <span className="overlay-text-content" style={contentStyle}>
+            {block.renderDirection === "horizontal"
+                ? horizontalLines.map((line, index) => (
+                  <span key={`${line}-${index}`} className="overlay-text-line" style={lineStyle}>
+                    {line}
+                  </span>
+                ))
+              : displayText}
+          </span>
+        </div>
+      ) : null}
+      {selected && editingEnabled ? <button className="rotate-handle" onPointerDown={onRotatePointerDown} aria-label="Rotate" /> : null}
+      {selected && editingEnabled ? <button className="resize-handle" onPointerDown={onResizePointerDown} aria-label="Resize" /> : null}
     </div>
   );
 }

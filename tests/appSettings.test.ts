@@ -59,6 +59,7 @@ describe("app settings helpers", () => {
         gpuLayers: 12
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -76,6 +77,7 @@ describe("app settings helpers", () => {
         gpuLayers: 30
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -89,6 +91,7 @@ describe("app settings helpers", () => {
         gpuLayers: 30
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -102,6 +105,7 @@ describe("app settings helpers", () => {
         gpuLayers: 0
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -115,6 +119,7 @@ describe("app settings helpers", () => {
         gpuLayers: DEFAULT_GEMMA_GPU_LAYERS
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -127,6 +132,7 @@ describe("app settings helpers", () => {
       modelProvider: defaults.modelProvider,
       gemma: defaults.gemma,
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: true
     });
@@ -135,6 +141,7 @@ describe("app settings helpers", () => {
       modelProvider: defaults.modelProvider,
       gemma: defaults.gemma,
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -147,6 +154,7 @@ describe("app settings helpers", () => {
       modelProvider: defaults.modelProvider,
       gemma: defaults.gemma,
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "accuracy",
       nsfwMode: false
     });
@@ -155,6 +163,7 @@ describe("app settings helpers", () => {
       modelProvider: defaults.modelProvider,
       gemma: defaults.gemma,
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -174,6 +183,7 @@ describe("app settings helpers", () => {
         reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
         oauthPort: DEFAULT_CODEX_OAUTH_PORT
       },
+      openAICompatible: resolveDefaultAppSettings().openAICompatible,
       translationMode: "fast",
       nsfwMode: true
     };
@@ -184,7 +194,6 @@ describe("app settings helpers", () => {
       paths: {
         dataRoot: "C:/app-data",
         toolsDir: "C:/tools",
-        llamaServerPath: "C:/tools/llama-server.exe",
         hfHomeDir: "C:/hf-home",
         hfHubCacheDir: "C:/hf-home/hub"
       },
@@ -231,6 +240,7 @@ describe("app settings helpers", () => {
         reasoningEffort: DEFAULT_CODEX_REASONING_EFFORT,
         oauthPort: DEFAULT_CODEX_OAUTH_PORT
       },
+      openAICompatible: resolveDefaultAppSettings().openAICompatible,
       translationMode: "accuracy",
       nsfwMode: false
     };
@@ -240,8 +250,7 @@ describe("app settings helpers", () => {
       runDir: "C:/runs/job-2",
       paths: {
         dataRoot: "C:/app-data",
-        toolsDir: "C:/tools",
-        llamaServerPath: "C:/tools/llama-server.exe"
+        toolsDir: "C:/tools"
       },
       settings
     });
@@ -277,6 +286,7 @@ describe("app settings helpers", () => {
         gpuLayers: defaults.gemma.gpuLayers
       },
       codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -305,6 +315,7 @@ describe("app settings helpers", () => {
         reasoningEffort: "xhigh",
         oauthPort: 10532
       },
+      openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       nsfwMode: false
     });
@@ -324,5 +335,34 @@ describe("app settings helpers", () => {
         defaults
       ).codex.reasoningEffort
     ).toBe("low");
+  });
+
+  it("normalizes custom OpenAI-compatible provider settings", () => {
+    const defaults = resolveDefaultAppSettings();
+
+    expect(
+      parseStoredAppSettings(
+        JSON.stringify({
+          modelProvider: "openai-compatible",
+          openAICompatible: {
+            baseUrl: " http://localhost:1234/v1/ ",
+            apiKey: " local-key ",
+            model: "local-vision-model"
+          }
+        }),
+        defaults
+      )
+    ).toEqual({
+      modelProvider: "openai-compatible",
+      gemma: defaults.gemma,
+      codex: defaults.codex,
+      openAICompatible: {
+        baseUrl: "http://localhost:1234/v1",
+        apiKey: "local-key",
+        model: "local-vision-model"
+      },
+      translationMode: "fast",
+      nsfwMode: false
+    });
   });
 });

@@ -2,10 +2,12 @@ import { describe, expect, it } from "vitest";
 import {
   applyEditableBlockBbox,
   clampBbox,
+  clampRotationDeg,
   enforceRenderDirection,
   estimateBlockFontSizePx,
   normalizeRenderDirection,
   offsetBlockBboxes,
+  resolveBlockRotationDeg,
   resolveBlockRenderBbox
 } from "../src/shared/geometry";
 
@@ -104,5 +106,12 @@ describe("geometry helpers", () => {
   it("allows vertical render direction for manual editing", () => {
     expect(enforceRenderDirection("speech", "vertical")).toBe("vertical");
     expect(normalizeRenderDirection("vertical", "horizontal")).toBe("vertical");
+  });
+
+  it("clamps manual block rotation and preserves legacy rotated direction", () => {
+    expect(clampRotationDeg(220)).toBe(180);
+    expect(clampRotationDeg(-220)).toBe(-180);
+    expect(resolveBlockRotationDeg({ renderDirection: "rotated" })).toBe(-8);
+    expect(resolveBlockRotationDeg({ renderDirection: "rotated", rotationDeg: 14 })).toBe(14);
   });
 });
