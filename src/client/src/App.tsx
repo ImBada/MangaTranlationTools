@@ -48,6 +48,7 @@ import {
 import { DEFAULT_OVERLAY_FONT_FAMILY } from "./lib/overlayLayout";
 import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "./lib/chapterSync";
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "./lib/jobProgress";
+import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction } from "./lib/globalUndo";
 import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
 import { clampStageViewScale } from "./lib/stageFit";
@@ -85,6 +86,7 @@ type DragState = {
   startAngleDeg: number;
   centerX: number;
   centerY: number;
+  undoRecorded: boolean;
 };
 
 type LayerVisibility = {
@@ -115,6 +117,41 @@ type PendingInpaintResultSave = {
   pageId: string;
   dataUrl: string | undefined;
 };
+
+type InpaintMaskUndoSnapshot = {
+  inpaintMaskPath?: string;
+  inpaintResultPath?: string;
+  inpaintMaskDataUrl?: string;
+  inpaintResultDataUrl?: string;
+  inpaintStatus?: MangaPage["inpaintStatus"];
+};
+
+type TranslationUndoSnapshot = {
+  chapterId: string;
+  label: string;
+  createdAtMs: number;
+  selectedPageId: string | null;
+  selectedBlockId: string | null;
+  editingFontPresetId: string | null;
+  fontPresets: ChapterSnapshot["fontPresets"];
+  pages: {
+    pageId: string;
+    updatedAt: string;
+    blocks: TranslationBlock[];
+  }[];
+};
+
+type GlobalUndoKind = "translation" | "inpaint-mask" | "inpaint-result";
+
+type GlobalUndoHistoryEntry = {
+  kind: GlobalUndoKind;
+  chapterId: string;
+  pageId?: string;
+};
+
+const GLOBAL_UNDO_HISTORY_LIMIT = 150;
+const TRANSLATION_UNDO_COALESCE_MS = 1000;
+const TRANSLATION_UNDO_LIMIT = 50;
 
 const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
   output: {
@@ -279,6 +316,48 @@ function clampInpaintMaskBrushSize(value: number): number {
   return Math.min(INPAINT_MASK_BRUSH_SIZE_MAX, Math.max(INPAINT_MASK_BRUSH_SIZE_MIN, Math.round(value)));
 }
 
+function cloneTranslationBlock(block: TranslationBlock): TranslationBlock {
+  return {
+    ...block,
+    bbox: { ...block.bbox },
+    renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined
+  };
+}
+
+function createInpaintMaskUndoSnapshot(page: MangaPage): InpaintMaskUndoSnapshot {
+  return {
+    inpaintMaskPath: page.inpaintMaskPath,
+    inpaintResultPath: page.inpaintResultPath,
+    inpaintMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
+    inpaintResultDataUrl: page.inpaintResultDataUrl,
+    inpaintStatus: page.inpaintStatus
+  };
+}
+
+function createTranslationUndoSnapshot(
+  chapter: ChapterSnapshot,
+  label: string,
+  createdAtMs: number,
+  selectedPageId: string | null,
+  selectedBlockId: string | null,
+  editingFontPresetId: string | null
+): TranslationUndoSnapshot {
+  return {
+    chapterId: chapter.id,
+    label,
+    createdAtMs,
+    selectedPageId,
+    selectedBlockId,
+    editingFontPresetId,
+    fontPresets: chapter.fontPresets?.map((preset) => ({ ...preset })),
+    pages: chapter.pages.map((page) => ({
+      pageId: page.id,
+      updatedAt: page.updatedAt,
+      blocks: page.blocks.map(cloneTranslationBlock)
+    }))
+  };
+}
+
 export default function App(): React.JSX.Element {
   const [library, setLibrary] = useState<LibraryIndex>({ workOrder: [], works: [] });
   const [currentChapter, setCurrentChapter] = useState<ChapterSnapshot | null>(null);
@@ -299,6 +378,7 @@ export default function App(): React.JSX.Element {
   const [stageViewScale, setStageViewScale] = useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = useState(0);
   const [dirty, setDirty] = useState(false);
+  const [undoVersion, setUndoVersion] = useState(0);
   const [saveFlash, setSaveFlash] = useState(false);
   const [inpaintTool, setInpaintTool] = useState<InpaintTool>("select");
   const [inpaintSelectionRect, setInpaintSelectionRect] = useState<ImageRect | null>(null);
@@ -348,7 +428,10 @@ export default function App(): React.JSX.Element {
   const currentChapterRef = useRef<ChapterSnapshot | null>(null);
   const selectedPageIdRef = useRef<string | null>(null);
   const selectedBlockIdRef = useRef<string | null>(null);
-  const inpaintUndoStackRef = useRef<Map<string, (string | undefined)[]>>(new Map());
+  const editingFontPresetIdRef = useRef<string | null>(null);
+  const globalUndoHistoryRef = useRef<GlobalUndoHistoryEntry[]>([]);
+  const translationUndoStackRef = useRef<TranslationUndoSnapshot[]>([]);
+  const inpaintUndoStackRef = useRef<Map<string, InpaintMaskUndoSnapshot[]>>(new Map());
   const inpaintResultUndoStackRef = useRef<Map<string, (string | undefined)[]>>(new Map());
   const inpaintMaskSaveTimerRef = useRef<number | null>(null);
   const inpaintMaskSaveStateRef = useRef<PendingInpaintMaskSave | null>(null);
@@ -393,6 +476,9 @@ export default function App(): React.JSX.Element {
   const jobActive = ["starting", "running", "cancelling"].includes(jobState.status);
   const libraryChapterCount = useMemo(() => library.works.reduce((total, work) => total + work.chapters.length, 0), [library.works]);
   const selectedPageEditLocked = Boolean(jobActive && selectedPage && selectedPage.analysisStatus !== "completed");
+  const canUndoTranslation = undoVersion >= 0 && currentChapter
+    ? translationUndoStackRef.current.some((snapshot) => snapshot.chapterId === currentChapter.id) && !selectedPageEditLocked
+    : false;
   const selectedPageSize = useMemo(
     () => (selectedPage ? { width: selectedPage.width, height: selectedPage.height } : null),
     [selectedPage?.height, selectedPage?.width]
@@ -408,6 +494,7 @@ export default function App(): React.JSX.Element {
   const saveStatusLabel = saveFlash ? "저장 완료" : dirty ? "저장되지 않은 변경 있음" : "최신 상태";
   const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
   const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
+  const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const layerToolActive = activeLayer === "overlay" || activeLayer === "inpaintMask" || activeLayer === "inpaintResult";
   const selectedPageInpaintNotice =
     selectedPage?.inpaintStatus === "running"
@@ -494,6 +581,10 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     selectedBlockIdRef.current = selectedBlockId;
   }, [selectedBlockId]);
+
+  React.useEffect(() => {
+    editingFontPresetIdRef.current = editingFontPresetId;
+  }, [editingFontPresetId]);
 
   const mergeLiveChapter = useCallback((chapter: ChapterSnapshot) => {
     const current = currentChapterRef.current;
@@ -647,6 +738,71 @@ export default function App(): React.JSX.Element {
     setDirty(true);
   }, []);
 
+  const recordGlobalUndoEntry = useCallback((entry: GlobalUndoHistoryEntry) => {
+    globalUndoHistoryRef.current = [...globalUndoHistoryRef.current, entry].slice(-GLOBAL_UNDO_HISTORY_LIMIT);
+    setUndoVersion((current) => current + 1);
+  }, []);
+
+  const consumeGlobalUndoEntry = useCallback((kind: GlobalUndoKind, pageId?: string) => {
+    const next = [...globalUndoHistoryRef.current];
+    for (let index = next.length - 1; index >= 0; index -= 1) {
+      const entry = next[index];
+      if (entry?.kind === kind && entry.pageId === pageId) {
+        next.splice(index, 1);
+        globalUndoHistoryRef.current = next;
+        setUndoVersion((current) => current + 1);
+        return;
+      }
+    }
+  }, []);
+
+  const clearUndoStacks = useCallback(() => {
+    globalUndoHistoryRef.current = [];
+    translationUndoStackRef.current = [];
+    inpaintUndoStackRef.current.clear();
+    inpaintResultUndoStackRef.current.clear();
+    setUndoVersion((current) => current + 1);
+  }, []);
+
+  const recordTranslationUndoSnapshot = useCallback((label: string) => {
+    const chapter = currentChapterRef.current;
+    if (!chapter) {
+      return false;
+    }
+
+    const now = Date.now();
+    const selectedPageId = selectedPageIdRef.current;
+    const selectedBlockId = selectedBlockIdRef.current;
+    const editingFontPresetId = editingFontPresetIdRef.current;
+    const lastSnapshot = translationUndoStackRef.current.at(-1);
+    if (
+      lastSnapshot &&
+      lastSnapshot.chapterId === chapter.id &&
+      lastSnapshot.label === label &&
+      lastSnapshot.selectedPageId === selectedPageId &&
+      lastSnapshot.selectedBlockId === selectedBlockId &&
+      lastSnapshot.editingFontPresetId === editingFontPresetId &&
+      now - lastSnapshot.createdAtMs <= TRANSLATION_UNDO_COALESCE_MS
+    ) {
+      lastSnapshot.createdAtMs = now;
+      return true;
+    }
+
+    translationUndoStackRef.current = [
+      ...translationUndoStackRef.current,
+      createTranslationUndoSnapshot(
+        chapter,
+        label,
+        now,
+        selectedPageId,
+        selectedBlockId,
+        editingFontPresetId
+      )
+    ].slice(-TRANSLATION_UNDO_LIMIT);
+    recordGlobalUndoEntry({ kind: "translation", chapterId: chapter.id });
+    return true;
+  }, [recordGlobalUndoEntry]);
+
   const saveNow = useCallback(async () => {
     if (!currentChapter) {
       return;
@@ -799,9 +955,11 @@ export default function App(): React.JSX.Element {
     currentChapterRef.current = null;
     setSelectedPageId(null);
     setSelectedBlockId(null);
+    setEditingFontPresetId(null);
+    clearUndoStacks();
     dirtyPageIdsRef.current.clear();
     setDirty(false);
-  }, []);
+  }, [clearUndoStacks]);
 
   const openChapter = useCallback(
     async (chapterId: string) => {
@@ -810,13 +968,14 @@ export default function App(): React.JSX.Element {
       }
       const chapter = await window.mangaApi.openChapter(chapterId);
       dirtyPageIdsRef.current.clear();
+      clearUndoStacks();
       currentChapterRef.current = chapter;
       setCurrentChapter(chapter);
       setSelectedPageId(chapter.pages[0]?.id ?? null);
       setSelectedBlockId(null);
       setDirty(false);
     },
-    [dirty, saveNow]
+    [clearUndoStacks, dirty, saveNow]
   );
 
   const applyChapter = useCallback((chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => {
@@ -824,6 +983,7 @@ export default function App(): React.JSX.Element {
       return;
     }
     dirtyPageIdsRef.current.clear();
+    clearUndoStacks();
     currentChapterRef.current = chapter;
     setCurrentChapter(chapter);
     setSelectedPageId((current) => (chapter.pages.some((page) => page.id === current) ? current : chapter.pages[0]?.id ?? null));
@@ -832,7 +992,7 @@ export default function App(): React.JSX.Element {
     if (fallbackStatus) {
       pushStatus(fallbackStatus);
     }
-  }, [pushStatus]);
+  }, [clearUndoStacks, pushStatus]);
 
   const selectPageForReading = useCallback((pageId: string | null) => {
     if (!pageId) {
@@ -1053,6 +1213,64 @@ export default function App(): React.JSX.Element {
     });
   }, [markDirty]);
 
+  const undoTranslationEdit = useCallback(() => {
+    if (selectedPageEditLocked) {
+      return;
+    }
+
+    const chapterId = currentChapterRef.current?.id;
+    if (!chapterId) {
+      return;
+    }
+
+    const stack = [...translationUndoStackRef.current];
+    let snapshotIndex = -1;
+    for (let index = stack.length - 1; index >= 0; index -= 1) {
+      if (stack[index]?.chapterId === chapterId) {
+        snapshotIndex = index;
+        break;
+      }
+    }
+    if (snapshotIndex < 0) {
+      return;
+    }
+
+    const snapshot = stack[snapshotIndex];
+    stack.splice(snapshotIndex, 1);
+    translationUndoStackRef.current = stack;
+    consumeGlobalUndoEntry("translation");
+
+    const pageSnapshots = new Map(snapshot.pages.map((page) => [page.pageId, page]));
+    const updatedAt = new Date().toISOString();
+    setCurrentChapter((current) => {
+      if (!current || current.id !== snapshot.chapterId) {
+        return current;
+      }
+
+      const next = {
+        ...current,
+        updatedAt,
+        fontPresets: snapshot.fontPresets?.map((preset) => ({ ...preset })),
+        pages: current.pages.map((page) => {
+          const pageSnapshot = pageSnapshots.get(page.id);
+          return pageSnapshot
+            ? {
+                ...page,
+                updatedAt,
+                blocks: pageSnapshot.blocks.map(cloneTranslationBlock)
+              }
+            : page;
+        })
+      };
+      currentChapterRef.current = next;
+      markDirty(undefined);
+      return next;
+    });
+    setSelectedPageId(snapshot.selectedPageId);
+    setSelectedBlockId(snapshot.selectedBlockId);
+    setEditingFontPresetId(snapshot.editingFontPresetId);
+  }, [consumeGlobalUndoEntry, markDirty, selectedPageEditLocked]);
+
   const removePage = useCallback(
     async (pageId: string) => {
       if (!currentChapter) {
@@ -1102,9 +1320,13 @@ export default function App(): React.JSX.Element {
     [currentChapter, runAnalysis]
   );
 
-  const updateSelectedBlock = (patch: Partial<TranslationBlock>) => {
+  const updateSelectedBlock = (patch: Partial<TranslationBlock>, options: { recordUndo?: boolean; undoLabel?: string } = {}) => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
       return;
+    }
+
+    if (options.recordUndo !== false) {
+      recordTranslationUndoSnapshot(options.undoLabel ?? "번역 블록 변경");
     }
 
     updateCurrentChapter(selectedPage.id, (current) => ({
@@ -1142,9 +1364,13 @@ export default function App(): React.JSX.Element {
     }));
   };
 
-  const updateAssignedFontPreset = (presetId: string, patch: FontPresetPatch) => {
+  const updateAssignedFontPreset = (presetId: string, patch: FontPresetPatch, options: { recordUndo?: boolean; undoLabel?: string } = {}) => {
     if (!currentChapter || selectedPageEditLocked) {
       return;
+    }
+
+    if (options.recordUndo !== false) {
+      recordTranslationUndoSnapshot(options.undoLabel ?? "폰트 설정 변경");
     }
 
     updateCurrentChapter(undefined, (current) => ({
@@ -1180,7 +1406,12 @@ export default function App(): React.JSX.Element {
         }
       }
       if (Object.keys(blockPatch).length > 0) {
-        updateSelectedBlock(blockPatch);
+        recordTranslationUndoSnapshot("폰트 설정 변경");
+        updateSelectedBlock(blockPatch, { recordUndo: false });
+        if (Object.keys(presetPatch).length > 0) {
+          updateAssignedFontPreset(selectedBlock.fontPresetId, presetPatch, { recordUndo: false });
+        }
+        return;
       }
       if (Object.keys(presetPatch).length > 0) {
         updateAssignedFontPreset(selectedBlock.fontPresetId, presetPatch);
@@ -1237,7 +1468,8 @@ export default function App(): React.JSX.Element {
 
     const presetName = fontPresetName.trim() || `프리셋 ${(currentChapter?.fontPresets?.length ?? 0) + 1}`;
     const preset = createFontPreset(presetName, selectedBlock ?? DEFAULT_FONT_PRESET);
-updateCurrentChapter(selectedPage?.id, (current) => ({
+    recordTranslationUndoSnapshot("폰트 프리셋 생성");
+    updateCurrentChapter(selectedPage?.id, (current) => ({
       ...current,
       fontPresets: [...(current.fontPresets ?? []), preset],
       pages: current.pages.map((page) =>
@@ -1262,7 +1494,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
             }
           : page
       )
-    }));    
+    }));
     setEditingFontPresetId(preset.id);
     setFontPresetName("");
   };
@@ -1310,6 +1542,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     if (selectedPageEditLocked) {
       return;
     }
+    recordTranslationUndoSnapshot("폰트 프리셋 삭제");
     updateCurrentChapter(undefined, (current) => ({
       ...current,
       fontPresets: (current.fontPresets ?? []).filter((preset) => preset.id !== presetId),
@@ -1331,6 +1564,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
       return;
     }
+    recordTranslationUndoSnapshot("번역 블록 삭제");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
       pages: current.pages.map((page) =>
@@ -1354,8 +1588,9 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     const previousDataUrl = selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
     if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
       const stack = inpaintUndoStackRef.current.get(selectedPage.id) ?? [];
-      stack.push(previousDataUrl);
+      stack.push(createInpaintMaskUndoSnapshot(selectedPage));
       inpaintUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
+      recordGlobalUndoEntry({ kind: "inpaint-mask", chapterId: currentChapter.id, pageId: selectedPage.id });
     }
 
     const updatedAt = new Date().toISOString();
@@ -1391,7 +1626,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         dataUrl
       });
     }
-  }, [currentChapter, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked]);
+  }, [currentChapter, recordGlobalUndoEntry, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked]);
 
   const updateSelectedPageInpaintResult = useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
@@ -1403,6 +1638,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
       stack.push(previousDataUrl);
       inpaintResultUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
+      recordGlobalUndoEntry({ kind: "inpaint-result", chapterId: currentChapter.id, pageId: selectedPage.id });
     }
 
     const updatedAt = new Date().toISOString();
@@ -1436,35 +1672,184 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         dataUrl
       });
     }
-  }, [currentChapter, scheduleInpaintResultSave, selectedPage, selectedPageEditLocked]);
+  }, [currentChapter, recordGlobalUndoEntry, scheduleInpaintResultSave, selectedPage, selectedPageEditLocked]);
+
+  const restorePageInpaintMaskSnapshot = useCallback((pageId: string, snapshot: InpaintMaskUndoSnapshot) => {
+    const chapter = currentChapterRef.current;
+    if (!chapter || selectedPageEditLocked) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    setCurrentChapter((current) => {
+      if (!current || current.id !== chapter.id) {
+        return current;
+      }
+      const next = {
+        ...current,
+        updatedAt,
+        pages: current.pages.map((page) =>
+          page.id === pageId
+            ? {
+                ...page,
+                updatedAt,
+                inpaintMaskPath: snapshot.inpaintMaskPath,
+                inpaintResultPath: snapshot.inpaintResultPath,
+                inpaintMaskDataUrl: snapshot.inpaintMaskDataUrl,
+                inpaintResultDataUrl: snapshot.inpaintResultDataUrl,
+                inpaintStatus: snapshot.inpaintStatus ?? (snapshot.inpaintResultDataUrl ? "completed" as const : "idle" as const)
+              }
+            : page
+        )
+      };
+      currentChapterRef.current = next;
+      return next;
+    });
+
+    scheduleInpaintMaskSave({
+      chapterId: chapter.id,
+      pageId,
+      dataUrl: snapshot.inpaintMaskDataUrl
+    });
+    window.setTimeout(() => {
+      scheduleInpaintResultSave({
+        chapterId: chapter.id,
+        pageId,
+        dataUrl: snapshot.inpaintResultDataUrl
+      });
+    }, 300);
+  }, [scheduleInpaintMaskSave, scheduleInpaintResultSave, selectedPageEditLocked]);
+
+  const undoPageInpaint = useCallback((pageId: string) => {
+    if (selectedPageEditLocked) {
+      return;
+    }
+
+    const stack = inpaintUndoStackRef.current.get(pageId) ?? [];
+    if (stack.length === 0) {
+      return;
+    }
+    const previousSnapshot = stack.pop();
+    if (!previousSnapshot) {
+      return;
+    }
+    inpaintUndoStackRef.current.set(pageId, stack);
+    consumeGlobalUndoEntry("inpaint-mask", pageId);
+    restorePageInpaintMaskSnapshot(pageId, previousSnapshot);
+  }, [consumeGlobalUndoEntry, restorePageInpaintMaskSnapshot, selectedPageEditLocked]);
 
   const undoSelectedPageInpaint = useCallback(() => {
-    if (!selectedPage || selectedPageEditLocked) {
+    if (!selectedPage) {
+      return;
+    }
+    undoPageInpaint(selectedPage.id);
+  }, [selectedPage, undoPageInpaint]);
+
+  const undoPageInpaintResult = useCallback((pageId: string) => {
+    if (selectedPageEditLocked) {
       return;
     }
 
-    const stack = inpaintUndoStackRef.current.get(selectedPage.id) ?? [];
+    const stack = inpaintResultUndoStackRef.current.get(pageId) ?? [];
     if (stack.length === 0) {
       return;
     }
     const previousDataUrl = stack.pop();
-    inpaintUndoStackRef.current.set(selectedPage.id, stack);
-    updateSelectedPageInpaintMask(previousDataUrl, { recordUndo: false });
-  }, [selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+    inpaintResultUndoStackRef.current.set(pageId, stack);
+    consumeGlobalUndoEntry("inpaint-result", pageId);
+
+    const chapter = currentChapterRef.current;
+    if (!chapter) {
+      return;
+    }
+    const updatedAt = new Date().toISOString();
+    setCurrentChapter((current) => {
+      if (!current || current.id !== chapter.id) {
+        return current;
+      }
+      const next = {
+        ...current,
+        updatedAt,
+        pages: current.pages.map((page) =>
+          page.id === pageId
+            ? {
+                ...page,
+                updatedAt,
+                inpaintResultPath: previousDataUrl ? page.inpaintResultPath : undefined,
+                inpaintResultDataUrl: previousDataUrl,
+                inpaintStatus: previousDataUrl ? "completed" as const : "idle" as const
+              }
+            : page
+        )
+      };
+      currentChapterRef.current = next;
+      return next;
+    });
+
+    scheduleInpaintResultSave({
+      chapterId: chapter.id,
+      pageId,
+      dataUrl: previousDataUrl
+    });
+  }, [consumeGlobalUndoEntry, scheduleInpaintResultSave, selectedPageEditLocked]);
 
   const undoSelectedPageInpaintResult = useCallback(() => {
-    if (!selectedPage || selectedPageEditLocked) {
+    if (!selectedPage) {
       return;
+    }
+    undoPageInpaintResult(selectedPage.id);
+  }, [selectedPage, undoPageInpaintResult]);
+
+  const globalUndoActions = useMemo<GlobalUndoAction[]>(() => {
+    const chapterId = currentChapter?.id;
+    if (!chapterId || selectedPageEditLocked) {
+      return [];
     }
 
-    const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
-    if (stack.length === 0) {
-      return;
-    }
-    const previousDataUrl = stack.pop();
-    inpaintResultUndoStackRef.current.set(selectedPage.id, stack);
-    updateSelectedPageInpaintResult(previousDataUrl, { recordUndo: false });
-  }, [selectedPage, selectedPageEditLocked, updateSelectedPageInpaintResult]);
+    return [...globalUndoHistoryRef.current].reverse().map((entry, index): GlobalUndoAction => {
+      const id = `${entry.kind}-${entry.pageId ?? "chapter"}-${index}`;
+      if (entry.chapterId !== chapterId) {
+        return { id, label: "다른 화 되돌리기", canUndo: false, run: () => undefined };
+      }
+
+      if (entry.kind === "translation") {
+        return {
+          id,
+          label: "번역 블록 되돌리기",
+          canUndo: canUndoTranslation,
+          run: undoTranslationEdit
+        };
+      }
+
+      if (entry.kind === "inpaint-mask" && entry.pageId) {
+        return {
+          id,
+          label: "인페인트 마스크 되돌리기",
+          canUndo: (inpaintUndoStackRef.current.get(entry.pageId)?.length ?? 0) > 0,
+          run: () => undoPageInpaint(entry.pageId!)
+        };
+      }
+
+      if (entry.kind === "inpaint-result" && entry.pageId) {
+        return {
+          id,
+          label: "인페인트 결과 되돌리기",
+          canUndo: (inpaintResultUndoStackRef.current.get(entry.pageId)?.length ?? 0) > 0,
+          run: () => undoPageInpaintResult(entry.pageId!)
+        };
+      }
+
+      return { id, label: "되돌리기", canUndo: false, run: () => undefined };
+    });
+  }, [
+    canUndoTranslation,
+    currentChapter?.id,
+    selectedPageEditLocked,
+    undoPageInpaint,
+    undoPageInpaintResult,
+    undoTranslationEdit,
+    undoVersion
+  ]);
 
   const applyInpaintSelectedBlock = useCallback(async () => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
@@ -1684,6 +2069,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       return;
     }
 
+    recordTranslationUndoSnapshot("블록 투명도 변경");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
       pages: current.pages.map((page) =>
@@ -1696,7 +2082,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
           : page
       )
     }));
-  }, [selectedPage, selectedPageEditLocked, updateCurrentChapter]);
+  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
   const duplicateSelectedBlock = () => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
@@ -1706,6 +2092,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       ...offsetBlockBboxes(selectedBlock, 16, 16),
       id: `${selectedBlock.id}-copy-${Date.now()}`
     };
+    recordTranslationUndoSnapshot("번역 블록 복제");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
       pages: current.pages.map((page) =>
@@ -1756,6 +2143,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       opacity: 0.88
     };
 
+    recordTranslationUndoSnapshot("번역 블록 생성");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
       pages: current.pages.map((page) =>
@@ -1793,7 +2181,8 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       startRotationDeg: resolveBlockRotationDeg(block),
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
-      centerY
+      centerY,
+      undoRecorded: false
     };
     stageRef.current.setPointerCapture(event.pointerId);
   };
@@ -1826,6 +2215,11 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
       drag.mode === "rotate"
         ? clampRotationDeg(drag.startRotationDeg + angleBetweenPointsDeg(drag.centerX, drag.centerY, event.clientX, event.clientY) - drag.startAngleDeg)
         : null;
+
+    if (!drag.undoRecorded) {
+      recordTranslationUndoSnapshot("번역 블록 위치 변경");
+      drag.undoRecorded = true;
+    }
 
     updateCurrentChapter(page.id, (chapter) => ({
       ...chapter,
@@ -1933,6 +2327,15 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         return;
       }
 
+      if (!modalOpen && !editableTarget && isPlatformUndoShortcut(event, undoShortcutPlatform)) {
+        event.preventDefault();
+        const undoAction = resolveGlobalUndoAction(globalUndoActions);
+        if (undoAction) {
+          undoAction.run();
+        }
+        return;
+      }
+
       const selectionClearShortcut =
         (event.key === "Delete" || event.key === "Backspace") &&
         !modalOpen &&
@@ -1986,7 +2389,19 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeLayer, clearSelectedInpaintSelection, inpaintResultTool, inpaintSelectionRect, inpaintTool, libraryWidgetOpen, modalOpen, pushStatus, selectPageForReading]);
+  }, [
+    activeLayer,
+    clearSelectedInpaintSelection,
+    globalUndoActions,
+    inpaintResultTool,
+    inpaintSelectionRect,
+    inpaintTool,
+    libraryWidgetOpen,
+    modalOpen,
+    pushStatus,
+    selectPageForReading,
+    undoShortcutPlatform
+  ]);
 
   const renameWork = useCallback((workId: string) => {
     const work = library.works.find((candidate) => candidate.id === workId);
@@ -2131,7 +2546,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         <>
           {fontControlValues ? (
             <>
-              <div className="font-picker-field">
+              <div className="compact-tool-field font-picker-field">
                 <span>서체</span>
                 <FontFamilyPicker
                   options={fontFamilyOptions}
@@ -2140,13 +2555,10 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
                   onChange={(fontFamily) => updateSelectedBlockFontSetting({ fontFamily })}
                 />
               </div>
-              <div className="font-metrics-row">
-                <div className="font-size-control">
-                  <label>
-                    <span className="preset-link-label">
-                      폰트 크기
-                      {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
-                    </span>
+              <div className="font-metrics-row font-tool-grid">
+                <label className="compact-tool-field font-number-field">
+                  <span>폰트 크기</span>
+                  <div className="compact-number-control">
                     <input
                       type="number"
                       min={8}
@@ -2156,71 +2568,73 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
                       disabled={selectedPageEditLocked}
                       onChange={(event) => updateSelectedBlockFontSetting({ fontSizePx: Number(event.target.value) })}
                     />
-                  </label>
-                </div>
-                <label>
-                  <span className="preset-link-label">
-                    줄 간격
-                    {renderFontPresetLinkButton("lineHeight", "줄 간격")}
-                  </span>
-                  <input
-                    type="number"
-                    min={0.8}
-                    max={2}
-                    step={0.05}
-                    value={fontControlValues.lineHeight}
-                    disabled={selectedPageEditLocked}
-                    onChange={(event) => updateSelectedBlockFontSetting({ lineHeight: Number(event.target.value) })}
-                  />
+                    <span>px</span>
+                  </div>
+                  {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
+                </label>
+                <label className="compact-tool-field font-number-field">
+                  <span>줄 간격</span>
+                  <div className="compact-number-control">
+                    <input
+                      type="number"
+                      min={0.8}
+                      max={2}
+                      step={0.05}
+                      value={fontControlValues.lineHeight}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ lineHeight: Number(event.target.value) })}
+                    />
+                    <span>배</span>
+                  </div>
+                  {renderFontPresetLinkButton("lineHeight", "줄 간격")}
                 </label>
               </div>
-              <div className="font-outline-row">
-                <label>
-                  <span className="preset-link-label">
-                    외곽선 색
-                    {renderFontPresetLinkButton("outlineColor", "외곽선 색")}
+              <div className="font-outline-row font-tool-grid">
+                <label className="compact-tool-field font-color-field">
+                  <span>외곽선 색</span>
+                  <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}>
+                    <input
+                      type="color"
+                      className="outline-color-input"
+                      value={fontControlValues.outlineColor ?? "#000000"}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
+                    />
                   </span>
+                  {renderFontPresetLinkButton("outlineColor", "외곽선 색")}
+                </label>
+                <label className="compact-tool-field font-number-field">
+                  <span>외곽선 두께</span>
+                  <div className="compact-number-control">
+                    <input
+                      type="number"
+                      min={0}
+                      max={24}
+                      step={0.5}
+                      value={fontControlValues.outlineWidthPx ?? 0}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ outlineWidthPx: Number(event.target.value) })}
+                    />
+                    <span>px</span>
+                  </div>
+                  {renderFontPresetLinkButton("outlineWidthPx", "외곽선 두께")}
+                </label>
+              </div>
+              <label className="compact-tool-field font-color-field">
+                <span>글자색</span>
+                <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
                   <input
                     type="color"
                     className="outline-color-input"
-                    value={fontControlValues.outlineColor ?? "#000000"}
-                    style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}
+                    value={fontControlValues.textColor ?? "#111111"}
                     disabled={selectedPageEditLocked}
-                    onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
+                    onChange={(event) => updateSelectedBlockFontSetting({ textColor: event.target.value })}
                   />
-                </label>
-                <label>
-                  <span className="preset-link-label">
-                    외곽선 두께
-                    {renderFontPresetLinkButton("outlineWidthPx", "외곽선 두께")}
-                  </span>
-                  <input
-                    type="number"
-                    min={0}
-                    max={24}
-                    step={0.5}
-                    value={fontControlValues.outlineWidthPx ?? 0}
-                    disabled={selectedPageEditLocked}
-                    onChange={(event) => updateSelectedBlockFontSetting({ outlineWidthPx: Number(event.target.value) })}
-                  />
-                </label>
-              </div>
-              <label>
-                <span className="preset-link-label">
-                  글자색
-                  {renderFontPresetLinkButton("textColor", "글자색")}
                 </span>
-                <input
-                  type="color"
-                  className="outline-color-input"
-                  value={fontControlValues.textColor ?? "#111111"}
-                  style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}
-                  disabled={selectedPageEditLocked}
-                  onChange={(event) => updateSelectedBlockFontSetting({ textColor: event.target.value })}
-                />
+                {renderFontPresetLinkButton("textColor", "글자색")}
               </label>
               {selectedBlock ? (
-                <div className="tool-field">
+                <div className="compact-tool-field font-align-field">
                   <span>정렬</span>
                   <div className="text-align-control" role="group" aria-label="텍스트 정렬">
                     <button
@@ -2247,17 +2661,15 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
                   </div>
                 </div>
               ) : null}
-              <label className="tool-checkbox">
+              <label className="tool-checkbox compact-tool-field font-checkbox-field">
                 <input
                   type="checkbox"
                   checked={fontControlValues.autoFitText ?? true}
                   disabled={selectedPageEditLocked}
                   onChange={(event) => updateSelectedBlockFontSetting({ autoFitText: event.target.checked })}
                 />
-                <span className="preset-link-label">
-                  자동 맞춤
-                  {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
-                </span>
+                <span>자동 맞춤</span>
+                {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
               </label>
             </>
           ) : (
@@ -2429,14 +2841,15 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
           <div className="result-tool-settings">
             <label className="compact-tool-field result-color-field">
               <span>색상</span>
-              <input
-                type="color"
-                className="outline-color-input"
-                value={inpaintResultBrushColor}
-                style={{ backgroundColor: inpaintResultBrushColor }}
-                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool !== "brush"}
-                onChange={(event) => setInpaintResultBrushColor(event.target.value)}
-              />
+              <span className="color-picker-shell" style={{ backgroundColor: inpaintResultBrushColor }}>
+                <input
+                  type="color"
+                  className="outline-color-input"
+                  value={inpaintResultBrushColor}
+                  disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool !== "brush"}
+                  onChange={(event) => setInpaintResultBrushColor(event.target.value)}
+                />
+              </span>
             </label>
             <label className="compact-tool-field result-size-field">
               <span>브러시 크기</span>

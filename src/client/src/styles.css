@@ -118,6 +118,17 @@ textarea {
   padding: 8px;
 }
 
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
 .primary {
   background: #2f6f61;
   border-color: #4aa58f;
@@ -1274,10 +1285,13 @@ textarea {
 }
 
 .outline-color-input {
-  height: 36px;
-  padding: 3px;
-  border-color: #596575;
-  box-shadow: inset 0 0 0 2px rgba(17, 19, 24, 0.65);
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 .outline-color-input::-webkit-color-swatch-wrapper {
@@ -1286,8 +1300,45 @@ textarea {
 
 .outline-color-input::-webkit-color-swatch {
   border: 0;
-  border-radius: 5px;
 }
+
+.outline-color-input::-moz-color-swatch {
+  border: 0;
+}
+
+.color-picker-shell {
+  position: relative;
+  display: block;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid rgba(100, 116, 139, 0.78);
+  border-radius: 8px;
+  box-shadow:
+    inset 0 0 0 3px rgba(8, 11, 15, 0.86),
+    inset 0 0 0 4px rgba(148, 163, 184, 0.2);
+  cursor: pointer;
+  overflow: hidden;
+}
+
+.color-picker-shell::after {
+  position: absolute;
+  inset: 3px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 5px;
+  content: "";
+  pointer-events: none;
+}
+
+.color-picker-shell:hover {
+  border-color: rgba(96, 165, 250, 0.72);
+}
+
+.color-picker-shell:focus-within {
+  border-color: #6aa9ff;
+  outline: 2px solid rgba(96, 165, 250, 0.32);
+  outline-offset: 1px;
+}
+
 
 .font-size-control {
   min-width: 0;
@@ -1303,10 +1354,10 @@ textarea {
 .font-preset-link-toggle {
   display: grid;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  border-radius: 6px;
+  border-radius: 5px;
 }
 
 .font-preset-link-toggle.linked {
@@ -1321,8 +1372,8 @@ textarea {
 }
 
 .font-preset-link-toggle svg {
-  width: 14px;
-  height: 14px;
+  width: 12px;
+  height: 12px;
   fill: none;
   stroke: currentColor;
   stroke-width: 2;
@@ -3058,9 +3109,22 @@ input[type="checkbox"] {
   height: 26px;
   min-width: 0;
   padding: 3px 5px;
+  border-color: rgba(100, 116, 139, 0.78);
+  background: linear-gradient(180deg, rgba(12, 15, 20, 0.98), rgba(8, 11, 15, 0.98));
+  box-shadow: inset 0 0 0 1px rgba(15, 18, 23, 0.7);
   text-align: right;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
+}
+
+.compact-number-control input[type="number"]:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.72);
+}
+
+.compact-number-control input[type="number"]:focus-visible {
+  border-color: #6aa9ff;
+  outline: 2px solid rgba(96, 165, 250, 0.32);
+  outline-offset: 1px;
 }
 
 .compact-number-control span {
@@ -3085,10 +3149,9 @@ input[type="checkbox"] {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.result-color-field input[type="color"] {
+.result-color-field .color-picker-shell {
   height: 26px;
   min-height: 26px;
-  padding: 2px;
 }
 
 .tool-option-icon {
@@ -3129,4 +3192,156 @@ input[type="checkbox"] {
 
 .mask-action-grid button:nth-child(n) {
   grid-column: auto;
+}
+
+.font-tool-grid {
+  gap: 4px;
+}
+
+.font-picker-field {
+  color: var(--color-muted);
+}
+
+.font-picker-field.compact-tool-field {
+  gap: 4px;
+  padding: 5px 7px;
+}
+
+.font-picker-field > span {
+  font-size: 11px;
+}
+
+.font-picker {
+  gap: 0;
+}
+
+.font-picker-trigger {
+  min-height: 30px;
+  padding: 4px 22px 4px 7px;
+  gap: 7px;
+}
+
+.font-picker-trigger::after {
+  right: 8px;
+}
+
+.font-picker-current-preview {
+  font-size: 14px;
+}
+
+.font-number-field,
+.font-color-field {
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-areas:
+    "label link"
+    "control control";
+  align-items: center;
+  align-content: start;
+  min-height: 68px;
+  gap: 3px;
+  padding: 5px 7px;
+}
+
+.font-number-field .compact-number-control input[type="number"] {
+  height: 25px;
+}
+
+.font-align-field {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: center;
+}
+
+.font-number-field > span,
+.font-color-field > span,
+.font-align-field > span,
+.font-checkbox-field > span {
+  justify-content: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.font-number-field > span,
+.font-color-field > span {
+  grid-area: label;
+}
+
+.font-number-field .compact-number-control,
+.font-color-field .color-picker-shell {
+  grid-area: control;
+}
+
+.font-number-field .font-preset-link-toggle,
+.font-color-field .font-preset-link-toggle {
+  grid-area: link;
+  align-self: center;
+  justify-self: end;
+}
+
+.font-number-field .font-preset-link-toggle,
+.font-color-field .font-preset-link-toggle,
+.font-checkbox-field .font-preset-link-toggle {
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
+  padding: 0;
+  border-radius: 5px;
+}
+
+.font-color-field .color-picker-shell {
+  width: 100%;
+  height: 25px;
+  min-height: 25px;
+}
+
+.font-align-field .text-align-control {
+  padding: 3px;
+}
+
+.font-align-field .text-align-control button {
+  height: 25px;
+  padding: 0 6px;
+  font-size: 11px;
+}
+
+.font-checkbox-field {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  min-height: 34px;
+  align-items: center;
+  gap: 8px;
+}
+
+.font-checkbox-field .font-preset-link-toggle {
+  align-self: center;
+  justify-self: end;
+}
+
+.font-checkbox-field > span {
+  flex: 1 1 auto;
+}
+
+.font-checkbox-field input {
+  width: 14px;
+  height: 14px;
+}
+
+.font-preset-panel {
+  gap: 6px;
+  padding-top: 8px;
+}
+
+.font-preset-create {
+  gap: 5px;
+}
+
+.font-preset-create input,
+.font-preset-create button {
+  height: 31px;
+  padding-top: 5px;
+  padding-bottom: 5px;
+  font-size: 11px;
 }
