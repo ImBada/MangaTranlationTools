@@ -50,6 +50,7 @@ import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages,
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "./lib/jobProgress";
 import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
+import { clampStageViewScale } from "./lib/stageFit";
 import "./styles.css";
 
 const EMPTY_JOB: JobState = {
@@ -158,6 +159,8 @@ const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
   }
 };
 
+const STAGE_ZOOM_STEP = 1.2;
+
 type RenameTarget =
   | {
       kind: "work";
@@ -194,6 +197,8 @@ export default function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [stageViewScale, setStageViewScale] = useState<number | null>(null);
+  const [stageViewResetKey, setStageViewResetKey] = useState(0);
   const [dirty, setDirty] = useState(false);
   const [saveFlash, setSaveFlash] = useState(false);
   const [inpaintTool, setInpaintTool] = useState<InpaintTool>("select");
@@ -292,6 +297,10 @@ export default function App(): React.JSX.Element {
     [selectedPage?.height, selectedPage?.width]
   );
   const stageSize = useStageSize(imageRef, selectedPageSize);
+  const currentStageScale = selectedPage && stageSize
+    ? stageSize.width / Math.max(1, selectedPage.width)
+    : (stageViewScale ?? 1);
+  const stageZoomLabel = `${Math.round(currentStageScale * 100)}%`;
   const progressSnapshot = useMemo(() => resolveProgressSnapshot(jobState), [jobState]);
   const showProgressBar = jobState.status !== "idle" && !!progressSnapshot;
   const saveStatusTone = saveFlash ? "saved" : dirty ? "unsaved" : "synced";
@@ -306,6 +315,14 @@ export default function App(): React.JSX.Element {
   const statusIndicatorLabel = jobActive ? jobState.progressText : saveStatusLabel;
   const showNotificationDock = Boolean(selectedPageInpaintNotice || statusToastLine || statusWidgetOpen);
   const overlayBackgroundOpacity = selectedPage?.blocks[0]?.opacity ?? 1;
+
+  const zoomStage = useCallback((factor: number) => {
+    setStageViewScale((current) => clampStageViewScale((current ?? currentStageScale) * factor));
+  }, [currentStageScale]);
+  const fitStageToWorkspace = useCallback(() => {
+    setStageViewScale(null);
+    setStageViewResetKey((current) => current + 1);
+  }, []);
   const stageLayerOpacity = useMemo(
     () => ({
       ...layerOpacity,
@@ -2374,6 +2391,24 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     </section>
   ) : null;
 
+  const stageZoomOverlay = selectedPage ? (
+    <div className="stage-zoom-overlay" aria-label="만화 확대/축소">
+      <button type="button" onClick={() => zoomStage(1 / STAGE_ZOOM_STEP)} aria-label="축소" title="축소">
+        -
+      </button>
+      <span className="stage-zoom-value" aria-live="polite">{stageZoomLabel}</span>
+      <button type="button" onClick={() => zoomStage(STAGE_ZOOM_STEP)} aria-label="확대" title="확대">
+        +
+      </button>
+      <button type="button" onClick={() => setStageViewScale(1)} title="원본 사이즈 보기">
+        원본
+      </button>
+      <button type="button" onClick={fitStageToWorkspace} title="화면에 맞춤">
+        맞춤
+      </button>
+    </div>
+  ) : null;
+
   return (
     <main className={currentChapter ? "app-shell grid h-screen bg-canvas" : "app-shell no-left-rail grid h-screen bg-canvas"}>
       <input
@@ -2551,11 +2586,12 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
 
       <section
         ref={workspacePanelRef}
-        className="workspace relative grid place-items-center overflow-auto outline-none"
+        className="workspace relative grid place-items-center outline-none"
         tabIndex={0}
         aria-label="읽기 영역"
         onMouseDown={() => workspacePanelRef.current?.focus()}
       >
+        {stageZoomOverlay}
         {notificationDock}
         {statusHistoryPanel}
         <button
@@ -2575,6 +2611,8 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               imageRef={imageRef}
               stageRef={stageRef}
               stageSize={stageSize}
+              viewScale={stageViewScale}
+              viewResetKey={stageViewResetKey}
               selectedBlockId={selectedBlockId}
               layerVisibility={layerVisibility}
               layerOpacity={stageLayerOpacity}

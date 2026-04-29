@@ -482,7 +482,9 @@ textarea {
   position: relative;
   display: grid;
   place-items: center;
-  overflow: auto;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   padding: 24px;
   background: #101114;
   outline: none;
@@ -865,6 +867,38 @@ textarea {
   gap: 8px;
   width: min(360px, calc(100vw - 36px));
   pointer-events: none;
+}
+
+.stage-zoom-overlay {
+  position: absolute;
+  top: 12px;
+  left: 12px;
+  z-index: 72;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: rgba(20, 23, 27, 0.92);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+}
+
+.stage-zoom-overlay button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px 8px;
+  border-radius: 6px;
+  font-size: 12px;
+}
+
+.stage-zoom-value {
+  min-width: 48px;
+  color: #f1f5f9;
+  font-size: 12px;
+  font-weight: 700;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
 .notification-card,
@@ -1646,27 +1680,39 @@ textarea {
 
 .stage-wrap {
   width: min(100%, 1040px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
   display: grid;
   place-items: center;
 }
 
 .workspace-pane {
   width: min(100%, 1040px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
 }
 
 .image-stage {
   position: relative;
-  display: inline-block;
-  max-width: 100%;
+  display: block;
+  cursor: grab;
   user-select: none;
   touch-action: none;
 }
 
+.image-stage.panning {
+  cursor: grabbing;
+}
+
 .page-image {
   display: block;
-  max-width: min(100%, 1040px);
-  max-height: calc(100vh - 48px);
-  object-fit: contain;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
 }
 
@@ -2164,7 +2210,8 @@ textarea {
   }
 
   .workspace {
-    min-height: 480px;
+    height: min(480px, calc(100vh - 96px));
+    min-height: 280px;
   }
 }
 
