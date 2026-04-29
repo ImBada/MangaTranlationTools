@@ -31,7 +31,7 @@ export function EditorPanel({
 }: EditorPanelProps): React.JSX.Element {
   if (!block) {
     return (
-      <section className="editor-panel muted">
+      <section className="editor-panel muted grid content-start gap-2.5">
         <h2>블록</h2>
         <p>블록을 선택하면 문구와 배치 방향을 바로 조정할 수 있습니다.</p>
         <button className="primary" onClick={onApplyBatchInpaint} disabled={batchInpaintDisabled}>
@@ -47,12 +47,12 @@ export function EditorPanel({
   const rotationDeg = Math.round(resolveBlockRotationDeg(block) * 10) / 10;
 
   return (
-    <section className="editor-panel">
-      <div className="block-panel-heading">
+    <section className="editor-panel grid content-start gap-2.5">
+      <div className="block-panel-heading flex items-center justify-between gap-2">
         <h2>블록</h2>
         {fontPresetName ? <span className="font-preset-tag block-preset-tag">{fontPresetName}</span> : null}
       </div>
-      <label>
+      <label className="grid gap-1.5 text-xs font-semibold text-soft">
         종류
         <select value={block.type} disabled={disabled} onChange={(event) => onUpdate({ type: event.target.value as TranslationBlock["type"] })}>
           <option value="speech">speech</option>
@@ -61,15 +61,15 @@ export function EditorPanel({
           <option value="other">other</option>
         </select>
       </label>
-      <label>
+      <label className="grid gap-1.5 text-xs font-semibold text-soft">
         한국어
         <textarea value={block.translatedText} disabled={disabled} onChange={(event) => onUpdate({ translatedText: event.target.value })} />
       </label>
-      <label>
+      <label className="grid gap-1.5 text-xs font-semibold text-soft">
         OCR
         <textarea value={block.sourceText} disabled={disabled} onChange={(event) => onUpdate({ sourceText: event.target.value })} />
       </label>
-      <label>
+      <label className="grid gap-1.5 text-xs font-semibold text-soft">
         방향
         <select
           value={block.renderDirection}
@@ -82,7 +82,7 @@ export function EditorPanel({
           <option value="hidden">hidden</option>
         </select>
       </label>
-      <label>
+      <label className="grid gap-1.5 text-xs font-semibold text-soft">
         회전
         <input
           type="range"
@@ -90,11 +90,12 @@ export function EditorPanel({
           max="180"
           step="1"
           value={rotationDeg}
+          style={rangeProgressStyle(rotationDeg, -180, 180)}
           disabled={disabled}
           onChange={(event) => onUpdate({ rotationDeg: Number(event.target.value) })}
         />
       </label>
-      <div className="rotation-row">
+      <div className="rotation-row grid grid-cols-[minmax(72px,1fr)_auto_auto] items-center gap-2">
         <input
           type="number"
           min="-180"
@@ -111,7 +112,7 @@ export function EditorPanel({
         </button>
       </div>
       <div className="padding-row">
-        <label>
+        <label className="grid gap-1.5 text-xs font-semibold text-soft">
           패딩
           <input
             type="number"
@@ -132,8 +133,8 @@ export function EditorPanel({
           자동
         </button>
       </div>
-      <div className="color-row">
-        <label>
+      <div className="color-row grid grid-cols-2 gap-2.5">
+        <label className="grid gap-1.5 text-xs font-semibold text-soft">
           배경색
           <input
             type="color"
@@ -143,7 +144,7 @@ export function EditorPanel({
           />
         </label>
       </div>
-      <div className="block-actions">
+      <div className="block-actions grid grid-cols-2 gap-2.5">
         <button onClick={onApplyInpaint} disabled={disabled}>블록 인페인트 실행</button>
         <button onClick={onDuplicate} disabled={disabled}>복제</button>
         <button className="danger" onClick={onDelete} disabled={disabled}>삭제</button>
@@ -153,4 +154,10 @@ export function EditorPanel({
       </button>
     </section>
   );
+}
+
+function rangeProgressStyle(value: number, min: number, max: number): React.CSSProperties {
+  const ratio = max === min ? 0 : (value - min) / (max - min);
+  const percent = Math.min(100, Math.max(0, ratio * 100));
+  return { "--range-progress": `${percent}%` } as React.CSSProperties;
 }

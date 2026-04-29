@@ -33,14 +33,14 @@ export function PageList({
   }, [selectedPageId]);
 
   return (
-    <section className="page-list">
-      <div className="panel-header">
-        <h2>
+    <section className="page-list grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2.5">
+      <div className="panel-header flex items-center justify-between gap-2">
+        <h2 className="inline-flex items-center gap-2">
           페이지
           <span className="panel-count">{pages.length}</span>
         </h2>
       </div>
-      <div className="page-list-scroll">
+      <div className="page-list-scroll grid min-h-0 content-start gap-2 overflow-auto pr-1">
         {pages.length ? (
           pages.map((page) => (
             <div
@@ -48,7 +48,7 @@ export function PageList({
               ref={(element) => {
                 pageItemRefs.current[page.id] = element;
               }}
-              className={page.id === selectedPageId ? "page-item active" : "page-item"}
+              className={page.id === selectedPageId ? "page-item active grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" : "page-item grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2"}
               draggable={!jobActive}
               onDragStart={() => setDraggingPageId(page.id)}
               onDragEnd={() => setDraggingPageId(null)}
@@ -66,14 +66,14 @@ export function PageList({
                 setDraggingPageId(null);
               }}
             >
-              <button className="page-select" onClick={() => onSelect(page.id)}>
-                <span>{page.name}</span>
+              <button className="page-select flex min-w-0 items-center justify-start gap-3 px-2.5 py-2" onClick={() => onSelect(page.id)}>
+                <span className="min-w-0 truncate">{page.name}</span>
               </button>
-              <div className="page-side">
+              <div className="page-side flex items-center justify-end">
                 {page.id === selectedPageId ? (
-                  <div className="page-actions">
+                  <div className="page-actions flex gap-2">
                     <button
-                      className="page-icon-button"
+                      className="page-icon-button grid size-7 place-items-center p-0"
                       onClick={() => onRetranslate(page.id)}
                       disabled={jobActive}
                       aria-label={`${page.name} 재번역`}
@@ -82,7 +82,7 @@ export function PageList({
                       ↻
                     </button>
                     <button
-                      className="page-remove page-icon-button"
+                      className="page-remove page-icon-button grid size-7 place-items-center p-0"
                       onClick={() => onRemove(page.id)}
                       disabled={jobActive}
                       aria-label={`${page.name} 삭제`}

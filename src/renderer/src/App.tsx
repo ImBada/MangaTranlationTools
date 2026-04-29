@@ -184,6 +184,7 @@ export default function App(): React.JSX.Element {
   const [selectedBlockId, setSelectedBlockId] = useState<string | null>(null);
   const [jobState, setJobState] = useState<JobState>(EMPTY_JOB);
   const [statusLines, setStatusLines] = useState<string[]>([]);
+  const [statusToastLine, setStatusToastLine] = useState<string | null>(null);
   const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [renderBusy, setRenderBusy] = useState(false);
@@ -224,8 +225,9 @@ export default function App(): React.JSX.Element {
   const [focusModeEnabled, setFocusModeEnabled] = useState(true);
   const [statusWidgetOpen, setStatusWidgetOpen] = useState(false);
   const [activeLayer, setActiveLayer] = useState<ActiveLayer>("output");
-  const [libraryCollapsed, setLibraryCollapsed] = useState(false);
+  const [libraryWidgetOpen, setLibraryWidgetOpen] = useState(false);
   const workspacePanelRef = useRef<HTMLElement | null>(null);
+  const libraryAnchorRef = useRef<HTMLDivElement | null>(null);
   const stageRef = useRef<HTMLDivElement | null>(null);
   const imageRef = useRef<HTMLImageElement | null>(null);
   const imageImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -235,6 +237,7 @@ export default function App(): React.JSX.Element {
   const dragRef = useRef<DragState | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const saveFlashTimerRef = useRef<number | null>(null);
+  const statusToastTimerRef = useRef<number | null>(null);
   const dirtyVersionRef = useRef(0);
   const dirtyPageIdsRef = useRef<Set<string>>(new Set());
   const currentChapterRef = useRef<ChapterSnapshot | null>(null);
@@ -282,6 +285,7 @@ export default function App(): React.JSX.Element {
   const canUndoInpaint = selectedPage ? (inpaintUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
   const canUndoInpaintResult = selectedPage ? (inpaintResultUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
   const jobActive = ["starting", "running", "cancelling"].includes(jobState.status);
+  const libraryChapterCount = useMemo(() => library.works.reduce((total, work) => total + work.chapters.length, 0), [library.works]);
   const selectedPageEditLocked = Boolean(jobActive && selectedPage && selectedPage.analysisStatus !== "completed");
   const selectedPageSize = useMemo(
     () => (selectedPage ? { width: selectedPage.width, height: selectedPage.height } : null),
@@ -293,6 +297,14 @@ export default function App(): React.JSX.Element {
   const saveStatusTone = saveFlash ? "saved" : dirty ? "unsaved" : "synced";
   const saveStatusLabel = saveFlash ? "저장 완료" : dirty ? "저장되지 않은 변경 있음" : "최신 상태";
   const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
+  const selectedPageInpaintNotice =
+    selectedPage?.inpaintStatus === "running"
+      ? { tone: "running", title: "인페인트 중", message: selectedPage.name }
+      : selectedPage?.inpaintStatus === "failed"
+        ? { tone: "failed", title: "인페인트 실패", message: selectedPage.name }
+        : null;
+  const statusIndicatorLabel = jobActive ? jobState.progressText : saveStatusLabel;
+  const showNotificationDock = Boolean(selectedPageInpaintNotice || statusToastLine || statusWidgetOpen);
   const overlayBackgroundOpacity = selectedPage?.blocks[0]?.opacity ?? 1;
   const stageLayerOpacity = useMemo(
     () => ({
@@ -391,6 +403,14 @@ export default function App(): React.JSX.Element {
     if (!next) {
       return;
     }
+    setStatusToastLine(next);
+    if (statusToastTimerRef.current) {
+      window.clearTimeout(statusToastTimerRef.current);
+    }
+    statusToastTimerRef.current = window.setTimeout(() => {
+      setStatusToastLine(null);
+      statusToastTimerRef.current = null;
+    }, 4000);
     setStatusLines((lines) => {
       if (lines[0] === next) {
         return lines;
@@ -414,6 +434,9 @@ export default function App(): React.JSX.Element {
     return () => {
       if (saveFlashTimerRef.current) {
         window.clearTimeout(saveFlashTimerRef.current);
+      }
+      if (statusToastTimerRef.current) {
+        window.clearTimeout(statusToastTimerRef.current);
       }
     };
   }, []);
@@ -745,6 +768,11 @@ export default function App(): React.JSX.Element {
 
       await saveNow();
       setStatusLines([]);
+      setStatusToastLine(null);
+      if (statusToastTimerRef.current) {
+        window.clearTimeout(statusToastTimerRef.current);
+        statusToastTimerRef.current = null;
+      }
       setJobState({
         id: "pending",
         kind: "gemma-analysis",
@@ -1655,9 +1683,33 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
   };
 
   React.useEffect(() => {
+    if (!libraryWidgetOpen) {
+      return;
+    }
+
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (target instanceof Node && libraryAnchorRef.current?.contains(target)) {
+        return;
+      }
+      setLibraryWidgetOpen(false);
+    };
+
+    window.addEventListener("pointerdown", onPointerDown);
+    return () => {
+      window.removeEventListener("pointerdown", onPointerDown);
+    };
+  }, [libraryWidgetOpen]);
+
+  React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
       const editableTarget = isEditableTarget(event.target);
+      if (event.key === "Escape" && libraryWidgetOpen) {
+        setLibraryWidgetOpen(false);
+        return;
+      }
+
       const selectionClearShortcut =
         (event.key === "Delete" || event.key === "Backspace") &&
         !modalOpen &&
@@ -1711,7 +1763,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeLayer, clearSelectedInpaintSelection, importPreview, inpaintResultTool, inpaintSelectionRect, inpaintTool, pushStatus, renameTarget, selectPageForReading, settingsOpen]);
+  }, [activeLayer, clearSelectedInpaintSelection, importPreview, inpaintResultTool, inpaintSelectionRect, inpaintTool, libraryWidgetOpen, pushStatus, renameTarget, selectPageForReading, settingsOpen]);
 
   const renameWork = useCallback((workId: string) => {
     const work = library.works.find((candidate) => candidate.id === workId);
@@ -2069,6 +2121,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               max={96}
               step={1}
               value={inpaintBrushSize}
+              style={rangeProgressStyle(inpaintBrushSize, 4, 96)}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
               onChange={(event) => setInpaintBrushSize(Number(event.target.value))}
             />
@@ -2161,6 +2214,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               max={128}
               step={1}
               value={inpaintResultBrushSize}
+              style={rangeProgressStyle(inpaintResultBrushSize, 2, 128)}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
               onChange={(event) => setInpaintResultBrushSize(Number(event.target.value))}
             />
@@ -2173,6 +2227,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               max={1}
               step={0.01}
               value={inpaintResultBrushHardness}
+              style={rangeProgressStyle(inpaintResultBrushHardness, 0, 1)}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
               onChange={(event) => setInpaintResultBrushHardness(Number(event.target.value))}
             />
@@ -2185,6 +2240,7 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               max={1}
               step={0.01}
               value={inpaintResultToolStrength}
+              style={rangeProgressStyle(inpaintResultToolStrength, 0.05, 1)}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool === "brush" || inpaintResultTool === "eraser"}
               onChange={(event) => setInpaintResultToolStrength(Number(event.target.value))}
             />
@@ -2226,8 +2282,48 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
     </section>
   );
 
+  const notificationDock = showNotificationDock ? (
+    <aside className="notification-dock" aria-label="알림" aria-live="polite">
+      {selectedPageInpaintNotice ? (
+        <section className={`notification-card ${selectedPageInpaintNotice.tone}`}>
+          <div className="notification-copy">
+            <strong>{selectedPageInpaintNotice.title}</strong>
+            <span>{selectedPageInpaintNotice.message}</span>
+          </div>
+        </section>
+      ) : null}
+      {statusToastLine ? (
+        <section className={`notification-card ${statusWidgetTone}`}>
+          <div className="notification-copy">
+            <strong>알림</strong>
+            <span>{statusToastLine}</span>
+          </div>
+        </section>
+      ) : null}
+    </aside>
+  ) : null;
+
+  const statusHistoryPanel = statusWidgetOpen ? (
+    <section className={`status-history-panel ${statusWidgetTone}`}>
+      <div className="notification-panel-header">
+        <h2>상태 기록</h2>
+        <button type="button" className="notification-panel-close" onClick={() => setStatusWidgetOpen(false)} aria-label="상태 기록 닫기">
+          ×
+        </button>
+      </div>
+      <div className={`job-pill ${jobState.status}`}>{jobState.progressText}</div>
+      <div className="status-log-scroll">
+        {statusLines.length ? (
+          statusLines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
+        ) : (
+          <p className="muted-line">아직 표시할 상태가 없습니다.</p>
+        )}
+      </div>
+    </section>
+  ) : null;
+
   return (
-    <main className="app-shell">
+    <main className={currentChapter ? "app-shell grid h-screen bg-canvas" : "app-shell no-left-rail grid h-screen bg-canvas"}>
       <input
         ref={imageImportInputRef}
         type="file"
@@ -2261,50 +2357,125 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
         {...{ webkitdirectory: "" }}
         onChange={(event) => void handleImportInputChange("zip-folder", event)}
       />
-      <aside className="sidebar">
-        <section className="toolbar">
-          <div className="toolbar-header">
-            <span>가져오기</span>
-            <button className="ghost-button" onClick={() => void openSettings()} disabled={settingsBusy && !settingsOpen}>
-              설정
+      <header className="context-bar">
+        <div className="context-bar-left">
+          <div className="context-library-anchor" ref={libraryAnchorRef}>
+            <button
+              type="button"
+              className={libraryWidgetOpen ? "context-button active" : "context-button"}
+              onClick={() => setLibraryWidgetOpen((current) => !current)}
+              aria-expanded={libraryWidgetOpen}
+              aria-controls="library-widget"
+            >
+              보관함
+              <span className="panel-count">{libraryChapterCount}</span>
             </button>
+            {libraryWidgetOpen ? (
+              <div id="library-widget" className="library-widget">
+                <LibraryTree
+                  library={library}
+                  currentChapterId={currentChapter?.id ?? null}
+                  jobActive={jobActive}
+                  collapsed={false}
+                  onToggleCollapsed={() => setLibraryWidgetOpen(false)}
+                  onOpenChapter={(chapterId) => {
+                    setLibraryWidgetOpen(false);
+                    void openChapter(chapterId);
+                  }}
+                  onRenameWork={(workId) => {
+                    setLibraryWidgetOpen(false);
+                    void renameWork(workId);
+                  }}
+                  onRenameChapter={(chapterId) => {
+                    setLibraryWidgetOpen(false);
+                    void renameChapter(chapterId);
+                  }}
+                  onReorderChapter={(workId, sourceChapterId, targetChapterId) => {
+                    const work = library.works.find((candidate) => candidate.id === workId);
+                    if (!work) {
+                      return;
+                    }
+                    const nextOrder = reorderByTarget(work.chapterOrder, sourceChapterId, targetChapterId);
+                    void window.mangaApi.reorderChapters(workId, nextOrder).then(setLibrary);
+                  }}
+                />
+              </div>
+            ) : null}
           </div>
-          <div className="import-actions">
-            <button onClick={() => selectImportFiles("images")} disabled={jobActive}>
-              이미지
-            </button>
-            <button onClick={() => selectImportFiles("folder")} disabled={jobActive}>
-              폴더
-            </button>
-            <button onClick={() => selectImportFiles("zip")} disabled={jobActive}>
-              압축파일
-            </button>
-            <button onClick={() => selectImportFiles("zip-folder")} disabled={jobActive}>
-              일괄 번역
-            </button>
+          <div className="context-import-group">
+            <span className="context-label">가져오기</span>
+            <div className="import-actions grid grid-cols-4 gap-1.5">
+              <button onClick={() => selectImportFiles("images")} disabled={jobActive}>
+                이미지
+              </button>
+              <button onClick={() => selectImportFiles("folder")} disabled={jobActive}>
+                폴더
+              </button>
+              <button onClick={() => selectImportFiles("zip")} disabled={jobActive}>
+                압축파일
+              </button>
+              <button onClick={() => selectImportFiles("zip-folder")} disabled={jobActive}>
+                일괄 번역
+              </button>
+            </div>
           </div>
-        </section>
+        </div>
+        <div className="context-bar-right">
+          <div className="context-chapter-chip" title={currentChapter?.title ?? "현재 화 없음"}>
+            <strong>{currentChapter?.title ?? "현재 화 없음"}</strong>
+            <span>{currentChapter ? `${currentChapter.pages.length}p` : "대기"}</span>
+          </div>
+          <div className="context-run-group" aria-label="번역 실행">
+            <div className="context-run-actions">
+              <button className="primary" onClick={() => void runAnalysis("pending")} disabled={!currentChapter || jobActive}>
+                계속 번역 (AI)
+              </button>
+              <button onClick={() => void runAnalysis("all")} disabled={!currentChapter || jobActive}>
+                전체 번역 (AI)
+              </button>
+              <button onClick={() => void renderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
+                {renderBusy ? "출력 중" : "페이지 출력"}
+              </button>
+              {jobActive ? (
+                <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
+                  취소
+                </button>
+              ) : null}
+            </div>
+            {showProgressBar && progressSnapshot ? (
+              <div className="context-progress">
+                <div className="context-progress-meta">
+                  <span>{jobState.progressText}</span>
+                  {progressSnapshot.mode === "determinate" ? (
+                    <strong>
+                      {progressSnapshot.current} / {progressSnapshot.total}
+                    </strong>
+                  ) : (
+                    <strong>준비 중</strong>
+                  )}
+                </div>
+                <div className={`progress-track ${progressSnapshot.mode === "indeterminate" ? "indeterminate" : ""}`} aria-hidden="true">
+                  <div
+                    className={`progress-fill ${progressSnapshot.mode === "indeterminate" ? "indeterminate" : ""}`}
+                    style={
+                      progressSnapshot.mode === "determinate"
+                        ? { width: `${Math.round(progressSnapshot.ratio * 100)}%` }
+                        : undefined
+                    }
+                  />
+                </div>
+              </div>
+            ) : null}
+          </div>
+          <span className={`context-status-indicator ${statusWidgetTone}`} aria-label={`상태: ${statusIndicatorLabel}`} title={statusIndicatorLabel} />
+          <button className="ghost-button context-settings" onClick={() => void openSettings()} disabled={settingsBusy && !settingsOpen}>
+            설정
+          </button>
+        </div>
+      </header>
 
+      <aside className="sidebar flex min-h-0 flex-col gap-3 overflow-hidden">
         {layerToolPanel}
-
-        <LibraryTree
-          library={library}
-          currentChapterId={currentChapter?.id ?? null}
-          jobActive={jobActive}
-          collapsed={libraryCollapsed}
-          onToggleCollapsed={() => setLibraryCollapsed((current) => !current)}
-          onOpenChapter={(chapterId) => void openChapter(chapterId)}
-          onRenameWork={(workId) => void renameWork(workId)}
-          onRenameChapter={(chapterId) => void renameChapter(chapterId)}
-          onReorderChapter={(workId, sourceChapterId, targetChapterId) => {
-            const work = library.works.find((candidate) => candidate.id === workId);
-            if (!work) {
-              return;
-            }
-            const nextOrder = reorderByTarget(work.chapterOrder, sourceChapterId, targetChapterId);
-            void window.mangaApi.reorderChapters(workId, nextOrder).then(setLibrary);
-          }}
-        />
 
         <PageList
           pages={currentChapter?.pages ?? []}
@@ -2328,13 +2499,25 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
 
       <section
         ref={workspacePanelRef}
-        className="workspace"
+        className="workspace relative grid place-items-center overflow-auto outline-none"
         tabIndex={0}
         aria-label="읽기 영역"
         onMouseDown={() => workspacePanelRef.current?.focus()}
       >
+        {notificationDock}
+        {statusHistoryPanel}
+        <button
+          type="button"
+          className={`status-history-button ${statusWidgetTone}`}
+          onClick={() => setStatusWidgetOpen((current) => !current)}
+          aria-expanded={statusWidgetOpen}
+          aria-label={`상태 기록 ${statusWidgetOpen ? "닫기" : "열기"}`}
+          title="상태 기록"
+        >
+          기록
+        </button>
         {selectedPage ? (
-          <div className="workspace-pane">
+          <div className="workspace-pane w-full max-w-[1040px]">
             <ImageStage
               page={selectedPage}
               imageRef={imageRef}
@@ -2368,10 +2551,10 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
             />
           </div>
         ) : (
-          <div className="empty-state">
+          <div className="empty-state max-w-xl text-center">
             <h2>보관함에서 화를 열거나 새로 가져오세요.</h2>
             <p>작품과 화 단위로 저장해두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.</p>
-            <div className="empty-actions">
+            <div className="empty-actions flex flex-wrap justify-center gap-2.5">
               <button onClick={() => selectImportFiles("images")}>이미지 열기</button>
               <button onClick={() => selectImportFiles("folder")}>폴더 열기</button>
               <button onClick={() => selectImportFiles("zip")}>압축파일 열기</button>
@@ -2379,91 +2562,9 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
             </div>
           </div>
         )}
-        <div className={statusWidgetOpen ? "status-widget open" : "status-widget"}>
-          {statusWidgetOpen ? (
-            <section className={`status-widget-panel ${statusWidgetTone}`} aria-label="상태">
-              <div className="status-widget-header">
-                <h2>상태</h2>
-                <button type="button" className="status-widget-close" onClick={() => setStatusWidgetOpen(false)} aria-label="상태 닫기">
-                  ×
-                </button>
-              </div>
-              <div className={`job-pill ${jobState.status}`}>{jobState.progressText}</div>
-              <div className="status-log-scroll">
-                {statusLines.length ? (
-                  statusLines.map((line, index) => <p key={`${line}-${index}`}>{line}</p>)
-                ) : (
-                  <p className="muted-line">아직 표시할 상태가 없습니다.</p>
-                )}
-              </div>
-            </section>
-          ) : (
-            <button
-              type="button"
-              className={`status-widget-toggle ${statusWidgetTone}`}
-              onClick={() => setStatusWidgetOpen(true)}
-              aria-label={`상태 열기: ${saveStatusLabel}`}
-              title={saveStatusLabel}
-            >
-              <span className="status-widget-dot" aria-hidden="true" />
-              <span className="status-widget-icon" aria-hidden="true">i</span>
-            </button>
-          )}
-        </div>
       </section>
 
-      <aside className="right-rail">
-        <section className="right-rail-quickbar" aria-label="번역 실행">
-          <div className="right-rail-chapter-chip" title={currentChapter?.title ?? "현재 화 없음"}>
-            <strong>{currentChapter?.title ?? "현재 화 없음"}</strong>
-            <span>{currentChapter ? `${currentChapter.pages.length}p` : "대기"}</span>
-          </div>
-          <div className="run-actions">
-            <button className="primary" onClick={() => void runAnalysis("pending")} disabled={!currentChapter || jobActive}>
-              이어서
-            </button>
-            <button onClick={() => void runAnalysis("all")} disabled={!currentChapter || jobActive}>
-              전체
-            </button>
-            <button onClick={() => void renderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
-              {renderBusy ? "출력 중" : "출력"}
-            </button>
-            {jobActive ? (
-              <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
-                취소
-              </button>
-            ) : null}
-          </div>
-          {showProgressBar && progressSnapshot ? (
-            <div className="progress-card">
-              <div className="progress-meta">
-                <span>{jobState.progressText}</span>
-                {progressSnapshot.mode === "determinate" ? (
-                  <strong>
-                    {progressSnapshot.current} / {progressSnapshot.total}
-                  </strong>
-                ) : (
-                  <strong>준비 중</strong>
-                )}
-              </div>
-              {jobState.detail ? <small className="progress-detail">{jobState.detail}</small> : null}
-              <div
-                className={`progress-track ${progressSnapshot.mode === "indeterminate" ? "indeterminate" : ""}`}
-                aria-hidden="true"
-              >
-                <div
-                  className={`progress-fill ${progressSnapshot.mode === "indeterminate" ? "indeterminate" : ""}`}
-                  style={
-                    progressSnapshot.mode === "determinate"
-                      ? { width: `${Math.round(progressSnapshot.ratio * 100)}%` }
-                      : undefined
-                  }
-                />
-              </div>
-            </div>
-          ) : null}
-        </section>
-
+      <aside className="right-rail flex min-h-0 flex-col gap-3 overflow-hidden">
         <section className="layer-panel right-rail-layer-panel">
             <div className="layer-panel-header">
               <h2>레이어</h2>
@@ -2639,6 +2740,12 @@ function isEditableTarget(target: EventTarget | null): boolean {
   }
 
   return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only']"));
+}
+
+function rangeProgressStyle(value: number, min: number, max: number): React.CSSProperties {
+  const ratio = max === min ? 0 : (value - min) / (max - min);
+  const percent = Math.min(100, Math.max(0, ratio * 100));
+  return { "--range-progress": `${percent}%` } as React.CSSProperties;
 }
 
 function FontPresetLinkIcon({ linked }: { linked: boolean }): React.JSX.Element {
@@ -2839,6 +2946,7 @@ function LayerControl({
           max={1}
           step={0.01}
           value={opacity}
+          style={rangeProgressStyle(opacity, 0, 1)}
           disabled={!visible}
           aria-label={`${label} 투명도`}
           onClick={(event) => event.stopPropagation()}

@@ -98,11 +98,6 @@ export function ImageStage({
         />
         {layerVisibility.inpaint ? (
           <div className="inpaint-layer-preview" style={{ opacity: layerOpacity.inpaint }}>
-            {page.inpaintStatus && page.inpaintStatus !== "idle" ? (
-              <div className={`inpaint-status-badge ${page.inpaintStatus}`}>
-                {page.inpaintStatus === "running" ? "인페인트 중" : page.inpaintStatus === "failed" ? "인페인트 실패" : "인페인트 완료"}
-              </div>
-            ) : null}
             {layerVisibility.inpaintResult && (page.inpaintResultDataUrl || activeLayer === "inpaintResult") ? (
               <InpaintResultCanvas
                 className="inpaint-result-canvas"

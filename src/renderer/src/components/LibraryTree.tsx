@@ -34,26 +34,26 @@ export function LibraryTree({
   const chapterCount = filteredLibrary.works.reduce((total, work) => total + work.chapters.length, 0);
 
   return (
-    <section className={collapsed ? "library-panel collapsed" : "library-panel"}>
-      <div className="panel-header library-panel-header">
-        <h2>
+    <section className={collapsed ? "library-panel collapsed grid min-h-0 content-start gap-2.5" : "library-panel grid min-h-0 content-start gap-2.5"}>
+      <div className="panel-header library-panel-header flex items-center gap-3">
+        <h2 className="inline-flex items-center gap-2">
           보관함
           <span className="panel-count">{chapterCount}</span>
         </h2>
         <button
           type="button"
-          className="ghost-button library-collapse-button"
+          className="ghost-button library-collapse-button ml-auto grid size-7 place-items-center p-1"
           onClick={onToggleCollapsed}
           aria-expanded={!collapsed}
         >
-          {collapsed ? <UnfoldIcon /> : <FoldIcon />}
+          {collapsed ? <UnfoldIcon /> : <CloseIcon />}
         </button>
       </div>
       {collapsed ? null : (
-        <label className="library-search-shell" aria-label="보관함 검색">
+        <label className="library-search-shell flex h-9 items-center gap-2.5 px-3" aria-label="보관함 검색">
           <SearchIcon />
           <input
-            className="library-search-input"
+            className="library-search-input min-w-0 border-0 bg-transparent p-0 shadow-none"
             type="text"
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
@@ -64,14 +64,14 @@ export function LibraryTree({
         </label>
       )}
       {collapsed ? null : (
-        <div className="library-scroll">
+        <div className="library-scroll grid min-h-0 content-start gap-2 overflow-auto pr-1">
           {filteredLibrary.works.length ? (
             filteredLibrary.works.map((work) => (
-              <div key={work.id} className="work-group">
-                <div className="work-row">
-                  <strong>{work.title}</strong>
+              <div key={work.id} className="work-group grid gap-2 p-2.5">
+                <div className="work-row flex items-center justify-between gap-2">
+                  <strong className="min-w-0 truncate text-xs">{work.title}</strong>
                   <button
-                    className="ghost-button library-icon-button"
+                    className="ghost-button library-icon-button grid size-7 place-items-center p-0"
                     onClick={() => onRenameWork(work.id)}
                     disabled={jobActive}
                     aria-label={`${work.title} 이름 변경`}
@@ -80,11 +80,11 @@ export function LibraryTree({
                     ✎
                   </button>
                 </div>
-                <div className="chapter-list">
+                <div className="chapter-list grid gap-2">
                   {work.chapters.map((chapter) => (
                     <div
                       key={chapter.id}
-                      className={chapter.id === currentChapterId ? "chapter-item active" : "chapter-item"}
+                      className={chapter.id === currentChapterId ? "chapter-item active grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2" : "chapter-item grid grid-cols-[minmax(0,1fr)_auto] items-center gap-2"}
                       draggable={dragEnabled}
                       onDragStart={() => {
                         if (!dragEnabled) {
@@ -107,14 +107,14 @@ export function LibraryTree({
                         setDragPayload(null);
                       }}
                     >
-                      <button className="chapter-select" onClick={() => onOpenChapter(chapter.id)}>
-                        <span>{chapter.title}</span>
-                        <small>
+                      <button className="chapter-select flex min-w-0 items-center gap-3 px-2.5 py-2" onClick={() => onOpenChapter(chapter.id)}>
+                        <span className="min-w-0 truncate">{chapter.title}</span>
+                        <small className="shrink-0">
                           {chapter.pageCount}페이지 · {resolveChapterStatusLabel(chapter.status)}
                         </small>
                       </button>
                       <button
-                        className="ghost-button library-icon-button"
+                        className="ghost-button library-icon-button grid size-7 place-items-center p-0"
                         onClick={() => onRenameChapter(chapter.id)}
                         disabled={jobActive}
                         aria-label={`${chapter.title} 이름 변경`}
@@ -169,6 +169,15 @@ function UnfoldIcon(): React.JSX.Element {
       <path d="M3 5.5L10 1.5L17 5.5V16.5C17 17.05 16.55 17.5 16 17.5H4C3.45 17.5 3 17.05 3 16.5V5.5Z" stroke="currentColor" strokeWidth="1.6" />
       <path d="M10 7V14" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
       <path d="M7 11H13" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function CloseIcon(): React.JSX.Element {
+  return (
+    <svg className="library-collapse-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
+      <path d="M5.5 5.5L14.5 14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
+      <path d="M14.5 5.5L5.5 14.5" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" />
     </svg>
   );
 }

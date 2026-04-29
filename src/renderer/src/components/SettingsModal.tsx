@@ -644,6 +644,7 @@ export function SettingsModal({
                 max={MAX_GPU_LAYERS}
                 step={1}
                 value={sliderValue}
+                style={rangeProgressStyle(sliderValue, 0, MAX_GPU_LAYERS)}
                 disabled={controlsBusy}
                 onChange={(event) => {
                   clearTestState();
@@ -872,6 +873,12 @@ function matchesPreset(
 
 function clampGpuLayers(value: number): number {
   return Math.min(MAX_GPU_LAYERS, Math.max(0, value));
+}
+
+function rangeProgressStyle(value: number, min: number, max: number): React.CSSProperties {
+  const ratio = max === min ? 0 : (value - min) / (max - min);
+  const percent = Math.min(100, Math.max(0, ratio * 100));
+  return { "--range-progress": `${percent}%` } as React.CSSProperties;
 }
 
 function withSettingsDefaults(settings: AppSettings): AppSettings {
