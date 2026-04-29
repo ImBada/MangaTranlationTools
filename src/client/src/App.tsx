@@ -180,6 +180,11 @@ const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
   tileSize: 1024
 };
 
+const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;
+const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
+const INPAINT_MASK_BRUSH_SIZE_MIN = 4;
+const INPAINT_MASK_BRUSH_SIZE_MAX = 96;
+
 type InpaintToolIconName = InpaintResultTool;
 
 type InpaintToolButtonProps = {
@@ -258,6 +263,20 @@ function InpaintToolButton({ active, disabled, icon, label, onClick }: InpaintTo
       <span className="tool-option-label">{label}</span>
     </button>
   );
+}
+
+function clampInpaintResultBrushSize(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 28;
+  }
+  return Math.min(INPAINT_RESULT_BRUSH_SIZE_MAX, Math.max(INPAINT_RESULT_BRUSH_SIZE_MIN, Math.round(value)));
+}
+
+function clampInpaintMaskBrushSize(value: number): number {
+  if (!Number.isFinite(value)) {
+    return 28;
+  }
+  return Math.min(INPAINT_MASK_BRUSH_SIZE_MAX, Math.max(INPAINT_MASK_BRUSH_SIZE_MIN, Math.round(value)));
 }
 
 export default function App(): React.JSX.Element {
@@ -2317,37 +2336,45 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
             />
           </div>
-          <label>
-            브러시 크기 {inpaintBrushSize}px
-            <input
-              type="range"
-              min={4}
-              max={96}
-              step={1}
-              value={inpaintBrushSize}
-              style={rangeProgressStyle(inpaintBrushSize, 4, 96)}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-              onChange={(event) => setInpaintBrushSize(Number(event.target.value))}
-            />
-          </label>
-          <button onClick={undoSelectedPageInpaint} disabled={selectedPageEditLocked || !canUndoInpaint}>
-            되돌리기
-          </button>
-          <button onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
-            선택 해제
-          </button>
-          <button
-            onClick={() => void fillSelectedInpaintSelection()}
-            disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintTool !== "select"}
-          >
-            선택 범위 채우기
-          </button>
-          <button
-            onClick={() => updateSelectedPageInpaintMask(undefined)}
-            disabled={selectedPageEditLocked || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
-          >
-            인페인트 마스크 비우기
-          </button>
+          <div className="result-tool-settings mask-tool-settings">
+            <label className="compact-tool-field result-size-field">
+              <span>브러시 크기</span>
+              <div className="compact-number-control">
+                <input
+                  type="number"
+                  min={INPAINT_MASK_BRUSH_SIZE_MIN}
+                  max={INPAINT_MASK_BRUSH_SIZE_MAX}
+                  step={1}
+                  value={inpaintBrushSize}
+                  disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+                  onChange={(event) => setInpaintBrushSize(clampInpaintMaskBrushSize(Number(event.target.value)))}
+                />
+                <span>px</span>
+              </div>
+            </label>
+          </div>
+          <div className="result-action-grid mask-action-grid">
+            <button type="button" onClick={undoSelectedPageInpaint} disabled={selectedPageEditLocked || !canUndoInpaint}>
+              되돌리기
+            </button>
+            <button type="button" onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
+              선택 해제
+            </button>
+            <button
+              type="button"
+              onClick={() => void fillSelectedInpaintSelection()}
+              disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintTool !== "select"}
+            >
+              선택 범위 채우기
+            </button>
+            <button
+              type="button"
+              onClick={() => updateSelectedPageInpaintMask(undefined)}
+              disabled={selectedPageEditLocked || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+            >
+              인페인트 마스크 비우기
+            </button>
+          </div>
         </>
       ) : activeLayer === "image" ? (
         <p className="muted-line">원본 이미지 레이어에는 사용할 도구가 없습니다.</p>
@@ -2399,86 +2426,102 @@ updateCurrentChapter(selectedPage?.id, (current) => ({
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
           </div>
-          <label>
-            색상
-            <input
-              type="color"
-              className="outline-color-input"
-              value={inpaintResultBrushColor}
-              style={{ backgroundColor: inpaintResultBrushColor }}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool !== "brush"}
-              onChange={(event) => setInpaintResultBrushColor(event.target.value)}
-            />
-          </label>
-          <label>
-            브러시 크기 {inpaintResultBrushSize}px
-            <input
-              type="range"
-              min={2}
-              max={128}
-              step={1}
-              value={inpaintResultBrushSize}
-              style={rangeProgressStyle(inpaintResultBrushSize, 2, 128)}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-              onChange={(event) => setInpaintResultBrushSize(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            가장자리 {Math.round(inpaintResultBrushHardness * 100)}%
-            <input
-              type="range"
-              min={0}
-              max={1}
-              step={0.01}
-              value={inpaintResultBrushHardness}
-              style={rangeProgressStyle(inpaintResultBrushHardness, 0, 1)}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-              onChange={(event) => setInpaintResultBrushHardness(Number(event.target.value))}
-            />
-          </label>
-          <label>
-            강도 {Math.round(inpaintResultToolStrength * 100)}%
-            <input
-              type="range"
-              min={0.05}
-              max={1}
-              step={0.01}
-              value={inpaintResultToolStrength}
-              style={rangeProgressStyle(inpaintResultToolStrength, 0.05, 1)}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool === "brush" || inpaintResultTool === "eraser"}
-              onChange={(event) => setInpaintResultToolStrength(Number(event.target.value))}
-            />
-          </label>
-          <button onClick={undoSelectedPageInpaintResult} disabled={selectedPageEditLocked || !canUndoInpaintResult}>
-            되돌리기
-          </button>
-          <button onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
-            선택 해제
-          </button>
-          <button
-            onClick={() => void fillSelectedInpaintSelection()}
-            disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintResultTool !== "select"}
-          >
-            선택 범위 채우기
-          </button>
-          <button
-            onClick={() => updateSelectedPageInpaintResult(undefined)}
-            disabled={selectedPageEditLocked || !selectedPage?.inpaintResultDataUrl}
-          >
-            인페인트 결과 비우기
-          </button>
-          <button
-            onClick={() => void rerunInpaintWithCurrentMask()}
-            disabled={selectedPageEditLocked || inpaintBusy || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
-          >
-            마스크 유지하고 인페인트 다시하기
-          </button>
-          <button
-            onClick={() => void rerunInpaintForSelection()}
-            disabled={selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
-          >
-            선택 범위만 다시 인페인트
-          </button>
+          <div className="result-tool-settings">
+            <label className="compact-tool-field result-color-field">
+              <span>색상</span>
+              <input
+                type="color"
+                className="outline-color-input"
+                value={inpaintResultBrushColor}
+                style={{ backgroundColor: inpaintResultBrushColor }}
+                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool !== "brush"}
+                onChange={(event) => setInpaintResultBrushColor(event.target.value)}
+              />
+            </label>
+            <label className="compact-tool-field result-size-field">
+              <span>브러시 크기</span>
+              <div className="compact-number-control">
+                <input
+                  type="number"
+                  min={INPAINT_RESULT_BRUSH_SIZE_MIN}
+                  max={INPAINT_RESULT_BRUSH_SIZE_MAX}
+                  step={1}
+                  value={inpaintResultBrushSize}
+                  disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+                  onChange={(event) => setInpaintResultBrushSize(clampInpaintResultBrushSize(Number(event.target.value)))}
+                />
+                <span>px</span>
+              </div>
+            </label>
+            <label className="compact-tool-field">
+              <span>
+                <span>가장자리</span>
+                <strong>{Math.round(inpaintResultBrushHardness * 100)}%</strong>
+              </span>
+              <input
+                type="range"
+                min={0}
+                max={1}
+                step={0.01}
+                value={inpaintResultBrushHardness}
+                style={rangeProgressStyle(inpaintResultBrushHardness, 0, 1)}
+                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+                onChange={(event) => setInpaintResultBrushHardness(Number(event.target.value))}
+              />
+            </label>
+            <label className="compact-tool-field">
+              <span>
+                <span>강도</span>
+                <strong>{Math.round(inpaintResultToolStrength * 100)}%</strong>
+              </span>
+              <input
+                type="range"
+                min={0.05}
+                max={1}
+                step={0.01}
+                value={inpaintResultToolStrength}
+                style={rangeProgressStyle(inpaintResultToolStrength, 0.05, 1)}
+                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool === "brush" || inpaintResultTool === "eraser"}
+                onChange={(event) => setInpaintResultToolStrength(Number(event.target.value))}
+              />
+            </label>
+          </div>
+          <div className="result-action-grid">
+            <button type="button" onClick={undoSelectedPageInpaintResult} disabled={selectedPageEditLocked || !canUndoInpaintResult}>
+              되돌리기
+            </button>
+            <button type="button" onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
+              선택 해제
+            </button>
+            <button
+              type="button"
+              onClick={() => void fillSelectedInpaintSelection()}
+              disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintResultTool !== "select"}
+            >
+              선택 범위 채우기
+            </button>
+            <button
+              type="button"
+              onClick={() => updateSelectedPageInpaintResult(undefined)}
+              disabled={selectedPageEditLocked || !selectedPage?.inpaintResultDataUrl}
+            >
+              인페인트 결과 비우기
+            </button>
+            <button
+              type="button"
+              onClick={() => void rerunInpaintWithCurrentMask()}
+              disabled={selectedPageEditLocked || inpaintBusy || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+            >
+              마스크 유지하고 인페인트 다시하기
+            </button>
+            <button
+              type="button"
+              onClick={() => void rerunInpaintForSelection()}
+              disabled={selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+            >
+              선택 범위만 다시 인페인트
+            </button>
+          </div>
         </>
       ) : (
         <p className="muted-line">최종 아웃풋 레이어에는 사용할 도구가 없습니다.</p>

@@ -2972,19 +2972,20 @@ input[type="checkbox"] {
 
 .segmented-control.tool-selector {
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 5px;
-  padding: 5px;
+  gap: 4px;
+  padding: 4px;
   border-color: rgba(148, 163, 184, 0.18);
   background: linear-gradient(180deg, rgba(23, 28, 35, 0.98), rgba(16, 19, 24, 0.98));
 }
 
 .segmented-control .tool-option {
-  min-height: 38px;
-  padding: 6px 7px;
+  min-height: 32px;
+  gap: 4px;
+  padding: 4px 6px;
   border-color: transparent;
   background: transparent;
   color: #b8c7d4;
-  font-size: 11px;
+  font-size: 10.5px;
 }
 
 .segmented-control .tool-option:hover:not(:disabled) {
@@ -2997,4 +2998,135 @@ input[type="checkbox"] {
   border-color: rgba(120, 199, 178, 0.68);
   background: linear-gradient(180deg, rgba(36, 68, 61, 0.96), rgba(28, 52, 48, 0.96));
   color: #e6fff7;
+}
+
+.result-tool-settings {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.compact-tool-field {
+  display: grid;
+  min-width: 0;
+  min-height: 38px;
+  gap: 4px;
+  padding: 6px 7px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  border-radius: 7px;
+  background: rgba(15, 18, 23, 0.48);
+}
+
+.compact-tool-field > span {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  min-width: 0;
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.compact-tool-field > span > span {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.compact-tool-field strong {
+  flex: 0 0 auto;
+  color: var(--color-soft);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-tool-field input[type="range"] {
+  height: 16px;
+  padding: 0;
+}
+
+.compact-number-control {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.compact-number-control input[type="number"] {
+  height: 26px;
+  min-width: 0;
+  padding: 3px 5px;
+  text-align: right;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.compact-number-control span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.result-color-field {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  align-content: center;
+}
+
+.result-size-field {
+  grid-template-columns: auto minmax(74px, 1fr);
+  align-items: center;
+  align-content: center;
+}
+
+.mask-tool-settings {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.result-color-field input[type="color"] {
+  height: 26px;
+  min-height: 26px;
+  padding: 2px;
+}
+
+.tool-option-icon {
+  width: 14px;
+  height: 14px;
+}
+
+.result-action-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.result-action-grid button {
+  min-width: 0;
+  min-height: 31px;
+  padding: 5px 6px;
+  border-radius: 7px;
+  font-size: 10.5px;
+  font-weight: 700;
+  line-height: 1.15;
+  word-break: keep-all;
+}
+
+.result-action-grid button:nth-child(3),
+.result-action-grid button:nth-child(4),
+.result-action-grid button:nth-child(5) {
+  grid-column: span 2;
+}
+
+.result-action-grid button:nth-child(6) {
+  grid-column: span 4;
+}
+
+.mask-action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.mask-action-grid button:nth-child(n) {
+  grid-column: auto;
 }
