@@ -72,12 +72,6 @@ export function EditorPanel({
           value={block.translatedText}
           disabled={disabled}
           onChange={(event) => onUpdate({ translatedText: event.target.value })}
-          onBlur={(event) => {
-            const normalized = normalizeKoreanText(event.target.value);
-            if (normalized !== event.target.value) {
-              onUpdate({ translatedText: normalized });
-            }
-          }}
         />
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
@@ -173,8 +167,4 @@ function rangeProgressStyle(value: number, min: number, max: number): React.CSSP
   const ratio = max === min ? 0 : (value - min) / (max - min);
   const percent = Math.min(100, Math.max(0, ratio * 100));
   return { "--range-progress": `${percent}%` } as React.CSSProperties;
-}
-
-function normalizeKoreanText(value: string): string {
-  return value.replace(/\.{3}/g, "…");
 }

@@ -53,6 +53,7 @@ import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction 
 import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
 import { clampStageViewScale } from "./lib/stageFit";
+import { normalizeKoreanText } from "./lib/textNormalization";
 import "./styles.css";
 
 const EMPTY_JOB: JobState = {
@@ -435,6 +436,45 @@ function createTranslationUndoSnapshot(
       updatedAt: page.updatedAt,
       blocks: page.blocks.map(cloneTranslationBlock)
     }))
+  };
+}
+
+function normalizeChapterTranslatedText(chapter: ChapterSnapshot): { chapter: ChapterSnapshot; dirtyPageIds: string[] } {
+  const updatedAt = new Date().toISOString();
+  const dirtyPageIds: string[] = [];
+  let chapterChanged = false;
+
+  const pages = chapter.pages.map((page) => {
+    let pageChanged = false;
+    const blocks = page.blocks.map((block) => {
+      const translatedText = normalizeKoreanText(block.translatedText);
+      if (translatedText === block.translatedText) {
+        return block;
+      }
+
+      pageChanged = true;
+      return {
+        ...block,
+        translatedText
+      };
+    });
+
+    if (!pageChanged) {
+      return page;
+    }
+
+    chapterChanged = true;
+    dirtyPageIds.push(page.id);
+    return {
+      ...page,
+      updatedAt,
+      blocks
+    };
+  });
+
+  return {
+    chapter: chapterChanged ? { ...chapter, updatedAt, pages } : chapter,
+    dirtyPageIds
   };
 }
 
@@ -825,8 +865,15 @@ export default function App(): React.JSX.Element {
     const dirtyPageIds = [...dirtyPageIdsRef.current];
     saveTimerRef.current = window.setTimeout(async () => {
       try {
-        await window.mangaApi.saveChapter(currentChapter, dirtyPageIds.length > 0 ? dirtyPageIds : undefined);
+        const normalized = normalizeChapterTranslatedText(currentChapter);
+        const chapterToSave = normalized.chapter;
+        const pageIdsToSave = [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
+        await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave.length > 0 ? pageIdsToSave : undefined);
         if (dirtyVersionRef.current === version) {
+          if (chapterToSave !== currentChapter) {
+            currentChapterRef.current = chapterToSave;
+            setCurrentChapter((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
+          }
           dirtyPageIdsRef.current.clear();
           setDirty(false);
           signalSaveComplete();
@@ -935,7 +982,14 @@ export default function App(): React.JSX.Element {
       saveTimerRef.current = null;
     }
     const dirtyPageIds = [...dirtyPageIdsRef.current];
-    await window.mangaApi.saveChapter(currentChapter, dirtyPageIds.length > 0 ? dirtyPageIds : undefined);
+    const normalized = normalizeChapterTranslatedText(currentChapter);
+    const chapterToSave = normalized.chapter;
+    const pageIdsToSave = [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
+    await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave.length > 0 ? pageIdsToSave : undefined);
+    if (chapterToSave !== currentChapter) {
+      currentChapterRef.current = chapterToSave;
+      setCurrentChapter((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
+    }
     dirtyPageIdsRef.current.clear();
     setDirty(false);
     signalSaveComplete();
