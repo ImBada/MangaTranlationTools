@@ -688,11 +688,16 @@ export default function App(): React.JSX.Element {
     setStageViewResetKey((current) => current + 1);
   }, []);
   const stageLayerOpacity = useMemo(
-    () => ({
-      ...layerOpacity,
-      overlay: overlayOpacityEditMode ? 1 : layerOpacity.overlay
-    }),
-    [layerOpacity, overlayOpacityEditMode]
+    () => temporaryPanActive
+      ? { image: 1, inpaint: 1, inpaintResult: 1, inpaintMask: 0, overlay: 1 }
+      : { ...layerOpacity, overlay: overlayOpacityEditMode ? 1 : layerOpacity.overlay },
+    [layerOpacity, overlayOpacityEditMode, temporaryPanActive]
+  );
+  const stageLayerVisibility = useMemo(
+    () => temporaryPanActive
+      ? { image: true, inpaint: true, inpaintResult: true, inpaintMask: true, overlay: true }
+      : layerVisibility,
+    [layerVisibility, temporaryPanActive]
   );
   const selectLayer = useCallback((nextLayer: ActiveLayer) => {
     setActiveLayer(nextLayer);
@@ -3549,7 +3554,7 @@ export default function App(): React.JSX.Element {
               viewScale={stageViewScale}
               viewResetKey={stageViewResetKey}
               selectedBlockId={selectedBlockId}
-              layerVisibility={layerVisibility}
+              layerVisibility={stageLayerVisibility}
               layerOpacity={stageLayerOpacity}
               activeLayer={activeLayer}
               inpaintTool={inpaintTool}
