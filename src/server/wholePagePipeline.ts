@@ -509,7 +509,7 @@ function summarizePage(page: MangaPage): Record<string, unknown> {
 function classifyFailure(error: unknown): string {
   const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
 
-  if (message.includes("build-page-variant")) {
+  if (message.includes("enhanced image variant") || message.includes("sharp for enhanced image variant")) {
     return "image-preprocessing";
   }
   if (message.includes("llama-server") || message.includes("bundled llama-server") || message.includes("timed out while waiting")) {

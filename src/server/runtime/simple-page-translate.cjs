@@ -32,6 +32,14 @@ function createDetailedError(message, detail = {}, cause) {
   return error;
 }
 
+function loadSharp() {
+  try {
+    return require("sharp");
+  } catch (error) {
+    throw createDetailedError("Failed to load sharp for enhanced image variant creation.", {}, error);
+  }
+}
+
 function buildOptionSummary(options = {}) {
   const launchTarget = inspectModelLaunch(options);
   return {
@@ -659,88 +667,43 @@ async function fileToModelAsset(filePath) {
 }
 
 async function buildEnhancedVariant(options) {
-  return await buildEnhancedVariantWithPowerShell(options);
-}
-
-async function buildEnhancedVariantWithPowerShell(options) {
   const outputPath = path.join(options.outputDir, "input-enhanced.png");
-  const scriptPath = path.join(__dirname, "build-page-variant.ps1");
-  const args = [
-    "-NoProfile",
-    "-ExecutionPolicy",
-    "Bypass",
-    "-File",
-    scriptPath,
-    "-Path",
-    options.imagePath,
-    "-OutputPath",
-    outputPath,
-    "-MaxLongSide",
-    String(options.enhancedMaxLongSide),
-    "-Contrast",
-    String(options.enhancedContrast),
-    "-Grayscale"
-  ];
+  const outputDir = path.dirname(outputPath);
+  const maxLongSide = Math.max(1, Math.round(Number(options.enhancedMaxLongSide) || 1900));
+  const contrast = Number.isFinite(Number(options.enhancedContrast)) ? Number(options.enhancedContrast) : 1.35;
+  const translation = ((1 - contrast) / 2) * 255;
 
-  await new Promise((resolve, reject) => {
-    const child = spawn("powershell", args, {
-      cwd: resolveWorkingDir(options),
-      stdio: ["ignore", "pipe", "pipe"],
-      shell: false,
-      env: process.env
-    });
+  await mkdir(outputDir, { recursive: true });
 
-    let stdout = "";
-    let stderr = "";
-    child.stdout?.setEncoding("utf8");
-    child.stderr?.setEncoding("utf8");
-    child.stdout?.on("data", (chunk) => {
-      stdout = shrinkBuffer(stdout, chunk, 4000);
-    });
-    child.stderr?.on("data", (chunk) => {
-      stderr = shrinkBuffer(stderr, chunk, 4000);
-    });
-    child.on("error", (error) => {
-      reject(
-        createDetailedError(
-          "Failed to launch build-page-variant.ps1.",
-          {
-            scriptPath,
-            imagePath: options.imagePath,
-            outputPath,
-            stdout: truncateText(stdout, 4000),
-            stderr: truncateText(stderr, 4000),
-            parameters: {
-              maxLongSide: options.enhancedMaxLongSide,
-              contrast: options.enhancedContrast,
-              grayscale: true
-            }
-          },
-          error
-        )
-      );
-    });
-    child.on("exit", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(
-        createDetailedError(`build-page-variant.ps1 failed (${code ?? "null"}).`, {
-          scriptPath,
-          imagePath: options.imagePath,
-          outputPath,
-          stdout: truncateText(stdout.trim(), 4000),
-          stderr: truncateText(stderr.trim(), 4000),
-          parameters: {
-            maxLongSide: options.enhancedMaxLongSide,
-            contrast: options.enhancedContrast,
-            grayscale: true
-          }
-        })
-      );
-    });
-  });
+  try {
+    await loadSharp()(options.imagePath, { failOn: "none" })
+      .rotate()
+      .resize({
+        width: maxLongSide,
+        height: maxLongSide,
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .grayscale()
+      .linear(contrast, translation)
+      .flatten({ background: "#ffffff" })
+      .png()
+      .toFile(outputPath);
+  } catch (error) {
+    throw createDetailedError(
+      "Failed to create enhanced image variant with sharp.",
+      {
+        imagePath: options.imagePath,
+        outputPath,
+        parameters: {
+          maxLongSide,
+          contrast,
+          grayscale: true
+        }
+      },
+      error
+    );
+  }
 
   return outputPath;
 }
@@ -750,7 +713,11 @@ async function prepareImageVariants(options) {
   let diagnostics = [];
   if (options.includeEnhancedVariant) {
     try {
-      variants.push({ role: "enhanced", path: await buildEnhancedVariant(options) });
+      const enhancedPath = await buildEnhancedVariant(options);
+      variants.push({ role: "enhanced", path: enhancedPath });
+      process.stderr.write(
+        `[runtime:${options.label}:info] enhanced PNG variant ready; including original and enhanced images (${enhancedPath})\n`
+      );
     } catch (error) {
       diagnostics = [buildEnhancedVariantFailureDetail(error, options)];
       process.stderr.write(

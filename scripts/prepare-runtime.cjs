@@ -1,4 +1,4 @@
-const { copyFileSync, existsSync, mkdirSync, readdirSync } = require("node:fs");
+const { copyFileSync, existsSync, mkdirSync, readdirSync, rmSync } = require("node:fs");
 const { join } = require("node:path");
 
 function prepareRuntimeAssets(options = {}) {
@@ -11,6 +11,12 @@ function prepareRuntimeAssets(options = {}) {
   }
 
   mkdirSync(outputDir, { recursive: true });
+
+  for (const entry of readdirSync(outputDir, { withFileTypes: true })) {
+    if (entry.isFile()) {
+      rmSync(join(outputDir, entry.name));
+    }
+  }
 
   for (const entry of readdirSync(sourceDir, { withFileTypes: true })) {
     if (!entry.isFile()) {
