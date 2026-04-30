@@ -258,6 +258,11 @@ const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;
 const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
 const INPAINT_MASK_BRUSH_SIZE_MIN = 4;
 const INPAINT_MASK_BRUSH_SIZE_MAX = 96;
+const INPAINT_TOOL_SHORTCUTS: Record<InpaintTool, string> = {
+  select: "M",
+  brush: "B",
+  eraser: "E"
+};
 
 type InpaintToolIconName = InpaintResultTool;
 
@@ -267,6 +272,8 @@ type InpaintToolButtonProps = {
   icon: InpaintToolIconName;
   label: string;
   onClick: () => void;
+  shortcut?: string;
+  text?: string;
 };
 
 type CompactNumberControlProps = {
@@ -334,20 +341,46 @@ function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Ele
   }
 }
 
-function InpaintToolButton({ active, disabled, icon, label, onClick }: InpaintToolButtonProps): React.JSX.Element {
+function InpaintToolButton({ active, disabled, icon, label, onClick, shortcut, text }: InpaintToolButtonProps): React.JSX.Element {
+  const title = shortcut ? `${label} (${shortcut})` : label;
+  const displayLabel = text ?? label;
   return (
     <button
       type="button"
       className={`tool-option ${active ? "active" : ""}`}
       aria-pressed={active}
-      title={label}
+      aria-label={title}
+      aria-keyshortcuts={shortcut}
+      title={title}
       onClick={onClick}
       disabled={disabled}
     >
       <InpaintToolIcon name={icon} />
-      <span className="tool-option-label">{label}</span>
+      <span className="tool-option-label">{shortcut ? `${displayLabel} (${shortcut})` : displayLabel}</span>
     </button>
   );
+}
+
+function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
+  switch (event.code) {
+    case "KeyM":
+      return "select";
+    case "KeyB":
+      return "brush";
+    case "KeyE":
+      return "eraser";
+  }
+
+  switch (event.key.toLowerCase()) {
+    case "m":
+      return "select";
+    case "b":
+      return "brush";
+    case "e":
+      return "eraser";
+    default:
+      return null;
+  }
 }
 
 function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
@@ -599,8 +632,6 @@ export default function App(): React.JSX.Element {
     () => buildFontFamilyOptions(systemFonts, fontControlValues?.fontFamily),
     [fontControlValues?.fontFamily, systemFonts]
   );
-  const canUndoInpaint = selectedPage ? (inpaintUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
-  const canUndoInpaintResult = selectedPage ? (inpaintResultUndoStackRef.current.get(selectedPage.id)?.length ?? 0) > 0 : false;
   const jobActive = ["starting", "running", "cancelling"].includes(jobState.status);
   const libraryChapterCount = useMemo(() => library.works.reduce((total, work) => total + work.chapters.length, 0), [library.works]);
   const selectedPageEditLocked = Boolean(jobActive && selectedPage && selectedPage.analysisStatus !== "completed");
@@ -1931,13 +1962,6 @@ export default function App(): React.JSX.Element {
     restorePageInpaintMaskSnapshot(pageId, previousSnapshot);
   }, [consumeGlobalUndoEntry, restorePageInpaintMaskSnapshot, selectedPageEditLocked]);
 
-  const undoSelectedPageInpaint = useCallback(() => {
-    if (!selectedPage) {
-      return;
-    }
-    undoPageInpaint(selectedPage.id);
-  }, [selectedPage, undoPageInpaint]);
-
   const undoPageInpaintResult = useCallback((pageId: string) => {
     if (selectedPageEditLocked) {
       return;
@@ -1985,13 +2009,6 @@ export default function App(): React.JSX.Element {
       dataUrl: previousDataUrl
     });
   }, [consumeGlobalUndoEntry, scheduleInpaintResultSave, selectedPageEditLocked]);
-
-  const undoSelectedPageInpaintResult = useCallback(() => {
-    if (!selectedPage) {
-      return;
-    }
-    undoPageInpaintResult(selectedPage.id);
-  }, [selectedPage, undoPageInpaintResult]);
 
   const globalUndoActions = useMemo<GlobalUndoAction[]>(() => {
     const chapterId = currentChapter?.id;
@@ -2537,6 +2554,19 @@ export default function App(): React.JSX.Element {
         return;
       }
 
+      const inpaintToolShortcut = !modalOpen && !editableTarget && !event.altKey && !event.ctrlKey && !event.metaKey
+        ? resolveInpaintToolShortcut(event)
+        : null;
+      const inpaintToolShortcutEnabled =
+        !selectedPageEditLocked &&
+        ((activeLayer === "inpaintMask" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
+          (activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
+      if (inpaintToolShortcut && inpaintToolShortcutEnabled) {
+        event.preventDefault();
+        selectSharedInpaintTool(inpaintToolShortcut);
+        return;
+      }
+
       const selectionClearShortcut =
         (event.key === "Delete" || event.key === "Backspace") &&
         !modalOpen &&
@@ -2609,10 +2639,13 @@ export default function App(): React.JSX.Element {
     inpaintResultTool,
     inpaintSelectionRect,
     inpaintTool,
+    layerVisibility,
     libraryWidgetOpen,
     modalOpen,
     pushStatus,
+    selectSharedInpaintTool,
     selectPageForReading,
+    selectedPageEditLocked,
     undoShortcutPlatform
   ]);
 
@@ -3036,6 +3069,8 @@ export default function App(): React.JSX.Element {
               active={inpaintTool === "select"}
               icon="select"
               label="범위 선택"
+              text="범위"
+              shortcut={INPAINT_TOOL_SHORTCUTS.select}
               onClick={() => selectSharedInpaintTool("select")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
             />
@@ -3043,6 +3078,7 @@ export default function App(): React.JSX.Element {
               active={inpaintTool === "brush"}
               icon="brush"
               label="브러시"
+              shortcut={INPAINT_TOOL_SHORTCUTS.brush}
               onClick={() => selectSharedInpaintTool("brush")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
             />
@@ -3050,6 +3086,7 @@ export default function App(): React.JSX.Element {
               active={inpaintTool === "eraser"}
               icon="eraser"
               label="지우개"
+              shortcut={INPAINT_TOOL_SHORTCUTS.eraser}
               onClick={() => selectSharedInpaintTool("eraser")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
             />
@@ -3070,9 +3107,6 @@ export default function App(): React.JSX.Element {
             </label>
           </div>
           <div className="result-action-grid mask-action-grid">
-            <button type="button" onClick={undoSelectedPageInpaint} disabled={selectedPageEditLocked || !canUndoInpaint}>
-              되돌리기
-            </button>
             <button type="button" onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
               선택 해제
             </button>
@@ -3090,6 +3124,13 @@ export default function App(): React.JSX.Element {
             >
               인페인트 마스크 비우기
             </button>
+            <button
+              type="button"
+              onClick={() => void rerunInpaintForSelection()}
+              disabled={selectedPageEditLocked || inpaintBusy || !inpaintSelectionRect || !(selectedPage?.inpaintMaskDataUrl ?? selectedPage?.inpaintLayerDataUrl)}
+            >
+              선택 범위만 다시 인페인트
+            </button>
           </div>
         </>
       ) : activeLayer === "image" ? (
@@ -3103,6 +3144,8 @@ export default function App(): React.JSX.Element {
               active={inpaintResultTool === "select"}
               icon="select"
               label="범위 선택"
+              text="범위"
+              shortcut={INPAINT_TOOL_SHORTCUTS.select}
               onClick={() => selectSharedInpaintTool("select")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
@@ -3110,6 +3153,7 @@ export default function App(): React.JSX.Element {
               active={inpaintResultTool === "brush"}
               icon="brush"
               label="브러시"
+              shortcut={INPAINT_TOOL_SHORTCUTS.brush}
               onClick={() => selectSharedInpaintTool("brush")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
@@ -3117,6 +3161,7 @@ export default function App(): React.JSX.Element {
               active={inpaintResultTool === "eraser"}
               icon="eraser"
               label="지우개"
+              shortcut={INPAINT_TOOL_SHORTCUTS.eraser}
               onClick={() => selectSharedInpaintTool("eraser")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
@@ -3156,7 +3201,7 @@ export default function App(): React.JSX.Element {
               </span>
             </label>
             <label className="compact-tool-field result-size-field">
-              <span>브러시 크기</span>
+              <span>크기</span>
               <CompactNumberControl
                 ariaLabel="결과 브러시 크기"
                 min={INPAINT_RESULT_BRUSH_SIZE_MIN}
@@ -3202,9 +3247,6 @@ export default function App(): React.JSX.Element {
             </label>
           </div>
           <div className="result-action-grid">
-            <button type="button" onClick={undoSelectedPageInpaintResult} disabled={selectedPageEditLocked || !canUndoInpaintResult}>
-              되돌리기
-            </button>
             <button type="button" onClick={() => setInpaintSelectionRect(null)} disabled={selectedPageEditLocked || !inpaintSelectionRect}>
               선택 해제
             </button>
@@ -3705,9 +3747,7 @@ export default function App(): React.JSX.Element {
           onDuplicate={duplicateSelectedBlock}
           onApplyInpaint={() => void applyInpaintSelectedBlock()}
           onApplyBatchInpaint={() => void applyInpaintAllBlocks()}
-          onUndoInpaint={undoSelectedPageInpaint}
           batchInpaintDisabled={selectedPageEditLocked || inpaintBusy || !selectedPage || selectedPage.blocks.length === 0}
-          undoInpaintDisabled={selectedPageEditLocked || !canUndoInpaint}
         />
       </aside>
 

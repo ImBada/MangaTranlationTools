@@ -12,9 +12,7 @@ type EditorPanelProps = {
   onDuplicate: () => void;
   onApplyInpaint: () => void;
   onApplyBatchInpaint: () => void;
-  onUndoInpaint: () => void;
   batchInpaintDisabled: boolean;
-  undoInpaintDisabled: boolean;
 };
 
 export function EditorPanel({
@@ -27,9 +25,7 @@ export function EditorPanel({
   onDuplicate,
   onApplyInpaint,
   onApplyBatchInpaint,
-  onUndoInpaint,
-  batchInpaintDisabled,
-  undoInpaintDisabled
+  batchInpaintDisabled
 }: EditorPanelProps): React.JSX.Element {
   if (!block) {
     return (
@@ -41,9 +37,6 @@ export function EditorPanel({
         </button>
         <button className="primary" onClick={onApplyBatchInpaint} disabled={batchInpaintDisabled}>
           전체 블록 인페인트
-        </button>
-        <button onClick={onUndoInpaint} disabled={undoInpaintDisabled}>
-          인페인트 되돌리기
         </button>
       </section>
     );
@@ -156,7 +149,6 @@ export function EditorPanel({
       <div className="block-actions">
         <button className="primary block-action" onClick={onApplyInpaint} disabled={disabled}>인페인트 실행</button>
         <button className="block-action" onClick={onDuplicate} disabled={disabled}>복제</button>
-        <button className="block-action" onClick={onUndoInpaint} disabled={undoInpaintDisabled}>되돌리기</button>
         <button className="danger block-action" onClick={onDelete} disabled={disabled}>삭제</button>
       </div>
     </section>
