@@ -53,7 +53,7 @@ npm run app:dev
 npm run app:build
 ```
 
-패키징 결과물은 `dist-app/`에 생성됩니다. 앱으로 실행할 때 저장 데이터는 `Documents/MangaTranslationTools/`에 만들어집니다. 웹 서버 방식처럼 저장 위치를 직접 지정하려면 실행 전에 `MANGA_TRANSLATOR_DATA_DIR`을 설정하면 됩니다.
+패키징 결과물은 `dist-app/`에 생성됩니다. 웹 서버와 앱 모두 기본 저장 데이터는 `Documents/MangaTranslationTools/`에 만들어집니다. 저장 위치를 직접 지정하려면 실행 전에 `MANGA_TRANSLATOR_DATA_DIR`을 설정하면 됩니다.
 
 ## 설정
 
@@ -65,7 +65,20 @@ npm run app:build
 
 ## LaMa 인페인트
 
-기본 인페인트는 앱 내장 `local-fill-fallback`으로 동작합니다. LaMa 품질로 실행하려면 `mayocream/lama-manga` 모델 환경을 준비하고 서버 실행 전에 아래 환경 변수를 지정하세요.
+기본 인페인트는 앱 내장 `local-fill-fallback`으로 동작합니다. LaMa용 Python 환경과 Er0mangaInpaint 코드는 `Documents/MangaTranslationTools/tools/` 아래에 준비됩니다.
+
+모델 파일은 자동 다운로드하지 않습니다. 아래 파일을 직접 다운로드해서 지정된 경로에 저장하세요.
+
+- 다운로드: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`
+- 저장 경로: `Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`
+
+웹 개발 환경에서 직접 준비하려면:
+
+```powershell
+npm run lama:prepare
+```
+
+기존 저장소 내부 `tools/`를 쓰고 싶다면 서버 실행 전에 아래 환경 변수를 지정하세요.
 
 ```powershell
 ./scripts/prepare-lama-manga-inpaint.sh

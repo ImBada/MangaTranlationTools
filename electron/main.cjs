@@ -51,11 +51,12 @@ process.on("SIGTERM", () => {
 async function startApp() {
   const port = process.env.MANGA_TRANSLATOR_PORT ? preferredPort : await findFreePort(preferredPort);
   const appRoot = process.env.MANGA_TRANSLATOR_APP_ROOT?.trim() || app.getAppPath();
+  const dataRoot = process.env.MANGA_TRANSLATOR_DATA_DIR?.trim() || path.join(app.getPath("documents"), "MangaTranslationTools");
   serverUrl = `http://127.0.0.1:${port}`;
 
   process.env.MANGA_TRANSLATOR_PORT = String(port);
   process.env.MANGA_TRANSLATOR_APP_ROOT ||= appRoot;
-  process.env.MANGA_TRANSLATOR_DATA_DIR ||= path.join(app.getPath("documents"), "MangaTranslationTools");
+  process.env.MANGA_TRANSLATOR_DATA_DIR ||= dataRoot;
   process.env.NODE_ENV ||= "production";
 
   require(path.join(appRoot, "out", "server", "index.js"));

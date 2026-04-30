@@ -1,6 +1,6 @@
 {
   "name": "manga-translation-tools",
-  "version": "0.1.6",
+  "version": "0.9.1",
   "description": "Browser-based manga translation overlay editor powered by an OpenAI-compatible API endpoint.",
   "type": "commonjs",
   "main": "out/server/index.js",
@@ -13,6 +13,7 @@
     "start": "node out/server/index.js",
     "compile:server": "tsc -p tsconfig.server.json",
     "logs": "node scripts/tail-log.cjs",
+    "lama:prepare": "node scripts/prepare-lama-runtime.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "preview": "npm run build && node scripts/preview.cjs"
@@ -53,12 +54,17 @@
     "files": [
       "electron/**/*",
       "out/**/*",
+      "scripts/lama-inpaint.py",
+      "scripts/prepare-lama-runtime.cjs",
       "package.json"
     ],
     "asarUnpack": [
       "node_modules/sharp/**/*",
       "node_modules/@img/**/*",
+      "node_modules/adm-zip/**/*",
       "out/app-runtime/**/*",
+      "scripts/lama-inpaint.py",
+      "scripts/prepare-lama-runtime.cjs",
       "tools/**/*"
     ],
     "mac": {

@@ -238,6 +238,31 @@ export type InpaintPageResult = {
   engine: InpaintEngine;
 };
 
+export type LamaRuntimeStatus = {
+  pythonAvailable: boolean;
+  pythonCommand: string | null;
+  pythonInstallCommand: string;
+  pythonInstallHelp: string[];
+  runtimeReady: boolean;
+  runtimePreparing: boolean;
+  modelExists: boolean;
+  modelDownloading: boolean;
+  modelPath: string;
+  modelUrl: string;
+  logPath: string;
+  lastError?: string;
+};
+
+export type UpdateStatus = {
+  currentVersion: string;
+  latestVersion: string | null;
+  updateAvailable: boolean;
+  checkedAt: string;
+  releaseUrl: string | null;
+  releaseName: string | null;
+  error?: string;
+};
+
 export type SaveInpaintMaskRequest = {
   chapterId: string;
   pageId: string;

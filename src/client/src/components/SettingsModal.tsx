@@ -2,9 +2,11 @@ import React from "react";
 import type {
   AppSettings,
   CodexReasoningEffort,
+  LamaRuntimeStatus,
   ModelProvider,
   ModelSource,
-  TranslationMode
+  TranslationMode,
+  UpdateStatus
 } from "../../../shared/types";
 
 const MAX_GPU_LAYERS = 30;
@@ -65,6 +67,11 @@ type TestState =
       message: string;
       detail: string | null;
     };
+
+type LamaActionState = {
+  status: "idle" | "running" | "success" | "error";
+  message: string | null;
+};
 
 const TRANSLATION_MODE_OPTIONS: TranslationModeOption[] = [
   {
@@ -173,6 +180,10 @@ export function SettingsModal({
   const [nsfwMode, setNsfwMode] = React.useState(safeInitialSettings.nsfwMode);
   const [localActionBusy, setLocalActionBusy] = React.useState(false);
   const [testState, setTestState] = React.useState<TestState>({ status: "idle", message: null, detail: null });
+  const [lamaStatus, setLamaStatus] = React.useState<LamaRuntimeStatus | null>(null);
+  const [lamaActionState, setLamaActionState] = React.useState<LamaActionState>({ status: "idle", message: null });
+  const [updateStatus, setUpdateStatus] = React.useState<UpdateStatus | null>(null);
+  const [updateBusy, setUpdateBusy] = React.useState(false);
   const modelRepoInputRef = React.useRef<HTMLInputElement | null>(null);
   const localModelInputRef = React.useRef<HTMLInputElement | null>(null);
   const gpuSliderRef = React.useRef<HTMLInputElement | null>(null);
@@ -196,6 +207,55 @@ export function SettingsModal({
     setNsfwMode(safeInitialSettings.nsfwMode);
     setTestState({ status: "idle", message: null, detail: null });
   }, [safeInitialSettings]);
+
+  React.useEffect(() => {
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const status = await window.mangaApi.getLamaRuntimeStatus();
+        if (!cancelled) {
+          setLamaStatus(status);
+        }
+      } catch {
+        if (!cancelled) {
+          setLamaStatus(null);
+        }
+      }
+    };
+    void loadStatus();
+    const interval = window.setInterval(() => {
+      if (lamaStatus?.runtimePreparing || lamaStatus?.modelDownloading) {
+        void loadStatus();
+      }
+    }, 2500);
+    return () => {
+      cancelled = true;
+      window.clearInterval(interval);
+    };
+  }, [lamaStatus?.modelDownloading, lamaStatus?.runtimePreparing]);
+
+  const refreshUpdateStatus = React.useCallback(async (refresh = false) => {
+    setUpdateBusy(true);
+    try {
+      setUpdateStatus(await window.mangaApi.getUpdateStatus(refresh));
+    } catch (error) {
+      setUpdateStatus({
+        currentVersion: __APP_VERSION__,
+        latestVersion: null,
+        updateAvailable: false,
+        checkedAt: new Date().toISOString(),
+        releaseUrl: null,
+        releaseName: null,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setUpdateBusy(false);
+    }
+  }, []);
+
+  React.useEffect(() => {
+    void refreshUpdateStatus(false);
+  }, [refreshUpdateStatus]);
 
   React.useEffect(() => {
     if (modelProvider === "openai-codex") {
@@ -421,6 +481,48 @@ export function SettingsModal({
     }
   };
 
+  const refreshLamaStatus = async () => {
+    try {
+      setLamaStatus(await window.mangaApi.getLamaRuntimeStatus());
+    } catch (error) {
+      setLamaActionState({ status: "error", message: error instanceof Error ? error.message : String(error) });
+    }
+  };
+
+  const prepareLamaRuntime = async () => {
+    setLocalActionBusy(true);
+    setLamaActionState({ status: "running", message: "LaMa Python 환경을 준비하는 중입니다." });
+    try {
+      const status = await window.mangaApi.prepareLamaRuntime();
+      setLamaStatus(status);
+      setLamaActionState({
+        status: status.pythonAvailable ? "success" : "error",
+        message: status.pythonAvailable ? "LaMa 환경 준비를 시작했습니다." : `Python 설치가 필요합니다: ${status.pythonInstallCommand}`
+      });
+    } catch (error) {
+      setLamaActionState({ status: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLocalActionBusy(false);
+    }
+  };
+
+  const downloadLamaModel = async () => {
+    setLocalActionBusy(true);
+    setLamaActionState({ status: "running", message: "LaMa 모델 다운로드를 시작하는 중입니다." });
+    try {
+      const status = await window.mangaApi.downloadLamaModel();
+      setLamaStatus(status);
+      setLamaActionState({
+        status: "success",
+        message: status.modelExists ? "LaMa 모델이 이미 준비되어 있습니다." : "LaMa 모델 다운로드를 시작했습니다."
+      });
+    } catch (error) {
+      setLamaActionState({ status: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setLocalActionBusy(false);
+    }
+  };
+
   return (
     <div className="modal-backdrop">
       <div className="modal-card settings-modal">
@@ -497,6 +599,34 @@ export function SettingsModal({
             </button>
           </label>
           <p className="muted-line">켜두면 시스템 프롬프트에 NSFW 허용 지시문을 추가합니다.</p>
+
+          <div className="settings-field-stack">
+            <span>LaMa 인페인트</span>
+            <div className="settings-runtime-grid">
+              <RuntimeState label="Python" ready={Boolean(lamaStatus?.pythonAvailable)} busy={false} />
+              <RuntimeState label="런타임" ready={Boolean(lamaStatus?.runtimeReady)} busy={Boolean(lamaStatus?.runtimePreparing)} />
+              <RuntimeState label="모델" ready={Boolean(lamaStatus?.modelExists)} busy={Boolean(lamaStatus?.modelDownloading)} />
+            </div>
+            <div className="settings-inline-actions">
+              <button type="button" onClick={() => void prepareLamaRuntime()} disabled={controlsBusy || Boolean(lamaStatus?.runtimePreparing)}>
+                {lamaStatus?.runtimePreparing ? "준비 중..." : "환경 준비"}
+              </button>
+              <button type="button" onClick={() => void downloadLamaModel()} disabled={controlsBusy || Boolean(lamaStatus?.modelDownloading)}>
+                {lamaStatus?.modelDownloading ? "다운로드 중..." : "모델 다운로드"}
+              </button>
+              <button type="button" onClick={() => void refreshLamaStatus()} disabled={controlsBusy}>
+                새로고침
+              </button>
+            </div>
+            {lamaStatus && !lamaStatus.pythonAvailable ? <PythonInstallHelp status={lamaStatus} compact /> : null}
+            {lamaStatus ? <p className="muted-line modal-note">모델 경로: {lamaStatus.modelPath}</p> : null}
+            {lamaStatus?.lastError ? <p className="muted-line modal-note">최근 오류: {lamaStatus.lastError}</p> : null}
+            {lamaActionState.message ? (
+              <div className={`settings-test-result ${lamaActionState.status === "error" ? "error" : lamaActionState.status === "success" ? "success" : ""}`}>
+                <strong>{lamaActionState.message}</strong>
+              </div>
+            ) : null}
+          </div>
 
           {modelProvider === "gemma" ? (
             <>
@@ -828,6 +958,21 @@ export function SettingsModal({
           ) : null}
         </section>
 
+        <div className={`settings-version ${updateStatus?.updateAvailable ? "update-available" : ""}`}>
+          <div>
+            <strong>MangaTranslationTools v{__APP_VERSION__}</strong>
+            <span>{resolveUpdateStatusText(updateStatus, updateBusy)}</span>
+          </div>
+          {updateStatus?.updateAvailable && updateStatus.releaseUrl ? (
+            <a href={updateStatus.releaseUrl} target="_blank" rel="noreferrer">
+              업데이트 열기
+            </a>
+          ) : null}
+          <button type="button" onClick={() => void refreshUpdateStatus(true)} disabled={updateBusy}>
+            {updateBusy ? "확인 중" : "다시 확인"}
+          </button>
+        </div>
+
         <div className="modal-actions settings-actions">
           <button onClick={onReset} disabled={controlsBusy}>
             기본값 복원
@@ -840,6 +985,46 @@ export function SettingsModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+function resolveUpdateStatusText(status: UpdateStatus | null, busy: boolean): string {
+  if (busy && !status) {
+    return "업데이트 확인 중...";
+  }
+  if (!status) {
+    return "업데이트 확인 대기 중";
+  }
+  if (status.error) {
+    return `업데이트 확인 실패: ${status.error}`;
+  }
+  if (status.updateAvailable && status.latestVersion) {
+    return `새 버전 v${status.latestVersion} 사용 가능`;
+  }
+  if (status.latestVersion) {
+    return "최신 버전입니다.";
+  }
+  return "최신 릴리스 정보를 찾지 못했습니다.";
+}
+
+function RuntimeState({ label, ready, busy }: { label: string; ready: boolean; busy: boolean }): React.JSX.Element {
+  return (
+    <div className={`settings-runtime-state ${ready ? "ready" : busy ? "busy" : "missing"}`}>
+      <span>{label}</span>
+      <strong>{ready ? "준비됨" : busy ? "진행 중" : "필요"}</strong>
+    </div>
+  );
+}
+
+function PythonInstallHelp({ status, compact = false }: { status: LamaRuntimeStatus; compact?: boolean }): React.JSX.Element {
+  return (
+    <div className={compact ? "settings-python-help compact" : "settings-python-help"}>
+      <strong>Python 설치가 필요합니다.</strong>
+      <code>{status.pythonInstallCommand}</code>
+      {status.pythonInstallHelp.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
     </div>
   );
 }

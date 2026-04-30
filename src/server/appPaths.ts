@@ -1,4 +1,5 @@
 import { mkdirSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 
 export type AppPaths = {
@@ -20,7 +21,7 @@ export function getAppPaths(): AppPaths {
     ? resolve(process.env.MANGA_TRANSLATOR_APP_ROOT)
     : resolve(__dirname, "../..");
   const executableDir = dirname(process.execPath);
-  const dataRoot = process.env.MANGA_TRANSLATOR_DATA_DIR?.trim() || repoRoot;
+  const dataRoot = process.env.MANGA_TRANSLATOR_DATA_DIR?.trim() || defaultDataRoot();
   const libraryDir = join(dataRoot, "library");
   const logsDir = join(dataRoot, "logs");
   const runtimeDir = join(repoRoot, "out", "app-runtime");
@@ -43,6 +44,10 @@ export function getAppPaths(): AppPaths {
     hfHomeDir,
     hfHubCacheDir
   };
+}
+
+function defaultDataRoot(): string {
+  return join(homedir(), "Documents", "MangaTranslationTools");
 }
 
 export function ensureWritableAppDirectories(): AppPaths {

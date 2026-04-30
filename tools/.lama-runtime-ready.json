@@ -1,0 +1,8 @@
+{
+  "ok": true,
+  "runtimeVersion": 1,
+  "pythonPath": "/Users/bada/Documents/GitHub/MangaTranlationTools/tools/lama-manga-venv/bin/python",
+  "codeDir": "/Users/bada/Documents/GitHub/MangaTranlationTools/tools/Er0mangaInpaint",
+  "modelPath": "/Users/bada/Documents/GitHub/MangaTranlationTools/models/lama-manga/lama-manga.safetensors",
+  "modelExists": true
+}

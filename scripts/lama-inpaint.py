@@ -11,6 +11,7 @@ Default model:
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -22,8 +23,13 @@ from safetensors.torch import load_file
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAMA_CODE_DIR = REPO_ROOT / "tools" / "Er0mangaInpaint"
-DEFAULT_WEIGHTS = REPO_ROOT / "tools" / "inpaint-models" / "mayocream-lama-manga" / "lama-manga.safetensors"
+LAMA_CODE_DIR = Path(os.environ.get("MANGA_TRANSLATOR_LAMA_CODE_DIR", REPO_ROOT / "tools" / "Er0mangaInpaint"))
+DEFAULT_WEIGHTS = Path(
+    os.environ.get(
+        "MANGA_TRANSLATOR_LAMA_WEIGHTS",
+        REPO_ROOT / "tools" / "inpaint-models" / "mayocream-lama-manga" / "lama-manga.safetensors",
+    )
+)
 
 if str(LAMA_CODE_DIR) not in sys.path:
     sys.path.insert(0, str(LAMA_CODE_DIR))

@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       tag_name:
-        description: "Release tag to create or update (example: v0.1.0)"
+        description: "Release tag to create or update (example: v0.1.6)"
         required: true
         type: string
 
@@ -16,7 +16,22 @@ permissions:
 
 jobs:
   build-and-release:
-    runs-on: windows-latest
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            files: |
+              dist-app/*.exe
+              dist-app/*.zip
+          - name: macOS
+            os: macos-latest
+            files: |
+              dist-app/*.dmg
+              dist-app/*-mac.zip
 
     steps:
       - name: Check out repository
@@ -31,32 +46,19 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Download bundled llama runtime
-        shell: pwsh
-        run: |
-          $runtimeDir = Join-Path $PWD "tools/llama-b8833-cuda12.4"
-          $binZip = Join-Path $env:RUNNER_TEMP "llama-b8833-bin-win-cuda-12.4-x64.zip"
-          $cudaZip = Join-Path $env:RUNNER_TEMP "cudart-llama-bin-win-cuda-12.4-x64.zip"
-
-          New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
-          Invoke-WebRequest -Uri "https://github.com/ggml-org/llama.cpp/releases/download/b8833/llama-b8833-bin-win-cuda-12.4-x64.zip" -OutFile $binZip
-          Invoke-WebRequest -Uri "https://github.com/ggml-org/llama.cpp/releases/download/b8833/cudart-llama-bin-win-cuda-12.4-x64.zip" -OutFile $cudaZip
-          Expand-Archive -Path $binZip -DestinationPath $runtimeDir -Force
-          Expand-Archive -Path $cudaZip -DestinationPath $runtimeDir -Force
-
-      - name: Build Windows release
-        run: npm run build && npx electron-builder --config electron-builder.config.cjs --win nsis --x64 --publish never
+      - name: Build desktop app
+        run: npm run app:build
 
       - name: Resolve release metadata
         id: release_meta
-        shell: pwsh
+        shell: bash
         run: |
-          if ("${{ github.event_name }}" -eq "workflow_dispatch") {
-            "tag=${{ inputs.tag_name }}" >> $env:GITHUB_OUTPUT
-          } else {
-            "tag=${{ github.ref_name }}" >> $env:GITHUB_OUTPUT
-          }
-          "target=${{ github.sha }}" >> $env:GITHUB_OUTPUT
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "target=${{ github.sha }}" >> "$GITHUB_OUTPUT"
 
       - name: Publish GitHub release assets
         uses: softprops/action-gh-release@v2
@@ -65,5 +67,4 @@ jobs:
           target_commitish: ${{ steps.release_meta.outputs.target }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: |
-            dist/망가번역기 Setup *.exe
+          files: ${{ matrix.files }}

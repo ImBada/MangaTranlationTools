@@ -7,6 +7,7 @@ import type {
   ImportPreviewResult,
   InpaintSettings,
   JobState,
+  LamaRuntimeStatus,
   LibraryIndex,
   MangaPage,
   SystemFont,
@@ -216,6 +217,41 @@ const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
   featherPx: 0,
   tileSize: 1024
 };
+const FORCE_INCOMPLETE_LAMA_NOTICE = false;
+type LamaNoticePlatform = "darwin" | "win32" | "linux";
+
+const LAMA_TEST_PLATFORM_OPTIONS: { label: string; value: LamaNoticePlatform }[] = [
+  { label: "macOS", value: "darwin" },
+  { label: "Windows", value: "win32" },
+  { label: "Linux", value: "linux" }
+];
+
+const LAMA_TEST_INSTALL_GUIDE: Record<LamaNoticePlatform, { command: string; help: string[] }> = {
+  darwin: {
+    command: "brew install python@3.11",
+    help: [
+      "Homebrew가 있으면 터미널에서 위 명령을 실행하세요.",
+      "Homebrew가 없으면 https://www.python.org/downloads/macos/ 에서 Python 3.11 이상 macOS installer를 설치하세요.",
+      "설치 후 터미널에서 `python3 --version`이 동작하는지 확인한 뒤 앱에서 새로고침을 누르세요."
+    ]
+  },
+  win32: {
+    command: "winget install Python.Python.3.11",
+    help: [
+      "Windows 터미널에서 위 명령을 실행하세요.",
+      "winget을 쓸 수 없으면 https://www.python.org/downloads/windows/ 에서 Python 3.11 이상 installer를 받고, 설치 중 Add python.exe to PATH를 켜세요.",
+      "설치 후 새 터미널에서 `py -3.11 --version` 또는 `python --version`을 확인한 뒤 앱에서 새로고침을 누르세요."
+    ]
+  },
+  linux: {
+    command: "sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv",
+    help: [
+      "Debian/Ubuntu 계열은 위 명령을 실행하세요.",
+      "다른 배포판은 패키지 매니저로 Python 3.11 이상과 venv 모듈을 설치하세요.",
+      "설치 후 `python3 --version`이 동작하는지 확인한 뒤 앱에서 새로고침을 누르세요."
+    ]
+  }
+};
 
 const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;
 const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
@@ -419,6 +455,10 @@ export default function App(): React.JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBusy, setSettingsBusy] = useState(false);
+  const [lamaStatus, setLamaStatus] = useState<LamaRuntimeStatus | null>(null);
+  const [lamaActionBusy, setLamaActionBusy] = useState(false);
+  const [lamaActionMessage, setLamaActionMessage] = useState<string | null>(null);
+  const [lamaNoticePlatform, setLamaNoticePlatform] = useState<LamaNoticePlatform>("win32");
   const [stageViewScale, setStageViewScale] = useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = useState(0);
   const [dirty, setDirty] = useState(false);
@@ -549,6 +589,21 @@ export default function App(): React.JSX.Element {
   const statusIndicatorLabel = jobActive ? jobState.progressText : saveStatusLabel;
   const showNotificationDock = Boolean(selectedPageInpaintNotice || statusToastLine || statusWidgetOpen);
   const overlayBackgroundOpacity = selectedPage?.blocks[0]?.opacity ?? 1;
+  const displayedLamaStatus = FORCE_INCOMPLETE_LAMA_NOTICE && lamaStatus
+    ? {
+        ...lamaStatus,
+        pythonAvailable: false,
+        pythonInstallCommand: LAMA_TEST_INSTALL_GUIDE[lamaNoticePlatform].command,
+        pythonInstallHelp: LAMA_TEST_INSTALL_GUIDE[lamaNoticePlatform].help,
+        runtimeReady: false,
+        runtimePreparing: false,
+        modelExists: false,
+        modelDownloading: false
+      }
+    : lamaStatus;
+  const showLamaEmptyNotice = Boolean(
+    displayedLamaStatus && !(displayedLamaStatus.pythonAvailable && displayedLamaStatus.runtimeReady && displayedLamaStatus.modelExists)
+  );
 
   const zoomStage = useCallback((factor: number) => {
     setStageViewScale((current) => clampStageViewScale((current ?? currentStageScale) * factor));
@@ -591,6 +646,12 @@ export default function App(): React.JSX.Element {
     return next;
   }, []);
 
+  const refreshLamaStatus = useCallback(async () => {
+    const next = await window.mangaApi.getLamaRuntimeStatus();
+    setLamaStatus(next);
+    return next;
+  }, []);
+
   React.useEffect(() => {
     void refreshLibrary();
   }, [refreshLibrary]);
@@ -600,6 +661,24 @@ export default function App(): React.JSX.Element {
       console.error(error);
     });
   }, [refreshSettings]);
+
+  React.useEffect(() => {
+    void refreshLamaStatus().catch((error) => {
+      console.error(error);
+    });
+  }, [refreshLamaStatus]);
+
+  React.useEffect(() => {
+    if (!lamaStatus?.runtimePreparing && !lamaStatus?.modelDownloading) {
+      return;
+    }
+    const interval = window.setInterval(() => {
+      void refreshLamaStatus().catch((error) => {
+        console.error(error);
+      });
+    }, 2500);
+    return () => window.clearInterval(interval);
+  }, [lamaStatus?.modelDownloading, lamaStatus?.runtimePreparing, refreshLamaStatus]);
 
   React.useEffect(() => {
     void window.mangaApi
@@ -2583,6 +2662,44 @@ export default function App(): React.JSX.Element {
     }
   }, [pushStatus]);
 
+  const prepareLamaFromEmptyState = useCallback(async () => {
+    if (FORCE_INCOMPLETE_LAMA_NOTICE) {
+      setLamaActionMessage("테스트 표시 모드입니다. 실제 환경 준비는 실행하지 않습니다.");
+      return;
+    }
+    setLamaActionBusy(true);
+    setLamaActionMessage("LaMa 환경 준비를 시작합니다.");
+    try {
+      const next = await window.mangaApi.prepareLamaRuntime();
+      setLamaStatus(next);
+      setLamaActionMessage(next.pythonAvailable ? "LaMa 환경 준비 중입니다." : `Python 설치가 필요합니다: ${next.pythonInstallCommand}`);
+    } catch (error) {
+      console.error(error);
+      setLamaActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLamaActionBusy(false);
+    }
+  }, []);
+
+  const downloadLamaModelFromEmptyState = useCallback(async () => {
+    if (FORCE_INCOMPLETE_LAMA_NOTICE) {
+      setLamaActionMessage("테스트 표시 모드입니다. 실제 모델 다운로드는 실행하지 않습니다.");
+      return;
+    }
+    setLamaActionBusy(true);
+    setLamaActionMessage("LaMa 모델 다운로드를 시작합니다.");
+    try {
+      const next = await window.mangaApi.downloadLamaModel();
+      setLamaStatus(next);
+      setLamaActionMessage(next.modelExists ? "LaMa 모델이 준비되어 있습니다." : "LaMa 모델 다운로드 중입니다.");
+    } catch (error) {
+      console.error(error);
+      setLamaActionMessage(error instanceof Error ? error.message : String(error));
+    } finally {
+      setLamaActionBusy(false);
+    }
+  }, []);
+
   const layerToolPanel = (
     <section className="layer-tool-panel left-tool-panel">
       <h2>{activeLayer === "overlay" ? "폰트 설정" : activeLayer === "inpaintMask" ? "마스크 도구" : activeLayer === "inpaintResult" ? "결과 레이어 도구" : "도구"}</h2>
@@ -3267,16 +3384,61 @@ export default function App(): React.JSX.Element {
             />
           </div>
         ) : (
-          <div className="empty-state max-w-xl text-center">
-            <h2>보관함에서 화를 열거나 새로 가져오세요.</h2>
-            <p>작품과 화 단위로 저장해두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.</p>
-            <div className="empty-actions flex flex-wrap justify-center gap-2.5">
-              <button onClick={() => selectImportFiles("images")}>이미지 열기</button>
-              <button onClick={() => selectImportFiles("folder")}>폴더 열기</button>
-              <button onClick={() => selectImportFiles("zip")}>압축파일 열기</button>
-              <button onClick={() => selectImportFiles("zip-folder")}>작품 일괄 번역</button>
-            </div>
-          </div>
+          <>
+            {showLamaEmptyNotice && displayedLamaStatus ? (
+              <div className="empty-state-stack max-w-xl">
+              <section className="empty-lama-card">
+                <div className="empty-lama-header">
+                  <h2>LaMa 인페인트 준비</h2>
+                  <button type="button" onClick={() => void refreshLamaStatus()} disabled={lamaActionBusy}>
+                    새로고침
+                  </button>
+                </div>
+                <div className="empty-lama-status-grid">
+                  <LamaStatusPill label="Python" ready={displayedLamaStatus.pythonAvailable} busy={false} />
+                  <LamaStatusPill label="런타임" ready={displayedLamaStatus.runtimeReady} busy={displayedLamaStatus.runtimePreparing} />
+                  <LamaStatusPill label="모델" ready={displayedLamaStatus.modelExists} busy={displayedLamaStatus.modelDownloading} />
+                </div>
+                {FORCE_INCOMPLETE_LAMA_NOTICE ? (
+                  <div className="empty-lama-test-platform" aria-label="테스트 OS">
+                    {LAMA_TEST_PLATFORM_OPTIONS.map((option) => (
+                      <button
+                        key={option.value}
+                        type="button"
+                        className={lamaNoticePlatform === option.value ? "active" : ""}
+                        onClick={() => setLamaNoticePlatform(option.value)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+                {!displayedLamaStatus.pythonAvailable ? <EmptyPythonInstallHelp status={displayedLamaStatus} /> : null}
+                <div className="empty-actions flex flex-wrap justify-center gap-2.5">
+                  <button type="button" onClick={() => void prepareLamaFromEmptyState()} disabled={lamaActionBusy || displayedLamaStatus.runtimePreparing}>
+                    {displayedLamaStatus.runtimePreparing ? "환경 준비 중" : "환경 준비"}
+                  </button>
+                  <button type="button" onClick={() => void downloadLamaModelFromEmptyState()} disabled={lamaActionBusy || displayedLamaStatus.modelDownloading}>
+                    {displayedLamaStatus.modelDownloading ? "모델 다운로드 중" : "모델 다운로드"}
+                  </button>
+                </div>
+                <p className="muted-line">모델 경로: {displayedLamaStatus.modelPath}</p>
+                {lamaActionMessage ? <p className="muted-line">{lamaActionMessage}</p> : null}
+              </section>
+              </div>
+            ) : (
+              <div className="empty-state max-w-xl text-center">
+              <h2>보관함에서 화를 열거나 새로 가져오세요.</h2>
+              <p>작품과 화 단위로 저장해두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.</p>
+              <div className="empty-actions flex flex-wrap justify-center gap-2.5">
+                <button onClick={() => selectImportFiles("images")}>이미지 열기</button>
+                <button onClick={() => selectImportFiles("folder")}>폴더 열기</button>
+                <button onClick={() => selectImportFiles("zip")}>압축파일 열기</button>
+                <button onClick={() => selectImportFiles("zip-folder")}>작품 일괄 번역</button>
+              </div>
+              </div>
+            )}
+          </>
         )}
       </section>
 
@@ -3445,6 +3607,27 @@ function reorderByTarget(currentOrder: string[], sourceId: string, targetId: str
   const [item] = next.splice(sourceIndex, 1);
   next.splice(targetIndex, 0, item);
   return next;
+}
+
+function LamaStatusPill({ label, ready, busy }: { label: string; ready: boolean; busy: boolean }): React.JSX.Element {
+  return (
+    <div className={`empty-lama-status ${ready ? "ready" : busy ? "busy" : "missing"}`}>
+      <span>{label}</span>
+      <strong>{ready ? "준비됨" : busy ? "진행 중" : "필요"}</strong>
+    </div>
+  );
+}
+
+function EmptyPythonInstallHelp({ status }: { status: LamaRuntimeStatus }): React.JSX.Element {
+  return (
+    <div className="empty-lama-python-help">
+      <strong>Python 설치가 필요합니다.</strong>
+      <code>{status.pythonInstallCommand}</code>
+      {status.pythonInstallHelp.map((line) => (
+        <p key={line}>{line}</p>
+      ))}
+    </div>
+  );
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {

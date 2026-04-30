@@ -7,6 +7,7 @@ import { join } from "node:path";
 import { ensureWritableAppDirectories } from "./appPaths";
 import { buildBaseTranslationOptions } from "./appSettings";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
+import { configureLamaEnvironment, getLamaRuntimeStatus, startLamaModelDownload, startLamaRuntimePrepare } from "./lamaRuntime";
 import {
   cleanupLegacyLogs,
   createImport,
@@ -38,6 +39,7 @@ import { createOpenAICompatibleEndpoint, stopOpenAICompatibleEndpoint, type Open
 import { startOpenAIOAuthEndpoint, stopOpenAIOAuthEndpoint, type OpenAIOAuthEndpoint } from "./openaiOauthEndpoint";
 import { getAppSettings, resetAppSettings, saveAppSettings } from "./settingsStore";
 import { listSystemFonts } from "./systemFonts";
+import { getUpdateStatus } from "./updateCheck";
 import { runWholePagePipeline } from "./wholePagePipeline";
 import type {
   AppSettings,
@@ -58,6 +60,7 @@ import type {
 } from "../shared/types";
 
 const appPaths = ensureWritableAppDirectories();
+configureLamaEnvironment(appPaths);
 const serverPort = Number(process.env.PORT || process.env.MANGA_TRANSLATOR_PORT || 3000);
 const uploadDir = join(appPaths.dataRoot, "uploads");
 mkdirSync(uploadDir, { recursive: true });
@@ -118,6 +121,10 @@ app.get("/api/health", (_req, res) => {
   res.json({ ok: true });
 });
 
+app.get("/api/update/status", asyncHandler(async (req, res) => {
+  res.json(await getUpdateStatus(appPaths, { refresh: req.query.refresh === "1" }));
+}));
+
 app.post("/api/logs/write", (req, res) => {
   const { level, message, detail } = req.body as { level: "debug" | "info" | "warn" | "error"; message: string; detail?: unknown };
   writeLog(level, `client: ${message}`, detail);
@@ -174,6 +181,18 @@ app.post("/api/inpaint/mask", asyncHandler(async (req, res) => {
 
 app.post("/api/inpaint/result-layer", asyncHandler(async (req, res) => {
   res.json(await saveInpaintResultLayerRequest(req.body as SaveInpaintResultLayerRequest));
+}));
+
+app.get("/api/lama/status", asyncHandler(async (_req, res) => {
+  res.json(getLamaRuntimeStatus(appPaths));
+}));
+
+app.post("/api/lama/prepare", asyncHandler(async (_req, res) => {
+  res.json(startLamaRuntimePrepare(appPaths));
+}));
+
+app.post("/api/lama/model/download", asyncHandler(async (_req, res) => {
+  res.json(startLamaModelDownload(appPaths));
 }));
 
 app.post("/api/library/works/:workId/rename", asyncHandler(async (req, res) => {

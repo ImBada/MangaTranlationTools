@@ -2035,6 +2035,126 @@ input[type="number"]::-webkit-inner-spin-button {
   color: #d8d0c3;
 }
 
+.empty-state-stack {
+  display: grid;
+  gap: 14px;
+  width: min(680px, 100%);
+}
+
+.empty-lama-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #343941;
+  border-radius: 10px;
+  background: rgba(19, 22, 27, 0.96);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+}
+
+.empty-lama-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.empty-lama-header h2 {
+  margin: 0;
+  color: #f3ecdf;
+  font-size: 16px;
+}
+
+.empty-lama-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.empty-lama-status {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #15181d;
+  text-align: left;
+}
+
+.empty-lama-status span {
+  color: #aeb8c2;
+  font-size: 12px;
+}
+
+.empty-lama-status strong {
+  color: #f3ecdf;
+  font-size: 13px;
+}
+
+.empty-lama-status.ready {
+  border-color: #2f6f61;
+  background: rgba(47, 111, 97, 0.18);
+}
+
+.empty-lama-status.busy {
+  border-color: #6e5b2d;
+  background: rgba(116, 88, 36, 0.2);
+}
+
+.empty-lama-status.missing {
+  border-color: #5f3939;
+  background: rgba(119, 52, 52, 0.16);
+}
+
+.empty-lama-test-platform {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.empty-lama-test-platform button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-color: #343941;
+  background: #15181d;
+  color: #b8c1ca;
+  font-size: 12px;
+}
+
+.empty-lama-test-platform button.active {
+  border-color: #64758a;
+  background: #252b34;
+  color: #f3ecdf;
+}
+
+.empty-lama-command,
+.empty-lama-python-help {
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #101215;
+  color: #e6ddcf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.empty-lama-python-help {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.empty-lama-python-help strong,
+.empty-lama-python-help p {
+  margin: 0;
+}
+
+.empty-lama-python-help code {
+  overflow-wrap: anywhere;
+  color: #f3ecdf;
+}
+
 .empty-state h2 {
   font-size: 30px;
   line-height: 1.25;
@@ -2187,6 +2307,80 @@ input[type="number"]::-webkit-inner-spin-button {
   gap: 10px;
 }
 
+.settings-runtime-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.settings-runtime-state {
+  display: grid;
+  gap: 4px;
+  padding: 9px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #15181d;
+}
+
+.settings-runtime-state span {
+  color: #aeb8c2;
+  font-size: 12px;
+}
+
+.settings-runtime-state strong {
+  color: #f3ecdf;
+  font-size: 13px;
+}
+
+.settings-runtime-state.ready {
+  border-color: #2f6f61;
+  background: rgba(47, 111, 97, 0.18);
+}
+
+.settings-runtime-state.busy {
+  border-color: #6e5b2d;
+  background: rgba(116, 88, 36, 0.2);
+}
+
+.settings-runtime-state.missing {
+  border-color: #5f3939;
+  background: rgba(119, 52, 52, 0.16);
+}
+
+.settings-code-line {
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #101215;
+  color: #e6ddcf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.settings-python-help {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #101215;
+  color: #e6ddcf;
+  font-size: 12px;
+}
+
+.settings-python-help strong,
+.settings-python-help p {
+  margin: 0;
+}
+
+.settings-python-help code {
+  overflow-wrap: anywhere;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  color: #f3ecdf;
+}
+
 .settings-test-result {
   display: grid;
   gap: 6px;
@@ -2253,6 +2447,54 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .settings-actions {
   justify-content: flex-end;
+}
+
+.settings-version {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  color: #7f8894;
+  font-size: 12px;
+}
+
+.settings-version div {
+  display: grid;
+  gap: 2px;
+  min-width: 220px;
+  text-align: right;
+}
+
+.settings-version strong {
+  color: #aeb8c2;
+  font-size: 12px;
+}
+
+.settings-version span {
+  overflow-wrap: anywhere;
+}
+
+.settings-version a,
+.settings-version button {
+  min-height: 30px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
+.settings-version a {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid #3d4147;
+  border-radius: 8px;
+  background: #24282f;
+  color: #f5f0e8;
+  text-decoration: none;
+}
+
+.settings-version.update-available strong,
+.settings-version.update-available span {
+  color: #f3d7a1;
 }
 
 @media (max-width: 1400px) {

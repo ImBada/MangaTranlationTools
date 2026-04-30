@@ -7,6 +7,7 @@ import type {
   InpaintPageRequest,
   InpaintPageResult,
   JobEvent,
+  LamaRuntimeStatus,
   LibraryIndex,
   ModelTestResult,
   RenderPageRequest,
@@ -17,7 +18,8 @@ import type {
   SaveInpaintMaskResult,
   StartAnalysisRequest,
   StartAnalysisResult,
-  SystemFont
+  SystemFont,
+  UpdateStatus
 } from "../../shared/types";
 
 type ImportKind = "images" | "folder" | "zip" | "zip-folder";
@@ -83,6 +85,10 @@ export const mangaApi = {
   saveSettings: (settings: AppSettings): Promise<AppSettings> => postJson("/api/settings", settings),
   resetSettings: (): Promise<AppSettings> => postJson("/api/settings/reset"),
   testModelSettings: (settings: AppSettings): Promise<ModelTestResult> => postJson("/api/settings/test-model", settings),
+  getLamaRuntimeStatus: (): Promise<LamaRuntimeStatus> => requestJson("/api/lama/status"),
+  prepareLamaRuntime: (): Promise<LamaRuntimeStatus> => postJson("/api/lama/prepare"),
+  downloadLamaModel: (): Promise<LamaRuntimeStatus> => postJson("/api/lama/model/download"),
+  getUpdateStatus: (refresh = false): Promise<UpdateStatus> => requestJson(`/api/update/status${refresh ? "?refresh=1" : ""}`),
   confirm: async (_title: string, message: string, detail?: string): Promise<boolean> => window.confirm(detail ? `${message}\n\n${detail}` : message),
   writeLog: (level: "debug" | "info" | "warn" | "error", message: string, detail?: unknown) =>
     postJson("/api/logs/write", { level, message, detail }),
