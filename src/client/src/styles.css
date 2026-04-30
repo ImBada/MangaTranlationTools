@@ -3100,9 +3100,31 @@ input[type="checkbox"] {
 
 .compact-number-control {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: 22px minmax(0, 1fr) 22px auto;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
+}
+
+.compact-number-control button {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  min-width: 22px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-color: rgba(100, 116, 139, 0.62);
+  border-radius: 6px;
+  background: rgba(22, 28, 36, 0.86);
+  color: var(--color-soft);
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.compact-number-control button:hover:not(:disabled) {
+  border-color: rgba(96, 165, 250, 0.72);
+  background: rgba(37, 48, 62, 0.9);
 }
 
 .compact-number-control input[type="number"] {

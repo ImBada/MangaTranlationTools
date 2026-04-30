@@ -232,6 +232,17 @@ type InpaintToolButtonProps = {
   onClick: () => void;
 };
 
+type CompactNumberControlProps = {
+  ariaLabel: string;
+  disabled: boolean;
+  max: number;
+  min: number;
+  onChange: (value: number) => void;
+  step: number;
+  suffix: string;
+  value: number;
+};
+
 function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Element {
   switch (name) {
     case "select":
@@ -299,6 +310,39 @@ function InpaintToolButton({ active, disabled, icon, label, onClick }: InpaintTo
       <InpaintToolIcon name={icon} />
       <span className="tool-option-label">{label}</span>
     </button>
+  );
+}
+
+function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
+  const precision = Math.max(0, String(step).split(".")[1]?.length ?? 0);
+  const clampValue = (nextValue: number) => {
+    if (!Number.isFinite(nextValue)) {
+      return value;
+    }
+    return Math.min(max, Math.max(min, Number(nextValue.toFixed(precision))));
+  };
+  const updateValue = (nextValue: number) => onChange(clampValue(nextValue));
+
+  return (
+    <div className="compact-number-control stepped-number-control">
+      <button type="button" aria-label={`${ariaLabel} 감소`} disabled={disabled || value <= min} onClick={() => updateValue(value - step)}>
+        -
+      </button>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        disabled={disabled}
+        aria-label={ariaLabel}
+        onChange={(event) => updateValue(Number(event.target.value))}
+      />
+      <button type="button" aria-label={`${ariaLabel} 증가`} disabled={disabled || value >= max} onClick={() => updateValue(value + step)}>
+        +
+      </button>
+      <span>{suffix}</span>
+    </div>
   );
 }
 
@@ -2558,34 +2602,30 @@ export default function App(): React.JSX.Element {
               <div className="font-metrics-row font-tool-grid">
                 <label className="compact-tool-field font-number-field">
                   <span>폰트 크기</span>
-                  <div className="compact-number-control">
-                    <input
-                      type="number"
-                      min={8}
-                      max={120}
-                      step={1}
-                      value={fontControlValues.fontSizePx}
-                      disabled={selectedPageEditLocked}
-                      onChange={(event) => updateSelectedBlockFontSetting({ fontSizePx: Number(event.target.value) })}
-                    />
-                    <span>px</span>
-                  </div>
+                  <CompactNumberControl
+                    ariaLabel="폰트 크기"
+                    min={8}
+                    max={120}
+                    step={1}
+                    value={fontControlValues.fontSizePx}
+                    suffix="px"
+                    disabled={selectedPageEditLocked}
+                    onChange={(fontSizePx) => updateSelectedBlockFontSetting({ fontSizePx })}
+                  />
                   {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
                 </label>
                 <label className="compact-tool-field font-number-field">
                   <span>줄 간격</span>
-                  <div className="compact-number-control">
-                    <input
-                      type="number"
-                      min={0.8}
-                      max={2}
-                      step={0.05}
-                      value={fontControlValues.lineHeight}
-                      disabled={selectedPageEditLocked}
-                      onChange={(event) => updateSelectedBlockFontSetting({ lineHeight: Number(event.target.value) })}
-                    />
-                    <span>배</span>
-                  </div>
+                  <CompactNumberControl
+                    ariaLabel="줄 간격"
+                    min={0.8}
+                    max={2}
+                    step={0.05}
+                    value={fontControlValues.lineHeight}
+                    suffix="배"
+                    disabled={selectedPageEditLocked}
+                    onChange={(lineHeight) => updateSelectedBlockFontSetting({ lineHeight })}
+                  />
                   {renderFontPresetLinkButton("lineHeight", "줄 간격")}
                 </label>
               </div>
@@ -2605,18 +2645,16 @@ export default function App(): React.JSX.Element {
                 </label>
                 <label className="compact-tool-field font-number-field">
                   <span>외곽선 두께</span>
-                  <div className="compact-number-control">
-                    <input
-                      type="number"
-                      min={0}
-                      max={24}
-                      step={0.5}
-                      value={fontControlValues.outlineWidthPx ?? 0}
-                      disabled={selectedPageEditLocked}
-                      onChange={(event) => updateSelectedBlockFontSetting({ outlineWidthPx: Number(event.target.value) })}
-                    />
-                    <span>px</span>
-                  </div>
+                  <CompactNumberControl
+                    ariaLabel="외곽선 두께"
+                    min={0}
+                    max={24}
+                    step={0.5}
+                    value={fontControlValues.outlineWidthPx ?? 0}
+                    suffix="px"
+                    disabled={selectedPageEditLocked}
+                    onChange={(outlineWidthPx) => updateSelectedBlockFontSetting({ outlineWidthPx })}
+                  />
                   {renderFontPresetLinkButton("outlineWidthPx", "외곽선 두께")}
                 </label>
               </div>
@@ -2751,18 +2789,16 @@ export default function App(): React.JSX.Element {
           <div className="result-tool-settings mask-tool-settings">
             <label className="compact-tool-field result-size-field">
               <span>브러시 크기</span>
-              <div className="compact-number-control">
-                <input
-                  type="number"
-                  min={INPAINT_MASK_BRUSH_SIZE_MIN}
-                  max={INPAINT_MASK_BRUSH_SIZE_MAX}
-                  step={1}
-                  value={inpaintBrushSize}
-                  disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-                  onChange={(event) => setInpaintBrushSize(clampInpaintMaskBrushSize(Number(event.target.value)))}
-                />
-                <span>px</span>
-              </div>
+              <CompactNumberControl
+                ariaLabel="마스크 브러시 크기"
+                min={INPAINT_MASK_BRUSH_SIZE_MIN}
+                max={INPAINT_MASK_BRUSH_SIZE_MAX}
+                step={1}
+                value={inpaintBrushSize}
+                suffix="px"
+                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
+                onChange={(brushSize) => setInpaintBrushSize(clampInpaintMaskBrushSize(brushSize))}
+              />
             </label>
           </div>
           <div className="result-action-grid mask-action-grid">
@@ -2853,18 +2889,16 @@ export default function App(): React.JSX.Element {
             </label>
             <label className="compact-tool-field result-size-field">
               <span>브러시 크기</span>
-              <div className="compact-number-control">
-                <input
-                  type="number"
-                  min={INPAINT_RESULT_BRUSH_SIZE_MIN}
-                  max={INPAINT_RESULT_BRUSH_SIZE_MAX}
-                  step={1}
-                  value={inpaintResultBrushSize}
-                  disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-                  onChange={(event) => setInpaintResultBrushSize(clampInpaintResultBrushSize(Number(event.target.value)))}
-                />
-                <span>px</span>
-              </div>
+              <CompactNumberControl
+                ariaLabel="결과 브러시 크기"
+                min={INPAINT_RESULT_BRUSH_SIZE_MIN}
+                max={INPAINT_RESULT_BRUSH_SIZE_MAX}
+                step={1}
+                value={inpaintResultBrushSize}
+                suffix="px"
+                disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+                onChange={(brushSize) => setInpaintResultBrushSize(clampInpaintResultBrushSize(brushSize))}
+              />
             </label>
             <label className="compact-tool-field">
               <span>
