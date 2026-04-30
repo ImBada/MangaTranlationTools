@@ -4063,6 +4063,12 @@ async function drawBlocksOnInpaintMask(page: MangaPage, blocks: TranslationBlock
     return page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl ?? "";
   }
 
+  const existingMask = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+  if (existingMask) {
+    const existingImage = await loadImage(existingMask);
+    context.drawImage(existingImage, 0, 0, page.width, page.height);
+  }
+
   const sourceCanvas = document.createElement("canvas");
   sourceCanvas.width = page.width;
   sourceCanvas.height = page.height;
