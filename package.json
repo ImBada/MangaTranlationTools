@@ -9,7 +9,7 @@
     "build": "node scripts/build.cjs",
     "app:dev": "npm run build && node scripts/electron-dev.cjs",
     "app:pack": "npm run build && electron-builder --dir",
-    "app:build": "npm run build && electron-builder",
+    "app:build": "npm run build && electron-builder --publish never",
     "start": "node out/server/index.js",
     "compile:server": "tsc -p tsconfig.server.json",
     "logs": "node scripts/tail-log.cjs",
