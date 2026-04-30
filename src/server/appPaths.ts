@@ -16,7 +16,9 @@ export type AppPaths = {
 };
 
 export function getAppPaths(): AppPaths {
-  const repoRoot = resolve(__dirname, "../..");
+  const repoRoot = process.env.MANGA_TRANSLATOR_APP_ROOT?.trim()
+    ? resolve(process.env.MANGA_TRANSLATOR_APP_ROOT)
+    : resolve(__dirname, "../..");
   const executableDir = dirname(process.execPath);
   const dataRoot = process.env.MANGA_TRANSLATOR_DATA_DIR?.trim() || repoRoot;
   const libraryDir = join(dataRoot, "library");

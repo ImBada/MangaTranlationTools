@@ -1,0 +1,6 @@
+{
+  "name": "manga-translation-tools-electron-dev",
+  "version": "0.1.6",
+  "private": true,
+  "main": "main.js"
+}

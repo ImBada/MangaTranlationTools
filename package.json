@@ -1,5 +1,5 @@
 {
-  "name": "manga-gemma-translator",
+  "name": "manga-translation-tools",
   "version": "0.1.6",
   "description": "Browser-based manga translation overlay editor powered by an OpenAI-compatible API endpoint.",
   "type": "commonjs",
@@ -7,6 +7,9 @@
   "scripts": {
     "dev": "node scripts/dev.cjs",
     "build": "node scripts/build.cjs",
+    "app:dev": "npm run build && node scripts/electron-dev.cjs",
+    "app:pack": "npm run build && electron-builder --dir",
+    "app:build": "npm run build && electron-builder",
     "start": "node out/server/index.js",
     "compile:server": "tsc -p tsconfig.server.json",
     "logs": "node scripts/tail-log.cjs",
@@ -31,9 +34,53 @@
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react-swc": "^4.3.0",
+    "electron": "^41.3.0",
+    "electron-builder": "^26.8.1",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.9.3",
     "vite": "^7.3.0",
     "vitest": "^4.0.16"
+  },
+  "build": {
+    "appId": "com.mangatranslationtools.app",
+    "productName": "MangaTranslationTools",
+    "extraMetadata": {
+      "main": "electron/main.cjs"
+    },
+    "directories": {
+      "output": "dist-app"
+    },
+    "files": [
+      "electron/**/*",
+      "out/**/*",
+      "package.json"
+    ],
+    "asarUnpack": [
+      "node_modules/sharp/**/*",
+      "node_modules/@img/**/*",
+      "out/app-runtime/**/*",
+      "tools/**/*"
+    ],
+    "mac": {
+      "category": "public.app-category.graphics-design",
+      "identity": null,
+      "target": [
+        "dmg",
+        "zip"
+      ]
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "category": "Graphics",
+      "target": [
+        "AppImage",
+        "deb"
+      ]
+    }
   }
 }
