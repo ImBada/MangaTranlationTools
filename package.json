@@ -68,6 +68,7 @@
       "tools/**/*"
     ],
     "mac": {
+      "icon": "build/icon.icns",
       "category": "public.app-category.graphics-design",
       "target": [
         "dmg",
@@ -75,12 +76,14 @@
       ]
     },
     "win": {
+      "icon": "build/icon.ico",
       "target": [
         "nsis",
         "zip"
       ]
     },
     "linux": {
+      "icon": "build/icon.png",
       "category": "Graphics",
       "target": [
         "AppImage",
