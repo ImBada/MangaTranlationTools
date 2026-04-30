@@ -3494,7 +3494,8 @@ input[type="checkbox"] {
 }
 
 .font-number-field,
-.font-color-field {
+.font-color-field,
+.font-range-field {
   grid-template-columns: minmax(0, 1fr) auto;
   grid-template-areas:
     "label link"
@@ -3518,6 +3519,7 @@ input[type="checkbox"] {
 
 .font-number-field > span,
 .font-color-field > span,
+.font-range-field > span,
 .font-align-field > span,
 .font-checkbox-field > span {
   justify-content: start;
@@ -3526,17 +3528,20 @@ input[type="checkbox"] {
 }
 
 .font-number-field > span,
-.font-color-field > span {
+.font-color-field > span,
+.font-range-field > span {
   grid-area: label;
 }
 
 .font-number-field .compact-number-control,
-.font-color-field .color-picker-shell {
+.font-color-field .color-picker-shell,
+.font-range-field input[type="range"] {
   grid-area: control;
 }
 
 .font-number-field .font-preset-link-toggle,
-.font-color-field .font-preset-link-toggle {
+.font-color-field .font-preset-link-toggle,
+.font-range-field .font-preset-link-toggle {
   grid-area: link;
   align-self: center;
   justify-self: end;
@@ -3544,6 +3549,7 @@ input[type="checkbox"] {
 
 .font-number-field .font-preset-link-toggle,
 .font-color-field .font-preset-link-toggle,
+.font-range-field .font-preset-link-toggle,
 .font-checkbox-field .font-preset-link-toggle {
   width: 20px;
   min-width: 20px;
@@ -3561,6 +3567,47 @@ input[type="checkbox"] {
   min-height: 25px;
 }
 
+.font-screentone-range-row {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.font-screentone-field {
+  gap: 6px;
+  padding: 6px 7px;
+}
+
+.font-screentone-field .font-checkbox-field {
+  min-height: 24px;
+  padding: 0;
+}
+
+.font-screentone-field .font-checkbox-field > span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.font-screentone-field .font-range-field {
+  min-height: 54px;
+  padding: 5px 7px;
+}
+
+.font-range-field {
+  min-height: 54px;
+  gap: 3px;
+  padding: 5px 7px;
+}
+
+.font-range-field > span {
+  gap: 4px;
+}
+
+.font-range-field strong {
+  font-size: 10px;
+}
+
 .font-align-field .text-align-control {
   padding: 3px;
 }
@@ -3573,7 +3620,7 @@ input[type="checkbox"] {
 
 .font-checkbox-field {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   min-height: 34px;
   align-items: center;
   gap: 8px;
@@ -3584,8 +3631,29 @@ input[type="checkbox"] {
   justify-self: end;
 }
 
+.font-inline-toggle {
+  width: auto;
+  min-width: 36px;
+  height: 20px;
+  min-height: 20px;
+  padding: 0 6px;
+  border-radius: 5px;
+  color: #9aa7b4;
+  font-size: 10px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.font-inline-toggle.active {
+  border-color: #78c7b2;
+  background: #24443d;
+  color: #e6fff7;
+}
+
 .font-checkbox-field > span {
   flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
 }
 
 .font-checkbox-field input {

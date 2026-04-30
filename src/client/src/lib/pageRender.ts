@@ -1,6 +1,13 @@
 import type { MangaPage, TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
-import { DEFAULT_OVERLAY_FONT_FAMILY, hexToRgba, resolveBlockTextLayout, resolveWrappedTextLines } from "./overlayLayout";
+import {
+  DEFAULT_OVERLAY_FONT_FAMILY,
+  hexToRgba,
+  resolveScreentoneDotRadiusPx,
+  resolveScreentoneTileSizePx,
+  resolveBlockTextLayout,
+  resolveWrappedTextLines
+} from "./overlayLayout";
 
 export type RenderLayerVisibility = {
   image: boolean;
@@ -175,7 +182,7 @@ function drawRenderedBlock(
   context.textBaseline = "top";
 
   if (block.renderDirection === "vertical") {
-    drawVerticalRenderedText(context, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight);
+    drawVerticalRenderedText(context, block, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight);
   } else {
     drawHorizontalRenderedText(context, block, text, left, top, layout.innerWidth, layout.innerHeight, layout.fitInnerWidth, renderFontSizePx);
   }
@@ -207,12 +214,13 @@ function drawHorizontalRenderedText(
 
   context.textAlign = block.textAlign;
   for (const [index, line] of lines.entries()) {
-    drawOutlinedText(context, line, x, startY + index * lineHeightPx);
+    drawFilledText(context, block, line, x, startY + index * lineHeightPx, fontSize);
   }
 }
 
 function drawVerticalRenderedText(
   context: CanvasRenderingContext2D,
+  block: TranslationBlock,
   text: string,
   left: number,
   top: number,
@@ -228,7 +236,7 @@ function drawVerticalRenderedText(
   const x = left + innerWidth / 2;
   context.textAlign = "center";
   for (const [index, char] of chars.entries()) {
-    drawOutlinedText(context, char, x, startY + index * lineHeightPx);
+    drawFilledText(context, block, char, x, startY + index * lineHeightPx, fontSize);
   }
 }
 
@@ -237,6 +245,101 @@ function drawOutlinedText(context: CanvasRenderingContext2D, text: string, x: nu
     context.strokeText(text, x, y);
   }
   context.fillText(text, x, y);
+}
+
+function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  if (!(block.screentoneFillEnabled ?? false)) {
+    drawOutlinedText(context, text, x, y);
+    return;
+  }
+
+  if (context.lineWidth > 0) {
+    context.strokeText(text, x, y);
+  }
+
+  context.save();
+  context.fillStyle = "#ffffff";
+  context.fillText(text, x, y);
+  const pattern = createScreentonePattern(
+    context,
+    block.textColor,
+    block.screentoneFillIntensity,
+    block.screentoneFillDensity,
+    block.screentoneFillAntialias,
+    fontSize
+  );
+  context.fillStyle = pattern ?? block.textColor;
+  context.fillText(text, x, y);
+  context.restore();
+}
+
+function createScreentonePattern(
+  context: CanvasRenderingContext2D,
+  textColor: string,
+  intensity: number | undefined,
+  density: number | undefined,
+  antialias: boolean | undefined,
+  fontSize: number
+): CanvasPattern | null {
+  const tileSizePx = resolveScreentoneTileSizePx(fontSize, density);
+  const dotRadiusPx = resolveScreentoneDotRadiusPx(tileSizePx, intensity);
+  const tileCanvasSizePx = Math.max(3, Math.ceil(tileSizePx));
+  const tile = document.createElement("canvas");
+  tile.width = tileCanvasSizePx;
+  tile.height = tileCanvasSizePx;
+  const tileContext = tile.getContext("2d");
+  if (!tileContext) {
+    return null;
+  }
+
+  if (antialias === false) {
+    drawHardScreentoneDot(tileContext, textColor, tileCanvasSizePx, tileSizePx, dotRadiusPx);
+  } else {
+    tileContext.fillStyle = "#ffffff";
+    tileContext.fillRect(0, 0, tileCanvasSizePx, tileCanvasSizePx);
+    tileContext.fillStyle = textColor;
+    tileContext.beginPath();
+    tileContext.arc(tileSizePx / 2, tileSizePx / 2, dotRadiusPx, 0, Math.PI * 2);
+    tileContext.fill();
+  }
+  return context.createPattern(tile, "repeat");
+}
+
+function drawHardScreentoneDot(
+  context: CanvasRenderingContext2D,
+  textColor: string,
+  tileCanvasSizePx: number,
+  tileSizePx: number,
+  dotRadiusPx: number
+): void {
+  const image = context.createImageData(tileCanvasSizePx, tileCanvasSizePx);
+  const color = parseHexColor(textColor);
+  const center = tileSizePx / 2;
+  const radiusSquared = dotRadiusPx * dotRadiusPx;
+
+  for (let y = 0; y < tileCanvasSizePx; y += 1) {
+    for (let x = 0; x < tileCanvasSizePx; x += 1) {
+      const index = (y * tileCanvasSizePx + x) * 4;
+      const dx = x + 0.5 - center;
+      const dy = y + 0.5 - center;
+      const inside = x + 0.5 <= tileSizePx && y + 0.5 <= tileSizePx && dx * dx + dy * dy <= radiusSquared;
+      image.data[index] = inside ? color.r : 255;
+      image.data[index + 1] = inside ? color.g : 255;
+      image.data[index + 2] = inside ? color.b : 255;
+      image.data[index + 3] = 255;
+    }
+  }
+
+  context.putImageData(image, 0, 0);
+}
+
+function parseHexColor(hex: string): { r: number; g: number; b: number } {
+  const normalized = hex.replace("#", "");
+  return {
+    r: Number.parseInt(normalized.slice(0, 2), 16),
+    g: Number.parseInt(normalized.slice(2, 4), 16),
+    b: Number.parseInt(normalized.slice(4, 6), 16)
+  };
 }
 
 function resolveRenderedOutlineWidthPx(block: TranslationBlock, fontSize: number): number {

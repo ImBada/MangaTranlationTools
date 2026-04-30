@@ -588,7 +588,11 @@ export default function App(): React.JSX.Element {
         outlineColor: isBlockFontPresetValueLinked(selectedBlock, "outlineColor"),
         outlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "outlineWidthPx"),
         autoFitText: isBlockFontPresetValueLinked(selectedBlock, "autoFitText"),
-        textColor: isBlockFontPresetValueLinked(selectedBlock, "textColor")
+        textColor: isBlockFontPresetValueLinked(selectedBlock, "textColor"),
+        screentoneFillEnabled: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillEnabled"),
+        screentoneFillIntensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillIntensity"),
+        screentoneFillDensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillDensity"),
+        screentoneFillAntialias: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillAntialias")
       }
     : null;
   const fontFamilyOptions = useMemo(
@@ -1664,7 +1668,11 @@ export default function App(): React.JSX.Element {
                       outlineColorLinkedToPreset: true,
                       outlineWidthLinkedToPreset: true,
                       autoFitTextLinkedToPreset: true,
-                      textColorLinkedToPreset: true
+                      textColorLinkedToPreset: true,
+                      screentoneFillEnabledLinkedToPreset: true,
+                      screentoneFillIntensityLinkedToPreset: true,
+                      screentoneFillDensityLinkedToPreset: true,
+                      screentoneFillAntialiasLinkedToPreset: true
                     }
                   : block
               )
@@ -1696,7 +1704,11 @@ export default function App(): React.JSX.Element {
       outlineColorLinkedToPreset: true,
       outlineWidthLinkedToPreset: true,
       autoFitTextLinkedToPreset: true,
-      textColorLinkedToPreset: true
+      textColorLinkedToPreset: true,
+      screentoneFillEnabledLinkedToPreset: true,
+      screentoneFillIntensityLinkedToPreset: true,
+      screentoneFillDensityLinkedToPreset: true,
+      screentoneFillAntialiasLinkedToPreset: true
     });
   };
 
@@ -1711,7 +1723,11 @@ export default function App(): React.JSX.Element {
       outlineColorLinkedToPreset: undefined,
       outlineWidthLinkedToPreset: undefined,
       autoFitTextLinkedToPreset: undefined,
-      textColorLinkedToPreset: undefined
+      textColorLinkedToPreset: undefined,
+      screentoneFillEnabledLinkedToPreset: undefined,
+      screentoneFillIntensityLinkedToPreset: undefined,
+      screentoneFillDensityLinkedToPreset: undefined,
+      screentoneFillAntialiasLinkedToPreset: undefined
     });
   };
 
@@ -1737,7 +1753,7 @@ export default function App(): React.JSX.Element {
     setEditingFontPresetId((current) => (current === presetId ? null : current));
   };
 
-  const deleteSelectedBlock = () => {
+  const deleteSelectedBlock = useCallback(() => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
       return;
     }
@@ -1755,7 +1771,7 @@ export default function App(): React.JSX.Element {
       )
     }));
     setSelectedBlockId(null);
-  };
+  }, [recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
   const updateSelectedPageInpaintMask = useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
@@ -2308,6 +2324,10 @@ export default function App(): React.JSX.Element {
       outlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
       autoFitTextLinkedToPreset: editingFontPreset ? true : undefined,
       textColorLinkedToPreset: editingFontPreset ? true : undefined,
+      screentoneFillEnabledLinkedToPreset: editingFontPreset ? true : undefined,
+      screentoneFillIntensityLinkedToPreset: editingFontPreset ? true : undefined,
+      screentoneFillDensityLinkedToPreset: editingFontPreset ? true : undefined,
+      screentoneFillAntialiasLinkedToPreset: editingFontPreset ? true : undefined,
       fontFamily: sourcePreset.fontFamily,
       fontSizePx: sourcePreset.fontSizePx,
       lineHeight: sourcePreset.lineHeight,
@@ -2316,6 +2336,10 @@ export default function App(): React.JSX.Element {
       autoFitText: sourcePreset.autoFitText,
       textAlign: "center",
       textColor: sourcePreset.textColor ?? "#111111",
+      screentoneFillEnabled: sourcePreset.screentoneFillEnabled,
+      screentoneFillIntensity: sourcePreset.screentoneFillIntensity,
+      screentoneFillDensity: sourcePreset.screentoneFillDensity,
+      screentoneFillAntialias: sourcePreset.screentoneFillAntialias,
       backgroundColor: "#fffdf5",
       opacity: 0.88
     };
@@ -2529,6 +2553,17 @@ export default function App(): React.JSX.Element {
         return;
       }
 
+      const blockDeleteShortcut =
+        (event.key === "Delete" || event.key === "Backspace") &&
+        !modalOpen &&
+        !editableTarget &&
+        Boolean(selectedBlockIdRef.current);
+      if (blockDeleteShortcut) {
+        event.preventDefault();
+        deleteSelectedBlock();
+        return;
+      }
+
       if ((event.key === "Delete" || event.key === "Backspace") && !modalOpen && !editableTarget) {
         if (inpaintSelectionRect) {
           return;
@@ -2569,6 +2604,7 @@ export default function App(): React.JSX.Element {
   }, [
     activeLayer,
     clearSelectedInpaintSelection,
+    deleteSelectedBlock,
     globalUndoActions,
     inpaintResultTool,
     inpaintSelectionRect,
@@ -2842,6 +2878,67 @@ export default function App(): React.JSX.Element {
                 </span>
                 {renderFontPresetLinkButton("textColor", "글자색")}
               </label>
+              <div className="compact-tool-field font-screentone-field">
+                <label className="tool-checkbox font-checkbox-field">
+                  <input
+                    type="checkbox"
+                    checked={fontControlValues.screentoneFillEnabled ?? false}
+                    disabled={selectedPageEditLocked}
+                    onChange={(event) => updateSelectedBlockFontSetting({ screentoneFillEnabled: event.target.checked })}
+                  />
+                  <span>스크린톤 채우기</span>
+                  <button
+                    type="button"
+                    className={`font-inline-toggle ${fontControlValues.screentoneFillAntialias ?? true ? "active" : ""}`}
+                    disabled={selectedPageEditLocked}
+                    onClick={(event) => {
+                      event.preventDefault();
+                      updateSelectedBlockFontSetting({ screentoneFillAntialias: !(fontControlValues.screentoneFillAntialias ?? true) });
+                    }}
+                    aria-pressed={fontControlValues.screentoneFillAntialias ?? true}
+                    title={`스크린톤 안티 ${(fontControlValues.screentoneFillAntialias ?? true) ? "끄기" : "켜기"}`}
+                  >
+                    안티
+                  </button>
+                  {renderFontPresetLinkButton("screentoneFillEnabled", "스크린톤 채우기")}
+                </label>
+                <div className="font-screentone-range-row">
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>강도</span>
+                      <strong>{Math.round((fontControlValues.screentoneFillIntensity ?? 0.55) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.01}
+                      value={fontControlValues.screentoneFillIntensity ?? 0.55}
+                      style={rangeProgressStyle(fontControlValues.screentoneFillIntensity ?? 0.55, 0.05, 1)}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ screentoneFillIntensity: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("screentoneFillIntensity", "스크린톤 강도")}
+                  </label>
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>밀도</span>
+                      <strong>{Math.round((fontControlValues.screentoneFillDensity ?? 0.55) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.01}
+                      value={fontControlValues.screentoneFillDensity ?? 0.55}
+                      style={rangeProgressStyle(fontControlValues.screentoneFillDensity ?? 0.55, 0.05, 1)}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => updateSelectedBlockFontSetting({ screentoneFillDensity: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("screentoneFillDensity", "스크린톤 밀도")}
+                  </label>
+                </div>
+              </div>
               {selectedBlock ? (
                 <div className="compact-tool-field font-align-field">
                   <span>정렬</span>

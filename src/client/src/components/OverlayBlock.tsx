@@ -3,6 +3,8 @@ import type { TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
+  buildScreentoneFillCssBackground,
+  buildScreentoneFillCssSize,
   hexToRgba,
   resolveBlockTextLayout,
   resolveWrappedTextLines,
@@ -44,6 +46,23 @@ export function OverlayBlock({
       : [];
   const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
   const rotationDeg = resolveBlockRotationDeg(block);
+  const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
+  const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
+    ? {
+        WebkitTextFillColor: "transparent",
+        WebkitBackgroundClip: "text",
+        backgroundClip: "text",
+        backgroundColor: "#ffffff",
+        backgroundImage: buildScreentoneFillCssBackground(
+          block.textColor,
+          block.screentoneFillIntensity,
+          block.screentoneFillDensity,
+          block.screentoneFillAntialias,
+          layout.fontSizePx
+        ),
+        backgroundSize: buildScreentoneFillCssSize(layout.fontSizePx, block.screentoneFillDensity)
+      }
+    : {};
   const style: React.CSSProperties = {
     left: layout.rect.left,
     top: layout.rect.top,
@@ -52,7 +71,7 @@ export function OverlayBlock({
     boxSizing: "border-box",
     padding: layout.paddingPx,
     overflow: "hidden",
-    color: visualContentVisible ? block.textColor : "transparent",
+    color: visualContentVisible && !screentoneFillEnabled ? block.textColor : "transparent",
     backgroundColor: visualContentVisible ? hexToRgba(block.backgroundColor, editingEnabled ? block.opacity : 0) : "transparent",
     borderColor: editingEnabled ? undefined : "transparent",
     boxShadow: editingEnabled ? undefined : "none",
@@ -80,10 +99,12 @@ export function OverlayBlock({
     height: block.renderDirection === "vertical" ? `${layout.fitInnerHeight}px` : undefined,
     maxWidth: "100%",
     maxHeight: "100%",
-    WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${block.outlineColor ?? "#000000"}` : undefined
+    WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${block.outlineColor ?? "#000000"}` : undefined,
+    ...screentoneFillStyle
   };
   const lineStyle: React.CSSProperties = {
-    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center"
+    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center",
+    ...screentoneFillStyle
   };
 
   return (

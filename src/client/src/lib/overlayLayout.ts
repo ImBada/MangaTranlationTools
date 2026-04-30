@@ -10,6 +10,8 @@ const BLOCK_BORDER_PX = 1;
 const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
 export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif";
+export const DEFAULT_SCREENTONE_FILL_INTENSITY = 0.55;
+export const DEFAULT_SCREENTONE_FILL_DENSITY = 0.55;
 
 let measureCanvas: HTMLCanvasElement | null = null;
 
@@ -139,6 +141,52 @@ export function hexToRgba(hex: string, alpha: number): string {
   const g = Number.parseInt(value.slice(2, 4), 16);
   const b = Number.parseInt(value.slice(4, 6), 16);
   return `rgba(${r}, ${g}, ${b}, ${clamp(alpha, 0, 1)})`;
+}
+
+export function normalizeScreentoneFillIntensity(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_SCREENTONE_FILL_INTENSITY;
+  }
+  return clamp(value ?? DEFAULT_SCREENTONE_FILL_INTENSITY, 0.05, 1);
+}
+
+export function normalizeScreentoneFillDensity(value: number | undefined): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_SCREENTONE_FILL_DENSITY;
+  }
+  return clamp(value ?? DEFAULT_SCREENTONE_FILL_DENSITY, 0.05, 1);
+}
+
+export function resolveScreentoneTileSizePx(fontSizePx: number, density: number | undefined): number {
+  const normalizedDensity = normalizeScreentoneFillDensity(density);
+  const minRatio = 0.022;
+  const maxRatio = 0.12;
+  const ratio = maxRatio - normalizedDensity * (maxRatio - minRatio);
+  return Math.max(3, fontSizePx * ratio);
+}
+
+export function resolveScreentoneDotRadiusPx(tileSizePx: number, intensity: number | undefined): number {
+  const normalizedIntensity = normalizeScreentoneFillIntensity(intensity);
+  return clamp(tileSizePx * (0.08 + normalizedIntensity * 0.4), 0.2, tileSizePx * 0.48);
+}
+
+export function buildScreentoneFillCssBackground(
+  textColor: string,
+  intensity: number | undefined,
+  density: number | undefined,
+  antialias: boolean | undefined,
+  fontSizePx: number
+): string {
+  const normalizedIntensity = normalizeScreentoneFillIntensity(intensity);
+  const tileSizePx = resolveScreentoneTileSizePx(fontSizePx, density);
+  const dotRadiusPx = resolveScreentoneDotRadiusPx(tileSizePx, normalizedIntensity);
+  const edgeRadiusPx = antialias === false ? dotRadiusPx : dotRadiusPx + 0.45;
+  return `radial-gradient(circle at 50% 50%, ${textColor} 0 ${dotRadiusPx}px, transparent ${edgeRadiusPx}px), #ffffff`;
+}
+
+export function buildScreentoneFillCssSize(fontSizePx: number, density: number | undefined): string {
+  const tileSizePx = resolveScreentoneTileSizePx(fontSizePx, density);
+  return `${tileSizePx}px ${tileSizePx}px`;
 }
 
 function resolveTextFontSizePx(

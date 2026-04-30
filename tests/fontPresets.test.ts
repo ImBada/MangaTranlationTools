@@ -5,13 +5,26 @@ import type { FontPreset, TranslationBlock } from "../src/shared/types";
 describe("font preset block links", () => {
   it("keeps block values when those values are unlinked from the preset", () => {
     const block = createBlock({ fontSizePx: 18, fontSizeLinkedToPreset: false, lineHeight: 1.1, lineHeightLinkedToPreset: false });
-    const preset = createPreset({ fontSizePx: 32, lineHeight: 1.3, outlineColor: "#ffffff", outlineWidthPx: 3 });
+    const preset = createPreset({
+      fontSizePx: 32,
+      lineHeight: 1.3,
+      outlineColor: "#ffffff",
+      outlineWidthPx: 3,
+      screentoneFillEnabled: true,
+      screentoneFillIntensity: 0.8,
+      screentoneFillDensity: 0.35,
+      screentoneFillAntialias: false
+    });
 
     expect(applyFontPresetPatchToBlock(block, preset)).toMatchObject({
       fontSizePx: 18,
       lineHeight: 1.1,
       outlineColor: "#ffffff",
-      outlineWidthPx: 3
+      outlineWidthPx: 3,
+      screentoneFillEnabled: true,
+      screentoneFillIntensity: 0.8,
+      screentoneFillDensity: 0.35,
+      screentoneFillAntialias: false
     });
   });
 
@@ -41,6 +54,10 @@ function createBlock(patch: Partial<TranslationBlock> = {}): TranslationBlock {
     lineHeight: 1.18,
     textAlign: "center",
     textColor: "#111111",
+    screentoneFillEnabled: false,
+    screentoneFillIntensity: 0.55,
+    screentoneFillDensity: 0.55,
+    screentoneFillAntialias: true,
     backgroundColor: "#fffdf5",
     opacity: 1,
     ...patch

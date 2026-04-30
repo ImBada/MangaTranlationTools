@@ -2,7 +2,20 @@ import type { FontPreset, TranslationBlock } from "../../../shared/types";
 import { DEFAULT_OVERLAY_FONT_FAMILY } from "./overlayLayout";
 
 export type FontPresetPatch = Partial<
-  Pick<FontPreset, "fontFamily" | "fontSizePx" | "lineHeight" | "outlineColor" | "outlineWidthPx" | "autoFitText" | "textColor">
+  Pick<
+    FontPreset,
+    | "fontFamily"
+    | "fontSizePx"
+    | "lineHeight"
+    | "outlineColor"
+    | "outlineWidthPx"
+    | "autoFitText"
+    | "textColor"
+    | "screentoneFillEnabled"
+    | "screentoneFillIntensity"
+    | "screentoneFillDensity"
+    | "screentoneFillAntialias"
+  >
 >;
 export type BlockFontPatch = FontPresetPatch & Partial<Pick<TranslationBlock, "textAlign">>;
 export type LinkableFontPresetKey = Exclude<keyof FontPresetPatch, "fontFamily">;
@@ -13,7 +26,11 @@ const PRESET_LINK_FIELD_BY_KEY = {
   outlineColor: "outlineColorLinkedToPreset",
   outlineWidthPx: "outlineWidthLinkedToPreset",
   autoFitText: "autoFitTextLinkedToPreset",
-  textColor: "textColorLinkedToPreset"
+  textColor: "textColorLinkedToPreset",
+  screentoneFillEnabled: "screentoneFillEnabledLinkedToPreset",
+  screentoneFillIntensity: "screentoneFillIntensityLinkedToPreset",
+  screentoneFillDensity: "screentoneFillDensityLinkedToPreset",
+  screentoneFillAntialias: "screentoneFillAntialiasLinkedToPreset"
 } satisfies Record<LinkableFontPresetKey, keyof TranslationBlock>;
 
 export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = {
@@ -23,7 +40,11 @@ export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = {
   outlineColor: "#000000",
   outlineWidthPx: 0,
   autoFitText: true,
-  textColor: "#111111"
+  textColor: "#111111",
+  screentoneFillEnabled: false,
+  screentoneFillIntensity: 0.55,
+  screentoneFillDensity: 0.55,
+  screentoneFillAntialias: true
 };
 
 export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT_FONT_PRESET): FontPreset {
@@ -36,7 +57,11 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     outlineColor: source.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
     outlineWidthPx: source.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
     autoFitText: source.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
-    textColor: source.textColor ?? DEFAULT_FONT_PRESET.textColor
+    textColor: source.textColor ?? DEFAULT_FONT_PRESET.textColor,
+    screentoneFillEnabled: source.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
+    screentoneFillIntensity: source.screentoneFillIntensity ?? DEFAULT_FONT_PRESET.screentoneFillIntensity,
+    screentoneFillDensity: source.screentoneFillDensity ?? DEFAULT_FONT_PRESET.screentoneFillDensity,
+    screentoneFillAntialias: source.screentoneFillAntialias ?? DEFAULT_FONT_PRESET.screentoneFillAntialias
   };
 }
 
@@ -60,6 +85,10 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
     outlineWidthLinkedToPreset: _outlineWidthLinkedToPreset,
     autoFitTextLinkedToPreset: _autoFitTextLinkedToPreset,
     textColorLinkedToPreset: _textColorLinkedToPreset,
+    screentoneFillEnabledLinkedToPreset: _screentoneFillEnabledLinkedToPreset,
+    screentoneFillIntensityLinkedToPreset: _screentoneFillIntensityLinkedToPreset,
+    screentoneFillDensityLinkedToPreset: _screentoneFillDensityLinkedToPreset,
+    screentoneFillAntialiasLinkedToPreset: _screentoneFillAntialiasLinkedToPreset,
     ...rest
   } = block;
   return rest;
@@ -98,6 +127,22 @@ export function applyFontPresetPatchToBlock(
     textColor:
       patch.textColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textColor"))
         ? patch.textColor
-        : block.textColor
+        : block.textColor,
+    screentoneFillEnabled:
+      patch.screentoneFillEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillEnabled"))
+        ? patch.screentoneFillEnabled
+        : block.screentoneFillEnabled,
+    screentoneFillIntensity:
+      patch.screentoneFillIntensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillIntensity"))
+        ? patch.screentoneFillIntensity
+        : block.screentoneFillIntensity,
+    screentoneFillDensity:
+      patch.screentoneFillDensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillDensity"))
+        ? patch.screentoneFillDensity
+        : block.screentoneFillDensity,
+    screentoneFillAntialias:
+      patch.screentoneFillAntialias !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillAntialias"))
+        ? patch.screentoneFillAntialias
+        : block.screentoneFillAntialias
   };
 }

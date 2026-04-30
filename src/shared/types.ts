@@ -97,6 +97,10 @@ export type TranslationBlock = {
   outlineWidthLinkedToPreset?: boolean;
   autoFitTextLinkedToPreset?: boolean;
   textColorLinkedToPreset?: boolean;
+  screentoneFillEnabledLinkedToPreset?: boolean;
+  screentoneFillIntensityLinkedToPreset?: boolean;
+  screentoneFillDensityLinkedToPreset?: boolean;
+  screentoneFillAntialiasLinkedToPreset?: boolean;
   fontFamily?: string;
   fontSizePx: number;
   lineHeight: number;
@@ -105,6 +109,10 @@ export type TranslationBlock = {
   textPaddingPx?: number;
   textAlign: "left" | "center" | "right";
   textColor: string;
+  screentoneFillEnabled?: boolean;
+  screentoneFillIntensity?: number;
+  screentoneFillDensity?: number;
+  screentoneFillAntialias?: boolean;
   backgroundColor: string;
   opacity: number;
   autoFitText?: boolean;
@@ -121,6 +129,10 @@ export type FontPreset = {
   outlineWidthPx?: number;
   autoFitText?: boolean;
   textColor?: string;
+  screentoneFillEnabled?: boolean;
+  screentoneFillIntensity?: number;
+  screentoneFillDensity?: number;
+  screentoneFillAntialias?: boolean;
 };
 
 export type SystemFont = {
