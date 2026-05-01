@@ -2565,12 +2565,14 @@ export default function App(): React.JSX.Element {
       if (layerNumberShortcut) {
         event.preventDefault();
         switch (event.key) {
-          case "1": selectLayer("output"); return;
-          case "2": selectLayer("overlay"); return;
-          case "3": selectLayer("inpaintResult"); return;
-          case "4": selectLayer("inpaintMask"); return;
-          case "5": selectLayer("image"); return;
+          case "1": selectLayer("output"); break;
+          case "2": selectLayer("overlay"); break;
+          case "3": selectLayer("inpaintResult"); break;
+          case "4": selectLayer("inpaintMask"); break;
+          case "5": selectLayer("image"); break;
+          default: return;
         }
+        workspacePanelRef.current?.focus();
         return;
       }
 
