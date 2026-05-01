@@ -274,10 +274,9 @@ const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;
 const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
 const INPAINT_MASK_BRUSH_SIZE_MIN = 4;
 const INPAINT_MASK_BRUSH_SIZE_MAX = 96;
-const INPAINT_TOOL_SHORTCUTS: Record<InpaintTool, string> = {
-  select: "M",
-  brush: "B",
-  eraser: "E"
+const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintTool, string>> = {
+  select: "E",
+  brush: "B"
 };
 
 type StageZoomDirection = "in" | "out";
@@ -381,21 +380,13 @@ function InpaintToolButton({ active, disabled, icon, label, onClick, shortcut, t
 
 function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
   switch (event.code) {
-    case "KeyM":
-      return "select";
     case "KeyB":
       return "brush";
-    case "KeyE":
-      return "eraser";
   }
 
   switch (event.key.toLowerCase()) {
-    case "m":
-      return "select";
     case "b":
       return "brush";
-    case "e":
-      return "eraser";
     default:
       return null;
   }
@@ -407,6 +398,10 @@ function isZoomToolShortcut(event: KeyboardEvent): boolean {
 
 function isPointerToolShortcut(event: KeyboardEvent): boolean {
   return event.code === "KeyA" || event.key.toLowerCase() === "a";
+}
+
+function isRangeToolShortcut(event: KeyboardEvent): boolean {
+  return event.code === "KeyE" || event.key.toLowerCase() === "e";
 }
 
 function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
@@ -561,6 +556,7 @@ export default function App(): React.JSX.Element {
   const [stageViewScale, setStageViewScale] = useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = useState(0);
   const [zoomToolActive, setZoomToolActive] = useState(false);
+  const [rangeToolActive, setRangeToolActive] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [undoVersion, setUndoVersion] = useState(0);
   const [saveFlash, setSaveFlash] = useState(false);
@@ -742,7 +738,31 @@ export default function App(): React.JSX.Element {
 
   const selectSharedInpaintTool = useCallback((tool: InpaintTool) => {
     setZoomToolActive(false);
+    setRangeToolActive(tool === "select");
     setInpaintTool(tool);
+    setInpaintResultTool(tool);
+  }, []);
+
+  const selectPointerTool = useCallback(() => {
+    setZoomToolActive(false);
+    setRangeToolActive(false);
+  }, []);
+
+  const selectRangeTool = useCallback(() => {
+    setZoomToolActive(false);
+    setRangeToolActive(true);
+    setInpaintTool("select");
+    setInpaintResultTool("select");
+  }, []);
+
+  const selectZoomTool = useCallback(() => {
+    setRangeToolActive(false);
+    setZoomToolActive(true);
+  }, []);
+
+  const selectInpaintResultEditTool = useCallback((tool: Exclude<InpaintResultTool, "select">) => {
+    setZoomToolActive(false);
+    setRangeToolActive(false);
     setInpaintResultTool(tool);
   }, []);
 
@@ -2249,7 +2269,7 @@ export default function App(): React.JSX.Element {
       return false;
     }
 
-    if (activeLayer === "inpaintMask" && inpaintTool === "select") {
+    if (activeLayer === "inpaintMask" && rangeToolActive) {
       const maskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
       if (!maskDataUrl) {
         return false;
@@ -2260,7 +2280,7 @@ export default function App(): React.JSX.Element {
       return true;
     }
 
-    if (activeLayer === "inpaintResult" && inpaintResultTool === "select") {
+    if (activeLayer === "inpaintResult" && rangeToolActive) {
       if (!page.inpaintResultDataUrl) {
         return false;
       }
@@ -2274,10 +2294,9 @@ export default function App(): React.JSX.Element {
   }, [
     activeLayer,
     inpaintBusy,
-    inpaintResultTool,
     inpaintSelectionRect,
-    inpaintTool,
     pushStatus,
+    rangeToolActive,
     selectedPageEditLocked,
     updateSelectedPageInpaintMask,
     updateSelectedPageInpaintResult
@@ -2294,7 +2313,7 @@ export default function App(): React.JSX.Element {
       return;
     }
 
-    if (activeLayer === "inpaintMask" && inpaintTool === "select") {
+    if (activeLayer === "inpaintMask" && rangeToolActive) {
       const nextDataUrl = await fillImageDataUrlRect({
         dataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
         width: page.width,
@@ -2307,7 +2326,7 @@ export default function App(): React.JSX.Element {
       return;
     }
 
-    if (activeLayer === "inpaintResult" && inpaintResultTool === "select") {
+    if (activeLayer === "inpaintResult" && rangeToolActive) {
       const nextDataUrl = await fillImageDataUrlRect({
         dataUrl: page.inpaintResultDataUrl,
         width: page.width,
@@ -2322,10 +2341,9 @@ export default function App(): React.JSX.Element {
     activeLayer,
     inpaintBusy,
     inpaintResultBrushColor,
-    inpaintResultTool,
     inpaintSelectionRect,
-    inpaintTool,
     pushStatus,
+    rangeToolActive,
     selectedPageEditLocked,
     updateSelectedPageInpaintMask,
     updateSelectedPageInpaintResult
@@ -2605,6 +2623,10 @@ export default function App(): React.JSX.Element {
         setZoomToolActive(false);
         return;
       }
+      if (event.key === "Escape" && rangeToolActive) {
+        setRangeToolActive(false);
+        return;
+      }
 
       if (!modalOpen && !editableTarget && isPlatformUndoShortcut(event, undoShortcutPlatform)) {
         event.preventDefault();
@@ -2641,7 +2663,7 @@ export default function App(): React.JSX.Element {
         isZoomToolShortcut(event);
       if (zoomToolShortcut) {
         event.preventDefault();
-        setZoomToolActive(true);
+        selectZoomTool();
         workspacePanelRef.current?.focus();
         return;
       }
@@ -2655,7 +2677,21 @@ export default function App(): React.JSX.Element {
         isPointerToolShortcut(event);
       if (pointerToolShortcut) {
         event.preventDefault();
-        setZoomToolActive(false);
+        selectPointerTool();
+        workspacePanelRef.current?.focus();
+        return;
+      }
+
+      const rangeToolShortcut =
+        !modalOpen &&
+        !editableTarget &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        isRangeToolShortcut(event);
+      if (rangeToolShortcut && !selectedPageEditLocked) {
+        event.preventDefault();
+        selectRangeTool();
         workspacePanelRef.current?.focus();
         return;
       }
@@ -2678,7 +2714,8 @@ export default function App(): React.JSX.Element {
         !modalOpen &&
         !editableTarget &&
         Boolean(inpaintSelectionRect) &&
-        ((activeLayer === "inpaintMask" && inpaintTool === "select") || (activeLayer === "inpaintResult" && inpaintResultTool === "select"));
+        rangeToolActive &&
+        (activeLayer === "inpaintMask" || activeLayer === "inpaintResult");
       if (selectionClearShortcut) {
         event.preventDefault();
         void clearSelectedInpaintSelection().then((handled) => {
@@ -2749,8 +2786,12 @@ export default function App(): React.JSX.Element {
     libraryWidgetOpen,
     modalOpen,
     pushStatus,
+    rangeToolActive,
     selectLayer,
+    selectPointerTool,
+    selectRangeTool,
     selectSharedInpaintTool,
+    selectZoomTool,
     selectPageForReading,
     selectedPageEditLocked,
     undoShortcutPlatform,
@@ -3174,15 +3215,6 @@ export default function App(): React.JSX.Element {
         <>
           <div className="segmented-control tool-selector mask-tool-selector" role="group" aria-label="인페인트 도구">
             <InpaintToolButton
-              active={inpaintTool === "select"}
-              icon="select"
-              label="범위 선택"
-              text="범위"
-              shortcut={INPAINT_TOOL_SHORTCUTS.select}
-              onClick={() => selectSharedInpaintTool("select")}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-            />
-            <InpaintToolButton
               active={inpaintTool === "brush"}
               icon="brush"
               label="브러시"
@@ -3221,7 +3253,7 @@ export default function App(): React.JSX.Element {
             <button
               type="button"
               onClick={() => void fillSelectedInpaintSelection()}
-              disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintTool !== "select"}
+              disabled={selectedPageEditLocked || !inpaintSelectionRect || !rangeToolActive}
             >
               선택 범위 채우기
             </button>
@@ -3249,15 +3281,6 @@ export default function App(): React.JSX.Element {
         <>
           <div className="segmented-control tool-selector result-tool-grid" role="group" aria-label="인페인트 결과 도구">
             <InpaintToolButton
-              active={inpaintResultTool === "select"}
-              icon="select"
-              label="범위 선택"
-              text="범위"
-              shortcut={INPAINT_TOOL_SHORTCUTS.select}
-              onClick={() => selectSharedInpaintTool("select")}
-              disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
-            />
-            <InpaintToolButton
               active={inpaintResultTool === "brush"}
               icon="brush"
               label="브러시"
@@ -3277,21 +3300,21 @@ export default function App(): React.JSX.Element {
               active={inpaintResultTool === "blur"}
               icon="blur"
               label="흐림"
-              onClick={() => setInpaintResultTool("blur")}
+              onClick={() => selectInpaintResultEditTool("blur")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
             <InpaintToolButton
               active={inpaintResultTool === "sharpen"}
               icon="sharpen"
               label="선명"
-              onClick={() => setInpaintResultTool("sharpen")}
+              onClick={() => selectInpaintResultEditTool("sharpen")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
             <InpaintToolButton
               active={inpaintResultTool === "smudge"}
               icon="smudge"
               label="뭉개기"
-              onClick={() => setInpaintResultTool("smudge")}
+              onClick={() => selectInpaintResultEditTool("smudge")}
               disabled={selectedPageEditLocked || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
             />
           </div>
@@ -3361,7 +3384,7 @@ export default function App(): React.JSX.Element {
             <button
               type="button"
               onClick={() => void fillSelectedInpaintSelection()}
-              disabled={selectedPageEditLocked || !inpaintSelectionRect || inpaintResultTool !== "select"}
+              disabled={selectedPageEditLocked || !inpaintSelectionRect || !rangeToolActive}
             >
               선택 범위 채우기
             </button>
@@ -3455,12 +3478,12 @@ export default function App(): React.JSX.Element {
     <div className="stage-tool-overlay" aria-label="전역 도구">
       <button
         type="button"
-        className={!zoomToolActive ? "active" : ""}
+        className={!zoomToolActive && !rangeToolActive ? "active" : ""}
         aria-label="일반 마우스"
-        aria-pressed={!zoomToolActive}
+        aria-pressed={!zoomToolActive && !rangeToolActive}
         aria-keyshortcuts="A"
         title="일반 마우스 (A)"
-        onClick={() => setZoomToolActive(false)}
+        onClick={selectPointerTool}
       >
         <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <path d="M6 3l12 11-6.2 1.1L8.3 21 6 3z" />
@@ -3469,12 +3492,28 @@ export default function App(): React.JSX.Element {
       </button>
       <button
         type="button"
+        className={rangeToolActive ? "active" : ""}
+        aria-label="범위 선택"
+        aria-pressed={rangeToolActive}
+        aria-keyshortcuts={INPAINT_TOOL_SHORTCUTS.select}
+        title={`범위 선택 (${INPAINT_TOOL_SHORTCUTS.select})`}
+        onClick={selectRangeTool}
+        disabled={selectedPageEditLocked}
+      >
+        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <rect x="4" y="4" width="11" height="11" rx="2" strokeDasharray="2.4 2.4" />
+          <path d="M13 12l6 6-3 1-1 3-6-6 4-4z" />
+        </svg>
+        <span className="stage-tool-shortcut" aria-hidden="true">{INPAINT_TOOL_SHORTCUTS.select}</span>
+      </button>
+      <button
+        type="button"
         className={zoomToolActive ? "active" : ""}
         aria-label="줌 도구"
         aria-pressed={zoomToolActive}
         aria-keyshortcuts="Z"
         title="줌 도구 (Z)"
-        onClick={() => setZoomToolActive(true)}
+        onClick={selectZoomTool}
       >
         <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
           <circle cx="10.5" cy="10.5" r="5.8" />
@@ -3694,6 +3733,7 @@ export default function App(): React.JSX.Element {
               viewScale={stageViewScale}
               viewResetKey={stageViewResetKey}
               zoomToolActive={zoomToolActive}
+              rangeToolActive={rangeToolActive}
               selectedBlockId={selectedBlockId}
               layerVisibility={stageLayerVisibility}
               layerOpacity={stageLayerOpacity}
@@ -3705,8 +3745,9 @@ export default function App(): React.JSX.Element {
               inpaintResultBrushColor={inpaintResultBrushColor}
               inpaintResultBrushHardness={inpaintResultBrushHardness}
               inpaintResultToolStrength={inpaintResultToolStrength}
-              inpaintDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintMask" || !layerVisibility.inpaint || !layerVisibility.inpaintMask}
-              inpaintResultDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintResult" || !layerVisibility.inpaint || !layerVisibility.inpaintResult}
+              inpaintDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintMask" || !layerVisibility.inpaint || !layerVisibility.inpaintMask || inpaintTool === "select"}
+              inpaintResultDisabled={selectedPageEditLocked || inpaintBusy || activeLayer !== "inpaintResult" || !layerVisibility.inpaint || !layerVisibility.inpaintResult || inpaintResultTool === "select"}
+              rangeSelectionDisabled={selectedPageEditLocked || inpaintBusy || !layerVisibility.inpaint}
               temporaryPanActive={temporaryPanActive}
               inpaintSelectionRect={inpaintSelectionRect}
               onInpaintLayerChange={updateSelectedPageInpaintMask}

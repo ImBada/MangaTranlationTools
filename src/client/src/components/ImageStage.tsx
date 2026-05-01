@@ -15,6 +15,7 @@ type ImageStageProps = {
   viewScale: number | null;
   viewResetKey: number;
   zoomToolActive: boolean;
+  rangeToolActive: boolean;
   selectedBlockId: string | null;
   layerVisibility: {
     image: boolean;
@@ -40,6 +41,7 @@ type ImageStageProps = {
   inpaintResultToolStrength: number;
   inpaintDisabled: boolean;
   inpaintResultDisabled: boolean;
+  rangeSelectionDisabled: boolean;
   temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
@@ -96,6 +98,7 @@ export function ImageStage({
   viewScale,
   viewResetKey,
   zoomToolActive,
+  rangeToolActive,
   selectedBlockId,
   layerVisibility,
   layerOpacity,
@@ -109,6 +112,7 @@ export function ImageStage({
   inpaintResultToolStrength,
   inpaintDisabled,
   inpaintResultDisabled,
+  rangeSelectionDisabled,
   temporaryPanActive,
   inpaintSelectionRect,
   onInpaintLayerChange,
@@ -361,7 +365,7 @@ export function ImageStage({
                 brushHardness={inpaintResultBrushHardness}
                 toolStrength={inpaintResultToolStrength}
                 disabled={inpaintResultDisabled || temporaryPanActive}
-                selectionRect={inpaintSelectionRect}
+                selectionRect={null}
                 onChange={onInpaintResultLayerChange}
                 onSelectionChange={onInpaintSelectionChange}
                 style={{
@@ -387,7 +391,7 @@ export function ImageStage({
                   tool={inpaintTool}
                   brushSize={inpaintBrushSize}
                   disabled={inpaintDisabled || temporaryPanActive}
-                  selectionRect={inpaintSelectionRect}
+                  selectionRect={null}
                   onChange={onInpaintLayerChange}
                   onSelectionChange={onInpaintSelectionChange}
                 />
@@ -426,6 +430,19 @@ export function ImageStage({
               </div>
             )
           : null}
+        {rangeToolActive || inpaintSelectionRect ? (
+          <div className={`stage-range-selection-layer ${rangeToolActive ? "active" : ""}`}>
+            <InpaintLayerCanvas
+              pageSize={{ width: page.width, height: page.height }}
+              tool="select"
+              brushSize={1}
+              disabled={rangeSelectionDisabled || temporaryPanActive || !rangeToolActive}
+              selectionRect={inpaintSelectionRect}
+              onChange={() => undefined}
+              onSelectionChange={onInpaintSelectionChange}
+            />
+          </div>
+        ) : null}
         {zoomToolActive ? (
           <div
             className="stage-zoom-hit-area"

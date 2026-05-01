@@ -1984,6 +1984,19 @@ input[type="number"]::-webkit-inner-spin-button {
   z-index: 1;
 }
 
+.stage-range-selection-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.stage-range-selection-layer.active {
+  pointer-events: auto;
+}
+
 .inpaint-mask-layer-preview {
   position: absolute;
   inset: 0;
