@@ -160,6 +160,7 @@ export type MangaPage = {
   blocks: TranslationBlock[];
   analysisStatus: PageAnalysisStatus;
   lastError?: string;
+  progressCompleted?: boolean;
   createdAt: string;
   updatedAt: string;
 };

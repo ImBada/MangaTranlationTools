@@ -780,9 +780,29 @@ input[type="number"]::-webkit-inner-spin-button {
 .chapter-item,
 .page-item {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 10px;
   align-items: center;
+}
+
+.page-item-dragging {
+  opacity: 0.4;
+}
+
+.page-item-drag-over {
+  position: relative;
+}
+
+.page-item-drag-over::before {
+  content: "";
+  position: absolute;
+  top: -5px;
+  left: 4px;
+  right: 4px;
+  height: 2px;
+  border-radius: 1px;
+  background: #60a5fa;
+  z-index: 1;
 }
 
 .chapter-select,
@@ -839,6 +859,15 @@ input[type="number"]::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+}
+
+.page-progress-checkbox {
+  width: 18px;
+  height: 18px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: #60a5fa;
+  flex-shrink: 0;
 }
 
 .page-status-badge {

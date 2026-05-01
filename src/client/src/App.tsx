@@ -1537,6 +1537,27 @@ export default function App(): React.JSX.Element {
     [currentChapter, runAnalysis]
   );
 
+  const togglePageProgress = useCallback(
+    (pageId: string) => {
+      if (!currentChapter) {
+        return;
+      }
+      updateCurrentChapter(pageId, (current) => ({
+        ...current,
+        pages: current.pages.map((page) =>
+          page.id !== pageId
+            ? page
+            : {
+                ...page,
+                updatedAt: new Date().toISOString(),
+                progressCompleted: !page.progressCompleted
+              }
+        )
+      }));
+    },
+    [currentChapter, updateCurrentChapter]
+  );
+
   const updateSelectedBlock = (patch: Partial<TranslationBlock>, options: { recordUndo?: boolean; undoLabel?: string } = {}) => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
       return;
@@ -3529,6 +3550,7 @@ export default function App(): React.JSX.Element {
           onSelect={selectPageForReading}
           onRetranslate={(pageId) => void retranslatePage(pageId)}
           onRemove={(pageId) => void removePage(pageId)}
+          onToggleProgress={togglePageProgress}
           onReorder={(sourcePageId, targetPageId) => {
             if (!currentChapter) {
               return;
