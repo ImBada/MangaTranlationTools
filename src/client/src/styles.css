@@ -3762,6 +3762,14 @@ input[type="checkbox"] {
   grid-column: 1 / -1;
 }
 
+.psd-action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.psd-action-grid button:nth-child(n) {
+  grid-column: auto;
+}
+
 .font-tool-grid {
   gap: 4px;
 }

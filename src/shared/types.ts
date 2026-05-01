@@ -257,6 +257,21 @@ export type InpaintPageResult = {
   engine: InpaintEngine;
 };
 
+export type ExportInpaintPsdRequest = {
+  chapterId: string;
+  pageId: string;
+  pageName: string;
+  width: number;
+  height: number;
+  sourceDataUrl: string;
+  maskDataUrl?: string;
+  resultDataUrl?: string;
+};
+
+export type ImportInpaintPsdResult = {
+  chapter: ChapterSnapshot;
+};
+
 export type LamaRuntimeStatus = {
   pythonAvailable: boolean;
   pythonCommand: string | null;

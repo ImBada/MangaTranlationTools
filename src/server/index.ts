@@ -2,11 +2,13 @@ import express from "express";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
+import { readFile, unlink } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { ensureWritableAppDirectories } from "./appPaths";
 import { buildBaseTranslationOptions } from "./appSettings";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
+import { exportInpaintPsd, importInpaintPsd, sanitizePsdFileBasename } from "./inpaintPsd";
 import { configureLamaEnvironment, getLamaRuntimeStatus, startLamaModelDownload, startLamaRuntimePrepare } from "./lamaRuntime";
 import {
   cleanupLegacyLogs,
@@ -27,6 +29,7 @@ import {
   reorderPages,
   resolvePagesForRun,
   saveInpaintMask,
+  saveImportedInpaintLayers,
   saveInpaintResult,
   saveInpaintResultLayer,
   saveRenderedPage,
@@ -44,6 +47,8 @@ import { runWholePagePipeline } from "./wholePagePipeline";
 import type {
   AppSettings,
   CreateImportRequest,
+  ExportInpaintPsdRequest,
+  ImportInpaintPsdResult,
   InpaintEngine,
   InpaintPageRequest,
   InpaintPageResult,
@@ -181,6 +186,19 @@ app.post("/api/inpaint/mask", asyncHandler(async (req, res) => {
 
 app.post("/api/inpaint/result-layer", asyncHandler(async (req, res) => {
   res.json(await saveInpaintResultLayerRequest(req.body as SaveInpaintResultLayerRequest));
+}));
+
+app.post("/api/inpaint/psd/export", asyncHandler(async (req, res) => {
+  const request = req.body as ExportInpaintPsdRequest;
+  const buffer = await exportInpaintPsdRequest(request);
+  const filename = `${sanitizePsdFileBasename(request.pageName || request.pageId, request.pageId || "inpaint")}-inpaint.psd`;
+  res.setHeader("Content-Type", "image/vnd.adobe.photoshop");
+  res.setHeader("Content-Disposition", `attachment; filename="inpaint.psd"; filename*=UTF-8''${encodeURIComponent(filename)}`);
+  res.end(buffer);
+}));
+
+app.post("/api/inpaint/psd/import", upload.single("file"), asyncHandler(async (req, res) => {
+  res.json(await importInpaintPsdRequest(req));
 }));
 
 app.get("/api/lama/status", asyncHandler(async (_req, res) => {
@@ -445,6 +463,46 @@ async function saveInpaintResultLayerRequest(request: SaveInpaintResultLayerRequ
   return {
     chapter: await saveInpaintResultLayer(request.chapterId, request.pageId, request.resultDataUrl)
   };
+}
+
+async function exportInpaintPsdRequest(request: ExportInpaintPsdRequest): Promise<Buffer> {
+  if (!request.chapterId || !request.pageId) {
+    throw new Error("내보낼 인페인트 PSD 페이지 정보가 없습니다.");
+  }
+  assertImageDataUrl(request.sourceDataUrl, "원본 이미지");
+  if (request.maskDataUrl) {
+    assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
+  }
+  if (request.resultDataUrl) {
+    assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
+  }
+  return exportInpaintPsd(request);
+}
+
+async function importInpaintPsdRequest(req: express.Request): Promise<ImportInpaintPsdResult> {
+  const chapterId = typeof req.body?.chapterId === "string" ? req.body.chapterId : "";
+  const pageId = typeof req.body?.pageId === "string" ? req.body.pageId : "";
+  const file = req.file;
+  if (!chapterId || !pageId) {
+    throw new Error("가져올 인페인트 PSD 페이지 정보가 없습니다.");
+  }
+  if (!file) {
+    throw new Error("가져올 PSD 파일이 없습니다.");
+  }
+
+  try {
+    const chapter = await openChapter(chapterId);
+    const page = chapter.pages.find((candidate) => candidate.id === pageId);
+    if (!page) {
+      throw new Error("페이지를 찾지 못했습니다.");
+    }
+    const imported = await importInpaintPsd(await readFile(file.path), page.width, page.height);
+    return {
+      chapter: await saveImportedInpaintLayers(chapterId, pageId, imported.maskDataUrl, imported.resultDataUrl)
+    };
+  } finally {
+    await unlink(file.path).catch(() => undefined);
+  }
 }
 
 function resolveAvailableInpaintEngine(requested: InpaintEngine): InpaintEngine {

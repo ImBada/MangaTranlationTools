@@ -121,6 +121,11 @@ const EMPTY_JOB: JobState = {
   progressText: "대기 중"
 };
 
+function sanitizeDownloadBasename(value: string, fallback: string): string {
+  const base = value.replace(/\.[^.]+$/u, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
+  return base || fallback;
+}
+
 type DragMode = "move" | "resize" | "rotate";
 
 type DragState = {
@@ -263,6 +268,7 @@ export default function App(): React.JSX.Element {
   const [renderBusy, setRenderBusy] = useState(false);
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [inpaintBusy, setInpaintBusy] = useState(false);
+  const [inpaintPsdBusy, setInpaintPsdBusy] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -318,6 +324,7 @@ export default function App(): React.JSX.Element {
   const folderImportInputRef = useRef<HTMLInputElement | null>(null);
   const zipImportInputRef = useRef<HTMLInputElement | null>(null);
   const batchImportInputRef = useRef<HTMLInputElement | null>(null);
+  const inpaintPsdInputRef = useRef<HTMLInputElement | null>(null);
   const dragRef = useRef<DragState | null>(null);
   const saveTimerRef = useRef<number | null>(null);
   const saveFlashTimerRef = useRef<number | null>(null);
@@ -2108,6 +2115,105 @@ export default function App(): React.JSX.Element {
     updateSelectedPageInpaintResult
   ]);
 
+  const exportSelectedPageInpaintPsd = useCallback(async () => {
+    if (!currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy) {
+      return;
+    }
+
+    setInpaintPsdBusy(true);
+    try {
+      const blob = await window.mangaApi.exportInpaintPsd({
+        chapterId: currentChapter.id,
+        pageId: selectedPage.id,
+        pageName: selectedPage.name,
+        width: selectedPage.width,
+        height: selectedPage.height,
+        sourceDataUrl: selectedPage.dataUrl,
+        maskDataUrl: selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl,
+        resultDataUrl: selectedPage.inpaintResultDataUrl
+      });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `${sanitizeDownloadBasename(selectedPage.name, selectedPage.id)}-inpaint.psd`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      pushStatus("인페인트 PSD를 내보냈습니다.");
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "인페인트 PSD 내보내기에 실패했습니다.");
+    } finally {
+      setInpaintPsdBusy(false);
+    }
+  }, [currentChapter, inpaintPsdBusy, pushStatus, selectedPage, selectedPageEditLocked]);
+
+  const selectInpaintPsdFile = useCallback(() => {
+    if (!currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy) {
+      return;
+    }
+    inpaintPsdInputRef.current?.click();
+  }, [currentChapter, inpaintPsdBusy, selectedPage, selectedPageEditLocked]);
+
+  const handleInpaintPsdInputChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    event.target.value = "";
+    if (!file || !currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy) {
+      return;
+    }
+
+    setInpaintPsdBusy(true);
+    try {
+      if (inpaintMaskSaveTimerRef.current) {
+        window.clearTimeout(inpaintMaskSaveTimerRef.current);
+        inpaintMaskSaveTimerRef.current = null;
+      }
+      if (inpaintResultSaveTimerRef.current) {
+        window.clearTimeout(inpaintResultSaveTimerRef.current);
+        inpaintResultSaveTimerRef.current = null;
+      }
+      await flushInpaintMaskSave();
+      await flushInpaintResultSave();
+      if (dirty) {
+        await saveNow();
+      }
+
+      const stack = inpaintUndoStackRef.current.get(selectedPage.id) ?? [];
+      stack.push(createInpaintMaskUndoSnapshot(selectedPage));
+      inpaintUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
+      recordGlobalUndoEntry({ kind: "inpaint-mask", chapterId: currentChapter.id, pageId: selectedPage.id });
+
+      const result = await window.mangaApi.importInpaintPsd(currentChapter.id, selectedPage.id, file);
+      mergeLiveChapter(result.chapter);
+      signalSaveComplete();
+      void refreshLibrary();
+      setLayerVisibility((current) => ({ ...current, inpaint: true, inpaintResult: true, inpaintMask: true }));
+      selectLayer("inpaintResult");
+      pushStatus("PSD에서 인페인트 결과와 마스크를 가져왔습니다.");
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "인페인트 PSD 가져오기에 실패했습니다.");
+    } finally {
+      setInpaintPsdBusy(false);
+    }
+  }, [
+    currentChapter,
+    dirty,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
+    inpaintPsdBusy,
+    mergeLiveChapter,
+    pushStatus,
+    recordGlobalUndoEntry,
+    refreshLibrary,
+    saveNow,
+    selectLayer,
+    selectedPage,
+    selectedPageEditLocked,
+    signalSaveComplete
+  ]);
+
   const updateSelectedPageBlockOpacity = useCallback((opacity: number) => {
     if (!selectedPage || selectedPageEditLocked) {
       return;
@@ -3023,7 +3129,22 @@ export default function App(): React.JSX.Element {
       ) : activeLayer === "image" ? (
         <p className="muted-line">원본 이미지 레이어에는 사용할 도구가 없습니다.</p>
       ) : activeLayer === "inpaint" ? (
-        <p className="muted-line">하위 레이어를 선택해 결과를 보거나 마스크를 편집하세요.</p>
+        <div className="result-action-grid psd-action-grid">
+          <button
+            type="button"
+            onClick={() => void exportSelectedPageInpaintPsd()}
+            disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
+          >
+            PSD 내보내기
+          </button>
+          <button
+            type="button"
+            onClick={selectInpaintPsdFile}
+            disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
+          >
+            PSD 가져오기
+          </button>
+        </div>
       ) : activeLayer === "inpaintResult" ? (
         <>
           <div className="segmented-control tool-selector result-tool-grid" role="group" aria-label="인페인트 결과 도구">
@@ -3307,6 +3428,13 @@ export default function App(): React.JSX.Element {
         hidden
         {...{ webkitdirectory: "" }}
         onChange={(event) => void handleImportInputChange("zip-folder", event)}
+      />
+      <input
+        ref={inpaintPsdInputRef}
+        type="file"
+        accept=".psd,image/vnd.adobe.photoshop,application/octet-stream"
+        hidden
+        onChange={(event) => void handleInpaintPsdInputChange(event)}
       />
       <header className="context-bar">
         <div className="context-bar-left">

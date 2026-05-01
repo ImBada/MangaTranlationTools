@@ -3,6 +3,8 @@ import type {
   ChapterSnapshot,
   CreateImportRequest,
   CreateImportResult,
+  ExportInpaintPsdRequest,
+  ImportInpaintPsdResult,
   ImportPreviewResult,
   InpaintPageRequest,
   InpaintPageResult,
@@ -40,6 +42,18 @@ function postJson<T>(url: string, body?: unknown): Promise<T> {
   return requestJson<T>(url, { method: "POST", body: JSON.stringify(body ?? {}) });
 }
 
+async function requestBlob(url: string, init?: RequestInit): Promise<Blob> {
+  const response = await fetch(url, {
+    ...init,
+    headers: init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers }
+  });
+  if (!response.ok) {
+    const payload = await response.json().catch(() => null);
+    throw new Error(payload?.error || `${response.status} ${response.statusText}`);
+  }
+  return response.blob();
+}
+
 async function previewImport(kind: ImportKind, files: File[]): Promise<ImportPreviewResult | null> {
   if (files.length === 0) {
     return null;
@@ -69,6 +83,15 @@ export const mangaApi = {
   saveInpaintMask: (request: SaveInpaintMaskRequest): Promise<SaveInpaintMaskResult> => postJson("/api/inpaint/mask", request),
   saveInpaintResultLayer: (request: SaveInpaintResultLayerRequest): Promise<SaveInpaintResultLayerResult> =>
     postJson("/api/inpaint/result-layer", request),
+  exportInpaintPsd: (request: ExportInpaintPsdRequest): Promise<Blob> =>
+    requestBlob("/api/inpaint/psd/export", { method: "POST", body: JSON.stringify(request) }),
+  importInpaintPsd: (chapterId: string, pageId: string, file: File): Promise<ImportInpaintPsdResult> => {
+    const formData = new FormData();
+    formData.append("chapterId", chapterId);
+    formData.append("pageId", pageId);
+    formData.append("file", file, file.name);
+    return requestJson<ImportInpaintPsdResult>("/api/inpaint/psd/import", { method: "POST", body: formData });
+  },
   renameWork: (workId: string, title: string): Promise<LibraryIndex> => postJson(`/api/library/works/${encodeURIComponent(workId)}/rename`, { title }),
   renameChapter: (chapterId: string, title: string): Promise<LibraryIndex> =>
     postJson(`/api/library/chapters/${encodeURIComponent(chapterId)}/rename`, { title }),
