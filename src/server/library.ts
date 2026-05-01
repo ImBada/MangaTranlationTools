@@ -149,7 +149,8 @@ export async function saveRenderedPage(chapterId: string, pageId: string, dataUr
   const buffer = dataUrlToBuffer(dataUrl);
   const outputDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "renders");
   await mkdir(outputDir, { recursive: true });
-  const outputPath = join(outputDir, `${sanitizeFileBasename(page.name, page.id)}-${page.id}.png`);
+  const outputFilename = sanitizeRenderFilename(page.name, page.id);
+  const outputPath = join(outputDir, outputFilename);
   await writeFile(outputPath, buffer);
   return { outputPath };
 }
@@ -986,6 +987,10 @@ async function clipOpaqueInpaintResultToMask(resultDataUrl: string, maskDataUrl:
 function sanitizeFileBasename(value: string, fallback: string): string {
   const base = basename(value, extname(value)).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
   return base || fallback;
+}
+
+function sanitizeRenderFilename(value: string, fallback: string): string {
+  return `${sanitizeFileBasename(value, fallback)}.png`;
 }
 
 function firstPathSegment(value: string | undefined): string {
