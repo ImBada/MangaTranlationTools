@@ -275,8 +275,9 @@ const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
 const INPAINT_MASK_BRUSH_SIZE_MIN = 4;
 const INPAINT_MASK_BRUSH_SIZE_MAX = 96;
 const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintTool, string>> = {
-  select: "E",
-  brush: "B"
+  select: "T",
+  brush: "B",
+  eraser: "E"
 };
 
 type StageZoomDirection = "in" | "out";
@@ -382,11 +383,15 @@ function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
   switch (event.code) {
     case "KeyB":
       return "brush";
+    case "KeyE":
+      return "eraser";
   }
 
   switch (event.key.toLowerCase()) {
     case "b":
       return "brush";
+    case "e":
+      return "eraser";
     default:
       return null;
   }
@@ -401,7 +406,7 @@ function isPointerToolShortcut(event: KeyboardEvent): boolean {
 }
 
 function isRangeToolShortcut(event: KeyboardEvent): boolean {
-  return event.code === "KeyE" || event.key.toLowerCase() === "e";
+  return event.code === "KeyT" || event.key.toLowerCase() === "t";
 }
 
 function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
