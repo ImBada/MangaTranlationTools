@@ -67,7 +67,7 @@ npm run app:build
 
 기본 인페인트는 앱 내장 `local-fill-fallback`으로 동작합니다. LaMa용 Python 환경과 Er0mangaInpaint 코드는 `Documents/MangaTranslationTools/tools/` 아래에 준비됩니다.
 
-모델 파일은 자동 다운로드하지 않습니다. 아래 파일을 직접 다운로드해서 지정된 경로에 저장하세요.
+모델 파일은 앱 시작 시 자동 다운로드하지 않습니다. 설정의 `LaMa 인페인트 > 모델 다운로드` 버튼으로 받을 수 있으며, 직접 다운로드해서 아래 경로에 저장해도 됩니다.
 
 - 다운로드: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`
 - 저장 경로: `Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`
