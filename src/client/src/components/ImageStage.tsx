@@ -298,7 +298,7 @@ export function ImageStage({
         />
         {layerVisibility.inpaint ? (
           <div className="inpaint-layer-preview" style={{ opacity: layerOpacity.inpaint }}>
-            {layerVisibility.inpaintResult && (page.inpaintResultDataUrl || activeLayer === "inpaintResult") ? (
+            {layerVisibility.inpaintResult && (page.inpaintResultDataUrl || (activeLayer === "inpaintResult" && !temporaryPanActive)) ? (
               <InpaintResultCanvas
                 className="inpaint-result-canvas"
                 dataUrl={page.inpaintResultDataUrl}
@@ -315,8 +315,8 @@ export function ImageStage({
                 style={{
                   zIndex: activeLayer === "inpaintResult" ? 3 : 1,
                   opacity: layerOpacity.inpaintResult,
-                  maskImage: activeLayer !== "inpaintResult" && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
-                  WebkitMaskImage: activeLayer !== "inpaintResult" && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
+                  maskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
+                  WebkitMaskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
                 }}
               />
             ) : null}
