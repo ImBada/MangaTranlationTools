@@ -14,6 +14,7 @@ type ImageStageProps = {
   stageSize: ViewportSize | null;
   viewScale: number | null;
   viewResetKey: number;
+  zoomToolActive: boolean;
   selectedBlockId: string | null;
   layerVisibility: {
     image: boolean;
@@ -44,6 +45,7 @@ type ImageStageProps = {
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
+  onZoomToolClick: (direction: "in" | "out") => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
@@ -60,6 +62,12 @@ type StagePanState = {
   startX: number;
   startY: number;
   startPan: PanOffset;
+};
+
+type ZoomCursorState = {
+  x: number;
+  y: number;
+  altKey: boolean;
 };
 
 function resolveStageFitBounds(wrap: HTMLDivElement): ViewportSize {
@@ -87,6 +95,7 @@ export function ImageStage({
   stageSize,
   viewScale,
   viewResetKey,
+  zoomToolActive,
   selectedBlockId,
   layerVisibility,
   layerOpacity,
@@ -105,6 +114,7 @@ export function ImageStage({
   onInpaintLayerChange,
   onInpaintSelectionChange,
   onInpaintResultLayerChange,
+  onZoomToolClick,
   onStagePointerMove,
   onStagePointerUp,
   onStagePointerDown,
@@ -116,6 +126,7 @@ export function ImageStage({
   const [fitSize, setFitSize] = React.useState<ViewportSize | null>(null);
   const [panOffset, setPanOffset] = React.useState<PanOffset>({ x: 0, y: 0 });
   const [panning, setPanning] = React.useState(false);
+  const [zoomCursor, setZoomCursor] = React.useState<ZoomCursorState | null>(null);
   const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
 
@@ -229,6 +240,47 @@ export function ImageStage({
     panRef.current = null;
     setPanning(false);
   }, [applyPanOffset, page.id, viewResetKey]);
+
+  React.useEffect(() => {
+    if (!zoomToolActive) {
+      setZoomCursor(null);
+      return;
+    }
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") {
+        return;
+      }
+      setZoomCursor((current) => current ? { ...current, altKey: true } : current);
+    };
+    const onKeyUp = (event: KeyboardEvent) => {
+      if (event.key !== "Alt") {
+        return;
+      }
+      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
+    };
+    const resetAlt = () => {
+      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", resetAlt);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", resetAlt);
+    };
+  }, [zoomToolActive]);
+
+  const updateZoomCursor = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    setZoomCursor({
+      x: event.clientX - rect.left,
+      y: event.clientY - rect.top,
+      altKey: event.altKey
+    });
+  }, []);
 
   return (
     <div ref={wrapRef} className="stage-wrap">
@@ -374,6 +426,45 @@ export function ImageStage({
               </div>
             )
           : null}
+        {zoomToolActive ? (
+          <div
+            className="stage-zoom-hit-area"
+            aria-label="줌 도구"
+            onPointerEnter={updateZoomCursor}
+            onPointerMove={updateZoomCursor}
+            onPointerLeave={() => setZoomCursor(null)}
+            onPointerDown={(event) => {
+              if (event.button !== 0) {
+                return;
+              }
+              event.preventDefault();
+              event.stopPropagation();
+              updateZoomCursor(event);
+              onZoomToolClick(event.altKey ? "out" : "in");
+            }}
+            onPointerUp={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+            onPointerCancel={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+            }}
+          >
+            {zoomCursor ? (
+              <div
+                className={`stage-zoom-cursor ${zoomCursor.altKey ? "zoom-out" : "zoom-in"}`}
+                style={{
+                  left: `${zoomCursor.x}px`,
+                  top: `${zoomCursor.y}px`
+                }}
+                aria-hidden="true"
+              >
+                <span className="stage-zoom-cursor-mark" />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
     </div>
   );

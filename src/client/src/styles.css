@@ -941,6 +941,68 @@ input[type="number"]::-webkit-inner-spin-button {
   font-variant-numeric: tabular-nums;
 }
 
+.stage-tool-overlay {
+  position: absolute;
+  top: 62px;
+  left: 12px;
+  z-index: 72;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: rgba(20, 23, 27, 0.92);
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+}
+
+.stage-tool-overlay button {
+  position: relative;
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  padding: 0;
+  border-radius: 6px;
+}
+
+.stage-tool-overlay button.active {
+  border-color: #77b7ff;
+  background: rgba(77, 144, 230, 0.28);
+  color: #ffffff;
+}
+
+.stage-tool-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.stage-tool-icon path:first-child {
+  fill: currentColor;
+}
+
+.stage-tool-shortcut {
+  position: absolute;
+  right: 3px;
+  bottom: 2px;
+  min-width: 8px;
+  color: rgba(241, 245, 249, 0.82);
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+  text-align: center;
+  pointer-events: none;
+}
+
+.stage-tool-overlay button.active .stage-tool-shortcut {
+  color: #ffffff;
+}
+
 .notification-card,
 .status-history-panel {
   pointer-events: auto;
@@ -1953,6 +2015,61 @@ input[type="number"]::-webkit-inner-spin-button {
 .inpaint-result-canvas.selecting {
   cursor: crosshair;
   pointer-events: auto;
+}
+
+.stage-zoom-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  cursor: none;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stage-zoom-cursor {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border: 2px solid rgba(26, 31, 38, 0.92);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 2px 8px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.stage-zoom-cursor::before {
+  content: "";
+  position: absolute;
+  right: -8px;
+  bottom: -5px;
+  width: 13px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(26, 31, 38, 0.92);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72);
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.stage-zoom-cursor-mark,
+.stage-zoom-cursor-mark::after {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(26, 31, 38, 0.92);
+  transform: translate(-50%, -50%);
+}
+
+.stage-zoom-cursor.zoom-in .stage-zoom-cursor-mark::after {
+  content: "";
+  width: 2px;
+  height: 13px;
 }
 
 .layer-subgroup {

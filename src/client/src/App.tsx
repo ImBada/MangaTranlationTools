@@ -280,6 +280,8 @@ const INPAINT_TOOL_SHORTCUTS: Record<InpaintTool, string> = {
   eraser: "E"
 };
 
+type StageZoomDirection = "in" | "out";
+
 type InpaintToolIconName = InpaintResultTool;
 
 type InpaintToolButtonProps = {
@@ -397,6 +399,14 @@ function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
     default:
       return null;
   }
+}
+
+function isZoomToolShortcut(event: KeyboardEvent): boolean {
+  return event.code === "KeyZ" || event.key.toLowerCase() === "z";
+}
+
+function isPointerToolShortcut(event: KeyboardEvent): boolean {
+  return event.code === "KeyA" || event.key.toLowerCase() === "a";
 }
 
 function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
@@ -550,6 +560,7 @@ export default function App(): React.JSX.Element {
   const [lamaNoticePlatform, setLamaNoticePlatform] = useState<LamaNoticePlatform>("win32");
   const [stageViewScale, setStageViewScale] = useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = useState(0);
+  const [zoomToolActive, setZoomToolActive] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [undoVersion, setUndoVersion] = useState(0);
   const [saveFlash, setSaveFlash] = useState(false);
@@ -699,6 +710,9 @@ export default function App(): React.JSX.Element {
   const zoomStage = useCallback((factor: number) => {
     setStageViewScale((current) => clampStageViewScale((current ?? currentStageScale) * factor));
   }, [currentStageScale]);
+  const handleZoomToolClick = useCallback((direction: StageZoomDirection) => {
+    zoomStage(direction === "out" ? 1 / STAGE_ZOOM_STEP : STAGE_ZOOM_STEP);
+  }, [zoomStage]);
   const fitStageToWorkspace = useCallback(() => {
     setStageViewScale(null);
     setStageViewResetKey((current) => current + 1);
@@ -727,6 +741,7 @@ export default function App(): React.JSX.Element {
   }, [focusModeEnabled]);
 
   const selectSharedInpaintTool = useCallback((tool: InpaintTool) => {
+    setZoomToolActive(false);
     setInpaintTool(tool);
     setInpaintResultTool(tool);
   }, []);
@@ -2586,6 +2601,10 @@ export default function App(): React.JSX.Element {
         setLibraryWidgetOpen(false);
         return;
       }
+      if (event.key === "Escape" && zoomToolActive) {
+        setZoomToolActive(false);
+        return;
+      }
 
       if (!modalOpen && !editableTarget && isPlatformUndoShortcut(event, undoShortcutPlatform)) {
         event.preventDefault();
@@ -2609,6 +2628,34 @@ export default function App(): React.JSX.Element {
           case "5": selectLayer("image"); break;
           default: return;
         }
+        workspacePanelRef.current?.focus();
+        return;
+      }
+
+      const zoomToolShortcut =
+        !modalOpen &&
+        !editableTarget &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        isZoomToolShortcut(event);
+      if (zoomToolShortcut) {
+        event.preventDefault();
+        setZoomToolActive(true);
+        workspacePanelRef.current?.focus();
+        return;
+      }
+
+      const pointerToolShortcut =
+        !modalOpen &&
+        !editableTarget &&
+        !event.altKey &&
+        !event.ctrlKey &&
+        !event.metaKey &&
+        isPointerToolShortcut(event);
+      if (pointerToolShortcut) {
+        event.preventDefault();
+        setZoomToolActive(false);
         workspacePanelRef.current?.focus();
         return;
       }
@@ -2706,7 +2753,8 @@ export default function App(): React.JSX.Element {
     selectSharedInpaintTool,
     selectPageForReading,
     selectedPageEditLocked,
-    undoShortcutPlatform
+    undoShortcutPlatform,
+    zoomToolActive
   ]);
 
   const renameWork = useCallback((workId: string) => {
@@ -3403,6 +3451,41 @@ export default function App(): React.JSX.Element {
       </button>
     </div>
   ) : null;
+  const stageToolOverlay = selectedPage ? (
+    <div className="stage-tool-overlay" aria-label="전역 도구">
+      <button
+        type="button"
+        className={!zoomToolActive ? "active" : ""}
+        aria-label="일반 마우스"
+        aria-pressed={!zoomToolActive}
+        aria-keyshortcuts="A"
+        title="일반 마우스 (A)"
+        onClick={() => setZoomToolActive(false)}
+      >
+        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 3l12 11-6.2 1.1L8.3 21 6 3z" />
+        </svg>
+        <span className="stage-tool-shortcut" aria-hidden="true">A</span>
+      </button>
+      <button
+        type="button"
+        className={zoomToolActive ? "active" : ""}
+        aria-label="줌 도구"
+        aria-pressed={zoomToolActive}
+        aria-keyshortcuts="Z"
+        title="줌 도구 (Z)"
+        onClick={() => setZoomToolActive(true)}
+      >
+        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <circle cx="10.5" cy="10.5" r="5.8" />
+          <path d="M15 15l5 5" />
+          <path d="M10.5 7.5v6" />
+          <path d="M7.5 10.5h6" />
+        </svg>
+        <span className="stage-tool-shortcut" aria-hidden="true">Z</span>
+      </button>
+    </div>
+  ) : null;
 
   return (
     <main className={currentChapter ? "app-shell grid h-screen bg-canvas" : "app-shell no-left-rail grid h-screen bg-canvas"}>
@@ -3588,6 +3671,7 @@ export default function App(): React.JSX.Element {
         onMouseDown={() => workspacePanelRef.current?.focus()}
       >
         {stageZoomOverlay}
+        {stageToolOverlay}
         {notificationDock}
         {statusHistoryPanel}
         <button
@@ -3609,6 +3693,7 @@ export default function App(): React.JSX.Element {
               stageSize={stageSize}
               viewScale={stageViewScale}
               viewResetKey={stageViewResetKey}
+              zoomToolActive={zoomToolActive}
               selectedBlockId={selectedBlockId}
               layerVisibility={stageLayerVisibility}
               layerOpacity={stageLayerOpacity}
@@ -3627,6 +3712,7 @@ export default function App(): React.JSX.Element {
               onInpaintLayerChange={updateSelectedPageInpaintMask}
               onInpaintSelectionChange={setInpaintSelectionRect}
               onInpaintResultLayerChange={updateSelectedPageInpaintResult}
+              onZoomToolClick={handleZoomToolClick}
               onStagePointerMove={onStagePointerMove}
               onStagePointerUp={onStagePointerUp}
               onStagePointerDown={() => {
