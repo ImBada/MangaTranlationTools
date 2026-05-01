@@ -165,9 +165,10 @@ const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
   },
   image: {
     image: 1,
-    inpaint: 0.3,
-    inpaintResult: 0.3,
-    inpaintMask: 0.3
+    inpaint: 0,
+    inpaintResult: 0,
+    inpaintMask: 0,
+    overlay: 0
   },
   inpaint: {
     image: 0.5,
