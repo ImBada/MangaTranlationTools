@@ -312,6 +312,7 @@ export default function App(): React.JSX.Element {
   const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
   const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const layerToolActive = activeLayer === "overlay" || activeLayer === "inpaintMask" || activeLayer === "inpaintResult";
+  const temporaryPanShortcutEnabled = layerToolActive || zoomToolActive;
   const selectedPageInpaintNotice =
     selectedPage?.inpaintStatus === "running"
       ? { tone: "running", title: "인페인트 중", message: selectedPage.name }
@@ -2205,15 +2206,15 @@ export default function App(): React.JSX.Element {
   }, [libraryWidgetOpen]);
 
   React.useEffect(() => {
-    if (!layerToolActive || modalOpen) {
+    if (!temporaryPanShortcutEnabled || modalOpen) {
       temporaryPanHeldRef.current = false;
       setTemporaryPanActive(false);
     }
-  }, [layerToolActive, modalOpen]);
+  }, [temporaryPanShortcutEnabled, modalOpen]);
 
   React.useEffect(() => {
     const shouldHandleSpacePan = (event: KeyboardEvent) =>
-      layerToolActive &&
+      temporaryPanShortcutEnabled &&
       !modalOpen &&
       !event.altKey &&
       !event.ctrlKey &&
@@ -2254,7 +2255,7 @@ export default function App(): React.JSX.Element {
       window.removeEventListener("blur", resetTemporaryPan);
       document.removeEventListener("visibilitychange", resetTemporaryPan);
     };
-  }, [layerToolActive, modalOpen]);
+  }, [temporaryPanShortcutEnabled, modalOpen]);
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {

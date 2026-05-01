@@ -246,7 +246,7 @@ export function ImageStage({
   }, [applyPanOffset, page.id, viewResetKey]);
 
   React.useEffect(() => {
-    if (!zoomToolActive) {
+    if (!zoomToolActive || temporaryPanActive) {
       setZoomCursor(null);
       return;
     }
@@ -275,7 +275,7 @@ export function ImageStage({
       window.removeEventListener("keyup", onKeyUp);
       window.removeEventListener("blur", resetAlt);
     };
-  }, [zoomToolActive]);
+  }, [temporaryPanActive, zoomToolActive]);
 
   const updateZoomCursor = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
@@ -443,7 +443,7 @@ export function ImageStage({
             />
           </div>
         ) : null}
-        {zoomToolActive ? (
+        {zoomToolActive && !temporaryPanActive ? (
           <div
             className="stage-zoom-hit-area"
             aria-label="줌 도구"
