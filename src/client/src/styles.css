@@ -1375,6 +1375,69 @@ input[type="number"]::-webkit-inner-spin-button {
   gap: 10px;
 }
 
+.font-outline-section {
+  display: grid;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.font-outline-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  min-height: 24px;
+  padding: 0 1px;
+}
+
+.font-outline-section-header > span {
+  color: var(--color-muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.font-outline-mode {
+  display: grid;
+  grid-template-columns: repeat(2, 30px);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid rgba(100, 116, 139, 0.36);
+  border-radius: 7px;
+  background: rgba(14, 18, 24, 0.86);
+}
+
+.font-outline-mode button {
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  min-height: 20px;
+  padding: 0 5px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  color: #9aa7b4;
+  font-size: 10px;
+  font-weight: 800;
+}
+
+.font-outline-mode button.active {
+  background: rgba(36, 68, 61, 0.96);
+  color: #e6fff7;
+}
+
+.font-outline-mode button:hover:not(:disabled) {
+  background: rgba(48, 56, 70, 0.72);
+  color: #f5f0e8;
+}
+
+.secondary-outline-row {
+  padding-top: 5px;
+}
+
 .outline-color-input {
   position: absolute;
   inset: 0;
@@ -2140,6 +2203,10 @@ input[type="number"]::-webkit-inner-spin-button {
   justify-content: center;
   overflow: hidden;
   text-align: inherit;
+}
+
+.overlay-text-layer-stack {
+  display: block;
 }
 
 .overlay-text-content {

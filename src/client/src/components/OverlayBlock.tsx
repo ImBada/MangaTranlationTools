@@ -45,6 +45,8 @@ export function OverlayBlock({
       ? resolveWrappedTextLines(block, displayText, layout.fontSizePx, layout.fitInnerWidth)
       : [];
   const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const secondaryOutlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
   const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
@@ -92,21 +94,58 @@ export function OverlayBlock({
     maxHeight: "100%",
     overflow: "hidden"
   };
-  const contentStyle: React.CSSProperties = {
-    boxSizing: "border-box",
-    writingMode: block.renderDirection === "vertical" ? "vertical-rl" : "horizontal-tb",
-    textOrientation: block.renderDirection === "vertical" ? "upright" : undefined,
+  const contentFrameStyle: React.CSSProperties = {
+    position: "relative",
     width: `${block.renderDirection === "vertical" ? layout.fitInnerWidth : layout.innerWidth}px`,
     height: block.renderDirection === "vertical" ? `${layout.fitInnerHeight}px` : undefined,
     maxWidth: "100%",
+    maxHeight: "100%"
+  };
+  const baseContentStyle: React.CSSProperties = {
+    boxSizing: "border-box",
+    writingMode: block.renderDirection === "vertical" ? "vertical-rl" : "horizontal-tb",
+    textOrientation: block.renderDirection === "vertical" ? "upright" : undefined,
+    width: "100%",
+    height: block.renderDirection === "vertical" ? "100%" : undefined,
+    maxWidth: "100%",
     maxHeight: "100%",
+  };
+  const contentStyle: React.CSSProperties = {
+    ...baseContentStyle,
+    position: "relative",
+    zIndex: 1,
     WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${block.outlineColor ?? "#000000"}` : undefined,
     ...screentoneFillStyle
+  };
+  const secondaryOutlineStyle: React.CSSProperties = {
+    ...baseContentStyle,
+    position: "absolute",
+    inset: 0,
+    zIndex: 0,
+    pointerEvents: "none",
+    color: "transparent",
+    WebkitTextFillColor: "transparent",
+    WebkitTextStroke:
+      combinedSecondaryOutlineWidthPx > 0 ? `${combinedSecondaryOutlineWidthPx}px ${block.secondaryOutlineColor ?? "#ffffff"}` : undefined
   };
   const lineStyle: React.CSSProperties = {
     alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center",
     ...screentoneFillStyle
   };
+  const secondaryOutlineLineStyle: React.CSSProperties = {
+    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center"
+  };
+  const renderTextContent = (contentLayerStyle: React.CSSProperties, contentLineStyle: React.CSSProperties, ariaHidden = false) => (
+    <span className="overlay-text-content" style={contentLayerStyle} aria-hidden={ariaHidden}>
+      {block.renderDirection === "horizontal"
+        ? horizontalLines.map((line, index) => (
+            <span key={`${line}-${index}`} className="overlay-text-line" style={contentLineStyle}>
+              {line}
+            </span>
+          ))
+        : displayText}
+    </span>
+  );
 
   return (
     <div
@@ -117,14 +156,9 @@ export function OverlayBlock({
     >
       {visualContentVisible ? (
         <div className="overlay-text" style={textWrapStyle}>
-          <span className="overlay-text-content" style={contentStyle}>
-            {block.renderDirection === "horizontal"
-                ? horizontalLines.map((line, index) => (
-                  <span key={`${line}-${index}`} className="overlay-text-line" style={lineStyle}>
-                    {line}
-                  </span>
-                ))
-              : displayText}
+          <span className="overlay-text-layer-stack" style={contentFrameStyle}>
+            {secondaryOutlineWidthPx > 0 ? renderTextContent(secondaryOutlineStyle, secondaryOutlineLineStyle, true) : null}
+            {renderTextContent(contentStyle, lineStyle)}
           </span>
         </div>
       ) : null}

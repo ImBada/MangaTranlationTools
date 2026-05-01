@@ -95,6 +95,8 @@ export type TranslationBlock = {
   lineHeightLinkedToPreset?: boolean;
   outlineColorLinkedToPreset?: boolean;
   outlineWidthLinkedToPreset?: boolean;
+  secondaryOutlineColorLinkedToPreset?: boolean;
+  secondaryOutlineWidthLinkedToPreset?: boolean;
   autoFitTextLinkedToPreset?: boolean;
   textColorLinkedToPreset?: boolean;
   screentoneFillEnabledLinkedToPreset?: boolean;
@@ -106,6 +108,8 @@ export type TranslationBlock = {
   lineHeight: number;
   outlineColor?: string;
   outlineWidthPx?: number;
+  secondaryOutlineColor?: string;
+  secondaryOutlineWidthPx?: number;
   textPaddingPx?: number;
   textAlign: "left" | "center" | "right";
   textColor: string;
@@ -127,6 +131,8 @@ export type FontPreset = {
   lineHeight: number;
   outlineColor?: string;
   outlineWidthPx?: number;
+  secondaryOutlineColor?: string;
+  secondaryOutlineWidthPx?: number;
   autoFitText?: boolean;
   textColor?: string;
   screentoneFillEnabled?: boolean;

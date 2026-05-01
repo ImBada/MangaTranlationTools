@@ -175,9 +175,7 @@ function drawRenderedBlock(
   }
 
   context.fillStyle = block.textColor;
-  context.strokeStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
   context.lineJoin = "round";
-  context.lineWidth = resolveRenderedOutlineWidthPx(block, renderFontSizePx);
   context.font = `${CANVAS_TEXT_RENDER_FONT_WEIGHT} ${renderFontSizePx}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
   context.textBaseline = "top";
 
@@ -240,22 +238,39 @@ function drawVerticalRenderedText(
   }
 }
 
-function drawOutlinedText(context: CanvasRenderingContext2D, text: string, x: number, y: number): void {
-  if (context.lineWidth > 0) {
+function strokeTextOutlines(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
+  const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
+
+  if (secondaryOutlineWidthPx > 0) {
+    context.save();
+    context.strokeStyle = block.secondaryOutlineColor ?? "#ffffff";
+    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2;
     context.strokeText(text, x, y);
+    context.restore();
   }
+
+  if (outlineWidthPx > 0) {
+    context.save();
+    context.strokeStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
+    context.lineWidth = outlineWidthPx;
+    context.strokeText(text, x, y);
+    context.restore();
+  }
+}
+
+function drawOutlinedText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  strokeTextOutlines(context, block, text, x, y, fontSize);
   context.fillText(text, x, y);
 }
 
 function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
   if (!(block.screentoneFillEnabled ?? false)) {
-    drawOutlinedText(context, text, x, y);
+    drawOutlinedText(context, block, text, x, y, fontSize);
     return;
   }
 
-  if (context.lineWidth > 0) {
-    context.strokeText(text, x, y);
-  }
+  strokeTextOutlines(context, block, text, x, y, fontSize);
 
   context.save();
   context.fillStyle = "#ffffff";
@@ -344,6 +359,11 @@ function parseHexColor(hex: string): { r: number; g: number; b: number } {
 
 function resolveRenderedOutlineWidthPx(block: TranslationBlock, fontSize: number): number {
   const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0);
+  return Math.min(outlineWidthPx, fontSize * 0.35);
+}
+
+function resolveRenderedSecondaryOutlineWidthPx(block: TranslationBlock, fontSize: number): number {
+  const outlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
   return Math.min(outlineWidthPx, fontSize * 0.35);
 }
 

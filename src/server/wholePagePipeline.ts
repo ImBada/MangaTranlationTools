@@ -372,6 +372,8 @@ function overlayItemToBlock(item: OverlayItem, page: MangaPage, index: number): 
     lineHeight: 1.18,
     outlineColor: "#000000",
     outlineWidthPx: 0,
+    secondaryOutlineColor: "#ffffff",
+    secondaryOutlineWidthPx: 0,
     textAlign: "center",
     textColor: DEFAULT_TEXT_COLOR,
     backgroundColor: type === "sfx" ? "#fff4ea" : DEFAULT_BACKGROUND_COLOR,

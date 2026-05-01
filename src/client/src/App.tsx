@@ -76,6 +76,7 @@ const TEXT_MASK_MIN_COMPONENT_RATIO = 0.00002;
 const TEXT_MASK_EDGE_COMPONENT_RATIO = 0.008;
 const TEXT_MASK_BROAD_OUTER_RATIO = 0.01;
 const TEXT_MASK_CORNER_STROKE_RATIO = 0.0015;
+const DEFAULT_SECONDARY_OUTLINE_WIDTH_PX = 2;
 
 type FontFamilyOption = {
   label: string;
@@ -642,12 +643,15 @@ export default function App(): React.JSX.Element {
     ? applyFontPresetPatchToBlock(selectedBlock, selectedFontPreset)
     : selectedBlock;
   const fontControlValues = selectedBlockFontControls ?? editingFontPreset;
+  const secondaryOutlineActive = (fontControlValues?.secondaryOutlineWidthPx ?? 0) > 0;
   const selectedBlockFontPresetLinks = selectedBlock
     ? {
         fontSizePx: isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"),
         lineHeight: isBlockFontPresetValueLinked(selectedBlock, "lineHeight"),
         outlineColor: isBlockFontPresetValueLinked(selectedBlock, "outlineColor"),
         outlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "outlineWidthPx"),
+        secondaryOutlineColor: isBlockFontPresetValueLinked(selectedBlock, "secondaryOutlineColor"),
+        secondaryOutlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "secondaryOutlineWidthPx"),
         autoFitText: isBlockFontPresetValueLinked(selectedBlock, "autoFitText"),
         textColor: isBlockFontPresetValueLinked(selectedBlock, "textColor"),
         screentoneFillEnabled: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillEnabled"),
@@ -1780,6 +1784,8 @@ export default function App(): React.JSX.Element {
                       lineHeightLinkedToPreset: true,
                       outlineColorLinkedToPreset: true,
                       outlineWidthLinkedToPreset: true,
+                      secondaryOutlineColorLinkedToPreset: true,
+                      secondaryOutlineWidthLinkedToPreset: true,
                       autoFitTextLinkedToPreset: true,
                       textColorLinkedToPreset: true,
                       screentoneFillEnabledLinkedToPreset: true,
@@ -1816,6 +1822,8 @@ export default function App(): React.JSX.Element {
       lineHeightLinkedToPreset: true,
       outlineColorLinkedToPreset: true,
       outlineWidthLinkedToPreset: true,
+      secondaryOutlineColorLinkedToPreset: true,
+      secondaryOutlineWidthLinkedToPreset: true,
       autoFitTextLinkedToPreset: true,
       textColorLinkedToPreset: true,
       screentoneFillEnabledLinkedToPreset: true,
@@ -1835,6 +1843,8 @@ export default function App(): React.JSX.Element {
       lineHeightLinkedToPreset: undefined,
       outlineColorLinkedToPreset: undefined,
       outlineWidthLinkedToPreset: undefined,
+      secondaryOutlineColorLinkedToPreset: undefined,
+      secondaryOutlineWidthLinkedToPreset: undefined,
       autoFitTextLinkedToPreset: undefined,
       textColorLinkedToPreset: undefined,
       screentoneFillEnabledLinkedToPreset: undefined,
@@ -2419,6 +2429,8 @@ export default function App(): React.JSX.Element {
       lineHeightLinkedToPreset: editingFontPreset ? true : undefined,
       outlineColorLinkedToPreset: editingFontPreset ? true : undefined,
       outlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
+      secondaryOutlineColorLinkedToPreset: editingFontPreset ? true : undefined,
+      secondaryOutlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
       autoFitTextLinkedToPreset: editingFontPreset ? true : undefined,
       textColorLinkedToPreset: editingFontPreset ? true : undefined,
       screentoneFillEnabledLinkedToPreset: editingFontPreset ? true : undefined,
@@ -2430,6 +2442,8 @@ export default function App(): React.JSX.Element {
       lineHeight: sourcePreset.lineHeight,
       outlineColor: sourcePreset.outlineColor,
       outlineWidthPx: sourcePreset.outlineWidthPx,
+      secondaryOutlineColor: sourcePreset.secondaryOutlineColor,
+      secondaryOutlineWidthPx: sourcePreset.secondaryOutlineWidthPx,
       autoFitText: sourcePreset.autoFitText,
       textAlign: "center",
       textColor: sourcePreset.textColor ?? "#111111",
@@ -3023,34 +3037,97 @@ export default function App(): React.JSX.Element {
                   {renderFontPresetLinkButton("lineHeight", "줄 간격")}
                 </label>
               </div>
-              <div className="font-outline-row font-tool-grid">
-                <label className="compact-tool-field font-color-field">
-                  <span>외곽선 색</span>
-                  <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}>
-                    <input
-                      type="color"
-                      className="outline-color-input"
-                      value={fontControlValues.outlineColor ?? "#000000"}
+              <div className="font-outline-section">
+                <div className="font-outline-section-header">
+                  <span>외곽선</span>
+                  <div className="font-outline-mode" aria-label="외곽선 개수">
+                    <button
+                      type="button"
+                      className={!secondaryOutlineActive ? "active" : ""}
                       disabled={selectedPageEditLocked}
-                      onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
+                      onClick={() => updateSelectedBlockFontSetting({ secondaryOutlineWidthPx: 0 })}
+                      aria-pressed={!secondaryOutlineActive}
+                    >
+                      1개
+                    </button>
+                    <button
+                      type="button"
+                      className={secondaryOutlineActive ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      onClick={() =>
+                        updateSelectedBlockFontSetting({
+                          secondaryOutlineColor: fontControlValues.secondaryOutlineColor ?? "#ffffff",
+                          secondaryOutlineWidthPx: fontControlValues.secondaryOutlineWidthPx && fontControlValues.secondaryOutlineWidthPx > 0
+                            ? fontControlValues.secondaryOutlineWidthPx
+                            : DEFAULT_SECONDARY_OUTLINE_WIDTH_PX
+                        })
+                      }
+                      aria-pressed={secondaryOutlineActive}
+                    >
+                      2개
+                    </button>
+                  </div>
+                </div>
+                <div className="font-outline-row font-tool-grid">
+                  <label className="compact-tool-field font-color-field">
+                    <span>{secondaryOutlineActive ? "1차 외곽선 색" : "외곽선 색"}</span>
+                    <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}>
+                      <input
+                        type="color"
+                        className="outline-color-input"
+                        value={fontControlValues.outlineColor ?? "#000000"}
+                        disabled={selectedPageEditLocked}
+                        onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
+                      />
+                    </span>
+                    {renderFontPresetLinkButton("outlineColor", secondaryOutlineActive ? "1차 외곽선 색" : "외곽선 색")}
+                  </label>
+                  <label className="compact-tool-field font-number-field">
+                    <span>{secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께"}</span>
+                    <CompactNumberControl
+                      ariaLabel={secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께"}
+                      min={0}
+                      max={24}
+                      step={0.5}
+                      value={fontControlValues.outlineWidthPx ?? 0}
+                      suffix="px"
+                      disabled={selectedPageEditLocked}
+                      onChange={(outlineWidthPx) => updateSelectedBlockFontSetting({ outlineWidthPx })}
                     />
-                  </span>
-                  {renderFontPresetLinkButton("outlineColor", "외곽선 색")}
-                </label>
-                <label className="compact-tool-field font-number-field">
-                  <span>외곽선 두께</span>
-                  <CompactNumberControl
-                    ariaLabel="외곽선 두께"
-                    min={0}
-                    max={24}
-                    step={0.5}
-                    value={fontControlValues.outlineWidthPx ?? 0}
-                    suffix="px"
-                    disabled={selectedPageEditLocked}
-                    onChange={(outlineWidthPx) => updateSelectedBlockFontSetting({ outlineWidthPx })}
-                  />
-                  {renderFontPresetLinkButton("outlineWidthPx", "외곽선 두께")}
-                </label>
+                    {renderFontPresetLinkButton("outlineWidthPx", secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께")}
+                  </label>
+                </div>
+                {secondaryOutlineActive ? (
+                  <div className="font-outline-row font-tool-grid secondary-outline-row">
+                    <label className="compact-tool-field font-color-field">
+                      <span>2차 외곽선 색</span>
+                      <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.secondaryOutlineColor ?? "#ffffff" }}>
+                        <input
+                          type="color"
+                          className="outline-color-input"
+                          value={fontControlValues.secondaryOutlineColor ?? "#ffffff"}
+                          disabled={selectedPageEditLocked}
+                          onChange={(event) => updateSelectedBlockFontSetting({ secondaryOutlineColor: event.target.value })}
+                        />
+                      </span>
+                      {renderFontPresetLinkButton("secondaryOutlineColor", "2차 외곽선 색")}
+                    </label>
+                    <label className="compact-tool-field font-number-field">
+                      <span>2차 외곽선 두께</span>
+                      <CompactNumberControl
+                        ariaLabel="2차 외곽선 두께"
+                        min={0}
+                        max={24}
+                        step={0.5}
+                        value={fontControlValues.secondaryOutlineWidthPx ?? 0}
+                        suffix="px"
+                        disabled={selectedPageEditLocked}
+                        onChange={(secondaryOutlineWidthPx) => updateSelectedBlockFontSetting({ secondaryOutlineWidthPx })}
+                      />
+                      {renderFontPresetLinkButton("secondaryOutlineWidthPx", "2차 외곽선 두께")}
+                    </label>
+                  </div>
+                ) : null}
               </div>
               <label className="compact-tool-field font-color-field">
                 <span>글자색</span>

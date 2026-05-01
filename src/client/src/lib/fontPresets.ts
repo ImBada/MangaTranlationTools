@@ -9,6 +9,8 @@ export type FontPresetPatch = Partial<
     | "lineHeight"
     | "outlineColor"
     | "outlineWidthPx"
+    | "secondaryOutlineColor"
+    | "secondaryOutlineWidthPx"
     | "autoFitText"
     | "textColor"
     | "screentoneFillEnabled"
@@ -25,6 +27,8 @@ const PRESET_LINK_FIELD_BY_KEY = {
   lineHeight: "lineHeightLinkedToPreset",
   outlineColor: "outlineColorLinkedToPreset",
   outlineWidthPx: "outlineWidthLinkedToPreset",
+  secondaryOutlineColor: "secondaryOutlineColorLinkedToPreset",
+  secondaryOutlineWidthPx: "secondaryOutlineWidthLinkedToPreset",
   autoFitText: "autoFitTextLinkedToPreset",
   textColor: "textColorLinkedToPreset",
   screentoneFillEnabled: "screentoneFillEnabledLinkedToPreset",
@@ -39,6 +43,8 @@ export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = {
   lineHeight: 1.18,
   outlineColor: "#000000",
   outlineWidthPx: 0,
+  secondaryOutlineColor: "#ffffff",
+  secondaryOutlineWidthPx: 0,
   autoFitText: true,
   textColor: "#111111",
   screentoneFillEnabled: false,
@@ -56,6 +62,8 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     lineHeight: source.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
     outlineColor: source.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
     outlineWidthPx: source.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
+    secondaryOutlineColor: source.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
+    secondaryOutlineWidthPx: source.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
     autoFitText: source.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
     textColor: source.textColor ?? DEFAULT_FONT_PRESET.textColor,
     screentoneFillEnabled: source.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
@@ -83,6 +91,8 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
     lineHeightLinkedToPreset: _lineHeightLinkedToPreset,
     outlineColorLinkedToPreset: _outlineColorLinkedToPreset,
     outlineWidthLinkedToPreset: _outlineWidthLinkedToPreset,
+    secondaryOutlineColorLinkedToPreset: _secondaryOutlineColorLinkedToPreset,
+    secondaryOutlineWidthLinkedToPreset: _secondaryOutlineWidthLinkedToPreset,
     autoFitTextLinkedToPreset: _autoFitTextLinkedToPreset,
     textColorLinkedToPreset: _textColorLinkedToPreset,
     screentoneFillEnabledLinkedToPreset: _screentoneFillEnabledLinkedToPreset,
@@ -120,6 +130,14 @@ export function applyFontPresetPatchToBlock(
       patch.outlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineWidthPx"))
         ? patch.outlineWidthPx
         : block.outlineWidthPx,
+    secondaryOutlineColor:
+      patch.secondaryOutlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineColor"))
+        ? patch.secondaryOutlineColor
+        : block.secondaryOutlineColor,
+    secondaryOutlineWidthPx:
+      patch.secondaryOutlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineWidthPx"))
+        ? patch.secondaryOutlineWidthPx
+        : block.secondaryOutlineWidthPx,
     autoFitText:
       patch.autoFitText !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "autoFitText"))
         ? patch.autoFitText
