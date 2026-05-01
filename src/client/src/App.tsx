@@ -2688,7 +2688,7 @@ export default function App(): React.JSX.Element {
   }, []);
 
   const layerToolPanel = (
-    <section className="layer-tool-panel left-tool-panel">
+    <section className="layer-tool-panel layer-tools-panel">
       <h2>{activeLayer === "overlay" ? "폰트 설정" : activeLayer === "inpaintMask" ? "마스크 도구" : activeLayer === "inpaintResult" ? "결과 레이어 도구" : "도구"}</h2>
       {activeLayer === "overlay" ? (
         <>
@@ -3371,8 +3371,6 @@ export default function App(): React.JSX.Element {
       </header>
 
       <aside className="sidebar flex min-h-0 flex-col gap-3 overflow-hidden">
-        {layerToolPanel}
-
         <PageList
           pages={currentChapter?.pages ?? []}
           selectedPageId={selectedPage?.id ?? null}
@@ -3514,6 +3512,10 @@ export default function App(): React.JSX.Element {
           </>
         )}
       </section>
+
+      <aside className="layer-tools-rail flex min-h-0 flex-col gap-3 overflow-hidden">
+        {layerToolPanel}
+      </aside>
 
       <aside className="right-rail flex min-h-0 flex-col gap-3 overflow-hidden">
         <section className="layer-panel right-rail-layer-panel">

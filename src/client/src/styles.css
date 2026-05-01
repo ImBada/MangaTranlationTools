@@ -149,7 +149,7 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 360px minmax(0, 1fr) 360px;
+  grid-template-columns: 340px minmax(0, 1fr) 340px 340px;
   grid-template-rows: auto minmax(0, 1fr);
   height: 100vh;
   background: #101114;
@@ -160,6 +160,10 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .app-shell.no-left-rail .sidebar {
+  display: none;
+}
+
+.app-shell.no-left-rail .layer-tools-rail {
   display: none;
 }
 
@@ -465,6 +469,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .sidebar,
+.layer-tools-rail,
 .right-rail {
   display: flex;
   flex-direction: column;
@@ -487,6 +492,13 @@ input[type="number"]::-webkit-inner-spin-button {
     linear-gradient(180deg, rgba(31, 36, 43, 0.72) 0%, rgba(21, 24, 29, 0) 280px),
     #15181d;
   overflow: hidden;
+}
+
+.layer-tools-rail {
+  border-left: 1px solid #2e3137;
+  background:
+    linear-gradient(180deg, rgba(31, 36, 43, 0.62) 0%, rgba(21, 24, 29, 0) 280px),
+    #141820;
 }
 
 .workspace {
@@ -580,10 +592,9 @@ input[type="number"]::-webkit-inner-spin-button {
   min-height: 210px;
 }
 
-.left-tool-panel {
-  flex: 0 1 auto;
-  max-height: 34%;
-  min-height: 120px;
+.layer-tools-panel {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow: auto;
   align-content: start;
 }
@@ -809,10 +820,14 @@ input[type="number"]::-webkit-inner-spin-button {
 .page-select {
   display: flex;
   align-items: center;
-  justify-content: flex-start;
+  justify-content: space-between;
   gap: 12px;
   min-width: 0;
   text-align: left;
+}
+
+.chapter-select {
+  justify-content: flex-start;
 }
 
 .chapter-item span,
@@ -831,6 +846,25 @@ input[type="number"]::-webkit-inner-spin-button {
 .page-actions {
   display: flex;
   gap: 8px;
+}
+
+.page-navigation-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.page-nav-button {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border-radius: 6px;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .page-icon-button {
@@ -859,6 +893,43 @@ input[type="number"]::-webkit-inner-spin-button {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  gap: 7px;
+}
+
+.page-status-icon {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  min-width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 999px;
+  border-color: #343941;
+  background: #171b21;
+  color: #9aa7b4;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  flex: 0 0 auto;
+}
+
+.page-status-translation-mark {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  align-items: baseline;
+  gap: 1px;
+  font-weight: 900;
+  line-height: 1;
+}
+
+.page-status-translation-mark span:first-child {
+  font-size: 10px;
+}
+
+.page-status-translation-mark span:last-child {
+  font-size: 11px;
 }
 
 .page-progress-checkbox {
@@ -870,15 +941,22 @@ input[type="number"]::-webkit-inner-spin-button {
   flex-shrink: 0;
 }
 
-.page-status-badge {
-  min-width: 40px;
-  padding: 6px 8px;
-  border-radius: 999px;
-  border: 1px solid #343941;
-  background: #1a1d22;
-  color: #ddd5ca;
-  font-size: 12px;
-  text-align: center;
+.page-status-icon.completed {
+  border-color: rgba(94, 234, 212, 0.48);
+  background: rgba(23, 53, 47, 0.86);
+  color: #a7f3d0;
+}
+
+.page-status-icon.running {
+  border-color: rgba(96, 165, 250, 0.48);
+  background: rgba(30, 58, 95, 0.78);
+  color: #bfdbfe;
+}
+
+.page-status-icon.failed {
+  border-color: rgba(248, 113, 113, 0.5);
+  background: rgba(59, 31, 38, 0.82);
+  color: #fecaca;
 }
 
 .page-remove {
@@ -2989,6 +3067,7 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .sidebar,
+.layer-tools-rail,
 .right-rail {
   @apply gap-3 bg-rail p-3;
 }
@@ -2998,6 +3077,10 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .right-rail {
+  @apply border-l border-line;
+}
+
+.layer-tools-rail {
   @apply border-l border-line;
 }
 
@@ -3039,7 +3122,6 @@ input[type="number"]::-webkit-inner-spin-button {
 }
 
 .panel-count,
-.page-status-badge,
 .layer-active-badge,
 .job-pill {
   @apply rounded-full border border-line bg-workspace text-xs font-semibold text-muted;
@@ -3373,18 +3455,6 @@ input[type="range"]::-moz-range-thumb {
 /* Visual polish after screen review. */
 input[type="checkbox"] {
   accent-color: var(--color-accent);
-}
-
-.left-tool-panel:has(.muted-line) {
-  flex: 0 0 auto;
-  min-height: 86px;
-  max-height: none;
-}
-
-.left-tool-panel:has(.font-preset-panel) {
-  flex: 0 0 auto;
-  max-height: none;
-  overflow: visible;
 }
 
 .right-rail-layer-panel {

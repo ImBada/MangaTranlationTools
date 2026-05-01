@@ -36,6 +36,9 @@ export function PageList({
   }, [selectedPageId]);
 
   const completedCount = pages.filter((p) => p.progressCompleted).length;
+  const selectedPageIndex = selectedPageId ? pages.findIndex((page) => page.id === selectedPageId) : -1;
+  const previousPage = selectedPageIndex > 0 ? pages[selectedPageIndex - 1] : null;
+  const nextPage = selectedPageIndex >= 0 && selectedPageIndex < pages.length - 1 ? pages[selectedPageIndex + 1] : null;
 
   return (
     <section className="page-list grid min-h-0 grid-rows-[auto_minmax(0,1fr)] gap-2.5">
@@ -44,6 +47,36 @@ export function PageList({
           페이지
           <span className="panel-count">{completedCount}/{pages.length}</span>
         </h2>
+        <div className="page-navigation-actions" aria-label="페이지 이동">
+          <button
+            type="button"
+            className="page-nav-button"
+            disabled={!previousPage}
+            onClick={() => {
+              if (previousPage) {
+                onSelect(previousPage.id);
+              }
+            }}
+            aria-label="이전 페이지"
+            title={previousPage ? `이전 페이지: ${previousPage.name}` : "이전 페이지 없음"}
+          >
+            ←
+          </button>
+          <button
+            type="button"
+            className="page-nav-button"
+            disabled={!nextPage}
+            onClick={() => {
+              if (nextPage) {
+                onSelect(nextPage.id);
+              }
+            }}
+            aria-label="다음 페이지"
+            title={nextPage ? `다음 페이지: ${nextPage.name}` : "다음 페이지 없음"}
+          >
+            →
+          </button>
+        </div>
       </div>
       <div className="page-list-scroll grid min-h-0 content-start gap-2 overflow-auto pr-1">
         {pages.length ? (
@@ -93,11 +126,23 @@ export function PageList({
                 className="page-progress-checkbox"
                 checked={page.progressCompleted ?? false}
                 onChange={() => onToggleProgress(page.id)}
-                aria-label={`${page.name} 완료`}
-                title="완료 체크"
+                aria-label={`${page.name} 작업 완료`}
+                title="작업 완료"
               />
-              <button className="page-select flex min-w-0 items-center justify-start gap-3 px-2.5 py-2" onClick={() => onSelect(page.id)}>
+              <button className="page-select px-2.5 py-2" onClick={() => onSelect(page.id)}>
                 <span className="min-w-0 truncate">{page.name}</span>
+                {page.id !== selectedPageId ? (
+                  <span
+                    className={`page-status-icon ${resolveStatusTone(page)}`}
+                    aria-label={`${page.name} AI 번역 상태: ${resolveStatusLabel(page)}`}
+                    title={`AI 번역 상태: ${resolveStatusLabel(page)}`}
+                  >
+                    <span className="page-status-translation-mark" aria-hidden="true">
+                      <span>A</span>
+                      <span>가</span>
+                    </span>
+                  </span>
+                ) : null}
               </button>
               <div className="page-side flex items-center justify-end">
                 {page.id === selectedPageId ? (
@@ -121,9 +166,7 @@ export function PageList({
                       ×
                     </button>
                   </div>
-                ) : (
-                  <span className="page-status-badge">{resolveStatusLabel(page)}</span>
-                )}
+                ) : null}
               </div>
             </div>
           ))
@@ -135,18 +178,28 @@ export function PageList({
   );
 }
 
-function resolveStatusLabel(page: MangaPage): string {
-  if (page.progressCompleted) {
-    return "완료";
-  }
+function resolveStatusTone(page: MangaPage): string {
   switch (page.analysisStatus) {
     case "completed":
-      return "완료";
+      return "completed";
     case "running":
-      return "진행";
+      return "running";
     case "failed":
-      return "실패";
+      return "failed";
     default:
-      return "대기";
+      return "idle";
+  }
+}
+
+function resolveStatusLabel(page: MangaPage): string {
+  switch (page.analysisStatus) {
+    case "completed":
+      return "번역 완료";
+    case "running":
+      return "번역 진행";
+    case "failed":
+      return "번역 실패";
+    default:
+      return "번역 대기";
   }
 }
