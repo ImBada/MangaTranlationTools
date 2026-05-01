@@ -70,6 +70,12 @@ const FONT_FAMILY_OPTIONS = [
   { label: "바탕", value: "Batang, \"AppleMyungjo\", serif" },
   { label: "돋움", value: "Dotum, \"Apple SD Gothic Neo\", sans-serif" }
 ];
+const TEXT_MASK_MIN_ALPHA = 48;
+const TEXT_MASK_MAX_LUMA = 205;
+const TEXT_MASK_MIN_COMPONENT_RATIO = 0.00002;
+const TEXT_MASK_EDGE_COMPONENT_RATIO = 0.008;
+const TEXT_MASK_BROAD_OUTER_RATIO = 0.01;
+const TEXT_MASK_CORNER_STROKE_RATIO = 0.0015;
 
 type FontFamilyOption = {
   label: string;
@@ -118,6 +124,15 @@ type PendingInpaintResultSave = {
   chapterId: string;
   pageId: string;
   dataUrl: string | undefined;
+};
+
+type TextMaskComponent = {
+  pixels: number[];
+  minX: number;
+  minY: number;
+  maxX: number;
+  maxY: number;
+  touchesEdge: boolean;
 };
 
 type InpaintMaskUndoSnapshot = {
@@ -4289,13 +4304,14 @@ function paintSourceTextPixelsOnMask(
   }
 
   const maskPixels = context.getImageData(rect.x, rect.y, rect.width, rect.height);
+  const candidateMask = new Uint8Array(rect.width * rect.height);
   let painted = 0;
 
   for (let y = 0; y < rect.height; y += 1) {
     for (let x = 0; x < rect.width; x += 1) {
       const sourceOffset = ((rect.y + y) * page.width + rect.x + x) * 4;
       const alpha = sourcePixels.data[sourceOffset + 3];
-      if (alpha < 48) {
+      if (alpha < TEXT_MASK_MIN_ALPHA) {
         continue;
       }
 
@@ -4303,22 +4319,192 @@ function paintSourceTextPixelsOnMask(
       const green = sourcePixels.data[sourceOffset + 1];
       const blue = sourcePixels.data[sourceOffset + 2];
       const luma = red * 0.299 + green * 0.587 + blue * 0.114;
-      if (luma > 205) {
+      if (luma > TEXT_MASK_MAX_LUMA) {
         continue;
       }
 
-      const targetOffset = (y * rect.width + x) * 4;
-      maskPixels.data[targetOffset] = 255;
-      maskPixels.data[targetOffset + 1] = 255;
-      maskPixels.data[targetOffset + 2] = 255;
-      maskPixels.data[targetOffset + 3] = 255;
-      painted += 1;
+      candidateMask[y * rect.width + x] = 255;
     }
+  }
+
+  const filteredMask = filterTextCandidateMask(candidateMask, rect.width, rect.height);
+  for (let index = 0; index < filteredMask.length; index += 1) {
+    if (filteredMask[index] <= 0) {
+      continue;
+    }
+    const targetOffset = index * 4;
+    if (maskPixels.data[targetOffset + 3] > 0) {
+      continue;
+    }
+    maskPixels.data[targetOffset] = 255;
+    maskPixels.data[targetOffset + 1] = 255;
+    maskPixels.data[targetOffset + 2] = 255;
+    maskPixels.data[targetOffset + 3] = 255;
+    painted += 1;
   }
 
   if (painted > 0) {
     context.putImageData(maskPixels, rect.x, rect.y);
   }
+}
+
+function filterTextCandidateMask(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const output = new Uint8Array(mask.length);
+  const visited = new Uint8Array(mask.length);
+  const minPixels = Math.max(2, Math.floor(mask.length * TEXT_MASK_MIN_COMPONENT_RATIO));
+
+  for (let index = 0; index < mask.length; index += 1) {
+    if (visited[index] > 0 || mask[index] <= 0) {
+      continue;
+    }
+
+    const component = collectTextMaskComponent(mask, visited, width, height, index);
+    if (component.pixels.length < minPixels || isLikelyNonTextMaskComponent(component, width, height)) {
+      continue;
+    }
+
+    for (const pixelIndex of component.pixels) {
+      output[pixelIndex] = 255;
+    }
+  }
+
+  return output;
+}
+
+function collectTextMaskComponent(
+  mask: Uint8Array,
+  visited: Uint8Array,
+  width: number,
+  height: number,
+  startIndex: number
+): TextMaskComponent {
+  const queue = [startIndex];
+  const pixels: number[] = [];
+  visited[startIndex] = 1;
+  let minX = startIndex % width;
+  let maxX = minX;
+  let minY = Math.floor(startIndex / width);
+  let maxY = minY;
+  let touchesEdge = minX === 0 || minY === 0 || minX === width - 1 || minY === height - 1;
+
+  for (let cursor = 0; cursor < queue.length; cursor += 1) {
+    const index = queue[cursor];
+    pixels.push(index);
+    const x = index % width;
+    const y = Math.floor(index / width);
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+    touchesEdge = touchesEdge || x === 0 || y === 0 || x === width - 1 || y === height - 1;
+
+    for (let neighborY = y - 1; neighborY <= y + 1; neighborY += 1) {
+      if (neighborY < 0 || neighborY >= height) {
+        continue;
+      }
+      for (let neighborX = x - 1; neighborX <= x + 1; neighborX += 1) {
+        if (neighborX < 0 || neighborX >= width || (neighborX === x && neighborY === y)) {
+          continue;
+        }
+        const neighborIndex = neighborY * width + neighborX;
+        if (visited[neighborIndex] > 0 || mask[neighborIndex] <= 0) {
+          continue;
+        }
+        visited[neighborIndex] = 1;
+        queue.push(neighborIndex);
+      }
+    }
+  }
+
+  return {
+    pixels,
+    minX,
+    minY,
+    maxX,
+    maxY,
+    touchesEdge
+  };
+}
+
+function isLikelyNonTextMaskComponent(component: TextMaskComponent, width: number, height: number): boolean {
+  const componentWidth = component.maxX - component.minX + 1;
+  const componentHeight = component.maxY - component.minY + 1;
+  const area = componentWidth * componentHeight;
+  const density = component.pixels.length / Math.max(1, area);
+  const nearEdge = isNearTextMaskEdge(component, width, height);
+  const inOuterBand = isInTextMaskOuterBand(component, width, height);
+  const inCornerBand = isInTextMaskCornerBand(component, width, height);
+  const elongatedLine = isElongatedTextMaskLine(component, width, height);
+  const outerStroke = isOuterTextMaskStroke(component, width, height);
+  const edgeSized = componentWidth >= width * 0.18 || componentHeight >= height * 0.18 || component.pixels.length >= width * height * TEXT_MASK_EDGE_COMPONENT_RATIO;
+  const oversized = componentWidth >= width * 0.78 || componentHeight >= height * 0.78;
+  const sparseLargeShape = density < 0.5 && (componentWidth >= width * 0.28 || componentHeight >= height * 0.28);
+  const broadOuterShape =
+    inOuterBand &&
+    (component.touchesEdge || elongatedLine || sparseLargeShape) &&
+    (componentWidth >= width * 0.2 || componentHeight >= height * 0.2 || component.pixels.length >= width * height * TEXT_MASK_BROAD_OUTER_RATIO);
+  const cornerStroke =
+    inCornerBand &&
+    (outerStroke || sparseLargeShape || componentWidth >= width * 0.12 || componentHeight >= height * 0.12) &&
+    component.pixels.length >= Math.max(6, width * height * TEXT_MASK_CORNER_STROKE_RATIO);
+
+  return (
+    cornerStroke ||
+    broadOuterShape ||
+    (nearEdge && (outerStroke || elongatedLine || oversized || sparseLargeShape || edgeSized)) ||
+    (component.touchesEdge && edgeSized)
+  );
+}
+
+function isNearTextMaskEdge(component: TextMaskComponent, width: number, height: number): boolean {
+  const edgeGuard = Math.max(1, Math.min(8, Math.round(Math.min(width, height) * 0.04)));
+  return (
+    component.minX <= edgeGuard ||
+    component.minY <= edgeGuard ||
+    component.maxX >= width - 1 - edgeGuard ||
+    component.maxY >= height - 1 - edgeGuard
+  );
+}
+
+function isInTextMaskOuterBand(component: TextMaskComponent, width: number, height: number): boolean {
+  const outerBandX = Math.max(2, Math.min(18, Math.round(width * 0.08)));
+  const outerBandY = Math.max(2, Math.min(18, Math.round(height * 0.08)));
+  return (
+    component.minX <= outerBandX ||
+    component.minY <= outerBandY ||
+    component.maxX >= width - 1 - outerBandX ||
+    component.maxY >= height - 1 - outerBandY
+  );
+}
+
+function isInTextMaskCornerBand(component: TextMaskComponent, width: number, height: number): boolean {
+  const cornerBandX = Math.max(3, Math.min(24, Math.round(width * 0.12)));
+  const cornerBandY = Math.max(3, Math.min(24, Math.round(height * 0.12)));
+  const nearLeft = component.minX <= cornerBandX;
+  const nearRight = component.maxX >= width - 1 - cornerBandX;
+  const nearTop = component.minY <= cornerBandY;
+  const nearBottom = component.maxY >= height - 1 - cornerBandY;
+  return (nearLeft || nearRight) && (nearTop || nearBottom);
+}
+
+function isElongatedTextMaskLine(component: TextMaskComponent, width: number, height: number): boolean {
+  const componentWidth = component.maxX - component.minX + 1;
+  const componentHeight = component.maxY - component.minY + 1;
+  const longHorizontal = componentWidth >= Math.max(12, width * 0.35) && componentHeight <= Math.max(4, height * 0.08);
+  const longVertical = componentHeight >= Math.max(12, height * 0.35) && componentWidth <= Math.max(4, width * 0.08);
+  return longHorizontal || longVertical;
+}
+
+function isOuterTextMaskStroke(component: TextMaskComponent, width: number, height: number): boolean {
+  const componentWidth = component.maxX - component.minX + 1;
+  const componentHeight = component.maxY - component.minY + 1;
+  const thinVertical = componentHeight >= Math.max(8, height * 0.12) && componentWidth <= Math.max(6, width * 0.1);
+  const thinHorizontal = componentWidth >= Math.max(8, width * 0.12) && componentHeight <= Math.max(6, height * 0.1);
+  const diagonalStroke =
+    componentWidth >= Math.max(7, width * 0.08) &&
+    componentHeight >= Math.max(7, height * 0.08) &&
+    component.pixels.length / Math.max(1, componentWidth * componentHeight) < 0.58;
+  return thinVertical || thinHorizontal || diagonalStroke;
 }
 
 function textMaskScanRect(block: TranslationBlock, pageWidth: number, pageHeight: number): { x: number; y: number; width: number; height: number } {
