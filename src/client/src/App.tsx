@@ -5,7 +5,6 @@ import type {
   ChapterSnapshot,
   ImageRect,
   ImportPreviewResult,
-  InpaintSettings,
   JobState,
   LamaRuntimeStatus,
   LibraryIndex,
@@ -54,8 +53,39 @@ import {
 } from "./lib/fontPresets";
 import { DEFAULT_OVERLAY_FONT_FAMILY } from "./lib/overlayLayout";
 import { markChapterPagesRunning, mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "./lib/chapterSync";
+import {
+  GLOBAL_UNDO_HISTORY_LIMIT,
+  TRANSLATION_UNDO_COALESCE_MS,
+  TRANSLATION_UNDO_LIMIT,
+  type GlobalUndoHistoryEntry,
+  type GlobalUndoKind
+} from "./lib/editorUndoHistory";
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "./lib/jobProgress";
 import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction } from "./lib/globalUndo";
+import {
+  INPAINT_TOOL_SHORTCUTS,
+  isPointerToolShortcut,
+  isRangeToolShortcut,
+  isZoomToolShortcut,
+  resolveInpaintToolShortcut
+} from "./lib/editorShortcuts";
+import {
+  angleBetweenPointsDeg,
+  cloneTranslationBlock,
+  createInpaintMaskUndoSnapshot,
+  createTranslationUndoSnapshot,
+  isEditableTarget,
+  normalizeChapterTranslatedText,
+  reorderByTarget,
+  type InpaintMaskUndoSnapshot,
+  type TranslationUndoSnapshot
+} from "./lib/editorUtils";
+import {
+  FORCE_INCOMPLETE_LAMA_NOTICE,
+  LAMA_TEST_INSTALL_GUIDE,
+  LAMA_TEST_PLATFORM_OPTIONS,
+  type LamaNoticePlatform
+} from "./lib/lamaRuntimeNotice";
 import {
   clearImageDataUrlRect,
   drawBlocksOnInpaintMask,
@@ -63,11 +93,25 @@ import {
   maskDataUrlForSelection,
   mergePartialInpaintResult
 } from "./lib/inpaintMaskImages";
+import {
+  clampInpaintMaskBrushSize,
+  clampInpaintResultBrushSize,
+  DEFAULT_INPAINT_SETTINGS,
+  INPAINT_MASK_BRUSH_SIZE_MAX,
+  INPAINT_MASK_BRUSH_SIZE_MIN,
+  INPAINT_RESULT_BRUSH_SIZE_MAX,
+  INPAINT_RESULT_BRUSH_SIZE_MIN
+} from "./lib/inpaintToolSettings";
 import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
 import { rangeProgressStyle } from "./lib/rangeProgressStyle";
 import { clampStageViewScale } from "./lib/stageFit";
-import { normalizeKoreanText } from "./lib/textNormalization";
+import {
+  LAYER_FOCUS_OPACITY,
+  type ActiveLayer,
+  type LayerOpacity,
+  type LayerVisibility
+} from "./lib/layerState";
 import "./styles.css";
 
 const EMPTY_JOB: JobState = {
@@ -92,23 +136,6 @@ type DragState = {
   undoRecorded: boolean;
 };
 
-type LayerVisibility = {
-  image: boolean;
-  inpaint: boolean;
-  inpaintResult: boolean;
-  inpaintMask: boolean;
-  overlay: boolean;
-};
-
-type LayerOpacity = {
-  image: number;
-  inpaint: number;
-  inpaintResult: number;
-  inpaintMask: number;
-  overlay: number;
-};
-
-type ActiveLayer = "output" | "image" | "inpaint" | "inpaintResult" | "inpaintMask" | "overlay";
 type PendingInpaintMaskSave = {
   chapterId: string;
   pageId: string;
@@ -119,85 +146,6 @@ type PendingInpaintResultSave = {
   chapterId: string;
   pageId: string;
   dataUrl: string | undefined;
-};
-
-type InpaintMaskUndoSnapshot = {
-  inpaintMaskPath?: string;
-  inpaintResultPath?: string;
-  inpaintMaskDataUrl?: string;
-  inpaintResultDataUrl?: string;
-  inpaintStatus?: MangaPage["inpaintStatus"];
-};
-
-type TranslationUndoSnapshot = {
-  chapterId: string;
-  label: string;
-  createdAtMs: number;
-  selectedPageId: string | null;
-  selectedBlockId: string | null;
-  editingFontPresetId: string | null;
-  fontPresets: ChapterSnapshot["fontPresets"];
-  pages: {
-    pageId: string;
-    updatedAt: string;
-    blocks: TranslationBlock[];
-  }[];
-};
-
-type GlobalUndoKind = "translation" | "inpaint-mask" | "inpaint-result";
-
-type GlobalUndoHistoryEntry = {
-  kind: GlobalUndoKind;
-  chapterId: string;
-  pageId?: string;
-};
-
-const GLOBAL_UNDO_HISTORY_LIMIT = 150;
-const TRANSLATION_UNDO_COALESCE_MS = 1000;
-const TRANSLATION_UNDO_LIMIT = 50;
-
-const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
-  output: {
-    image: 1,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 0,
-    overlay: 1
-  },
-  image: {
-    image: 1,
-    inpaint: 0,
-    inpaintResult: 0,
-    inpaintMask: 0,
-    overlay: 0
-  },
-  inpaint: {
-    image: 0.5,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 0
-  },
-  inpaintResult: {
-    image: 0.5,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 0,
-    overlay: 0.5
-  },
-  inpaintMask: {
-    image: 0.5,
-    inpaint: 1,
-    inpaintResult: 0,
-    inpaintMask: 1,
-    overlay: 0.5
-  },
-  overlay: {
-    image: 1,
-    inpaint: 0.2,
-    inpaintResult: 0.2,
-    inpaintMask: 0,
-    overlay: 1
-  }
 };
 
 const STAGE_ZOOM_STEP = 1.2;
@@ -214,184 +162,7 @@ type RenameTarget =
       title: string;
     };
 
-const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
-  engine: "lama",
-  paddingPx: 0,
-  featherPx: 0,
-  tileSize: 1024
-};
-const FORCE_INCOMPLETE_LAMA_NOTICE = false;
-type LamaNoticePlatform = "darwin" | "win32" | "linux";
-
-const LAMA_TEST_PLATFORM_OPTIONS: { label: string; value: LamaNoticePlatform }[] = [
-  { label: "macOS", value: "darwin" },
-  { label: "Windows", value: "win32" },
-  { label: "Linux", value: "linux" }
-];
-
-const LAMA_TEST_INSTALL_GUIDE: Record<LamaNoticePlatform, { command: string; help: string[] }> = {
-  darwin: {
-    command: "brew install python@3.11",
-    help: [
-      "Homebrew가 있으면 터미널에서 위 명령을 실행하세요.",
-      "Homebrew가 없으면 https://www.python.org/downloads/macos/ 에서 Python 3.11 이상 macOS installer를 설치하세요.",
-      "설치 후 터미널에서 `python3 --version`이 동작하는지 확인한 뒤 앱에서 새로고침을 누르세요."
-    ]
-  },
-  win32: {
-    command: "winget install Python.Python.3.11",
-    help: [
-      "Windows 터미널에서 위 명령을 실행하세요.",
-      "winget을 쓸 수 없으면 https://www.python.org/downloads/windows/ 에서 Python 3.11 이상 installer를 받고, 설치 중 Add python.exe to PATH를 켜세요.",
-      "설치 후 새 터미널에서 `py -3.11 --version` 또는 `python --version`을 확인한 뒤 앱에서 새로고침을 누르세요."
-    ]
-  },
-  linux: {
-    command: "sudo apt-get update && sudo apt-get install -y python3.11 python3.11-venv",
-    help: [
-      "Debian/Ubuntu 계열은 위 명령을 실행하세요.",
-      "다른 배포판은 패키지 매니저로 Python 3.11 이상과 venv 모듈을 설치하세요.",
-      "설치 후 `python3 --version`이 동작하는지 확인한 뒤 앱에서 새로고침을 누르세요."
-    ]
-  }
-};
-
-const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;
-const INPAINT_RESULT_BRUSH_SIZE_MAX = 128;
-const INPAINT_MASK_BRUSH_SIZE_MIN = 4;
-const INPAINT_MASK_BRUSH_SIZE_MAX = 96;
-const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintTool, string>> = {
-  select: "T",
-  brush: "B",
-  eraser: "E"
-};
-
 type StageZoomDirection = "in" | "out";
-
-function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
-  switch (event.code) {
-    case "KeyB":
-      return "brush";
-    case "KeyE":
-      return "eraser";
-  }
-
-  switch (event.key.toLowerCase()) {
-    case "b":
-      return "brush";
-    case "e":
-      return "eraser";
-    default:
-      return null;
-  }
-}
-
-function isZoomToolShortcut(event: KeyboardEvent): boolean {
-  return event.code === "KeyZ" || event.key.toLowerCase() === "z";
-}
-
-function isPointerToolShortcut(event: KeyboardEvent): boolean {
-  return event.code === "KeyA" || event.key.toLowerCase() === "a";
-}
-
-function isRangeToolShortcut(event: KeyboardEvent): boolean {
-  return event.code === "KeyT" || event.key.toLowerCase() === "t";
-}
-
-function clampInpaintResultBrushSize(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 28;
-  }
-  return Math.min(INPAINT_RESULT_BRUSH_SIZE_MAX, Math.max(INPAINT_RESULT_BRUSH_SIZE_MIN, Math.round(value)));
-}
-
-function clampInpaintMaskBrushSize(value: number): number {
-  if (!Number.isFinite(value)) {
-    return 28;
-  }
-  return Math.min(INPAINT_MASK_BRUSH_SIZE_MAX, Math.max(INPAINT_MASK_BRUSH_SIZE_MIN, Math.round(value)));
-}
-
-function cloneTranslationBlock(block: TranslationBlock): TranslationBlock {
-  return {
-    ...block,
-    bbox: { ...block.bbox },
-    renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined
-  };
-}
-
-function createInpaintMaskUndoSnapshot(page: MangaPage): InpaintMaskUndoSnapshot {
-  return {
-    inpaintMaskPath: page.inpaintMaskPath,
-    inpaintResultPath: page.inpaintResultPath,
-    inpaintMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
-    inpaintResultDataUrl: page.inpaintResultDataUrl,
-    inpaintStatus: page.inpaintStatus
-  };
-}
-
-function createTranslationUndoSnapshot(
-  chapter: ChapterSnapshot,
-  label: string,
-  createdAtMs: number,
-  selectedPageId: string | null,
-  selectedBlockId: string | null,
-  editingFontPresetId: string | null
-): TranslationUndoSnapshot {
-  return {
-    chapterId: chapter.id,
-    label,
-    createdAtMs,
-    selectedPageId,
-    selectedBlockId,
-    editingFontPresetId,
-    fontPresets: chapter.fontPresets?.map((preset) => ({ ...preset })),
-    pages: chapter.pages.map((page) => ({
-      pageId: page.id,
-      updatedAt: page.updatedAt,
-      blocks: page.blocks.map(cloneTranslationBlock)
-    }))
-  };
-}
-
-function normalizeChapterTranslatedText(chapter: ChapterSnapshot): { chapter: ChapterSnapshot; dirtyPageIds: string[] } {
-  const updatedAt = new Date().toISOString();
-  const dirtyPageIds: string[] = [];
-  let chapterChanged = false;
-
-  const pages = chapter.pages.map((page) => {
-    let pageChanged = false;
-    const blocks = page.blocks.map((block) => {
-      const translatedText = normalizeKoreanText(block.translatedText);
-      if (translatedText === block.translatedText) {
-        return block;
-      }
-
-      pageChanged = true;
-      return {
-        ...block,
-        translatedText
-      };
-    });
-
-    if (!pageChanged) {
-      return page;
-    }
-
-    chapterChanged = true;
-    dirtyPageIds.push(page.id);
-    return {
-      ...page,
-      updatedAt,
-      blocks
-    };
-  });
-
-  return {
-    chapter: chapterChanged ? { ...chapter, updatedAt, pages } : chapter,
-    dirtyPageIds
-  };
-}
 
 export default function App(): React.JSX.Element {
   const [library, setLibrary] = useState<LibraryIndex>({ workOrder: [], works: [] });
@@ -3824,32 +3595,4 @@ export default function App(): React.JSX.Element {
       ) : null}
     </main>
   );
-}
-
-function reorderByTarget(currentOrder: string[], sourceId: string, targetId: string): string[] {
-  const next = [...currentOrder];
-  const sourceIndex = next.indexOf(sourceId);
-  const targetIndex = next.indexOf(targetId);
-  if (sourceIndex < 0 || targetIndex < 0) {
-    return currentOrder;
-  }
-  const [item] = next.splice(sourceIndex, 1);
-  next.splice(targetIndex, 0, item);
-  return next;
-}
-
-function isEditableTarget(target: EventTarget | null): boolean {
-  if (typeof Element === "undefined" || !(target instanceof Element)) {
-    return false;
-  }
-
-  if (target instanceof HTMLElement && target.isContentEditable) {
-    return true;
-  }
-
-  return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only']"));
-}
-
-function angleBetweenPointsDeg(centerX: number, centerY: number, x: number, y: number): number {
-  return (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
 }
