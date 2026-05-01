@@ -8,6 +8,7 @@ import type {
   TranslationMode,
   UpdateStatus
 } from "../../../shared/types";
+import { rangeProgressStyle } from "../lib/rangeProgressStyle";
 
 const MAX_GPU_LAYERS = 30;
 const DEFAULT_GEMMA_MODEL_REPO = "unsloth/gemma-4-26B-A4B-it-GGUF";
@@ -1058,12 +1059,6 @@ function matchesPreset(
 
 function clampGpuLayers(value: number): number {
   return Math.min(MAX_GPU_LAYERS, Math.max(0, value));
-}
-
-function rangeProgressStyle(value: number, min: number, max: number): React.CSSProperties {
-  const ratio = max === min ? 0 : (value - min) / (max - min);
-  const percent = Math.min(100, Math.max(0, ratio * 100));
-  return { "--range-progress": `${percent}%` } as React.CSSProperties;
 }
 
 function withSettingsDefaults(settings: AppSettings): AppSettings {

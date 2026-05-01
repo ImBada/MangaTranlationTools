@@ -25,14 +25,21 @@ import {
   resolveBlockRenderBbox,
   resolveEditableBlockBbox
 } from "../../shared/geometry";
+import { CompactNumberControl } from "./components/controls/CompactNumberControl";
 import { EditorPanel } from "./components/EditorPanel";
+import { FontFamilyPicker, buildFontFamilyOptions } from "./components/font/FontFamilyPicker";
+import { FontOutlineControls } from "./components/font/FontOutlineControls";
+import { FontPresetLinkIcon } from "./components/font/FontPresetLinkIcon";
 import { ImageStage } from "./components/ImageStage";
 import type { InpaintTool } from "./components/InpaintLayerCanvas";
 import type { InpaintResultTool } from "./components/InpaintResultCanvas";
+import { InpaintToolButton } from "./components/inpaint/InpaintToolButton";
 import { ImportModal, type ImportModalSubmit } from "./components/ImportModal";
+import { LayerControl } from "./components/layers/LayerControl";
 import { LibraryTree } from "./components/LibraryTree";
 import { PageList } from "./components/PageList";
 import { RenameModal } from "./components/RenameModal";
+import { EmptyPythonInstallHelp, LamaStatusPill } from "./components/runtime/RuntimeStatus";
 import { SettingsModal } from "./components/SettingsModal";
 import { useStageSize } from "./hooks/useStageSize";
 import {
@@ -52,6 +59,7 @@ import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeW
 import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction } from "./lib/globalUndo";
 import { renderPageToPngDataUrl } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
+import { rangeProgressStyle } from "./lib/rangeProgressStyle";
 import { clampStageViewScale } from "./lib/stageFit";
 import { normalizeKoreanText } from "./lib/textNormalization";
 import "./styles.css";
@@ -63,25 +71,12 @@ const EMPTY_JOB: JobState = {
   progressText: "대기 중"
 };
 
-const FONT_FAMILY_OPTIONS = [
-  { label: "맑은 고딕", value: DEFAULT_OVERLAY_FONT_FAMILY },
-  { label: "Apple SD Gothic Neo", value: "\"Apple SD Gothic Neo\", \"Malgun Gothic\", sans-serif" },
-  { label: "본고딕", value: "\"Noto Sans CJK KR\", \"Noto Sans KR\", \"Malgun Gothic\", sans-serif" },
-  { label: "바탕", value: "Batang, \"AppleMyungjo\", serif" },
-  { label: "돋움", value: "Dotum, \"Apple SD Gothic Neo\", sans-serif" }
-];
 const TEXT_MASK_MIN_ALPHA = 48;
 const TEXT_MASK_MAX_LUMA = 205;
 const TEXT_MASK_MIN_COMPONENT_RATIO = 0.00002;
 const TEXT_MASK_EDGE_COMPONENT_RATIO = 0.008;
 const TEXT_MASK_BROAD_OUTER_RATIO = 0.01;
 const TEXT_MASK_CORNER_STROKE_RATIO = 0.0015;
-const DEFAULT_SECONDARY_OUTLINE_WIDTH_PX = 2;
-
-type FontFamilyOption = {
-  label: string;
-  value: string;
-};
 
 type DragMode = "move" | "resize" | "rotate";
 
@@ -283,103 +278,6 @@ const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintTool, string>> = {
 
 type StageZoomDirection = "in" | "out";
 
-type InpaintToolIconName = InpaintResultTool;
-
-type InpaintToolButtonProps = {
-  active: boolean;
-  disabled: boolean;
-  icon: InpaintToolIconName;
-  label: string;
-  onClick: () => void;
-  shortcut?: string;
-  text?: string;
-};
-
-type CompactNumberControlProps = {
-  ariaLabel: string;
-  disabled: boolean;
-  max: number;
-  min: number;
-  onChange: (value: number) => void;
-  step: number;
-  suffix: string;
-  value: number;
-};
-
-function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Element {
-  switch (name) {
-    case "select":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <rect x="4" y="4" width="11" height="11" rx="2" strokeDasharray="2.4 2.4" />
-          <path d="M13 12l6 6-3 1-1 3-6-6 4-4z" />
-        </svg>
-      );
-    case "brush":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M14 5l5 5-8.5 8.5a4 4 0 0 1-5.7 0l-.3-.3L14 5z" />
-          <path d="M16 3l5 5" />
-          <path d="M5 18c-.5 1.6-1.5 2.5-3 2.8 2.4 1.1 5 .7 6.7-1" />
-        </svg>
-      );
-    case "eraser":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M6 15l8.5-8.5a2.1 2.1 0 0 1 3 0l2 2a2.1 2.1 0 0 1 0 3L12 19H7l-3-3 2-1z" />
-          <path d="M10 11l5 5" />
-          <path d="M12 19h8" />
-        </svg>
-      );
-    case "blur":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <circle cx="12" cy="12" r="3.2" />
-          <circle cx="6" cy="12" r="1.5" />
-          <circle cx="18" cy="12" r="1.5" />
-          <circle cx="12" cy="6" r="1.5" />
-          <circle cx="12" cy="18" r="1.5" />
-        </svg>
-      );
-    case "sharpen":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M12 3l7 17H5L12 3z" />
-          <path d="M12 8v6" />
-          <path d="M9.5 17h5" />
-        </svg>
-      );
-    case "smudge":
-      return (
-        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M5 7c3-3 6.5-3 9.2-.5 2.5 2.3 1 5.8-2.2 5.4-2.1-.3-2.5-2.3-1-3.2" />
-          <path d="M4 16c3.5-2.5 6.7-2.3 9.5 0 2.1 1.7 4.1 1.7 6.5-.2" />
-          <path d="M4 20c4-1.8 7.2-1.6 10 .5" />
-        </svg>
-      );
-  }
-}
-
-function InpaintToolButton({ active, disabled, icon, label, onClick, shortcut, text }: InpaintToolButtonProps): React.JSX.Element {
-  const title = shortcut ? `${label} (${shortcut})` : label;
-  const displayLabel = text ?? label;
-  return (
-    <button
-      type="button"
-      className={`tool-option ${active ? "active" : ""}`}
-      aria-pressed={active}
-      aria-label={title}
-      aria-keyshortcuts={shortcut}
-      title={title}
-      onClick={onClick}
-      disabled={disabled}
-    >
-      <InpaintToolIcon name={icon} />
-      <span className="tool-option-label">{shortcut ? `${displayLabel} (${shortcut})` : displayLabel}</span>
-    </button>
-  );
-}
-
 function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintTool | null {
   switch (event.code) {
     case "KeyB":
@@ -408,39 +306,6 @@ function isPointerToolShortcut(event: KeyboardEvent): boolean {
 
 function isRangeToolShortcut(event: KeyboardEvent): boolean {
   return event.code === "KeyT" || event.key.toLowerCase() === "t";
-}
-
-function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
-  const precision = Math.max(0, String(step).split(".")[1]?.length ?? 0);
-  const clampValue = (nextValue: number) => {
-    if (!Number.isFinite(nextValue)) {
-      return value;
-    }
-    return Math.min(max, Math.max(min, Number(nextValue.toFixed(precision))));
-  };
-  const updateValue = (nextValue: number) => onChange(clampValue(nextValue));
-
-  return (
-    <div className="compact-number-control stepped-number-control">
-      <button type="button" aria-label={`${ariaLabel} 감소`} disabled={disabled || value <= min} onClick={() => updateValue(value - step)}>
-        -
-      </button>
-      <input
-        type="number"
-        min={min}
-        max={max}
-        step={step}
-        value={value}
-        disabled={disabled}
-        aria-label={ariaLabel}
-        onChange={(event) => updateValue(Number(event.target.value))}
-      />
-      <button type="button" aria-label={`${ariaLabel} 증가`} disabled={disabled || value >= max} onClick={() => updateValue(value + step)}>
-        +
-      </button>
-      <span>{suffix}</span>
-    </div>
-  );
 }
 
 function clampInpaintResultBrushSize(value: number): number {
@@ -643,7 +508,6 @@ export default function App(): React.JSX.Element {
     ? applyFontPresetPatchToBlock(selectedBlock, selectedFontPreset)
     : selectedBlock;
   const fontControlValues = selectedBlockFontControls ?? editingFontPreset;
-  const secondaryOutlineActive = (fontControlValues?.secondaryOutlineWidthPx ?? 0) > 0;
   const selectedBlockFontPresetLinks = selectedBlock
     ? {
         fontSizePx: isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"),
@@ -3037,98 +2901,12 @@ export default function App(): React.JSX.Element {
                   {renderFontPresetLinkButton("lineHeight", "줄 간격")}
                 </label>
               </div>
-              <div className="font-outline-section">
-                <div className="font-outline-section-header">
-                  <span>외곽선</span>
-                  <div className="font-outline-mode" aria-label="외곽선 개수">
-                    <button
-                      type="button"
-                      className={!secondaryOutlineActive ? "active" : ""}
-                      disabled={selectedPageEditLocked}
-                      onClick={() => updateSelectedBlockFontSetting({ secondaryOutlineWidthPx: 0 })}
-                      aria-pressed={!secondaryOutlineActive}
-                    >
-                      1개
-                    </button>
-                    <button
-                      type="button"
-                      className={secondaryOutlineActive ? "active" : ""}
-                      disabled={selectedPageEditLocked}
-                      onClick={() =>
-                        updateSelectedBlockFontSetting({
-                          secondaryOutlineColor: fontControlValues.secondaryOutlineColor ?? "#ffffff",
-                          secondaryOutlineWidthPx: fontControlValues.secondaryOutlineWidthPx && fontControlValues.secondaryOutlineWidthPx > 0
-                            ? fontControlValues.secondaryOutlineWidthPx
-                            : DEFAULT_SECONDARY_OUTLINE_WIDTH_PX
-                        })
-                      }
-                      aria-pressed={secondaryOutlineActive}
-                    >
-                      2개
-                    </button>
-                  </div>
-                </div>
-                <div className="font-outline-row font-tool-grid">
-                  <label className="compact-tool-field font-color-field">
-                    <span>{secondaryOutlineActive ? "1차 외곽선 색" : "외곽선 색"}</span>
-                    <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.outlineColor ?? "#000000" }}>
-                      <input
-                        type="color"
-                        className="outline-color-input"
-                        value={fontControlValues.outlineColor ?? "#000000"}
-                        disabled={selectedPageEditLocked}
-                        onChange={(event) => updateSelectedBlockFontSetting({ outlineColor: event.target.value })}
-                      />
-                    </span>
-                    {renderFontPresetLinkButton("outlineColor", secondaryOutlineActive ? "1차 외곽선 색" : "외곽선 색")}
-                  </label>
-                  <label className="compact-tool-field font-number-field">
-                    <span>{secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께"}</span>
-                    <CompactNumberControl
-                      ariaLabel={secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께"}
-                      min={0}
-                      max={24}
-                      step={0.5}
-                      value={fontControlValues.outlineWidthPx ?? 0}
-                      suffix="px"
-                      disabled={selectedPageEditLocked}
-                      onChange={(outlineWidthPx) => updateSelectedBlockFontSetting({ outlineWidthPx })}
-                    />
-                    {renderFontPresetLinkButton("outlineWidthPx", secondaryOutlineActive ? "1차 외곽선 두께" : "외곽선 두께")}
-                  </label>
-                </div>
-                {secondaryOutlineActive ? (
-                  <div className="font-outline-row font-tool-grid secondary-outline-row">
-                    <label className="compact-tool-field font-color-field">
-                      <span>2차 외곽선 색</span>
-                      <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.secondaryOutlineColor ?? "#ffffff" }}>
-                        <input
-                          type="color"
-                          className="outline-color-input"
-                          value={fontControlValues.secondaryOutlineColor ?? "#ffffff"}
-                          disabled={selectedPageEditLocked}
-                          onChange={(event) => updateSelectedBlockFontSetting({ secondaryOutlineColor: event.target.value })}
-                        />
-                      </span>
-                      {renderFontPresetLinkButton("secondaryOutlineColor", "2차 외곽선 색")}
-                    </label>
-                    <label className="compact-tool-field font-number-field">
-                      <span>2차 외곽선 두께</span>
-                      <CompactNumberControl
-                        ariaLabel="2차 외곽선 두께"
-                        min={0}
-                        max={24}
-                        step={0.5}
-                        value={fontControlValues.secondaryOutlineWidthPx ?? 0}
-                        suffix="px"
-                        disabled={selectedPageEditLocked}
-                        onChange={(secondaryOutlineWidthPx) => updateSelectedBlockFontSetting({ secondaryOutlineWidthPx })}
-                      />
-                      {renderFontPresetLinkButton("secondaryOutlineWidthPx", "2차 외곽선 두께")}
-                    </label>
-                  </div>
-                ) : null}
-              </div>
+              <FontOutlineControls
+                values={fontControlValues}
+                disabled={selectedPageEditLocked}
+                onChange={updateSelectedBlockFontSetting}
+                renderLinkButton={renderFontPresetLinkButton}
+              />
               <label className="compact-tool-field font-color-field">
                 <span>글자색</span>
                 <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
@@ -4070,27 +3848,6 @@ function reorderByTarget(currentOrder: string[], sourceId: string, targetId: str
   return next;
 }
 
-function LamaStatusPill({ label, ready, busy }: { label: string; ready: boolean; busy: boolean }): React.JSX.Element {
-  return (
-    <div className={`empty-lama-status ${ready ? "ready" : busy ? "busy" : "missing"}`}>
-      <span>{label}</span>
-      <strong>{ready ? "준비됨" : busy ? "진행 중" : "필요"}</strong>
-    </div>
-  );
-}
-
-function EmptyPythonInstallHelp({ status }: { status: LamaRuntimeStatus }): React.JSX.Element {
-  return (
-    <div className="empty-lama-python-help">
-      <strong>Python 설치가 필요합니다.</strong>
-      <code>{status.pythonInstallCommand}</code>
-      {status.pythonInstallHelp.map((line) => (
-        <p key={line}>{line}</p>
-      ))}
-    </div>
-  );
-}
-
 function isEditableTarget(target: EventTarget | null): boolean {
   if (typeof Element === "undefined" || !(target instanceof Element)) {
     return false;
@@ -4101,221 +3858,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   }
 
   return Boolean(target.closest("input, textarea, select, [contenteditable=''], [contenteditable='true'], [contenteditable='plaintext-only']"));
-}
-
-function rangeProgressStyle(value: number, min: number, max: number): React.CSSProperties {
-  const ratio = max === min ? 0 : (value - min) / (max - min);
-  const percent = Math.min(100, Math.max(0, ratio * 100));
-  return { "--range-progress": `${percent}%` } as React.CSSProperties;
-}
-
-function FontPresetLinkIcon({ linked }: { linked: boolean }): React.JSX.Element {
-  return (
-    <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-      <path d="M10 13a5 5 0 0 0 7.5.5l2.1-2.1a5 5 0 0 0-7.1-7.1l-1.2 1.2" />
-      <path d="M14 11a5 5 0 0 0-7.5-.5l-2.1 2.1a5 5 0 0 0 7.1 7.1l1.2-1.2" />
-      {linked ? null : <path d="M3 3l18 18" />}
-    </svg>
-  );
-}
-
-function buildFontFamilyOptions(systemFonts: SystemFont[], selectedFontFamily?: string): FontFamilyOption[] {
-  const options = new Map<string, FontFamilyOption>();
-  for (const option of FONT_FAMILY_OPTIONS) {
-    options.set(option.value, option);
-  }
-  for (const font of systemFonts) {
-    if (!options.has(font.cssFamily)) {
-      options.set(font.cssFamily, { label: font.family, value: font.cssFamily });
-    }
-  }
-  if (selectedFontFamily && !options.has(selectedFontFamily)) {
-    options.set(selectedFontFamily, { label: selectedFontFamily, value: selectedFontFamily });
-  }
-  return [...options.values()];
-}
-
-type FontFamilyPickerProps = {
-  options: FontFamilyOption[];
-  value: string;
-  disabled: boolean;
-  onChange: (value: string) => void;
-};
-
-function FontFamilyPicker({ options, value, disabled, onChange }: FontFamilyPickerProps): React.JSX.Element {
-  const [open, setOpen] = React.useState(false);
-  const [query, setQuery] = React.useState("");
-  const rootRef = React.useRef<HTMLDivElement | null>(null);
-  const inputRef = React.useRef<HTMLInputElement | null>(null);
-  const selectedOption = options.find((option) => option.value === value) ?? { label: value, value };
-  const normalizedQuery = normalizeFontSearchText(query);
-  const filteredOptions = normalizedQuery
-    ? options.filter((option) => normalizeFontSearchText(option.label).includes(normalizedQuery))
-    : options;
-
-  React.useEffect(() => {
-    if (!open) {
-      return;
-    }
-
-    const handlePointerDown = (event: PointerEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) {
-        setOpen(false);
-      }
-    };
-    window.addEventListener("pointerdown", handlePointerDown);
-    window.setTimeout(() => inputRef.current?.focus(), 0);
-    return () => window.removeEventListener("pointerdown", handlePointerDown);
-  }, [open]);
-
-  return (
-    <div className="font-picker" ref={rootRef}>
-      <button
-        type="button"
-        className="font-picker-trigger"
-        disabled={disabled}
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="font-picker-current-name">{selectedOption.label}</span>
-        <span className="font-picker-current-preview" style={{ fontFamily: selectedOption.value }}>
-          번역 미리보기 Aa
-        </span>
-      </button>
-      {open ? (
-        <div className="font-picker-popover">
-          <input
-            ref={inputRef}
-            className="font-picker-search"
-            type="search"
-            value={query}
-            placeholder="폰트 검색"
-            onChange={(event) => setQuery(event.target.value)}
-            onKeyDown={(event) => {
-              if (event.key === "Escape") {
-                setOpen(false);
-              }
-            }}
-          />
-          <div className="font-picker-count">{filteredOptions.length.toLocaleString()}개</div>
-          <div className="font-picker-list" role="listbox">
-            {filteredOptions.length > 0 ? (
-              filteredOptions.map((option) => (
-                <button
-                  key={option.value}
-                  type="button"
-                  className={option.value === value ? "font-picker-option active" : "font-picker-option"}
-                  role="option"
-                  aria-selected={option.value === value}
-                  onClick={() => {
-                    onChange(option.value);
-                    setOpen(false);
-                    setQuery("");
-                  }}
-                >
-                  <span className="font-picker-option-name">{option.label}</span>
-                  <span className="font-picker-option-preview" style={{ fontFamily: option.value }}>
-                    오늘의 번역 Aa 123
-                  </span>
-                </button>
-              ))
-            ) : (
-              <div className="font-picker-empty">검색 결과 없음</div>
-            )}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function normalizeFontSearchText(value: string): string {
-  return value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "");
-}
-
-type LayerControlProps = {
-  label: string;
-  active: boolean;
-  visible: boolean;
-  opacity: number;
-  viewOnly?: boolean;
-  nested?: boolean;
-  opacityEditMode?: boolean;
-  opacityEditModeLabel?: string;
-  onSelect: () => void;
-  onVisibleChange: (visible: boolean) => void;
-  onOpacityEditModeChange?: (enabled: boolean) => void;
-  onOpacityChange: (opacity: number) => void;
-};
-
-function LayerControl({
-  label,
-  active,
-  visible,
-  opacity,
-  viewOnly,
-  nested,
-  opacityEditMode,
-  opacityEditModeLabel,
-  onSelect,
-  onVisibleChange,
-  onOpacityEditModeChange,
-  onOpacityChange
-}: LayerControlProps): React.JSX.Element {
-  return (
-    <div
-      className={`layer-control${active ? " active" : ""}${nested ? " nested" : ""}`}
-      role="button"
-      tabIndex={0}
-      onClick={onSelect}
-      onKeyDown={(event) => {
-        if (event.key === "Enter" || event.key === " ") {
-          event.preventDefault();
-          onSelect();
-        }
-      }}
-    >
-      <div className="layer-toggle">
-        <span className="layer-select-grip" aria-hidden="true">::</span>
-        {viewOnly ? null : (
-          <input
-            type="checkbox"
-            checked={visible}
-            onClick={(event) => event.stopPropagation()}
-            onChange={(event) => onVisibleChange(event.target.checked)}
-          />
-        )}
-        <span className="layer-label-text">{label}</span>
-        {viewOnly ? <span className="layer-active-badge">보기</span> : <span className="layer-opacity-value">{Math.round(opacity * 100)}%</span>}
-      </div>
-      {onOpacityEditModeChange && opacityEditModeLabel ? (
-        <label className="layer-edit-toggle" onClick={(event) => event.stopPropagation()}>
-          <input
-            type="checkbox"
-            checked={Boolean(opacityEditMode)}
-            onChange={(event) => onOpacityEditModeChange(event.target.checked)}
-          />
-          {opacityEditModeLabel}
-        </label>
-      ) : null}
-      {viewOnly ? null : (
-        <input
-          className="layer-opacity-slider"
-          type="range"
-          min={0}
-          max={1}
-          step={0.01}
-          value={opacity}
-          style={rangeProgressStyle(opacity, 0, 1)}
-          disabled={!visible}
-          aria-label={`${label} 투명도`}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => onOpacityChange(Number(event.target.value))}
-        />
-      )}
-    </div>
-  );
 }
 
 async function drawBlocksOnInpaintMask(page: MangaPage, blocks: TranslationBlock[]): Promise<string> {
