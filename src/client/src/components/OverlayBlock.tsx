@@ -81,7 +81,8 @@ export function OverlayBlock({
     textAlign: block.textAlign,
     pointerEvents: editingEnabled ? undefined : "none",
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
-    transformOrigin: "center center"
+    transformOrigin: "center center",
+    zIndex: selected && editingEnabled ? 50 : undefined
   };
   const textWrapStyle: React.CSSProperties = {
     boxSizing: "border-box",
