@@ -102,7 +102,7 @@ import {
   INPAINT_RESULT_BRUSH_SIZE_MAX,
   INPAINT_RESULT_BRUSH_SIZE_MIN
 } from "./lib/inpaintToolSettings";
-import { renderPageToPngDataUrl } from "./lib/pageRender";
+import { renderPageToPngDataUrl, type RenderPageOptions } from "./lib/pageRender";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "./lib/pageNavigation";
 import { rangeProgressStyle } from "./lib/rangeProgressStyle";
 import { clampStageViewScale } from "./lib/stageFit";
@@ -226,6 +226,29 @@ type RenameTarget =
     };
 
 type StageZoomDirection = "in" | "out";
+type RenderProgress = {
+  mode: "page" | "all";
+  current: number;
+  total: number;
+};
+
+const OUTPUT_RENDER_OPTIONS: RenderPageOptions = {
+  layerVisibility: {
+    image: true,
+    inpaint: true,
+    inpaintResult: true,
+    inpaintMask: false,
+    overlay: true
+  },
+  layerOpacity: {
+    image: 1,
+    inpaint: 1,
+    inpaintResult: 1,
+    inpaintMask: 1,
+    overlay: 1
+  },
+  activeLayer: "output"
+};
 
 export default function App(): React.JSX.Element {
   const [library, setLibrary] = useState<LibraryIndex>({ workOrder: [], works: [] });
@@ -238,6 +261,7 @@ export default function App(): React.JSX.Element {
   const [importPreview, setImportPreview] = useState<ImportPreviewResult | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const [renderBusy, setRenderBusy] = useState(false);
+  const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [inpaintBusy, setInpaintBusy] = useState(false);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameBusy, setRenameBusy] = useState(false);
@@ -1049,6 +1073,16 @@ export default function App(): React.JSX.Element {
     [applyChapter, currentChapter, jobActive, pushStatus, refreshLibrary, saveNow]
   );
 
+  const renderPageOutput = useCallback(async (chapterId: string, page: MangaPage): Promise<string> => {
+    const dataUrl = await renderPageToPngDataUrl(page, OUTPUT_RENDER_OPTIONS);
+    const result = await window.mangaApi.renderPage({
+      chapterId,
+      pageId: page.id,
+      dataUrl
+    });
+    return result.outputPath;
+  }, []);
+
   const renderSelectedPage = useCallback(async () => {
     const chapter = currentChapterRef.current;
     const pageId = selectedPageIdRef.current;
@@ -1057,6 +1091,7 @@ export default function App(): React.JSX.Element {
     }
 
     setRenderBusy(true);
+    setRenderProgress({ mode: "page", current: 1, total: 1 });
     try {
       if (dirty) {
         await saveNow();
@@ -1067,37 +1102,57 @@ export default function App(): React.JSX.Element {
       if (!page) {
         return;
       }
-      const dataUrl = await renderPageToPngDataUrl(page, {
-        layerVisibility: {
-          image: true,
-          inpaint: true,
-          inpaintResult: true,
-          inpaintMask: false,
-          overlay: true
-        },
-        layerOpacity: {
-          image: 1,
-          inpaint: 1,
-          inpaintResult: 1,
-          inpaintMask: 1,
-          overlay: 1
-        },
-        activeLayer: "output"
-      });
-      const result = await window.mangaApi.renderPage({
-        chapterId: currentChapterRef.current!.id,
-        pageId,
-        dataUrl
-      });
+      const outputPath = await renderPageOutput(currentChapterRef.current!.id, page);
       signalSaveComplete();
-      pushStatus(`페이지 렌더 저장: ${result.outputPath}`);
+      pushStatus(`페이지 렌더 저장: ${outputPath}`);
     } catch (error) {
       console.error(error);
       pushStatus(error instanceof Error ? error.message : "페이지 렌더에 실패했습니다.");
     } finally {
+      setRenderProgress(null);
       setRenderBusy(false);
     }
-  }, [dirty, pushStatus, renderBusy, saveNow, signalSaveComplete]);
+  }, [dirty, pushStatus, renderBusy, renderPageOutput, saveNow, signalSaveComplete]);
+
+  const renderAllPages = useCallback(async () => {
+    const initialChapter = currentChapterRef.current;
+    if (!initialChapter || initialChapter.pages.length === 0 || renderBusy) {
+      return;
+    }
+
+    setRenderBusy(true);
+    setRenderProgress({ mode: "all", current: 0, total: initialChapter.pages.length });
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+      const chapter = currentChapterRef.current;
+      if (!chapter || chapter.pages.length === 0) {
+        return;
+      }
+
+      const pages = [...chapter.pages];
+      pushStatus(`전체 페이지 출력 시작: ${pages.length}p`);
+      for (const [index, page] of pages.entries()) {
+        setRenderProgress({ mode: "all", current: index + 1, total: pages.length });
+        try {
+          await renderPageOutput(chapter.id, page);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "페이지 렌더에 실패했습니다.";
+          throw new Error(`${page.name} 출력 실패: ${message}`);
+        }
+      }
+
+      signalSaveComplete();
+      pushStatus(`전체 페이지 렌더 저장 완료: ${pages.length}p`);
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "전체 페이지 렌더에 실패했습니다.");
+    } finally {
+      setRenderProgress(null);
+      setRenderBusy(false);
+    }
+  }, [dirty, pushStatus, renderBusy, renderPageOutput, saveNow, signalSaveComplete]);
 
   const runInpaintForPage = useCallback(async (page: MangaPage, maskDataUrl: string, statusMessage = "인페인트 결과를 저장했습니다.") => {
     if (!currentChapter || inpaintBusy) {
@@ -3330,7 +3385,10 @@ export default function App(): React.JSX.Element {
                 전체 번역 (AI)
               </button>
               <button onClick={() => void renderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
-                {renderBusy ? "출력 중" : "페이지 출력"}
+                {renderProgress?.mode === "page" ? "출력 중" : "페이지 출력"}
+              </button>
+              <button onClick={() => void renderAllPages()} disabled={!currentChapter || currentChapter.pages.length === 0 || jobActive || renderBusy}>
+                {renderProgress?.mode === "all" ? `전체 출력 ${renderProgress.current}/${renderProgress.total}` : "전체 페이지 출력"}
               </button>
               {jobActive ? (
                 <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
