@@ -63,6 +63,7 @@ export function EditorPanel({
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         한국어
         <textarea
+          data-block-text-field="translated"
           value={block.translatedText}
           disabled={disabled}
           onChange={(event) => onUpdate({ translatedText: event.target.value })}
@@ -70,7 +71,12 @@ export function EditorPanel({
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         OCR
-        <textarea value={block.sourceText} disabled={disabled} onChange={(event) => onUpdate({ sourceText: event.target.value })} />
+        <textarea
+          data-block-text-field="source"
+          value={block.sourceText}
+          disabled={disabled}
+          onChange={(event) => onUpdate({ sourceText: event.target.value })}
+        />
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         방향

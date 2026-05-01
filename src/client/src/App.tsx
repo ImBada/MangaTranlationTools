@@ -134,6 +134,16 @@ type DragState = {
   centerX: number;
   centerY: number;
   undoRecorded: boolean;
+  textFocusSnapshot: BlockTextFocusSnapshot | null;
+  textFocusPaused: boolean;
+};
+
+type BlockTextFocusSnapshot = {
+  element: HTMLTextAreaElement;
+  selectionStart: number;
+  selectionEnd: number;
+  selectionDirection: "forward" | "backward" | "none";
+  scrollTop: number;
 };
 
 type PendingInpaintMaskSave = {
@@ -149,6 +159,59 @@ type PendingInpaintResultSave = {
 };
 
 const STAGE_ZOOM_STEP = 1.2;
+const DRAG_FOCUS_BLUR_THRESHOLD_PX = 2;
+
+function captureBlockTextFocusSnapshot(): BlockTextFocusSnapshot | null {
+  if (typeof document === "undefined" || typeof HTMLTextAreaElement === "undefined") {
+    return null;
+  }
+
+  const activeElement = document.activeElement;
+  if (!(activeElement instanceof HTMLTextAreaElement) || !activeElement.dataset.blockTextField) {
+    return null;
+  }
+
+  return {
+    element: activeElement,
+    selectionStart: activeElement.selectionStart,
+    selectionEnd: activeElement.selectionEnd,
+    selectionDirection: activeElement.selectionDirection,
+    scrollTop: activeElement.scrollTop
+  };
+}
+
+function pauseBlockTextFocus(drag: DragState, event: React.PointerEvent): void {
+  if (drag.textFocusPaused || !drag.textFocusSnapshot) {
+    return;
+  }
+
+  const dragDistance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
+  if (dragDistance < DRAG_FOCUS_BLUR_THRESHOLD_PX) {
+    return;
+  }
+
+  if (document.activeElement === drag.textFocusSnapshot.element) {
+    drag.textFocusSnapshot.element.blur();
+    drag.textFocusPaused = true;
+  }
+}
+
+function restoreBlockTextFocus(snapshot: BlockTextFocusSnapshot): void {
+  window.setTimeout(() => {
+    if (!snapshot.element.isConnected || snapshot.element.disabled) {
+      return;
+    }
+
+    const activeElement = document.activeElement;
+    if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) {
+      return;
+    }
+
+    snapshot.element.focus({ preventScroll: true });
+    snapshot.element.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd, snapshot.selectionDirection);
+    snapshot.element.scrollTop = snapshot.scrollTop;
+  }, 0);
+}
 
 type RenameTarget =
   | {
@@ -2120,7 +2183,9 @@ export default function App(): React.JSX.Element {
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
       centerY,
-      undoRecorded: false
+      undoRecorded: false,
+      textFocusSnapshot: captureBlockTextFocusSnapshot(),
+      textFocusPaused: false
     };
     stageRef.current.setPointerCapture(event.pointerId);
   };
@@ -2132,6 +2197,7 @@ export default function App(): React.JSX.Element {
     if (!drag || !page || !stage || !currentChapter || selectedPageEditLocked) {
       return;
     }
+    pauseBlockTextFocus(drag, event);
     const rect = stage.getBoundingClientRect();
     const dx = ((event.clientX - drag.startX) / Math.max(1, rect.width)) * 1000;
     const dy = ((event.clientY - drag.startY) / Math.max(1, rect.height)) * 1000;
@@ -2180,8 +2246,12 @@ export default function App(): React.JSX.Element {
   };
 
   const onStagePointerUp = (event: React.PointerEvent) => {
-    if (dragRef.current && stageRef.current) {
+    const drag = dragRef.current;
+    if (drag && stageRef.current) {
       stageRef.current.releasePointerCapture(event.pointerId);
+    }
+    if (drag?.textFocusPaused && drag.textFocusSnapshot) {
+      restoreBlockTextFocus(drag.textFocusSnapshot);
     }
     dragRef.current = null;
   };
