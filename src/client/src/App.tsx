@@ -2559,6 +2559,21 @@ export default function App(): React.JSX.Element {
         return;
       }
 
+      const layerNumberShortcut =
+        !modalOpen && !editableTarget && !event.altKey && !event.ctrlKey && !event.metaKey &&
+        event.key >= "1" && event.key <= "5";
+      if (layerNumberShortcut) {
+        event.preventDefault();
+        switch (event.key) {
+          case "1": selectLayer("output"); return;
+          case "2": selectLayer("overlay"); return;
+          case "3": selectLayer("inpaintResult"); return;
+          case "4": selectLayer("inpaintMask"); return;
+          case "5": selectLayer("image"); return;
+        }
+        return;
+      }
+
       const inpaintToolShortcut = !modalOpen && !editableTarget && !event.altKey && !event.ctrlKey && !event.metaKey
         ? resolveInpaintToolShortcut(event)
         : null;
@@ -2648,6 +2663,7 @@ export default function App(): React.JSX.Element {
     libraryWidgetOpen,
     modalOpen,
     pushStatus,
+    selectLayer,
     selectSharedInpaintTool,
     selectPageForReading,
     selectedPageEditLocked,
@@ -3655,7 +3671,7 @@ export default function App(): React.JSX.Element {
               </label>
             </div>
             <LayerControl
-              label="최종 아웃풋"
+              label="1 최종 아웃풋"
               active={activeLayer === "output"}
               visible={true}
               opacity={1}
@@ -3665,7 +3681,7 @@ export default function App(): React.JSX.Element {
               viewOnly
             />
           <LayerControl
-            label="번역 블록"
+            label="2 번역 블록"
             active={activeLayer === "overlay"}
             visible={layerVisibility.overlay}
             opacity={overlayOpacityEditMode ? overlayBackgroundOpacity : layerOpacity.overlay}
@@ -3707,7 +3723,7 @@ export default function App(): React.JSX.Element {
           />
           <div className="layer-subgroup">
             <LayerControl
-              label="인페인트 결과"
+              label="3 인페인트 결과"
               active={activeLayer === "inpaintResult"}
               visible={layerVisibility.inpaint && layerVisibility.inpaintResult}
               opacity={layerOpacity.inpaintResult}
@@ -3719,7 +3735,7 @@ export default function App(): React.JSX.Element {
               nested
             />
             <LayerControl
-              label="인페인트 마스크"
+              label="4 인페인트 마스크"
               active={activeLayer === "inpaintMask"}
               visible={layerVisibility.inpaint && layerVisibility.inpaintMask}
               opacity={layerOpacity.inpaintMask}
@@ -3732,7 +3748,7 @@ export default function App(): React.JSX.Element {
             />
           </div>
           <LayerControl
-            label="원본 이미지"
+            label="5 원본 이미지"
             active={activeLayer === "image"}
             visible={layerVisibility.image}
             opacity={layerOpacity.image}
