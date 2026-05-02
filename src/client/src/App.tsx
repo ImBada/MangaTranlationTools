@@ -2572,8 +2572,8 @@ export default function App(): React.JSX.Element {
         switch (event.key) {
           case "1": selectLayer("output"); break;
           case "2": selectLayer("overlay"); break;
-          case "3": selectLayer("inpaintResult"); break;
-          case "4": selectLayer("inpaintMask"); break;
+          case "3": selectLayer(activeLayer === "inpaintResult" ? "inpaint" : "inpaintResult"); break;
+          case "4": selectLayer(activeLayer === "inpaintMask" ? "inpaint" : "inpaintMask"); break;
           case "5": selectLayer("image"); break;
           default: return;
         }
