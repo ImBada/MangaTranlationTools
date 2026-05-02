@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readPsd } from "ag-psd";
+import { readPsd, writePsdBuffer, type PixelData, type Psd } from "ag-psd";
 import sharp from "sharp";
 import { exportInpaintPsd, importInpaintPsd } from "../src/server/inpaintPsd";
 
@@ -18,6 +18,14 @@ async function dataUrlToRgba(dataUrl: string): Promise<Buffer> {
   const encoded = dataUrl.replace(/^data:image\/png;base64,/u, "");
   const { data } = await sharp(Buffer.from(encoded, "base64")).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return data;
+}
+
+function solidPixel(red: number, green: number, blue: number, alpha = 255): PixelData {
+  return {
+    data: new Uint8ClampedArray([red, green, blue, alpha]),
+    width: 1,
+    height: 1
+  };
 }
 
 describe("inpaint PSD import/export", () => {
@@ -55,7 +63,52 @@ describe("inpaint PSD import/export", () => {
 
     expect([...importedResult.slice(0, 8)]).toEqual([200, 0, 0, 255, 0, 0, 0, 0]);
     expect([...importedMask.slice(0, 8)]).toEqual([255, 255, 255, 255, 0, 0, 0, 0]);
-    expect([...importedResult.slice(8, 16)]).toEqual([0, 0, 0, 0, 200, 200, 0, 255]);
-    expect([...importedMask.slice(8, 16)]).toEqual([0, 0, 0, 0, 255, 255, 255, 128]);
+    expect([...importedResult.slice(8, 16)]).toEqual([0, 0, 0, 0, 200, 200, 0, 128]);
+    expect([...importedMask.slice(8, 16)]).toEqual([0, 0, 0, 0, 255, 255, 255, 255]);
+  });
+
+  it("preserves visible layer order when importing layers inside groups", async () => {
+    const psd: Psd = {
+      width: 1,
+      height: 1,
+      children: [
+        {
+          name: "배경 (이름변경금지)",
+          top: 0,
+          left: 0,
+          bottom: 1,
+          right: 1,
+          imageData: solidPixel(255, 255, 255)
+        },
+        {
+          name: "paint group",
+          children: [
+            {
+              name: "group bottom red",
+              top: 0,
+              left: 0,
+              bottom: 1,
+              right: 1,
+              imageData: solidPixel(255, 0, 0)
+            },
+            {
+              name: "group top blue",
+              top: 0,
+              left: 0,
+              bottom: 1,
+              right: 1,
+              imageData: solidPixel(0, 0, 255)
+            }
+          ]
+        }
+      ]
+    };
+
+    const imported = await importInpaintPsd(Buffer.from(writePsdBuffer(psd)), 1, 1);
+    const importedResult = await dataUrlToRgba(imported.resultDataUrl);
+    const importedMask = await dataUrlToRgba(imported.maskDataUrl);
+
+    expect([...importedResult]).toEqual([0, 0, 255, 255]);
+    expect([...importedMask]).toEqual([255, 255, 255, 255]);
   });
 });

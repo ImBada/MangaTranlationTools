@@ -78,7 +78,18 @@ export async function importInpaintPsd(buffer: Buffer, width: number, height: nu
     throw new Error("배경 레이어를 제외하고 가져올 PSD 레이어가 없습니다.");
   }
 
-  const merged = mergeLayers(paintLayers, width, height);
+  const imported = extractPaintFromMergedLayers(mergeLayers(paintLayers, width, height), width, height);
+  if (!imported.hasPaint) {
+    throw new Error("배경 레이어를 제외한 PSD 레이어가 비어 있습니다.");
+  }
+
+  return {
+    resultDataUrl: await rgbaToPngDataUrl(imported.result, width, height),
+    maskDataUrl: await rgbaToPngDataUrl(imported.mask, width, height)
+  };
+}
+
+function extractPaintFromMergedLayers(merged: Buffer, width: number, height: number): { result: Buffer; mask: Buffer; hasPaint: boolean } {
   let hasPaint = false;
   const result = Buffer.alloc(width * height * 4);
   const mask = Buffer.alloc(width * height * 4);
@@ -92,20 +103,17 @@ export async function importInpaintPsd(buffer: Buffer, width: number, height: nu
     result[offset] = merged[offset];
     result[offset + 1] = merged[offset + 1];
     result[offset + 2] = merged[offset + 2];
-    result[offset + 3] = 255;
+    result[offset + 3] = alpha;
     mask[offset] = 255;
     mask[offset + 1] = 255;
     mask[offset + 2] = 255;
-    mask[offset + 3] = alpha;
-  }
-
-  if (!hasPaint) {
-    throw new Error("배경 레이어를 제외한 PSD 레이어가 비어 있습니다.");
+    mask[offset + 3] = 255;
   }
 
   return {
-    resultDataUrl: await rgbaToPngDataUrl(result, width, height),
-    maskDataUrl: await rgbaToPngDataUrl(mask, width, height)
+    result,
+    mask,
+    hasPaint
   };
 }
 
@@ -143,9 +151,9 @@ function isBackgroundLayer(name: string): boolean {
   return name.trim() === EXPORT_BACKGROUND_LAYER_NAME;
 }
 
-function mergeLayers(layersTopToBottom: FlattenedLayer[], width: number, height: number): Buffer {
+function mergeLayers(layersBottomToTop: FlattenedLayer[], width: number, height: number): Buffer {
   const output = Buffer.alloc(width * height * 4);
-  for (const layer of [...layersTopToBottom].reverse()) {
+  for (const layer of layersBottomToTop) {
     const data = toUint8Array(layer.imageData);
     const layerWidth = layer.imageData.width;
     const layerHeight = layer.imageData.height;

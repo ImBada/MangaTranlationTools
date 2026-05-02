@@ -3129,22 +3129,27 @@ export default function App(): React.JSX.Element {
       ) : activeLayer === "image" ? (
         <p className="muted-line">원본 이미지 레이어에는 사용할 도구가 없습니다.</p>
       ) : activeLayer === "inpaint" ? (
-        <div className="result-action-grid psd-action-grid">
-          <button
-            type="button"
-            onClick={() => void exportSelectedPageInpaintPsd()}
-            disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
-          >
-            PSD 내보내기
-          </button>
-          <button
-            type="button"
-            onClick={selectInpaintPsdFile}
-            disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
-          >
-            PSD 가져오기
-          </button>
-        </div>
+        <>
+          <div className="result-action-grid psd-action-grid">
+            <button
+              type="button"
+              onClick={() => void exportSelectedPageInpaintPsd()}
+              disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
+            >
+              PSD 내보내기
+            </button>
+            <button
+              type="button"
+              onClick={selectInpaintPsdFile}
+              disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
+            >
+              PSD 가져오기
+            </button>
+          </div>
+          <p className="muted-line">
+            글자에 레이어 효과가 들어갈 경우 임포트 전에 스마트 오브젝트로 변환한 후 임포트해야 보이는 그대로 불러올 수 있습니다.
+          </p>
+        </>
       ) : activeLayer === "inpaintResult" ? (
         <>
           <div className="segmented-control tool-selector result-tool-grid" role="group" aria-label="인페인트 결과 도구">
