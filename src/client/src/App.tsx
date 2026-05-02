@@ -1951,6 +1951,73 @@ export default function App(): React.JSX.Element {
     await runInpaintForPage({ ...selectedPage, inpaintMaskDataUrl: maskDataUrl }, maskDataUrl, "전체 블록 인페인트 결과를 저장했습니다.");
   }, [inpaintBusy, runInpaintForPage, selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
 
+  const applyInpaintAllPages = useCallback(async () => {
+    const initialChapter = currentChapterRef.current;
+    if (!initialChapter || initialChapter.pages.length === 0 || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const pagesWithBlocks = initialChapter.pages.filter((page) => page.blocks.length > 0 && !page.progressCompleted);
+    if (pagesWithBlocks.length === 0) {
+      pushStatus("인페인트할 미완료 페이지가 없습니다.");
+      return;
+    }
+
+    setInpaintBusy(true);
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+
+      const chapterId = currentChapterRef.current?.id;
+      if (!chapterId) {
+        return;
+      }
+
+      pushStatus(`전체 인페인트 시작: ${pagesWithBlocks.length}p`);
+      for (const [index, queuedPage] of pagesWithBlocks.entries()) {
+        const page = currentChapterRef.current?.pages.find((candidate) => candidate.id === queuedPage.id) ?? queuedPage;
+        const maskDataUrl = await drawBlocksOnInpaintMask(page, page.blocks);
+
+        updatePageInpaintStatus(page.id, "running");
+        try {
+          const result = await window.mangaApi.inpaintPage({
+            chapterId,
+            pageId: page.id,
+            sourceDataUrl: page.dataUrl,
+            maskDataUrl,
+            settings: DEFAULT_INPAINT_SETTINGS
+          });
+          applyChapter(result.chapter);
+          pushStatus(`${index + 1}/${pagesWithBlocks.length} ${page.name} 인페인트 완료`);
+        } catch (error) {
+          updatePageInpaintStatus(page.id, "failed");
+          const message = error instanceof Error ? error.message : "인페인트 실행에 실패했습니다.";
+          throw new Error(`${page.name} 인페인트 실패: ${message}`);
+        }
+      }
+
+      signalSaveComplete();
+      void refreshLibrary();
+      pushStatus(`전체 인페인트 완료: ${pagesWithBlocks.length}p`);
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "전체 인페인트에 실패했습니다.");
+    } finally {
+      setInpaintBusy(false);
+    }
+  }, [
+    applyChapter,
+    dirty,
+    inpaintBusy,
+    pushStatus,
+    refreshLibrary,
+    saveNow,
+    selectedPageEditLocked,
+    signalSaveComplete,
+    updatePageInpaintStatus
+  ]);
+
   const rerunInpaintWithCurrentMask = useCallback(async () => {
     if (selectedPageEditLocked || inpaintBusy) {
       return;
@@ -3578,6 +3645,12 @@ export default function App(): React.JSX.Element {
               </button>
               <button onClick={() => void runAnalysis("all")} disabled={!currentChapter || jobActive}>
                 전체 번역 (AI)
+              </button>
+              <button
+                onClick={() => void applyInpaintAllPages()}
+                disabled={!currentChapter || currentChapter.pages.every((page) => page.blocks.length === 0 || page.progressCompleted) || jobActive || inpaintBusy}
+              >
+                {inpaintBusy ? "전체 인페인트 중" : "전체 인페인트 (완료 제외)"}
               </button>
               <button onClick={() => void renderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
                 {renderProgress?.mode === "page" ? "출력 중" : "페이지 출력"}
