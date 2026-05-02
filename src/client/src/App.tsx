@@ -411,7 +411,12 @@ export default function App(): React.JSX.Element {
   const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
   const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
   const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
-  const layerToolActive = activeLayer === "overlay" || activeLayer === "inpaintMask" || activeLayer === "inpaintResult";
+  const layerToolActive =
+    activeLayer === "image" ||
+    activeLayer === "overlay" ||
+    activeLayer === "inpaint" ||
+    activeLayer === "inpaintMask" ||
+    activeLayer === "inpaintResult";
   const temporaryPanShortcutEnabled = layerToolActive || zoomToolActive;
   const selectedPageInpaintNotice =
     selectedPage?.inpaintStatus === "running"
