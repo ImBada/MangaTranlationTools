@@ -25,6 +25,7 @@ import type {
 } from "../../shared/types";
 
 type ImportKind = "images" | "folder" | "zip" | "zip-folder";
+type LastImportedInpaintPsdMeta = { exists: boolean; importedAt?: string };
 
 async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, {
@@ -85,6 +86,10 @@ export const mangaApi = {
     postJson("/api/inpaint/result-layer", request),
   exportInpaintPsd: (request: ExportInpaintPsdRequest): Promise<Blob> =>
     requestBlob("/api/inpaint/psd/export", { method: "POST", body: JSON.stringify(request) }),
+  downloadLastImportedInpaintPsd: (chapterId: string, pageId: string): Promise<Blob> =>
+    requestBlob(`/api/inpaint/psd/last-import?chapterId=${encodeURIComponent(chapterId)}&pageId=${encodeURIComponent(pageId)}`),
+  getLastImportedInpaintPsdMeta: (chapterId: string, pageId: string): Promise<LastImportedInpaintPsdMeta> =>
+    requestJson(`/api/inpaint/psd/last-import/meta?chapterId=${encodeURIComponent(chapterId)}&pageId=${encodeURIComponent(pageId)}`),
   importInpaintPsd: (chapterId: string, pageId: string, file: File): Promise<ImportInpaintPsdResult> => {
     const formData = new FormData();
     formData.append("chapterId", chapterId);

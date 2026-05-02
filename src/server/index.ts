@@ -2,7 +2,7 @@ import express from "express";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { mkdirSync } from "node:fs";
-import { readFile, unlink } from "node:fs/promises";
+import { readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { join } from "node:path";
 import { ensureWritableAppDirectories } from "./appPaths";
@@ -17,6 +17,7 @@ import {
   deletePage,
   deleteWork,
   finalizeRunningPages,
+  getInpaintPsdImportPath,
   getLibraryRoot,
   getRunPaths,
   listLibrary,
@@ -199,6 +200,30 @@ app.post("/api/inpaint/psd/export", asyncHandler(async (req, res) => {
 
 app.post("/api/inpaint/psd/import", upload.single("file"), asyncHandler(async (req, res) => {
   res.json(await importInpaintPsdRequest(req));
+}));
+
+app.get("/api/inpaint/psd/last-import", asyncHandler(async (req, res) => {
+  const { chapterId, pageId } = readPsdPageQuery(req);
+  const psdPath = await getInpaintPsdImportPath(chapterId, pageId);
+  const buffer = await readFile(psdPath).catch(() => null);
+  if (!buffer) {
+    res.status(404).json({ error: "현재 페이지에서 마지막으로 가져온 PSD 파일이 없습니다." });
+    return;
+  }
+  res.setHeader("Content-Type", "image/vnd.adobe.photoshop");
+  res.setHeader("Content-Disposition", "attachment; filename=\"last-imported-inpaint.psd\"");
+  res.end(buffer);
+}));
+
+app.get("/api/inpaint/psd/last-import/meta", asyncHandler(async (req, res) => {
+  const pageQuery = readOptionalPsdPageQuery(req);
+  if (!pageQuery) {
+    res.json({ exists: false });
+    return;
+  }
+  const psdPath = await getInpaintPsdImportPath(pageQuery.chapterId, pageQuery.pageId);
+  const stats = await stat(psdPath).catch(() => null);
+  res.json(stats ? { exists: true, importedAt: stats.mtime.toISOString() } : { exists: false });
 }));
 
 app.get("/api/lama/status", asyncHandler(async (_req, res) => {
@@ -496,13 +521,29 @@ async function importInpaintPsdRequest(req: express.Request): Promise<ImportInpa
     if (!page) {
       throw new Error("페이지를 찾지 못했습니다.");
     }
-    const imported = await importInpaintPsd(await readFile(file.path), page.width, page.height);
+    const psdBuffer = await readFile(file.path);
+    const imported = await importInpaintPsd(psdBuffer, page.width, page.height);
+    await writeFile(await getInpaintPsdImportPath(chapterId, pageId), psdBuffer);
     return {
       chapter: await saveImportedInpaintLayers(chapterId, pageId, imported.maskDataUrl, imported.resultDataUrl)
     };
   } finally {
     await unlink(file.path).catch(() => undefined);
   }
+}
+
+function readOptionalPsdPageQuery(req: express.Request): { chapterId: string; pageId: string } | null {
+  const chapterId = typeof req.query.chapterId === "string" ? req.query.chapterId : "";
+  const pageId = typeof req.query.pageId === "string" ? req.query.pageId : "";
+  return chapterId && pageId ? { chapterId, pageId } : null;
+}
+
+function readPsdPageQuery(req: express.Request): { chapterId: string; pageId: string } {
+  const pageQuery = readOptionalPsdPageQuery(req);
+  if (!pageQuery) {
+    throw new Error("내려받을 PSD 페이지 정보가 없습니다.");
+  }
+  return pageQuery;
 }
 
 function resolveAvailableInpaintEngine(requested: InpaintEngine): InpaintEngine {

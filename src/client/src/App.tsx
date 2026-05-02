@@ -269,6 +269,7 @@ export default function App(): React.JSX.Element {
   const [renderProgress, setRenderProgress] = useState<RenderProgress | null>(null);
   const [inpaintBusy, setInpaintBusy] = useState(false);
   const [inpaintPsdBusy, setInpaintPsdBusy] = useState(false);
+  const [lastImportedInpaintPsdAt, setLastImportedInpaintPsdAt] = useState<string | null>(null);
   const [renameTarget, setRenameTarget] = useState<RenameTarget | null>(null);
   const [renameBusy, setRenameBusy] = useState(false);
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -351,7 +352,12 @@ export default function App(): React.JSX.Element {
     () => currentChapter?.pages.find((page) => page.id === selectedPageId) ?? currentChapter?.pages[0] ?? null,
     [currentChapter?.pages, selectedPageId]
   );
+  const currentChapterId = currentChapter?.id ?? null;
+  const selectedPageCurrentId = selectedPage?.id ?? null;
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+  const lastImportedInpaintPsdLabel = lastImportedInpaintPsdAt
+    ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(lastImportedInpaintPsdAt))
+    : null;
   const fontPresets = currentChapter?.fontPresets ?? [];
   const selectedFontPreset = selectedBlock?.fontPresetId
     ? fontPresets.find((preset) => preset.id === selectedBlock.fontPresetId) ?? null
@@ -512,6 +518,16 @@ export default function App(): React.JSX.Element {
     return next;
   }, []);
 
+  const refreshLastImportedInpaintPsdMeta = useCallback(async () => {
+    if (!currentChapterId || !selectedPageCurrentId) {
+      setLastImportedInpaintPsdAt(null);
+      return { exists: false };
+    }
+    const meta = await window.mangaApi.getLastImportedInpaintPsdMeta(currentChapterId, selectedPageCurrentId);
+    setLastImportedInpaintPsdAt(meta.exists && meta.importedAt ? meta.importedAt : null);
+    return meta;
+  }, [currentChapterId, selectedPageCurrentId]);
+
   React.useEffect(() => {
     void refreshLibrary();
   }, [refreshLibrary]);
@@ -527,6 +543,12 @@ export default function App(): React.JSX.Element {
       console.error(error);
     });
   }, [refreshLamaStatus]);
+
+  React.useEffect(() => {
+    void refreshLastImportedInpaintPsdMeta().catch((error) => {
+      console.error(error);
+    });
+  }, [refreshLastImportedInpaintPsdMeta]);
 
   React.useEffect(() => {
     if (!lamaStatus?.runtimePreparing && !lamaStatus?.modelDownloading) {
@@ -2156,6 +2178,30 @@ export default function App(): React.JSX.Element {
     inpaintPsdInputRef.current?.click();
   }, [currentChapter, inpaintPsdBusy, selectedPage, selectedPageEditLocked]);
 
+  const downloadLastImportedInpaintPsd = useCallback(async () => {
+    if (!currentChapterId || !selectedPageCurrentId || inpaintPsdBusy) {
+      return;
+    }
+    setInpaintPsdBusy(true);
+    try {
+      const blob = await window.mangaApi.downloadLastImportedInpaintPsd(currentChapterId, selectedPageCurrentId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = "last-imported-inpaint.psd";
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      pushStatus("마지막으로 사용한 PSD를 내려받았습니다.");
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "마지막으로 사용한 PSD 내려받기에 실패했습니다.");
+    } finally {
+      setInpaintPsdBusy(false);
+    }
+  }, [currentChapterId, inpaintPsdBusy, pushStatus, selectedPageCurrentId]);
+
   const handleInpaintPsdInputChange = useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -2186,10 +2232,10 @@ export default function App(): React.JSX.Element {
 
       const result = await window.mangaApi.importInpaintPsd(currentChapter.id, selectedPage.id, file);
       mergeLiveChapter(result.chapter);
+      void refreshLastImportedInpaintPsdMeta();
       signalSaveComplete();
       void refreshLibrary();
       setLayerVisibility((current) => ({ ...current, inpaint: true, inpaintResult: true, inpaintMask: true }));
-      selectLayer("inpaintResult");
       pushStatus("PSD에서 인페인트 결과와 마스크를 가져왔습니다.");
     } catch (error) {
       console.error(error);
@@ -2206,9 +2252,9 @@ export default function App(): React.JSX.Element {
     mergeLiveChapter,
     pushStatus,
     recordGlobalUndoEntry,
+    refreshLastImportedInpaintPsdMeta,
     refreshLibrary,
     saveNow,
-    selectLayer,
     selectedPage,
     selectedPageEditLocked,
     signalSaveComplete
@@ -3146,7 +3192,18 @@ export default function App(): React.JSX.Element {
               PSD 가져오기
             </button>
           </div>
-          <p className="muted-line">
+          <button
+            type="button"
+            className="psd-last-import-button"
+            onClick={() => void downloadLastImportedInpaintPsd()}
+            disabled={inpaintPsdBusy || !currentChapter || !selectedPage || !lastImportedInpaintPsdAt}
+          >
+            마지막으로 사용한 PSD 내려받기
+          </button>
+          {lastImportedInpaintPsdLabel ? (
+            <p className="psd-helper-line">마지막 사용: {lastImportedInpaintPsdLabel}</p>
+          ) : null}
+          <p className="psd-helper-line">
             글자에 레이어 효과가 들어갈 경우 임포트 전에 스마트 오브젝트로 변환한 후 임포트해야 보이는 그대로 불러올 수 있습니다.
           </p>
         </>
