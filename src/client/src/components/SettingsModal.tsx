@@ -8,138 +8,27 @@ import type {
   TranslationMode,
   UpdateStatus
 } from "../../../shared/types";
-import { rangeProgressStyle } from "../lib/rangeProgressStyle";
-
-const MAX_GPU_LAYERS = 30;
-const DEFAULT_GEMMA_MODEL_REPO = "unsloth/gemma-4-26B-A4B-it-GGUF";
-const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:11434/v1";
-const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:31b";
-const MODEL_PRESETS = {
-  q3: {
-    label: "Q3_K_XL",
-    modelRepo: DEFAULT_GEMMA_MODEL_REPO,
-    modelFile: "gemma-4-26B-A4B-it-UD-Q3_K_XL.gguf"
-  },
-  q4: {
-    label: "Q4_K_XL",
-    modelRepo: DEFAULT_GEMMA_MODEL_REPO,
-    modelFile: "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf"
-  },
-  q6: {
-    label: "Q6_K_XL",
-    modelRepo: DEFAULT_GEMMA_MODEL_REPO,
-    modelFile: "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf"
-  }
-} as const;
-
-type ModelPresetId = keyof typeof MODEL_PRESETS | "custom";
-type TranslationModeOption = {
-  id: TranslationMode;
-  label: string;
-  description: string;
-};
-
-type ModelSourceOption = {
-  id: ModelSource;
-  label: string;
-  description: string;
-};
-
-type ModelProviderOption = {
-  id: ModelProvider;
-  label: string;
-  description: string;
-};
-
-type CodexReasoningOption = {
-  id: CodexReasoningEffort;
-  label: string;
-  description: string;
-};
-
-type TestState =
-  | {
-      status: "idle";
-      message: null;
-      detail: null;
-    }
-  | {
-      status: "running" | "success" | "error";
-      message: string;
-      detail: string | null;
-    };
-
-type LamaActionState = {
-  status: "idle" | "running" | "success" | "error";
-  message: string | null;
-};
-
-const TRANSLATION_MODE_OPTIONS: TranslationModeOption[] = [
-  {
-    id: "fast",
-    label: "빠름",
-    description: "원본 이미지만 보내고 토큰 예산을 줄여 더 빠르게 처리합니다."
-  },
-  {
-    id: "accuracy",
-    label: "정확성",
-    description: "고대비 보조 이미지를 함께 보내고 더 넉넉한 토큰 예산을 사용합니다."
-  }
-];
-
-const MODEL_SOURCE_OPTIONS: ModelSourceOption[] = [
-  {
-    id: "huggingface",
-    label: "HF repo",
-    description: "기본 프리셋이나 Hugging Face repo/GGUF 파일명을 사용합니다."
-  },
-  {
-    id: "local",
-    label: "로컬 파일",
-    description: "이미 가지고 있는 GGUF 모델과 mmproj를 직접 지정합니다."
-  }
-];
-
-const MODEL_PROVIDER_OPTIONS: ModelProviderOption[] = [
-  {
-    id: "openai-codex",
-    label: "OpenAI API",
-    description: "Codex 로그인 토큰을 쓰는 openai-oauth 엔드포인트로 요청합니다."
-  },
-  {
-    id: "openai-compatible",
-    label: "커스텀",
-    description: "OpenAI 호환 /v1/chat/completions 엔드포인트로 요청합니다."
-  }
-];
-
-const CODEX_REASONING_OPTIONS: CodexReasoningOption[] = [
-  {
-    id: "none",
-    label: "없음",
-    description: "생각 예산을 쓰지 않고 가장 빠르게 응답합니다."
-  },
-  {
-    id: "low",
-    label: "낮음",
-    description: "가벼운 추론으로 처리합니다."
-  },
-  {
-    id: "medium",
-    label: "보통",
-    description: "기본 균형 설정입니다."
-  },
-  {
-    id: "high",
-    label: "높음",
-    description: "더 오래 생각해서 까다로운 페이지를 처리합니다."
-  },
-  {
-    id: "xhigh",
-    label: "최고",
-    description: "가장 넉넉한 생각 예산을 사용합니다."
-  }
-];
+import { CodexModelSettingsSection } from "./settings/CodexModelSettingsSection";
+import { GemmaModelSettingsSection } from "./settings/GemmaModelSettingsSection";
+import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
+import { LamaRuntimeSettingsSection } from "./settings/LamaRuntimeSettingsSection";
+import { ModelTestSection } from "./settings/ModelTestSection";
+import { OpenAICompatibleSettingsSection } from "./settings/OpenAICompatibleSettingsSection";
+import { SettingsVersionBar } from "./settings/SettingsVersionBar";
+import {
+  DEFAULT_GEMMA_MODEL_REPO,
+  MAX_GPU_LAYERS,
+  MODEL_PRESETS,
+  type ModelPresetId
+} from "./settings/settingsModalConfig";
+import {
+  buildTestDetail,
+  clampGpuLayers,
+  type LamaActionState,
+  resolveModelPreset,
+  type TestState,
+  withSettingsDefaults
+} from "./settings/settingsModalUtils";
 
 type SettingsModalProps = {
   initialSettings: AppSettings;
@@ -420,13 +309,13 @@ export function SettingsModal({
     setTestState({ status: "idle", message: null, detail: null });
   }, []);
 
-  const submit = () => {
+  const submit = React.useCallback(() => {
     const nextSettings = buildSettings();
     if (!nextSettings || !canSubmit) {
       return;
     }
     onSubmit(nextSettings);
-  };
+  }, [buildSettings, canSubmit, onSubmit]);
 
   const handleGpuLayersInputChange = (event: React.ChangeEvent<HTMLInputElement>) => {
     clearTestState();
@@ -535,444 +424,95 @@ export function SettingsModal({
         </div>
 
         <section className="modal-section">
-          <p className="muted-line modal-note">다음 번 번역 실행부터 적용됩니다.</p>
-          <div className="settings-field-stack">
-            <span>번역 모드</span>
-            <div className="settings-mode-group" role="tablist" aria-label="번역 모드">
-              {TRANSLATION_MODE_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`settings-preset-button ${translationMode === option.id ? "active" : ""}`}
-                  onClick={() => {
-                    clearTestState();
-                    setTranslationMode(option.id);
-                  }}
-                  disabled={controlsBusy}
-                  aria-pressed={translationMode === option.id}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="muted-line modal-note">
-              {TRANSLATION_MODE_OPTIONS.find((option) => option.id === translationMode)?.description}
-            </p>
-          </div>
+          <GeneralSettingsSection
+            controlsBusy={controlsBusy}
+            modelProvider={modelProvider}
+            nsfwMode={nsfwMode}
+            translationMode={translationMode}
+            onClearTestState={clearTestState}
+            onModelProviderChange={setModelProvider}
+            onNsfwModeChange={setNsfwMode}
+            onTranslationModeChange={setTranslationMode}
+          />
 
-          <div className="settings-field-stack">
-            <span>번역 엔진</span>
-            <div className="settings-mode-group" role="tablist" aria-label="번역 엔진">
-              {MODEL_PROVIDER_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`settings-preset-button ${modelProvider === option.id ? "active" : ""}`}
-                  onClick={() => {
-                    clearTestState();
-                    setModelProvider(option.id);
-                  }}
-                  disabled={controlsBusy}
-                  aria-pressed={modelProvider === option.id}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="muted-line modal-note">
-              {MODEL_PROVIDER_OPTIONS.find((option) => option.id === modelProvider)?.description}
-            </p>
-          </div>
-
-          <label className="settings-toggle-row">
-            NSFW 모드
-            <button
-              type="button"
-              className={`settings-toggle-button ${nsfwMode ? "active" : ""}`}
-              onClick={() => {
-                clearTestState();
-                setNsfwMode((current) => !current);
-              }}
-              disabled={controlsBusy}
-              aria-pressed={nsfwMode}
-            >
-              {nsfwMode ? "켜짐" : "꺼짐"}
-            </button>
-          </label>
-          <p className="muted-line">켜두면 시스템 프롬프트에 NSFW 허용 지시문을 추가합니다.</p>
-
-          <div className="settings-field-stack">
-            <span>LaMa 인페인트</span>
-            <div className="settings-runtime-grid">
-              <RuntimeState label="Python" ready={Boolean(lamaStatus?.pythonAvailable)} busy={false} />
-              <RuntimeState label="런타임" ready={Boolean(lamaStatus?.runtimeReady)} busy={Boolean(lamaStatus?.runtimePreparing)} />
-              <RuntimeState label="모델" ready={Boolean(lamaStatus?.modelExists)} busy={Boolean(lamaStatus?.modelDownloading)} />
-            </div>
-            <div className="settings-inline-actions">
-              <button type="button" onClick={() => void prepareLamaRuntime()} disabled={controlsBusy || Boolean(lamaStatus?.runtimePreparing)}>
-                {lamaStatus?.runtimePreparing ? "준비 중..." : "환경 준비"}
-              </button>
-              <button type="button" onClick={() => void downloadLamaModel()} disabled={controlsBusy || Boolean(lamaStatus?.modelDownloading)}>
-                {lamaStatus?.modelDownloading ? "다운로드 중..." : "모델 다운로드"}
-              </button>
-              <button type="button" onClick={() => void refreshLamaStatus()} disabled={controlsBusy}>
-                새로고침
-              </button>
-            </div>
-            {lamaStatus && !lamaStatus.pythonAvailable ? <PythonInstallHelp status={lamaStatus} compact /> : null}
-            {lamaStatus ? <p className="muted-line modal-note">모델 경로: {lamaStatus.modelPath}</p> : null}
-            {lamaStatus?.lastError ? <p className="muted-line modal-note">최근 오류: {lamaStatus.lastError}</p> : null}
-            {lamaActionState.message ? (
-              <div className={`settings-test-result ${lamaActionState.status === "error" ? "error" : lamaActionState.status === "success" ? "success" : ""}`}>
-                <strong>{lamaActionState.message}</strong>
-              </div>
-            ) : null}
-          </div>
+          <LamaRuntimeSettingsSection
+            controlsBusy={controlsBusy}
+            lamaActionState={lamaActionState}
+            lamaStatus={lamaStatus}
+            onDownloadModel={downloadLamaModel}
+            onPrepareRuntime={prepareLamaRuntime}
+            onRefreshStatus={refreshLamaStatus}
+          />
 
           {modelProvider === "gemma" ? (
-            <>
-          <div className="settings-field-stack">
-            <span>모델 소스</span>
-            <div className="settings-mode-group" role="tablist" aria-label="모델 소스">
-              {MODEL_SOURCE_OPTIONS.map((option) => (
-                <button
-                  key={option.id}
-                  type="button"
-                  className={`settings-preset-button ${modelSource === option.id ? "active" : ""}`}
-                  onClick={() => {
-                    clearTestState();
-                    setModelSource(option.id);
-                  }}
-                  disabled={controlsBusy}
-                  aria-pressed={modelSource === option.id}
-                >
-                  {option.label}
-                </button>
-              ))}
-            </div>
-            <p className="muted-line modal-note">
-              {MODEL_SOURCE_OPTIONS.find((option) => option.id === modelSource)?.description}
-            </p>
-          </div>
-
-          {modelSource === "huggingface" ? (
-            <>
-              <div className="settings-field-stack">
-                <span>모델</span>
-                <div className="settings-preset-group" role="tablist" aria-label="모델 프리셋">
-                  {(["q3", "q4", "q6", "custom"] as const).map((presetId) => (
-                    <button
-                      key={presetId}
-                      type="button"
-                      className={`settings-preset-button ${selectedPreset === presetId ? "active" : ""}`}
-                      onClick={() => {
-                        clearTestState();
-                        setSelectedPreset(presetId);
-                      }}
-                      disabled={controlsBusy}
-                      aria-pressed={selectedPreset === presetId}
-                    >
-                      {presetId === "custom" ? "커스텀" : MODEL_PRESETS[presetId].label}
-                    </button>
-                  ))}
-                </div>
-                <p className="muted-line modal-note">대략 권장 VRAM: Q3 약 16GB, Q4 약 24GB, Q6 약 32GB</p>
-              </div>
-              {selectedPreset === "custom" ? (
-                <>
-                  <label>
-                    HF repo
-                    <input
-                      ref={modelRepoInputRef}
-                      value={customModelRepo}
-                      disabled={controlsBusy}
-                      onChange={(event) => {
-                        clearTestState();
-                        setCustomModelRepo(event.target.value);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          submit();
-                        }
-                      }}
-                    />
-                  </label>
-                  <label>
-                    GGUF 파일명
-                    <input
-                      value={customModelFile}
-                      disabled={controlsBusy}
-                      onChange={(event) => {
-                        clearTestState();
-                        setCustomModelFile(event.target.value);
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          submit();
-                        }
-                      }}
-                    />
-                  </label>
-                </>
-              ) : null}
-            </>
-          ) : (
-            <>
-              <div className="settings-field-stack">
-                <span>로컬 모델 파일</span>
-                <div className="settings-file-row">
-                  <input
-                    ref={localModelInputRef}
-                    value={localModelPath}
-                    disabled={controlsBusy}
-                    onChange={(event) => {
-                      clearTestState();
-                      setLocalModelPath(event.target.value);
-                    }}
-                    placeholder="C:\\models\\my-model.gguf"
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        submit();
-                      }
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div className="settings-field-stack">
-                <span>mmproj 파일</span>
-                <div className="settings-file-row">
-                  <input
-                    value={localMmprojPath}
-                    disabled={controlsBusy}
-                    onChange={(event) => {
-                      clearTestState();
-                      setLocalMmprojPath(event.target.value);
-                    }}
-                    placeholder="같은 폴더면 자동 탐지, 필요하면 직접 지정"
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        submit();
-                      }
-                    }}
-                  />
-                </div>
-                <p className="muted-line modal-note">
-                  mmproj는 같은 폴더에서 자동으로 찾아보고, 안 잡히면 직접 지정할 수 있습니다.
-                </p>
-              </div>
-            </>
-          )}
-
-          <div className="settings-field-stack">
-            <span>GPU layers</span>
-            <div className="settings-gpu-row">
-              <input
-                ref={gpuSliderRef}
-                className="settings-gpu-slider"
-                type="range"
-                min={0}
-                max={MAX_GPU_LAYERS}
-                step={1}
-                value={sliderValue}
-                style={rangeProgressStyle(sliderValue, 0, MAX_GPU_LAYERS)}
-                disabled={controlsBusy}
-                onChange={(event) => {
-                  clearTestState();
-                  setGpuLayers(String(clampGpuLayers(Number(event.target.value))));
-                }}
-              />
-              <input
-                className="settings-gpu-input"
-                type="number"
-                min={0}
-                max={MAX_GPU_LAYERS}
-                step={1}
-                value={gpuLayers}
-                disabled={controlsBusy}
-                onChange={handleGpuLayersInputChange}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    submit();
-                  }
-                }}
-              />
-            </div>
-            <p className="muted-line modal-note">0부터 30까지 설정할 수 있습니다.</p>
-          </div>
-            </>
+            <GemmaModelSettingsSection
+              controlsBusy={controlsBusy}
+              customModelFile={customModelFile}
+              customModelRepo={customModelRepo}
+              gpuLayers={gpuLayers}
+              gpuSliderRef={gpuSliderRef}
+              localMmprojPath={localMmprojPath}
+              localModelInputRef={localModelInputRef}
+              localModelPath={localModelPath}
+              modelRepoInputRef={modelRepoInputRef}
+              modelSource={modelSource}
+              selectedPreset={selectedPreset}
+              sliderValue={sliderValue}
+              onClearTestState={clearTestState}
+              onCustomModelFileChange={setCustomModelFile}
+              onCustomModelRepoChange={setCustomModelRepo}
+              onGpuLayersChange={setGpuLayers}
+              onGpuLayersInputChange={handleGpuLayersInputChange}
+              onLocalMmprojPathChange={setLocalMmprojPath}
+              onLocalModelPathChange={setLocalModelPath}
+              onModelSourceChange={setModelSource}
+              onSelectedPresetChange={setSelectedPreset}
+              onSubmit={submit}
+            />
           ) : modelProvider === "openai-codex" ? (
-            <>
-              <label>
-                Codex 모델
-                <input
-                  value={codexModel}
-                  disabled={controlsBusy}
-                  onChange={(event) => {
-                    clearTestState();
-                    setCodexModel(event.target.value);
-                  }}
-                  placeholder="gpt-5.5"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submit();
-                    }
-                  }}
-                />
-              </label>
-
-              <div className="settings-field-stack">
-                <span>생각</span>
-                <div className="settings-preset-group" role="tablist" aria-label="Codex 생각">
-                  {CODEX_REASONING_OPTIONS.map((option) => (
-                    <button
-                      key={option.id}
-                      type="button"
-                      className={`settings-preset-button ${codexReasoningEffort === option.id ? "active" : ""}`}
-                      onClick={() => {
-                        clearTestState();
-                        setCodexReasoningEffort(option.id);
-                      }}
-                      disabled={controlsBusy}
-                      aria-pressed={codexReasoningEffort === option.id}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="muted-line modal-note">
-                  {CODEX_REASONING_OPTIONS.find((option) => option.id === codexReasoningEffort)?.description}
-                </p>
-              </div>
-
-              <label>
-                openai-oauth 포트
-                <input
-                  type="number"
-                  min={0}
-                  max={65535}
-                  step={1}
-                  value={codexOauthPort}
-                  disabled={controlsBusy}
-                  onChange={(event) => {
-                    clearTestState();
-                    setCodexOauthPort(event.target.value);
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submit();
-                    }
-                  }}
-                />
-              </label>
-            </>
+            <CodexModelSettingsSection
+              codexModel={codexModel}
+              codexOauthPort={codexOauthPort}
+              codexReasoningEffort={codexReasoningEffort}
+              controlsBusy={controlsBusy}
+              onClearTestState={clearTestState}
+              onCodexModelChange={setCodexModel}
+              onCodexOauthPortChange={setCodexOauthPort}
+              onCodexReasoningEffortChange={setCodexReasoningEffort}
+              onSubmit={submit}
+            />
           ) : (
-            <>
-              <label>
-                Base URL
-                <input
-                  value={compatibleBaseUrl}
-                  disabled={controlsBusy}
-                  onChange={(event) => {
-                    clearTestState();
-                    setCompatibleBaseUrl(event.target.value);
-                  }}
-                  placeholder="http://127.0.0.1:1234/v1"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submit();
-                    }
-                  }}
-                />
-              </label>
-
-              <label>
-                API Key
-                <input
-                  type="password"
-                  value={compatibleApiKey}
-                  disabled={controlsBusy}
-                  onChange={(event) => {
-                    clearTestState();
-                    setCompatibleApiKey(event.target.value);
-                  }}
-                  placeholder="로컬 서버면 비워둘 수 있습니다"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submit();
-                    }
-                  }}
-                />
-              </label>
-
-              <label>
-                모델
-                <input
-                  value={compatibleModel}
-                  disabled={controlsBusy}
-                  onChange={(event) => {
-                    clearTestState();
-                    setCompatibleModel(event.target.value);
-                  }}
-                  placeholder="gpt-4o-mini"
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") {
-                      submit();
-                    }
-                  }}
-                />
-              </label>
-            </>
+            <OpenAICompatibleSettingsSection
+              compatibleApiKey={compatibleApiKey}
+              compatibleBaseUrl={compatibleBaseUrl}
+              compatibleModel={compatibleModel}
+              controlsBusy={controlsBusy}
+              onClearTestState={clearTestState}
+              onCompatibleApiKeyChange={setCompatibleApiKey}
+              onCompatibleBaseUrlChange={setCompatibleBaseUrl}
+              onCompatibleModelChange={setCompatibleModel}
+              onSubmit={submit}
+            />
           )}
 
-          <div className="settings-field-stack">
-            <span>모델 테스트</span>
-            <div className="settings-inline-actions">
-              <button
-                type="button"
-                onClick={() => void runModelTest()}
-                disabled={controlsBusy || !canSubmit || jobActive}
-              >
-                {testState.status === "running" ? "테스트 중..." : "잘 작동되나 확인"}
-              </button>
-            </div>
-            <p className="muted-line modal-note">
-              서버가 뜨고 간단한 텍스트 요청에 응답하는지만 확인합니다. 실제 이미지 번역 가능 여부와는 다를 수 있습니다.
-            </p>
-            {jobActive ? <p className="muted-line">번역 작업 중에는 모델 테스트를 실행할 수 없습니다.</p> : null}
-            {testState.status !== "idle" ? (
-              <div className={`settings-test-result ${testState.status}`}>
-                <strong>{testState.message}</strong>
-                {testState.detail ? <p>{testState.detail}</p> : null}
-              </div>
-            ) : null}
-          </div>
-
-          {modelProvider === "gemma" && !gpuLayersValid ? (
-            <p className="muted-line">GPU layers는 0 이상 30 이하의 정수여야 합니다.</p>
-          ) : null}
-          {modelProvider === "openai-codex" && !codexOauthPortValid ? (
-            <p className="muted-line">openai-oauth 포트는 0 이상 65535 이하의 정수여야 합니다.</p>
-          ) : null}
-          {modelProvider === "openai-compatible" && !compatibleBaseUrlValid ? (
-            <p className="muted-line">Base URL은 http:// 또는 https://로 시작해야 합니다.</p>
-          ) : null}
+          <ModelTestSection
+            canSubmit={canSubmit}
+            codexOauthPortValid={codexOauthPortValid}
+            compatibleBaseUrlValid={compatibleBaseUrlValid}
+            controlsBusy={controlsBusy}
+            gpuLayersValid={gpuLayersValid}
+            jobActive={jobActive}
+            modelProvider={modelProvider}
+            testState={testState}
+            onRunModelTest={runModelTest}
+          />
         </section>
 
-        <div className={`settings-version ${updateStatus?.updateAvailable ? "update-available" : ""}`}>
-          <div>
-            <strong>MangaTranslationTools v{__APP_VERSION__}</strong>
-            <span>{resolveUpdateStatusText(updateStatus, updateBusy)}</span>
-          </div>
-          {updateStatus?.updateAvailable && updateStatus.releaseUrl ? (
-            <a href={updateStatus.releaseUrl} target="_blank" rel="noreferrer">
-              업데이트 열기
-            </a>
-          ) : null}
-          <button type="button" onClick={() => void refreshUpdateStatus(true)} disabled={updateBusy}>
-            {updateBusy ? "확인 중" : "다시 확인"}
-          </button>
-        </div>
+        <SettingsVersionBar
+          updateBusy={updateBusy}
+          updateStatus={updateStatus}
+          onRefreshUpdateStatus={() => refreshUpdateStatus(true)}
+        />
 
         <div className="modal-actions settings-actions">
           <button onClick={onReset} disabled={controlsBusy}>
@@ -988,100 +528,4 @@ export function SettingsModal({
       </div>
     </div>
   );
-}
-
-function resolveUpdateStatusText(status: UpdateStatus | null, busy: boolean): string {
-  if (busy && !status) {
-    return "업데이트 확인 중...";
-  }
-  if (!status) {
-    return "업데이트 확인 대기 중";
-  }
-  if (status.error) {
-    return `업데이트 확인 실패: ${status.error}`;
-  }
-  if (status.updateAvailable && status.latestVersion) {
-    return `새 버전 v${status.latestVersion} 사용 가능`;
-  }
-  if (status.latestVersion) {
-    return "최신 버전입니다.";
-  }
-  return "최신 릴리스 정보를 찾지 못했습니다.";
-}
-
-function RuntimeState({ label, ready, busy }: { label: string; ready: boolean; busy: boolean }): React.JSX.Element {
-  return (
-    <div className={`settings-runtime-state ${ready ? "ready" : busy ? "busy" : "missing"}`}>
-      <span>{label}</span>
-      <strong>{ready ? "준비됨" : busy ? "진행 중" : "필요"}</strong>
-    </div>
-  );
-}
-
-function PythonInstallHelp({ status, compact = false }: { status: LamaRuntimeStatus; compact?: boolean }): React.JSX.Element {
-  return (
-    <div className={compact ? "settings-python-help compact" : "settings-python-help"}>
-      <strong>Python 설치가 필요합니다.</strong>
-      <code>{status.pythonInstallCommand}</code>
-      {status.pythonInstallHelp.map((line) => (
-        <p key={line}>{line}</p>
-      ))}
-    </div>
-  );
-}
-
-function resolveModelPreset(modelRepo: string, modelFile: string): ModelPresetId {
-  const trimmedModelRepo = modelRepo.trim();
-  const trimmedModelFile = modelFile.trim();
-
-  if (matchesPreset(MODEL_PRESETS.q4, trimmedModelRepo, trimmedModelFile)) {
-    return "q4";
-  }
-
-  if (matchesPreset(MODEL_PRESETS.q3, trimmedModelRepo, trimmedModelFile)) {
-    return "q3";
-  }
-
-  if (matchesPreset(MODEL_PRESETS.q6, trimmedModelRepo, trimmedModelFile)) {
-    return "q6";
-  }
-
-  return "custom";
-}
-
-function matchesPreset(
-  preset: (typeof MODEL_PRESETS)[keyof typeof MODEL_PRESETS],
-  modelRepo: string,
-  modelFile: string
-): boolean {
-  return preset.modelRepo === modelRepo && preset.modelFile === modelFile;
-}
-
-function clampGpuLayers(value: number): number {
-  return Math.min(MAX_GPU_LAYERS, Math.max(0, value));
-}
-
-function withSettingsDefaults(settings: AppSettings): AppSettings {
-  return {
-    ...settings,
-    openAICompatible: {
-      baseUrl: settings.openAICompatible?.baseUrl || DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-      apiKey: settings.openAICompatible?.apiKey || "",
-      model: settings.openAICompatible?.model || DEFAULT_OPENAI_COMPATIBLE_MODEL
-    }
-  };
-}
-
-function buildTestDetail(
-  modelPath: string | null | undefined,
-  mmprojPath: string | null | undefined,
-  endpoint: string | null | undefined
-): string | null {
-  const lines = [
-    modelPath ? `모델: ${modelPath}` : null,
-    mmprojPath ? `mmproj: ${mmprojPath}` : null,
-    endpoint ? `엔드포인트: ${endpoint}` : null
-  ].filter(Boolean);
-
-  return lines.length > 0 ? lines.join("\n") : null;
 }
