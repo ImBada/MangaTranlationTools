@@ -35,3 +35,13 @@ export function isPointerToolShortcut(event: KeyboardEvent): boolean {
 export function isRangeToolShortcut(event: KeyboardEvent): boolean {
   return event.code === "KeyT" || event.key.toLowerCase() === "t";
 }
+
+export function isBlockCopyShortcut(event: KeyboardEvent): boolean {
+  return !event.altKey && (event.metaKey || event.ctrlKey) && (event.code === "KeyC" || event.key.toLowerCase() === "c");
+}
+
+export function isBlockPasteShortcut(event: KeyboardEvent): boolean {
+  const hasPasteModifier = event.metaKey || event.ctrlKey;
+  const plainPasteKey = !event.shiftKey && !event.metaKey && !event.ctrlKey;
+  return !event.altKey && (hasPasteModifier || plainPasteKey) && (event.code === "KeyV" || event.key.toLowerCase() === "v");
+}

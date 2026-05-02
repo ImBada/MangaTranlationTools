@@ -1,6 +1,14 @@
 import type { ChapterSnapshot, MangaPage, TranslationBlock } from "../../../shared/types";
 import { normalizeKoreanText } from "./textNormalization";
 
+const TRANSLATION_BLOCK_CLIPBOARD_KIND = "manga-translation-tools/translation-block";
+
+type TranslationBlockClipboardPayload = {
+  kind: typeof TRANSLATION_BLOCK_CLIPBOARD_KIND;
+  version: 1;
+  block: TranslationBlock;
+};
+
 export type InpaintMaskUndoSnapshot = {
   inpaintMaskPath?: string;
   inpaintResultPath?: string;
@@ -30,6 +38,26 @@ export function cloneTranslationBlock(block: TranslationBlock): TranslationBlock
     bbox: { ...block.bbox },
     renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined
   };
+}
+
+export function serializeTranslationBlockForClipboard(block: TranslationBlock): string {
+  return JSON.stringify({
+    kind: TRANSLATION_BLOCK_CLIPBOARD_KIND,
+    version: 1,
+    block: cloneTranslationBlock(block)
+  } satisfies TranslationBlockClipboardPayload);
+}
+
+export function parseTranslationBlockFromClipboard(value: string): TranslationBlock | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<TranslationBlockClipboardPayload>;
+    if (parsed.kind !== TRANSLATION_BLOCK_CLIPBOARD_KIND || parsed.version !== 1 || !parsed.block) {
+      return null;
+    }
+    return cloneTranslationBlock(parsed.block);
+  } catch {
+    return null;
+  }
 }
 
 export function createInpaintMaskUndoSnapshot(page: MangaPage): InpaintMaskUndoSnapshot {

@@ -64,6 +64,8 @@ import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeW
 import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction } from "./lib/globalUndo";
 import {
   INPAINT_TOOL_SHORTCUTS,
+  isBlockCopyShortcut,
+  isBlockPasteShortcut,
   isPointerToolShortcut,
   isRangeToolShortcut,
   isZoomToolShortcut,
@@ -76,7 +78,9 @@ import {
   createTranslationUndoSnapshot,
   isEditableTarget,
   normalizeChapterTranslatedText,
+  parseTranslationBlockFromClipboard,
   reorderByTarget,
+  serializeTranslationBlockForClipboard,
   type InpaintMaskUndoSnapshot,
   type TranslationUndoSnapshot
 } from "./lib/editorUtils";
@@ -347,6 +351,7 @@ export default function App(): React.JSX.Element {
   const inpaintResultSaveStateRef = useRef<PendingInpaintResultSave | null>(null);
   const inpaintResultSavingRef = useRef(false);
   const temporaryPanHeldRef = useRef(false);
+  const translationBlockClipboardRef = useRef<TranslationBlock | null>(null);
 
   const selectedPage = useMemo(
     () => currentChapter?.pages.find((page) => page.id === selectedPageId) ?? currentChapter?.pages[0] ?? null,
@@ -2352,6 +2357,64 @@ export default function App(): React.JSX.Element {
     }));
   }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
+  const copySelectedBlockToClipboard = useCallback(async () => {
+    if (!selectedBlock) {
+      return;
+    }
+
+    const blockCopy = cloneTranslationBlock(selectedBlock);
+    translationBlockClipboardRef.current = blockCopy;
+    try {
+      await navigator.clipboard?.writeText(serializeTranslationBlockForClipboard(blockCopy));
+      pushStatus("선택한 텍스트 블록을 복사했습니다.");
+    } catch {
+      pushStatus("선택한 텍스트 블록을 복사했습니다. 시스템 클립보드 접근은 차단되어 앱 안에서만 붙여넣을 수 있습니다.");
+    }
+  }, [pushStatus, selectedBlock]);
+
+  const pasteTranslationBlockFromClipboard = useCallback(async () => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    let sourceBlock = translationBlockClipboardRef.current ? cloneTranslationBlock(translationBlockClipboardRef.current) : null;
+    try {
+      const clipboardText = await navigator.clipboard?.readText();
+      if (clipboardText) {
+        sourceBlock = parseTranslationBlockFromClipboard(clipboardText) ?? sourceBlock;
+      }
+    } catch {
+      // Keep the in-memory copy path working when clipboard read permission is unavailable.
+    }
+
+    if (!sourceBlock) {
+      pushStatus("붙여넣을 텍스트 블록이 없습니다.");
+      return;
+    }
+
+    const pastedBlock = {
+      ...offsetBlockBboxes(sourceBlock, 16, 16),
+      id: `${sourceBlock.id}-paste-${Date.now()}`
+    };
+    translationBlockClipboardRef.current = cloneTranslationBlock(sourceBlock);
+    recordTranslationUndoSnapshot("번역 블록 붙여넣기");
+    updateCurrentChapter(selectedPage.id, (current) => ({
+      ...current,
+      pages: current.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: [...page.blocks, pastedBlock]
+            }
+          : page
+      )
+    }));
+    setLayerVisibility((current) => ({ ...current, overlay: true }));
+    selectLayer("overlay");
+    setSelectedBlockId(pastedBlock.id);
+  }, [pushStatus, recordTranslationUndoSnapshot, selectLayer, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
+
   const duplicateSelectedBlock = () => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
       return;
@@ -2631,6 +2694,22 @@ export default function App(): React.JSX.Element {
         return;
       }
 
+      const blockCopyShortcut =
+        !modalOpen && !editableTarget && Boolean(selectedBlockIdRef.current) && isBlockCopyShortcut(event);
+      if (blockCopyShortcut) {
+        event.preventDefault();
+        void copySelectedBlockToClipboard();
+        return;
+      }
+
+      const blockPasteShortcut =
+        !modalOpen && !editableTarget && isBlockPasteShortcut(event);
+      if (blockPasteShortcut && !selectedPageEditLocked) {
+        event.preventDefault();
+        void pasteTranslationBlockFromClipboard();
+        return;
+      }
+
       const layerNumberShortcut =
         !modalOpen && !editableTarget && !event.altKey && !event.ctrlKey && !event.metaKey &&
         event.key >= "1" && event.key <= "5";
@@ -2771,6 +2850,7 @@ export default function App(): React.JSX.Element {
   }, [
     activeLayer,
     clearSelectedInpaintSelection,
+    copySelectedBlockToClipboard,
     deleteSelectedBlock,
     globalUndoActions,
     inpaintResultTool,
@@ -2779,6 +2859,7 @@ export default function App(): React.JSX.Element {
     layerVisibility,
     libraryWidgetOpen,
     modalOpen,
+    pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,
     selectLayer,
