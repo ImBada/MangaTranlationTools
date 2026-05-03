@@ -90,7 +90,6 @@ export function ImageStage({
     wrapRef,
     zoomCursor
   } = useImageStageView({
-    imageRef,
     onStagePointerDown,
     onStagePointerMove,
     onStagePointerUp,
@@ -103,16 +102,19 @@ export function ImageStage({
   });
 
   return (
-    <div ref={wrapRef} className="stage-wrap">
+    <div
+      ref={wrapRef}
+      className={`stage-wrap${panning || temporaryPanActive ? " panning" : ""}`}
+      onPointerMove={handleStagePointerMove}
+      onPointerUp={handleStagePointerUp}
+      onPointerCancel={handleStagePointerCancel}
+      onPointerDown={handleStagePointerDown}
+    >
       <div
         ref={stageRef}
         data-testid="image-stage"
         className={`image-stage${panning || temporaryPanActive ? " panning" : ""}`}
         style={stageStyle}
-        onPointerMove={handleStagePointerMove}
-        onPointerUp={handleStagePointerUp}
-        onPointerCancel={handleStagePointerCancel}
-        onPointerDown={handleStagePointerDown}
       >
         <ImageStageLayers
           activeLayer={activeLayer}

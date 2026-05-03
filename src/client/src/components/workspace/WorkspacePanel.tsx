@@ -230,7 +230,7 @@ export function WorkspacePanel({
         기록
       </button>
       {selectedPage ? (
-        <div className="workspace-pane w-full max-w-[1040px]">
+        <div className="workspace-pane w-full">
           <ImageStage
             page={selectedPage}
             imageRef={imageRef}

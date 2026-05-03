@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampStageViewScale, resolveStageFitSize, resolveStagePanBounds, resolveStagePanRange } from "../src/client/src/lib/stageFit";
+import { clampStageViewScale, resolveStageFitSize } from "../src/client/src/lib/stageFit";
 
 describe("stage fit sizing", () => {
   it("fits tall manga pages inside the available height", () => {
@@ -41,58 +41,5 @@ describe("stage fit sizing", () => {
   it("clamps explicit zoom scales", () => {
     expect(clampStageViewScale(0.01)).toBe(0.1);
     expect(clampStageViewScale(4)).toBe(2);
-  });
-
-  it("allows oversized pages to pan far enough to bring edges into view", () => {
-    expect(resolveStagePanBounds({ width: 1200, height: 1800 }, { width: 800, height: 600 })).toEqual({
-      width: 600,
-      height: 900
-    });
-  });
-
-  it("does not pan axes that already fit in the visible area", () => {
-    expect(resolveStagePanBounds({ width: 600, height: 1800 }, { width: 800, height: 600 })).toEqual({
-      width: 0,
-      height: 900
-    });
-  });
-
-  it("calculates exact pan limits from image and clip edges", () => {
-    expect(resolveStagePanRange(
-      { left: -200, top: -600, right: 1000, bottom: 1200, width: 1200, height: 1800 },
-      { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 },
-      0
-    )).toEqual({
-      minX: -200,
-      maxX: 200,
-      minY: -600,
-      maxY: 600
-    });
-  });
-
-  it("uses asymmetric pan limits when the image starts off-center", () => {
-    expect(resolveStagePanRange(
-      { left: 80, top: -600, right: 1280, bottom: 1200, width: 1200, height: 1800 },
-      { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 },
-      0
-    )).toEqual({
-      minX: -480,
-      maxX: -80,
-      minY: -600,
-      maxY: 600
-    });
-  });
-
-  it("adds a small edge margin beyond exact image edges", () => {
-    expect(resolveStagePanRange(
-      { left: -200, top: -600, right: 1000, bottom: 1200, width: 1200, height: 1800 },
-      { left: 0, top: 0, right: 800, bottom: 600, width: 800, height: 600 },
-      80
-    )).toEqual({
-      minX: -280,
-      maxX: 280,
-      minY: -680,
-      maxY: 680
-    });
   });
 });

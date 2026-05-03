@@ -1,6 +1,6 @@
 import React from "react";
 import type { ViewportSize } from "../lib/overlayLayout";
-import { resolveStageFitSize, resolveStagePanRange } from "../lib/stageFit";
+import { resolveStageFitSize } from "../lib/stageFit";
 
 type PanOffset = {
   x: number;
@@ -21,7 +21,6 @@ type ZoomCursorState = {
 };
 
 type UseImageStageViewOptions = {
-  imageRef: React.RefObject<HTMLImageElement | null>;
   onStagePointerDown: (event: React.PointerEvent) => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
@@ -47,7 +46,6 @@ type UseImageStageViewState = {
 };
 
 export function useImageStageView({
-  imageRef,
   onStagePointerDown,
   onStagePointerMove,
   onStagePointerUp,
@@ -71,54 +69,6 @@ export function useImageStageView({
     setPanOffset(offset);
   }, []);
 
-  const clampPanOffset = React.useCallback((offset: PanOffset, size?: ViewportSize | null): PanOffset => {
-    const wrap = wrapRef.current;
-    if (!wrap) {
-      return offset;
-    }
-
-    const clipElement = wrap.closest(".workspace") as HTMLElement | null;
-    const clipRect = (clipElement ?? wrap).getBoundingClientRect();
-    const imageRect = size ? null : imageRef.current?.getBoundingClientRect();
-    const currentPan = panOffsetRef.current;
-    const wrapRect = wrap.getBoundingClientRect();
-    const stageRect = imageRect
-      ? {
-          left: imageRect.left - currentPan.x,
-          top: imageRect.top - currentPan.y,
-          right: imageRect.right - currentPan.x,
-          bottom: imageRect.bottom - currentPan.y,
-          width: imageRect.width,
-          height: imageRect.height
-        }
-      : size
-        ? {
-            left: wrapRect.left + (wrapRect.width - size.width) / 2,
-            top: wrapRect.top + (wrapRect.height - size.height) / 2,
-            right: wrapRect.left + (wrapRect.width + size.width) / 2,
-            bottom: wrapRect.top + (wrapRect.height + size.height) / 2,
-            width: size.width,
-            height: size.height
-          }
-        : null;
-    if (!stageRect) {
-      return offset;
-    }
-
-    const range = resolveStagePanRange(stageRect, {
-      left: clipRect.left,
-      top: clipRect.top,
-      right: clipRect.right,
-      bottom: clipRect.bottom,
-      width: clipRect.width || wrap.clientWidth,
-      height: clipRect.height || wrap.clientHeight
-    });
-    return {
-      x: Math.min(range.maxX, Math.max(range.minX, offset.x)),
-      y: Math.min(range.maxY, Math.max(range.minY, offset.y))
-    };
-  }, [imageRef]);
-
   React.useLayoutEffect(() => {
     const wrap = wrapRef.current;
     if (!wrap) {
@@ -129,9 +79,9 @@ export function useImageStageView({
     const syncFitSize = () => {
       const next = resolveStageFitSize(pageSize, resolveStageFitBounds(wrap), { viewScale });
       setPanOffset((current) => {
-        const clamped = viewScale === null ? { x: 0, y: 0 } : clampPanOffset(current, next);
-        panOffsetRef.current = clamped;
-        return clamped;
+        const nextPan = viewScale === null ? { x: 0, y: 0 } : current;
+        panOffsetRef.current = nextPan;
+        return nextPan;
       });
       setFitSize((current) => {
         if (
@@ -170,7 +120,7 @@ export function useImageStageView({
       observer.disconnect();
       window.removeEventListener("resize", scheduleSync);
     };
-  }, [clampPanOffset, pageSize, viewScale]);
+  }, [pageSize, viewScale]);
 
   React.useEffect(() => {
     applyPanOffset({ x: 0, y: 0 });
@@ -227,14 +177,14 @@ export function useImageStageView({
     const pan = panRef.current;
     if (pan && pan.pointerId === event.pointerId) {
       event.preventDefault();
-      applyPanOffset(clampPanOffset({
+      applyPanOffset({
         x: pan.startPan.x + event.clientX - pan.startX,
         y: pan.startPan.y + event.clientY - pan.startY
-      }));
+      });
       return;
     }
     onStagePointerMove(event);
-  }, [applyPanOffset, clampPanOffset, onStagePointerMove]);
+  }, [applyPanOffset, onStagePointerMove]);
 
   const handleStagePointerUp = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     if (panRef.current?.pointerId === event.pointerId) {
