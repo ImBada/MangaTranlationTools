@@ -121,6 +121,24 @@ function restoreBlockTextFocus(snapshot: BlockTextFocusSnapshot): void {
   }, 0);
 }
 
+function trySetPointerCapture(element: Element, pointerId: number): void {
+  try {
+    element.setPointerCapture(pointerId);
+  } catch {
+    // Some automated or synthetic pointer events do not create an active pointer.
+  }
+}
+
+function tryReleasePointerCapture(element: Element | null, pointerId: number): void {
+  try {
+    if (element?.hasPointerCapture(pointerId)) {
+      element.releasePointerCapture(pointerId);
+    }
+  } catch {
+    // Ignore stale pointer capture state after cancellation or synthetic events.
+  }
+}
+
 export function useStageInteraction({
   activeLayer,
   currentChapter,
@@ -196,7 +214,7 @@ export function useStageInteraction({
       textFocusSnapshot: captureBlockTextFocusSnapshot(),
       textFocusPaused: false
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    trySetPointerCapture(event.currentTarget, event.pointerId);
   }, [activeLayer, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
@@ -256,9 +274,7 @@ export function useStageInteraction({
 
   const onStagePointerUp = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;
-    if (drag?.captureElement?.hasPointerCapture(event.pointerId)) {
-      drag.captureElement.releasePointerCapture(event.pointerId);
-    }
+    tryReleasePointerCapture(drag?.captureElement ?? null, event.pointerId);
     if (drag?.textFocusPaused && drag.textFocusSnapshot) {
       restoreBlockTextFocus(drag.textFocusSnapshot);
     }
