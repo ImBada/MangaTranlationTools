@@ -453,7 +453,11 @@
 }
 
 .font-preset-tag::before {
-  @apply bg-accent;
+  background: #9aa6b2;
+}
+
+.font-preset-tag.active::before {
+  background: #6aa9ff;
 }
 
 .font-preset-tag-remove {

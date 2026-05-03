@@ -544,14 +544,21 @@
   content: "";
   width: 5px;
   align-self: stretch;
-  background: #6aa9ff;
+  background: #9aa6b2;
 }
 
 .font-preset-tag.active {
   border-color: #6aa9ff;
   background: #fffefa;
   color: #111111;
-  box-shadow: 0 0 0 1px rgba(106, 169, 255, 0.45);
+  box-shadow:
+    inset 0 0 0 1px rgba(106, 169, 255, 0.45),
+    0 0 0 1px rgba(106, 169, 255, 0.35);
+}
+
+.font-preset-tag.active::before {
+  width: 7px;
+  background: #6aa9ff;
 }
 
 .font-preset-tag-name,
