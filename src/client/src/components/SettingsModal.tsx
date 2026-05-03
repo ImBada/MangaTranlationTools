@@ -1,11 +1,13 @@
 import React from "react";
-import type {
-  AppSettings,
-  CodexReasoningEffort,
-  LamaRuntimeStatus,
-  ModelProvider,
-  TranslationMode,
-  UpdateStatus
+import {
+  TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX,
+  TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN,
+  type AppSettings,
+  type CodexReasoningEffort,
+  type LamaRuntimeStatus,
+  type ModelProvider,
+  type TranslationMode,
+  type UpdateStatus
 } from "../../../shared/types";
 import { CodexModelSettingsSection } from "./settings/CodexModelSettingsSection";
 import { GeneralSettingsSection } from "./settings/GeneralSettingsSection";
@@ -48,6 +50,10 @@ export function SettingsModal({
   const [compatibleApiKey, setCompatibleApiKey] = React.useState(safeInitialSettings.openAICompatible.apiKey);
   const [compatibleModel, setCompatibleModel] = React.useState(safeInitialSettings.openAICompatible.model);
   const [translationMode, setTranslationMode] = React.useState<TranslationMode>(safeInitialSettings.translationMode);
+  const [translationParallelEnabled, setTranslationParallelEnabled] = React.useState(safeInitialSettings.translationParallel.enabled);
+  const [translationParallelMaxConcurrency, setTranslationParallelMaxConcurrency] = React.useState(
+    safeInitialSettings.translationParallel.maxConcurrency
+  );
   const [nsfwMode, setNsfwMode] = React.useState(safeInitialSettings.nsfwMode);
   const [localActionBusy, setLocalActionBusy] = React.useState(false);
   const [testState, setTestState] = React.useState<TestState>({ status: "idle", message: null, detail: null });
@@ -65,6 +71,8 @@ export function SettingsModal({
     setCompatibleApiKey(safeInitialSettings.openAICompatible.apiKey);
     setCompatibleModel(safeInitialSettings.openAICompatible.model);
     setTranslationMode(safeInitialSettings.translationMode);
+    setTranslationParallelEnabled(safeInitialSettings.translationParallel.enabled);
+    setTranslationParallelMaxConcurrency(safeInitialSettings.translationParallel.maxConcurrency);
     setNsfwMode(safeInitialSettings.nsfwMode);
     setTestState({ status: "idle", message: null, detail: null });
   }, [safeInitialSettings]);
@@ -127,6 +135,12 @@ export function SettingsModal({
   const codexOauthPortValid =
     Number.isInteger(parsedCodexOauthPort) && parsedCodexOauthPort >= 0 && parsedCodexOauthPort <= 65535;
   const compatibleBaseUrlValid = /^https?:\/\/.+/i.test(trimmedCompatibleBaseUrl);
+  const normalizedTranslationParallelMaxConcurrency = Number.isFinite(translationParallelMaxConcurrency)
+    ? Math.min(
+        TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX,
+        Math.max(TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN, Math.floor(translationParallelMaxConcurrency))
+      )
+    : safeInitialSettings.translationParallel.maxConcurrency;
   const canSubmit = Boolean(
     modelProvider === "openai-codex"
       ? trimmedCodexModel && codexOauthPortValid
@@ -152,6 +166,10 @@ export function SettingsModal({
           model: trimmedCompatibleModel || safeInitialSettings.openAICompatible.model
         },
         translationMode,
+        translationParallel: {
+          enabled: translationParallelEnabled,
+          maxConcurrency: normalizedTranslationParallelMaxConcurrency
+        },
         nsfwMode
       };
     }
@@ -173,6 +191,10 @@ export function SettingsModal({
         model: trimmedCompatibleModel || safeInitialSettings.openAICompatible.model
       },
       translationMode,
+      translationParallel: {
+        enabled: translationParallelEnabled,
+        maxConcurrency: normalizedTranslationParallelMaxConcurrency
+      },
       nsfwMode
     };
   }, [
@@ -190,6 +212,8 @@ export function SettingsModal({
     safeInitialSettings.openAICompatible.baseUrl,
     safeInitialSettings.openAICompatible.model,
     translationMode,
+    translationParallelEnabled,
+    normalizedTranslationParallelMaxConcurrency,
     nsfwMode
   ]);
 
@@ -289,10 +313,14 @@ export function SettingsModal({
             controlsBusy={controlsBusy}
             modelProvider={modelProvider}
             nsfwMode={nsfwMode}
+            translationParallelEnabled={translationParallelEnabled}
+            translationParallelMaxConcurrency={translationParallelMaxConcurrency}
             translationMode={translationMode}
             onClearTestState={clearTestState}
             onModelProviderChange={setModelProvider}
             onNsfwModeChange={setNsfwMode}
+            onTranslationParallelEnabledChange={setTranslationParallelEnabled}
+            onTranslationParallelMaxConcurrencyChange={setTranslationParallelMaxConcurrency}
             onTranslationModeChange={setTranslationMode}
           />
 

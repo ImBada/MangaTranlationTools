@@ -1,4 +1,13 @@
-import type { AppSettings, CodexReasoningEffort, ModelProvider, TranslationMode } from "../shared/types";
+import {
+  DEFAULT_TRANSLATION_PARALLEL_ENABLED,
+  DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY,
+  TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX,
+  TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN,
+  type AppSettings,
+  type CodexReasoningEffort,
+  type ModelProvider,
+  type TranslationMode
+} from "../shared/types";
 
 export const DEFAULT_MODEL_PROVIDER: ModelProvider = "openai-codex";
 export const DEFAULT_CODEX_MODEL = "gpt-5.5";
@@ -73,6 +82,15 @@ export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env):
       model: resolveNonEmptyString(env.MANGA_TRANSLATOR_OPENAI_COMPATIBLE_MODEL, DEFAULT_OPENAI_COMPATIBLE_MODEL)
     },
     translationMode: DEFAULT_TRANSLATION_MODE,
+    translationParallel: {
+      enabled: resolveBoolean(env.MANGA_TRANSLATOR_PARALLEL_ENABLED, DEFAULT_TRANSLATION_PARALLEL_ENABLED),
+      maxConcurrency: resolveInteger(
+        env.MANGA_TRANSLATOR_PARALLEL_MAX_CONCURRENCY,
+        DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY,
+        TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN,
+        TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX
+      )
+    },
     nsfwMode: false
   };
 }
@@ -95,6 +113,15 @@ export function normalizeAppSettings(raw: unknown, defaults = resolveDefaultAppS
       model: resolveNonEmptyString(asRecord(openAICompatible)?.model, defaults.openAICompatible.model)
     },
     translationMode: resolveTranslationMode(record?.translationMode, defaults.translationMode),
+    translationParallel: {
+      enabled: resolveBoolean(asRecord(record?.translationParallel)?.enabled, defaults.translationParallel.enabled),
+      maxConcurrency: resolveInteger(
+        asRecord(record?.translationParallel)?.maxConcurrency,
+        defaults.translationParallel.maxConcurrency,
+        TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN,
+        TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX
+      )
+    },
     nsfwMode: resolveBoolean(record?.nsfwMode, defaults.nsfwMode)
   };
 }
@@ -193,6 +220,14 @@ function resolvePortNumber(value: unknown, fallback: number): number {
     return fallback;
   }
   return clampInteger(parsed, 0, 65535);
+}
+
+function resolveInteger(value: unknown, fallback: number, min: number, max: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  if (!Number.isInteger(parsed)) {
+    return fallback;
+  }
+  return clampInteger(parsed, min, max);
 }
 
 function clampInteger(value: number, min: number, max: number): number {

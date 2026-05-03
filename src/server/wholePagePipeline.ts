@@ -89,11 +89,13 @@ export async function runWholePagePipeline({
   const runtime = loadRuntimeModules();
   const baseOptions = buildBaseOptions(jobId, runPaths.runDir, appSettings);
   const progressTotal = pages.length;
+  const pageConcurrency = resolvePageConcurrency(appSettings, pages.length);
 
   logInfo("Analysis pipeline initialized", {
     jobId,
     pageCount: pages.length,
     runPaths,
+    pageConcurrency,
     settings: summarizeTranslationOptions(baseOptions)
   });
 
@@ -123,13 +125,15 @@ export async function runWholePagePipeline({
     progressCurrent: 0,
     progressTotal,
     pageTotal: pages.length,
-    detail: `endpoint ready at ${server.baseUrl}`
+    detail: pageConcurrency > 1 ? `endpoint ready at ${server.baseUrl}, parallel ${pageConcurrency}` : `endpoint ready at ${server.baseUrl}`
   });
 
   try {
-    const nextPages: MangaPage[] = [];
+    const nextPages: MangaPage[] = new Array(pages.length);
+    let completedCount = 0;
+    let nextPageIndex = 0;
 
-    for (const [index, page] of pages.entries()) {
+    const processPage = async (index: number, page: MangaPage): Promise<void> => {
       throwIfAborted(signal);
       let successPage: MangaPage | null = null;
       let lastErrorMessage = "";
@@ -148,7 +152,7 @@ export async function runWholePagePipeline({
           status: "running",
           progressText: `${page.name} 분석 중`,
           phase: "page_running",
-          progressCurrent: index + 1,
+          progressCurrent: completedCount,
           progressTotal,
           pageIndex: index + 1,
           pageTotal: pages.length,
@@ -201,13 +205,14 @@ export async function runWholePagePipeline({
           };
           warnings.push(...buildPageWarnings(page.name, items));
           await onPageComplete?.(successPage);
+          completedCount += 1;
           emit({
             id: jobId,
             kind: "model-analysis",
             status: "running",
             progressText: `${page.name} 완료`,
             phase: "page_done",
-            progressCurrent: index + 1,
+            progressCurrent: completedCount,
             progressTotal,
             pageIndex: index + 1,
             pageTotal: pages.length,
@@ -257,8 +262,8 @@ export async function runWholePagePipeline({
       }
 
       if (successPage) {
-        nextPages.push(successPage);
-        continue;
+        nextPages[index] = successPage;
+        return;
       }
 
       warnings.push(`${page.name}: ${maxAttempts}회 재시도 후 실패하여 이 페이지는 건너뜁니다. 마지막 오류: ${lastErrorMessage}`);
@@ -281,20 +286,39 @@ export async function runWholePagePipeline({
         lastError: lastErrorMessage,
         updatedAt: new Date().toISOString()
       };
-      nextPages.push(failedPage);
+      nextPages[index] = failedPage;
       await onPageFailed?.(failedPage, lastErrorMessage);
+      completedCount += 1;
       emit({
         id: jobId,
         kind: "model-analysis",
         status: "running",
         progressText: `${page.name} 건너뜀`,
         phase: "page_skipped",
-        progressCurrent: index + 1,
+        progressCurrent: completedCount,
         progressTotal,
         pageIndex: index + 1,
         pageTotal: pages.length,
         detail: `${maxAttempts}회 재시도 후 실패`
       });
+    };
+
+    const runWorker = async (): Promise<void> => {
+      while (true) {
+        throwIfAborted(signal);
+        const index = nextPageIndex;
+        nextPageIndex += 1;
+        if (index >= pages.length) {
+          return;
+        }
+        await processPage(index, pages[index]);
+      }
+    };
+
+    await Promise.all(Array.from({ length: pageConcurrency }, () => runWorker()));
+
+    if (nextPages.some((page) => !page)) {
+      throw new Error("일부 페이지 번역 결과가 누락되었습니다.");
     }
 
     emit({
@@ -399,6 +423,13 @@ function buildPageWarnings(pageName: string, items: OverlayItem[]): string[] {
 function readNumberEnv(name: string, fallback: number): number {
   const value = Number(process.env[name]);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function resolvePageConcurrency(settings: AppSettings, pageCount: number): number {
+  if (!settings.translationParallel.enabled) {
+    return 1;
+  }
+  return Math.min(pageCount, Math.max(1, Math.floor(settings.translationParallel.maxConcurrency)));
 }
 
 function summarizePreview(text: string, maxLength = 240): string {

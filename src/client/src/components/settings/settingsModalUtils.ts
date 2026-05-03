@@ -1,4 +1,9 @@
-import type { AppSettings, UpdateStatus } from "../../../../shared/types";
+import {
+  DEFAULT_TRANSLATION_PARALLEL_ENABLED,
+  DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY,
+  type AppSettings,
+  type UpdateStatus
+} from "../../../../shared/types";
 import {
   DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
   DEFAULT_OPENAI_COMPATIBLE_MODEL
@@ -30,6 +35,10 @@ export function withSettingsDefaults(settings: AppSettings): AppSettings {
       baseUrl: settings.openAICompatible?.baseUrl || DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
       apiKey: settings.openAICompatible?.apiKey || "",
       model: settings.openAICompatible?.model || DEFAULT_OPENAI_COMPATIBLE_MODEL
+    },
+    translationParallel: {
+      enabled: settings.translationParallel?.enabled ?? DEFAULT_TRANSLATION_PARALLEL_ENABLED,
+      maxConcurrency: settings.translationParallel?.maxConcurrency ?? DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY
     }
   };
 }

@@ -111,6 +111,21 @@
   gap: 10px;
 }
 
+.settings-inline-number-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 96px;
+  gap: 12px;
+  align-items: center;
+}
+
+.settings-inline-number-row label {
+  color: #e6ddcf;
+}
+
+.settings-inline-number-row input {
+  width: 100%;
+}
+
 .settings-runtime-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

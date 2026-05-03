@@ -19,6 +19,7 @@ describe("app settings helpers", () => {
     expect(defaults.codex.reasoningEffort).toBe(DEFAULT_CODEX_REASONING_EFFORT);
     expect(defaults.codex.oauthPort).toBe(DEFAULT_CODEX_OAUTH_PORT);
     expect(defaults.translationMode).toBe(DEFAULT_TRANSLATION_MODE);
+    expect(defaults.translationParallel).toEqual({ enabled: false, maxConcurrency: 2 });
   });
 
   it("fills missing or partial stored settings from environment-based defaults", () => {
@@ -42,6 +43,7 @@ describe("app settings helpers", () => {
       },
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
     });
   });
@@ -54,6 +56,7 @@ describe("app settings helpers", () => {
       codex: defaults.codex,
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: true
     });
 
@@ -62,7 +65,29 @@ describe("app settings helpers", () => {
       codex: defaults.codex,
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
+    });
+  });
+
+  it("normalizes AI translation parallel settings from stored settings", () => {
+    const defaults = resolveDefaultAppSettings();
+
+    expect(parseStoredAppSettings("{\"translationParallel\":{\"enabled\":true,\"maxConcurrency\":4}}", defaults)).toEqual({
+      modelProvider: defaults.modelProvider,
+      codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
+      translationMode: "fast",
+      translationParallel: {
+        enabled: true,
+        maxConcurrency: 4
+      },
+      nsfwMode: false
+    });
+
+    expect(parseStoredAppSettings("{\"translationParallel\":{\"enabled\":\"off\",\"maxConcurrency\":99}}", defaults).translationParallel).toEqual({
+      enabled: false,
+      maxConcurrency: 8
     });
   });
 
@@ -74,6 +99,7 @@ describe("app settings helpers", () => {
       codex: defaults.codex,
       openAICompatible: defaults.openAICompatible,
       translationMode: "accuracy",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
     });
 
@@ -82,6 +108,7 @@ describe("app settings helpers", () => {
       codex: defaults.codex,
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
     });
   });
@@ -100,6 +127,10 @@ describe("app settings helpers", () => {
         model: "saved-compatible"
       },
       translationMode: "fast",
+      translationParallel: {
+        enabled: false,
+        maxConcurrency: 2
+      },
       nsfwMode: true
     };
 
@@ -186,6 +217,7 @@ describe("app settings helpers", () => {
       },
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
     });
   });
@@ -230,6 +262,7 @@ describe("app settings helpers", () => {
         model: "local-vision-model"
       },
       translationMode: "fast",
+      translationParallel: defaults.translationParallel,
       nsfwMode: false
     });
   });
