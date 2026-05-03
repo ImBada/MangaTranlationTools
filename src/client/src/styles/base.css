@@ -1,0 +1,149 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  --color-canvas: #0e1116;
+  --color-workspace: #0a0c10;
+  --color-rail: #12161c;
+  --color-panel: #181d24;
+  --color-panel-soft: #141920;
+  --color-control: #202631;
+  --color-control-hover: #28313d;
+  --color-line: #2c3440;
+  --color-line-strong: #3d4856;
+  --color-ink: #f1f5f9;
+  --color-soft: #cbd5e1;
+  --color-muted: #94a3b8;
+  --color-accent: #60a5fa;
+  --color-accent-soft: #1e3a5f;
+  --color-success: #5eead4;
+  --color-success-panel: #17352f;
+  --color-danger: #f87171;
+  --color-danger-panel: #3b1f26;
+  --color-warning: #fbbf24;
+}
+
+:root {
+  color: #ece7dc;
+  background: #101114;
+  font-family: "Malgun Gothic", "Apple SD Gothic Neo", "Segoe UI", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+  scrollbar-color: #556170 #141820;
+  scrollbar-width: thin;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: #141820;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 36px;
+  border: 2px solid #141820;
+  border-radius: 999px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.14), rgba(255, 255, 255, 0)),
+    #556170;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.18), rgba(255, 255, 255, 0)),
+    #6b7a8c;
+}
+
+::-webkit-scrollbar-thumb:active {
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.2), rgba(255, 255, 255, 0)),
+    #60a5fa;
+}
+
+::-webkit-scrollbar-corner {
+  background: #141820;
+}
+
+body {
+  margin: 0;
+  min-width: 100vw;
+  min-height: 100vh;
+  overflow: hidden;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #3d4147;
+  background: #24282f;
+  color: #f5f0e8;
+  border-radius: 8px;
+  padding: 9px 12px;
+  cursor: pointer;
+}
+
+button:disabled,
+select:disabled,
+input:disabled,
+textarea:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+button:hover:not(:disabled) {
+  border-color: #6aa9ff;
+  background: #303846;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  color: #f5f0e8;
+  border: 1px solid #3d4147;
+  border-radius: 8px;
+  background: #111318;
+  padding: 8px;
+}
+
+input[type="number"] {
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+
+input[type="number"]::-webkit-outer-spin-button,
+input[type="number"]::-webkit-inner-spin-button {
+  margin: 0;
+  -webkit-appearance: none;
+}
+
+.primary {
+  background: #2f6f61;
+  border-color: #4aa58f;
+}
+
+.danger {
+  background: #7c3030;
+  border-color: #c56363;
+}
+
+.ghost-button,
+.page-mini {
+  padding: 6px 10px;
+  background: #1a1d22;
+  border-color: #343941;
+  font-size: 12px;
+}
+

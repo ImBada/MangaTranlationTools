@@ -1,0 +1,458 @@
+.stage-wrap {
+  width: min(100%, 1040px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.workspace-pane {
+  width: min(100%, 1040px);
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  display: grid;
+  place-items: center;
+}
+
+.image-stage {
+  position: relative;
+  display: block;
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.image-stage.panning {
+  cursor: grabbing;
+}
+
+.page-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+.inpaint-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.inpaint-layer.editing {
+  cursor: none;
+  pointer-events: auto;
+}
+
+.inpaint-layer.selecting {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.inpaint-brush-cursor {
+  position: absolute;
+  z-index: 5;
+  border: 1.5px solid rgba(45, 145, 255, 0.95);
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.92),
+    0 0 8px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.inpaint-brush-cursor.eraser {
+  border-color: rgba(255, 120, 88, 0.95);
+}
+
+.inpaint-brush-cursor.blur,
+.inpaint-brush-cursor.smudge {
+  border-color: rgba(120, 199, 178, 0.95);
+}
+
+.inpaint-brush-cursor.sharpen {
+  border-color: rgba(255, 205, 86, 0.95);
+}
+
+.inpaint-selection-rect {
+  position: absolute;
+  z-index: 6;
+  border: 1.5px solid rgba(96, 190, 255, 0.98);
+  background: rgba(96, 190, 255, 0.16);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.92),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+}
+
+.inpaint-layer-preview,
+.overlay-layer-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.inpaint-layer-preview {
+  z-index: 1;
+}
+
+.stage-range-selection-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.stage-range-selection-layer.active {
+  pointer-events: auto;
+}
+
+.inpaint-mask-layer-preview {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.inpaint-result-image,
+.inpaint-result-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: fill;
+  mask-mode: luminance;
+  mask-repeat: no-repeat;
+  mask-size: 100% 100%;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: 100% 100%;
+  pointer-events: none;
+}
+
+.inpaint-result-canvas.editing {
+  cursor: none;
+  pointer-events: auto;
+}
+
+.inpaint-result-canvas.selecting {
+  cursor: crosshair;
+  pointer-events: auto;
+}
+
+.stage-zoom-hit-area {
+  position: absolute;
+  inset: 0;
+  z-index: 80;
+  cursor: none;
+  pointer-events: auto;
+  touch-action: none;
+}
+
+.stage-zoom-cursor {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border: 2px solid rgba(26, 31, 38, 0.92);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.22);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.9),
+    0 2px 8px rgba(0, 0, 0, 0.38);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.stage-zoom-cursor::before {
+  content: "";
+  position: absolute;
+  right: -8px;
+  bottom: -5px;
+  width: 13px;
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(26, 31, 38, 0.92);
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.72);
+  transform: rotate(45deg);
+  transform-origin: center;
+}
+
+.stage-zoom-cursor-mark,
+.stage-zoom-cursor-mark::after {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 13px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(26, 31, 38, 0.92);
+  transform: translate(-50%, -50%);
+}
+
+.stage-zoom-cursor.zoom-in .stage-zoom-cursor-mark::after {
+  content: "";
+  width: 2px;
+  height: 13px;
+}
+
+.layer-subgroup {
+  margin-top: -4px;
+  margin-bottom: 4px;
+  padding-left: 14px;
+}
+
+.layer-control.nested {
+  min-height: 54px;
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.overlay-layer-preview {
+  z-index: 2;
+}
+
+.overlay-render-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.overlay-block {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border: 1px solid rgba(50, 50, 50, 0.32);
+  border-radius: 4px;
+  font-weight: 700;
+  white-space: normal;
+  cursor: move;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
+}
+
+.overlay-block.selected {
+  outline: 2px solid #6aa9ff;
+  outline-offset: 2px;
+}
+
+.overlay-block.overflowing {
+  outline: 2px dashed #ff9b5d;
+  outline-offset: 2px;
+}
+
+.overlay-text {
+  max-width: 100%;
+  max-height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  text-align: inherit;
+}
+
+.overlay-text-layer-stack {
+  display: block;
+}
+
+.overlay-text-content {
+  display: flex;
+  flex-direction: column;
+  max-width: 100%;
+  max-height: 100%;
+  white-space: pre-line;
+  text-align: inherit;
+  line-height: inherit;
+  overflow-wrap: normal;
+  word-break: keep-all;
+}
+
+.overlay-text-line {
+  display: block;
+  width: fit-content;
+  max-width: 100%;
+  white-space: nowrap;
+}
+
+.resize-handle {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 4px 0 4px 0;
+  border: 0;
+  background: #6aa9ff;
+  cursor: nwse-resize;
+}
+
+.rotate-handle {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border-radius: 0 4px 0 4px;
+  border: 0;
+  background: #ffb35c;
+  cursor: grab;
+}
+
+.empty-state {
+  width: min(680px, 100%);
+  max-width: 680px;
+  text-align: center;
+  color: #d8d0c3;
+}
+
+.empty-state-stack {
+  display: grid;
+  gap: 14px;
+  width: min(680px, 100%);
+}
+
+.empty-lama-card {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+  border: 1px solid #343941;
+  border-radius: 10px;
+  background: rgba(19, 22, 27, 0.96);
+  box-shadow: 0 18px 46px rgba(0, 0, 0, 0.32);
+}
+
+.empty-lama-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.empty-lama-header h2 {
+  margin: 0;
+  color: #f3ecdf;
+  font-size: 16px;
+}
+
+.empty-lama-status-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.empty-lama-status {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #15181d;
+  text-align: left;
+}
+
+.empty-lama-status span {
+  color: #aeb8c2;
+  font-size: 12px;
+}
+
+.empty-lama-status strong {
+  color: #f3ecdf;
+  font-size: 13px;
+}
+
+.empty-lama-status.ready {
+  border-color: #2f6f61;
+  background: rgba(47, 111, 97, 0.18);
+}
+
+.empty-lama-status.busy {
+  border-color: #6e5b2d;
+  background: rgba(116, 88, 36, 0.2);
+}
+
+.empty-lama-status.missing {
+  border-color: #5f3939;
+  background: rgba(119, 52, 52, 0.16);
+}
+
+.empty-lama-test-platform {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.empty-lama-test-platform button {
+  min-height: 30px;
+  padding: 5px 10px;
+  border-color: #343941;
+  background: #15181d;
+  color: #b8c1ca;
+  font-size: 12px;
+}
+
+.empty-lama-test-platform button.active {
+  border-color: #64758a;
+  background: #252b34;
+  color: #f3ecdf;
+}
+
+.empty-lama-command,
+.empty-lama-python-help {
+  margin: 0;
+  overflow-wrap: anywhere;
+  padding: 9px 10px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #101215;
+  color: #e6ddcf;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  font-size: 12px;
+}
+
+.empty-lama-python-help {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.empty-lama-python-help strong,
+.empty-lama-python-help p {
+  margin: 0;
+}
+
+.empty-lama-python-help code {
+  overflow-wrap: anywhere;
+  color: #f3ecdf;
+}
+
+.empty-state h2 {
+  font-size: 30px;
+  line-height: 1.25;
+  word-break: keep-all;
+  text-wrap: balance;
+}
+
+.empty-state p {
+  color: #b8b1a6;
+  line-height: 1.6;
+  word-break: keep-all;
+}
+
+.empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+}
+
