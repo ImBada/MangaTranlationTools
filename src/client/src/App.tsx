@@ -1,4 +1,5 @@
 import React, { useCallback, useMemo, useRef, useState } from "react";
+import type { TranslationBlock } from "../../shared/types";
 import { AppContextBarSlot } from "./components/AppContextBarSlot";
 import { AppFileInputs } from "./components/AppFileInputs";
 import { AppLayerToolPanel } from "./components/AppLayerToolPanel";
@@ -365,6 +366,28 @@ export default function App(): React.JSX.Element {
     setSelectedBlockId,
     updateCurrentChapter
   });
+  const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    recordTranslationUndoSnapshot("번역 텍스트 변경");
+    setSelectedBlockId(block.id);
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) =>
+        page.id !== selectedPage.id
+          ? page
+          : {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: page.blocks.map((candidate) =>
+                candidate.id === block.id ? { ...candidate, translatedText } : candidate
+              )
+            }
+      )
+    }));
+  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
   const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
   const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const {
@@ -632,6 +655,7 @@ export default function App(): React.JSX.Element {
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={onBlockPointerDown}
+          onBlockTextUpdate={updateInlineBlockText}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}
           onInpaintLayerChange={updateSelectedPageInpaintMask}
           onInpaintResultLayerChange={updateSelectedPageInpaintResult}

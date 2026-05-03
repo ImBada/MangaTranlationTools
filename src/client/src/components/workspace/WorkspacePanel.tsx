@@ -71,6 +71,7 @@ type WorkspacePanelProps = {
   workspacePanelRef: React.RefObject<HTMLElement | null>;
   zoomToolActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
+  onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
@@ -136,6 +137,7 @@ export function WorkspacePanel({
   workspacePanelRef,
   zoomToolActive,
   onBlockPointerDown,
+  onBlockTextUpdate,
   onDownloadLamaModel,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
@@ -266,6 +268,7 @@ export function WorkspacePanel({
               }
             }}
             onBlockPointerDown={onBlockPointerDown}
+            onBlockTextUpdate={onBlockTextUpdate}
           />
         </div>
       ) : (

@@ -47,6 +47,7 @@ type ImageStageLayersProps = {
   stageSize: ViewportSize | null;
   temporaryPanActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -75,12 +76,38 @@ export function ImageStageLayers({
   stageSize,
   temporaryPanActive,
   onBlockPointerDown,
+  onBlockTextUpdate,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
   onInpaintSelectionChange
 }: ImageStageLayersProps): React.JSX.Element {
   const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
   const resolvedStageSize = stageSize ?? pageSize;
+  const [inlineEdit, setInlineEdit] = React.useState<{ blockId: string; draft: string } | null>(null);
+
+  const commitInlineEdit = React.useCallback(() => {
+    if (!inlineEdit) {
+      return;
+    }
+    const block = page.blocks.find((candidate) => candidate.id === inlineEdit.blockId);
+    if (block && inlineEdit.draft !== block.translatedText) {
+      onBlockTextUpdate(block, inlineEdit.draft);
+    }
+    setInlineEdit(null);
+  }, [inlineEdit, onBlockTextUpdate, page.blocks]);
+
+  React.useEffect(() => {
+    if (!inlineEdit) {
+      return;
+    }
+    if (!page.blocks.some((block) => block.id === inlineEdit.blockId)) {
+      setInlineEdit(null);
+      return;
+    }
+    if (selectedBlockId !== inlineEdit.blockId) {
+      commitInlineEdit();
+    }
+  }, [commitInlineEdit, inlineEdit, page.blocks, selectedBlockId]);
 
   return (
     <>
@@ -164,8 +191,17 @@ export function ImageStageLayers({
                   stageSize={resolvedStageSize}
                   selected={block.id === selectedBlockId}
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
+                  inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
                   visualContentVisible={false}
                   onPointerDown={(event) => onBlockPointerDown(event, block, "move")}
+                  onStartInlineEdit={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setInlineEdit({ blockId: block.id, draft: block.translatedText });
+                  }}
+                  onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
+                  onInlineEditCancel={() => setInlineEdit(null)}
+                  onInlineEditCommit={commitInlineEdit}
                   onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}
                   onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
                 />

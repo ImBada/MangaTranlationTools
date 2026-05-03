@@ -17,11 +17,20 @@ type OverlayBlockProps = {
   stageSize: ViewportSize;
   selected: boolean;
   editingEnabled: boolean;
+  inlineEditDraft?: string;
   visualContentVisible?: boolean;
+  onInlineEditCancel?: () => void;
+  onInlineEditChange?: (value: string) => void;
+  onInlineEditCommit?: () => void;
+  onStartInlineEdit?: (event: React.MouseEvent) => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onResizePointerDown: (event: React.PointerEvent) => void;
   onRotatePointerDown: (event: React.PointerEvent) => void;
 };
+
+function stopInlineEditorEvent(event: React.SyntheticEvent): void {
+  event.stopPropagation();
+}
 
 export function OverlayBlock({
   block,
@@ -29,7 +38,12 @@ export function OverlayBlock({
   stageSize,
   selected,
   editingEnabled,
+  inlineEditDraft,
   visualContentVisible = true,
+  onInlineEditCancel,
+  onInlineEditChange,
+  onInlineEditCommit,
+  onStartInlineEdit,
   onPointerDown,
   onResizePointerDown,
   onRotatePointerDown
@@ -72,7 +86,6 @@ export function OverlayBlock({
     height: layout.rect.height,
     boxSizing: "border-box",
     padding: layout.paddingPx,
-    overflow: "hidden",
     color: visualContentVisible && !screentoneFillEnabled ? block.textColor : "transparent",
     backgroundColor: visualContentVisible ? hexToRgba(block.backgroundColor, editingEnabled ? block.opacity : 0) : "transparent",
     borderColor: editingEnabled ? undefined : "transparent",
@@ -84,7 +97,8 @@ export function OverlayBlock({
     pointerEvents: editingEnabled ? undefined : "none",
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center center",
-    zIndex: selected && editingEnabled ? 50 : undefined
+    zIndex: inlineEditDraft !== undefined ? 70 : selected && editingEnabled ? 50 : undefined,
+    overflow: inlineEditDraft !== undefined ? "visible" : "hidden"
   };
   const textWrapStyle: React.CSSProperties = {
     boxSizing: "border-box",
@@ -155,7 +169,37 @@ export function OverlayBlock({
       style={style}
       title={layout.overflow && editingEnabled ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
       onPointerDown={onPointerDown}
+      onDoubleClick={editingEnabled ? onStartInlineEdit : undefined}
     >
+      {inlineEditDraft !== undefined ? (
+        <textarea
+          className="overlay-inline-editor"
+          value={inlineEditDraft}
+          aria-label="블록 번역문 바로 편집"
+          autoFocus
+          onMouseDown={stopInlineEditorEvent}
+          onMouseMove={stopInlineEditorEvent}
+          onMouseUp={stopInlineEditorEvent}
+          onClick={stopInlineEditorEvent}
+          onPointerDown={stopInlineEditorEvent}
+          onPointerMove={stopInlineEditorEvent}
+          onPointerUp={stopInlineEditorEvent}
+          onDoubleClick={stopInlineEditorEvent}
+          onChange={(event) => onInlineEditChange?.(event.target.value)}
+          onBlur={onInlineEditCommit}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              event.preventDefault();
+              onInlineEditCancel?.();
+              return;
+            }
+            if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
+              event.preventDefault();
+              event.currentTarget.blur();
+            }
+          }}
+        />
+      ) : null}
       {visualContentVisible ? (
         <div className="overlay-text" style={textWrapStyle}>
           <span className="overlay-text-layer-stack" style={contentFrameStyle}>

@@ -250,6 +250,39 @@
   outline-offset: 2px;
 }
 
+.overlay-inline-editor {
+  position: absolute;
+  left: 0;
+  bottom: calc(100% + 8px);
+  z-index: 4;
+  width: max(180px, 100%);
+  min-height: 72px;
+  max-height: 180px;
+  padding: 8px 10px;
+  border: 1px solid rgba(106, 169, 255, 0.95);
+  border-radius: 6px;
+  background: rgba(18, 22, 28, 0.96);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.32);
+  color: #f4f0e8;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.45;
+  text-align: left;
+  resize: vertical;
+  pointer-events: auto;
+  cursor: text;
+  user-select: text;
+  -webkit-user-select: text;
+  touch-action: auto;
+  white-space: pre-wrap;
+}
+
+.overlay-inline-editor:focus {
+  outline: 2px solid rgba(106, 169, 255, 0.72);
+  outline-offset: 1px;
+}
+
 .overlay-text {
   max-width: 100%;
   max-height: 100%;
@@ -455,4 +488,3 @@
   justify-content: center;
   gap: 10px;
 }
-
