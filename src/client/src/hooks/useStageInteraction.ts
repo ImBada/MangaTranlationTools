@@ -6,7 +6,7 @@ import {
   resolveBlockRotationDeg,
   resolveEditableBlockBbox
 } from "../../../shared/geometry";
-import { angleBetweenPointsDeg } from "../lib/editorUtils";
+import { angleBetweenPointsDeg, isEditableTarget } from "../lib/editorUtils";
 import type { ActiveLayer } from "../lib/layerState";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { clampStageViewScale } from "../lib/stageFit";
@@ -27,16 +27,6 @@ type DragState = {
   centerX: number;
   centerY: number;
   undoRecorded: boolean;
-  textFocusSnapshot: BlockTextFocusSnapshot | null;
-  textFocusPaused: boolean;
-};
-
-type BlockTextFocusSnapshot = {
-  element: HTMLTextAreaElement;
-  selectionStart: number;
-  selectionEnd: number;
-  selectionDirection: "forward" | "backward" | "none";
-  scrollTop: number;
 };
 
 type UseStageInteractionOptions = {
@@ -67,58 +57,18 @@ type UseStageInteractionState = {
 };
 
 const STAGE_ZOOM_STEP = 1.2;
-const DRAG_FOCUS_BLUR_THRESHOLD_PX = 2;
 
-function captureBlockTextFocusSnapshot(): BlockTextFocusSnapshot | null {
-  if (typeof document === "undefined" || typeof HTMLTextAreaElement === "undefined") {
-    return null;
+function blurActiveEditableElement(): void {
+  if (typeof document === "undefined" || typeof HTMLElement === "undefined") {
+    return;
   }
 
   const activeElement = document.activeElement;
-  if (!(activeElement instanceof HTMLTextAreaElement) || !activeElement.dataset.blockTextField) {
-    return null;
-  }
-
-  return {
-    element: activeElement,
-    selectionStart: activeElement.selectionStart,
-    selectionEnd: activeElement.selectionEnd,
-    selectionDirection: activeElement.selectionDirection,
-    scrollTop: activeElement.scrollTop
-  };
-}
-
-function pauseBlockTextFocus(drag: DragState, event: React.PointerEvent): void {
-  if (drag.textFocusPaused || !drag.textFocusSnapshot) {
+  if (!(activeElement instanceof HTMLElement) || !isEditableTarget(activeElement)) {
     return;
   }
 
-  const dragDistance = Math.hypot(event.clientX - drag.startX, event.clientY - drag.startY);
-  if (dragDistance < DRAG_FOCUS_BLUR_THRESHOLD_PX) {
-    return;
-  }
-
-  if (document.activeElement === drag.textFocusSnapshot.element) {
-    drag.textFocusSnapshot.element.blur();
-    drag.textFocusPaused = true;
-  }
-}
-
-function restoreBlockTextFocus(snapshot: BlockTextFocusSnapshot): void {
-  window.setTimeout(() => {
-    if (!snapshot.element.isConnected || snapshot.element.disabled) {
-      return;
-    }
-
-    const activeElement = document.activeElement;
-    if (activeElement && activeElement !== document.body && activeElement !== document.documentElement) {
-      return;
-    }
-
-    snapshot.element.focus({ preventScroll: true });
-    snapshot.element.setSelectionRange(snapshot.selectionStart, snapshot.selectionEnd, snapshot.selectionDirection);
-    snapshot.element.scrollTop = snapshot.scrollTop;
-  }, 0);
+  activeElement.blur();
 }
 
 function trySetPointerCapture(element: Element, pointerId: number): void {
@@ -194,6 +144,7 @@ export function useStageInteraction({
     }
     event.preventDefault();
     event.stopPropagation();
+    blurActiveEditableElement();
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
     const stageRect = stageRef.current.getBoundingClientRect();
@@ -210,9 +161,7 @@ export function useStageInteraction({
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
       centerY,
-      undoRecorded: false,
-      textFocusSnapshot: captureBlockTextFocusSnapshot(),
-      textFocusPaused: false
+      undoRecorded: false
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
   }, [activeLayer, selectedPageEditLocked, setSelectedBlockId]);
@@ -224,7 +173,6 @@ export function useStageInteraction({
     if (!drag || !page || !stage || !currentChapter || selectedPageEditLocked) {
       return;
     }
-    pauseBlockTextFocus(drag, event);
     const rect = stage.getBoundingClientRect();
     const dx = ((event.clientX - drag.startX) / Math.max(1, rect.width)) * 1000;
     const dy = ((event.clientY - drag.startY) / Math.max(1, rect.height)) * 1000;
@@ -275,9 +223,6 @@ export function useStageInteraction({
   const onStagePointerUp = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;
     tryReleasePointerCapture(drag?.captureElement ?? null, event.pointerId);
-    if (drag?.textFocusPaused && drag.textFocusSnapshot) {
-      restoreBlockTextFocus(drag.textFocusSnapshot);
-    }
     dragRef.current = null;
   }, []);
 
