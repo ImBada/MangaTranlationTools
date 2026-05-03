@@ -2,6 +2,7 @@ import React from "react";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
+import { CompactNumberControl } from "./controls/CompactNumberControl";
 
 type EditorPanelProps = {
   block: TranslationBlock | null;
@@ -120,37 +121,44 @@ export function EditorPanel({
           </button>
         </div>
       </div>
-      <div className="padding-row">
-        <label className="grid gap-1.5 text-xs font-semibold text-soft">
-          패딩
-          <input
-            type="number"
-            min="0"
-            max="80"
-            step="1"
-            value={block.textPaddingPx ?? ""}
-            placeholder="자동"
+      <div className="block-appearance-row font-tool-grid">
+        <div className="compact-tool-field font-number-field block-padding-field">
+          <span>
+            <span>패딩</span>
+            <button
+              type="button"
+              className={`block-auto-chip ${block.textPaddingPx === undefined ? "active" : ""}`}
+              disabled={disabled}
+              onClick={(event) => {
+                event.preventDefault();
+                onUpdate({ textPaddingPx: undefined });
+              }}
+            >
+              자동
+            </button>
+          </span>
+          <CompactNumberControl
+            ariaLabel="패딩"
+            min={0}
+            max={80}
+            step={1}
+            value={block.textPaddingPx ?? 0}
+            suffix="px"
             disabled={disabled}
-            onChange={(event) =>
-              onUpdate({
-                textPaddingPx: event.target.value === "" ? undefined : Number(event.target.value)
-              })
-            }
+            onChange={(textPaddingPx) => onUpdate({ textPaddingPx })}
           />
-        </label>
-        <button type="button" disabled={disabled || block.textPaddingPx === undefined} onClick={() => onUpdate({ textPaddingPx: undefined })}>
-          자동
-        </button>
-      </div>
-      <div className="color-row grid grid-cols-2 gap-2.5">
-        <label className="grid gap-1.5 text-xs font-semibold text-soft">
-          배경색
-          <input
-            type="color"
-            value={block.backgroundColor}
-            disabled={disabled}
-            onChange={(event) => onUpdate({ backgroundColor: event.target.value })}
-          />
+        </div>
+        <label className="compact-tool-field font-color-field">
+          <span>배경색</span>
+          <span className="color-picker-shell" style={{ backgroundColor: block.backgroundColor }}>
+            <input
+              type="color"
+              className="outline-color-input"
+              value={block.backgroundColor}
+              disabled={disabled}
+              onChange={(event) => onUpdate({ backgroundColor: event.target.value })}
+            />
+          </span>
         </label>
       </div>
       <div className="block-actions">
