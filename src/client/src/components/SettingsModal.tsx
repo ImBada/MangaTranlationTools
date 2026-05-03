@@ -55,6 +55,7 @@ export function SettingsModal({
     safeInitialSettings.translationParallel.maxConcurrency
   );
   const [nsfwMode, setNsfwMode] = React.useState(safeInitialSettings.nsfwMode);
+  const [oneHandMode, setOneHandMode] = React.useState(safeInitialSettings.oneHandMode);
   const [localActionBusy, setLocalActionBusy] = React.useState(false);
   const [testState, setTestState] = React.useState<TestState>({ status: "idle", message: null, detail: null });
   const [lamaStatus, setLamaStatus] = React.useState<LamaRuntimeStatus | null>(null);
@@ -74,6 +75,7 @@ export function SettingsModal({
     setTranslationParallelEnabled(safeInitialSettings.translationParallel.enabled);
     setTranslationParallelMaxConcurrency(safeInitialSettings.translationParallel.maxConcurrency);
     setNsfwMode(safeInitialSettings.nsfwMode);
+    setOneHandMode(safeInitialSettings.oneHandMode);
     setTestState({ status: "idle", message: null, detail: null });
   }, [safeInitialSettings]);
 
@@ -170,7 +172,8 @@ export function SettingsModal({
           enabled: translationParallelEnabled,
           maxConcurrency: normalizedTranslationParallelMaxConcurrency
         },
-        nsfwMode
+        nsfwMode,
+        oneHandMode
       };
     }
 
@@ -195,7 +198,8 @@ export function SettingsModal({
         enabled: translationParallelEnabled,
         maxConcurrency: normalizedTranslationParallelMaxConcurrency
       },
-      nsfwMode
+      nsfwMode,
+      oneHandMode
     };
   }, [
     modelProvider,
@@ -214,7 +218,8 @@ export function SettingsModal({
     translationMode,
     translationParallelEnabled,
     normalizedTranslationParallelMaxConcurrency,
-    nsfwMode
+    nsfwMode,
+    oneHandMode
   ]);
 
   const clearTestState = React.useCallback(() => {
@@ -303,7 +308,7 @@ export function SettingsModal({
       <div className="modal-card settings-modal">
         <div className="modal-header">
           <h2>설정</h2>
-          <button className="ghost-button" onClick={onCancel} disabled={controlsBusy}>
+          <button className="ghost-button" onClick={submit} disabled={controlsBusy || !canSubmit}>
             닫기
           </button>
         </div>
@@ -313,12 +318,14 @@ export function SettingsModal({
             controlsBusy={controlsBusy}
             modelProvider={modelProvider}
             nsfwMode={nsfwMode}
+            oneHandMode={oneHandMode}
             translationParallelEnabled={translationParallelEnabled}
             translationParallelMaxConcurrency={translationParallelMaxConcurrency}
             translationMode={translationMode}
             onClearTestState={clearTestState}
             onModelProviderChange={setModelProvider}
             onNsfwModeChange={setNsfwMode}
+            onOneHandModeChange={setOneHandMode}
             onTranslationParallelEnabledChange={setTranslationParallelEnabled}
             onTranslationParallelMaxConcurrencyChange={setTranslationParallelMaxConcurrency}
             onTranslationModeChange={setTranslationMode}

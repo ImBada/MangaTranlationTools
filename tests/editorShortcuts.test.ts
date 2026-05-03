@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBlockCopyShortcut, isBlockPasteShortcut } from "../src/client/src/lib/editorShortcuts";
+import { isBlockCopyShortcut, isBlockPasteShortcut, isDeleteShortcut } from "../src/client/src/lib/editorShortcuts";
 
 function keyboardEvent(patch: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -25,5 +25,13 @@ describe("editor shortcuts", () => {
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", ctrlKey: true }))).toBe(true);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v" }))).toBe(true);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", shiftKey: true }))).toBe(false);
+  });
+
+  it("recognizes Q as delete only in one-hand mode", () => {
+    expect(isDeleteShortcut(keyboardEvent({ key: "Backspace" }), false)).toBe(true);
+    expect(isDeleteShortcut(keyboardEvent({ key: "Delete" }), false)).toBe(true);
+    expect(isDeleteShortcut(keyboardEvent({ code: "KeyQ", key: "q" }), false)).toBe(false);
+    expect(isDeleteShortcut(keyboardEvent({ code: "KeyQ", key: "q" }), true)).toBe(true);
+    expect(isDeleteShortcut(keyboardEvent({ code: "KeyQ", key: "q", metaKey: true }), true)).toBe(false);
   });
 });

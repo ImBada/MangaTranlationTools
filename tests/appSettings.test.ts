@@ -20,6 +20,7 @@ describe("app settings helpers", () => {
     expect(defaults.codex.oauthPort).toBe(DEFAULT_CODEX_OAUTH_PORT);
     expect(defaults.translationMode).toBe(DEFAULT_TRANSLATION_MODE);
     expect(defaults.translationParallel).toEqual({ enabled: false, maxConcurrency: 2 });
+    expect(defaults.oneHandMode).toBe(false);
   });
 
   it("fills missing or partial stored settings from environment-based defaults", () => {
@@ -44,7 +45,8 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
   });
 
@@ -57,7 +59,8 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: true
+      nsfwMode: true,
+      oneHandMode: false
     });
 
     expect(parseStoredAppSettings("{\"nsfwMode\":\"off\"}", defaults)).toEqual({
@@ -66,7 +69,22 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
+    });
+  });
+
+  it("normalizes one-hand mode from stored settings", () => {
+    const defaults = resolveDefaultAppSettings();
+
+    expect(parseStoredAppSettings("{\"oneHandMode\":\"on\"}", defaults)).toEqual({
+      modelProvider: defaults.modelProvider,
+      codex: defaults.codex,
+      openAICompatible: defaults.openAICompatible,
+      translationMode: "fast",
+      translationParallel: defaults.translationParallel,
+      nsfwMode: false,
+      oneHandMode: true
     });
   });
 
@@ -82,7 +100,8 @@ describe("app settings helpers", () => {
         enabled: true,
         maxConcurrency: 4
       },
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
 
     expect(parseStoredAppSettings("{\"translationParallel\":{\"enabled\":\"off\",\"maxConcurrency\":99}}", defaults).translationParallel).toEqual({
@@ -100,7 +119,8 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "accuracy",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
 
     expect(parseStoredAppSettings("{\"translationMode\":\"turbo\"}", defaults)).toEqual({
@@ -109,7 +129,8 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
   });
 
@@ -131,7 +152,8 @@ describe("app settings helpers", () => {
         enabled: false,
         maxConcurrency: 2
       },
-      nsfwMode: true
+      nsfwMode: true,
+      oneHandMode: false
     };
 
     const options = buildBaseTranslationOptions({
@@ -218,7 +240,8 @@ describe("app settings helpers", () => {
       openAICompatible: defaults.openAICompatible,
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
   });
 
@@ -263,7 +286,8 @@ describe("app settings helpers", () => {
       },
       translationMode: "fast",
       translationParallel: defaults.translationParallel,
-      nsfwMode: false
+      nsfwMode: false,
+      oneHandMode: false
     });
   });
 });

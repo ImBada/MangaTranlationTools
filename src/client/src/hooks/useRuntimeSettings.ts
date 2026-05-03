@@ -109,7 +109,7 @@ export function useRuntimeSettings({ pushStatus }: RuntimeSettingsOptions): Runt
       const saved = await window.mangaApi.saveSettings(nextSettings);
       setSettings(saved);
       setSettingsOpen(false);
-      pushStatus("설정을 저장했습니다. 다음 번 번역 실행부터 적용됩니다.");
+      pushStatus("설정을 저장했습니다. 모델/번역 옵션은 다음 번 번역 실행부터 적용됩니다.");
     } catch (error) {
       console.error(error);
       pushStatus("설정을 저장하지 못했습니다.");
@@ -123,7 +123,7 @@ export function useRuntimeSettings({ pushStatus }: RuntimeSettingsOptions): Runt
     try {
       const reset = await window.mangaApi.resetSettings();
       setSettings(reset);
-      pushStatus("설정을 기본값으로 복원했습니다. 다음 번 번역 실행부터 적용됩니다.");
+      pushStatus("설정을 기본값으로 복원했습니다. 모델/번역 옵션은 다음 번 번역 실행부터 적용됩니다.");
     } catch (error) {
       console.error(error);
       pushStatus("기본 설정을 복원하지 못했습니다.");

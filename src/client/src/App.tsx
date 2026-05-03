@@ -476,6 +476,7 @@ export default function App(): React.JSX.Element {
     layerVisibility,
     libraryWidgetOpen,
     modalOpen,
+    oneHandMode: settings?.oneHandMode ?? false,
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,

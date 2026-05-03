@@ -45,3 +45,16 @@ export function isBlockPasteShortcut(event: KeyboardEvent): boolean {
   const plainPasteKey = !event.shiftKey && !event.metaKey && !event.ctrlKey;
   return !event.altKey && (hasPasteModifier || plainPasteKey) && (event.code === "KeyV" || event.key.toLowerCase() === "v");
 }
+
+export function isDeleteShortcut(event: KeyboardEvent, oneHandMode: boolean): boolean {
+  if (event.key === "Delete" || event.key === "Backspace") {
+    return true;
+  }
+  return (
+    oneHandMode &&
+    !event.altKey &&
+    !event.ctrlKey &&
+    !event.metaKey &&
+    (event.code === "KeyQ" || event.key.toLowerCase() === "q")
+  );
+}

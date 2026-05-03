@@ -1,6 +1,7 @@
 import {
   DEFAULT_TRANSLATION_PARALLEL_ENABLED,
   DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY,
+  DEFAULT_ONE_HAND_MODE,
   TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX,
   TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN,
   type AppSettings,
@@ -91,7 +92,8 @@ export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env):
         TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX
       )
     },
-    nsfwMode: false
+    nsfwMode: false,
+    oneHandMode: DEFAULT_ONE_HAND_MODE
   };
 }
 
@@ -122,7 +124,8 @@ export function normalizeAppSettings(raw: unknown, defaults = resolveDefaultAppS
         TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX
       )
     },
-    nsfwMode: resolveBoolean(record?.nsfwMode, defaults.nsfwMode)
+    nsfwMode: resolveBoolean(record?.nsfwMode, defaults.nsfwMode),
+    oneHandMode: resolveBoolean(record?.oneHandMode, defaults.oneHandMode)
   };
 }
 

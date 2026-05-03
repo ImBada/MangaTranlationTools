@@ -4,6 +4,7 @@ import type { InpaintTool } from "../components/InpaintLayerCanvas";
 import {
   isBlockCopyShortcut,
   isBlockPasteShortcut,
+  isDeleteShortcut,
   isPointerToolShortcut,
   isRangeToolShortcut,
   isZoomToolShortcut,
@@ -25,6 +26,7 @@ type WorkspaceShortcutOptions = {
   layerVisibility: LayerVisibility;
   libraryWidgetOpen: boolean;
   modalOpen: boolean;
+  oneHandMode: boolean;
   pasteTranslationBlockFromClipboard: () => void | Promise<void>;
   pushStatus: (line: string) => void;
   rangeToolActive: boolean;
@@ -59,6 +61,7 @@ export function useWorkspaceShortcuts({
   layerVisibility,
   libraryWidgetOpen,
   modalOpen,
+  oneHandMode,
   pasteTranslationBlockFromClipboard,
   pushStatus,
   rangeToolActive,
@@ -247,7 +250,7 @@ export function useWorkspaceShortcuts({
       }
 
       const selectionClearShortcut =
-        (event.key === "Delete" || event.key === "Backspace") &&
+        isDeleteShortcut(event, oneHandMode) &&
         !modalOpen &&
         !editableTarget &&
         Boolean(inpaintSelectionRect) &&
@@ -264,7 +267,7 @@ export function useWorkspaceShortcuts({
       }
 
       const blockDeleteShortcut =
-        (event.key === "Delete" || event.key === "Backspace") &&
+        isDeleteShortcut(event, oneHandMode) &&
         !modalOpen &&
         !editableTarget &&
         Boolean(selectedBlockIdRef.current);
@@ -274,7 +277,7 @@ export function useWorkspaceShortcuts({
         return;
       }
 
-      if ((event.key === "Delete" || event.key === "Backspace") && !modalOpen && !editableTarget) {
+      if (isDeleteShortcut(event, oneHandMode) && !modalOpen && !editableTarget) {
         if (inpaintSelectionRect) {
           return;
         }
@@ -326,6 +329,7 @@ export function useWorkspaceShortcuts({
     layerVisibility,
     libraryWidgetOpen,
     modalOpen,
+    oneHandMode,
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,

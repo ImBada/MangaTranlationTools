@@ -14,12 +14,14 @@ type GeneralSettingsSectionProps = {
   controlsBusy: boolean;
   modelProvider: ModelProvider;
   nsfwMode: boolean;
+  oneHandMode: boolean;
   translationParallelEnabled: boolean;
   translationParallelMaxConcurrency: number;
   translationMode: TranslationMode;
   onClearTestState: () => void;
   onModelProviderChange: (value: ModelProvider) => void;
   onNsfwModeChange: React.Dispatch<React.SetStateAction<boolean>>;
+  onOneHandModeChange: React.Dispatch<React.SetStateAction<boolean>>;
   onTranslationParallelEnabledChange: React.Dispatch<React.SetStateAction<boolean>>;
   onTranslationParallelMaxConcurrencyChange: (value: number) => void;
   onTranslationModeChange: (value: TranslationMode) => void;
@@ -29,19 +31,41 @@ export function GeneralSettingsSection({
   controlsBusy,
   modelProvider,
   nsfwMode,
+  oneHandMode,
   translationParallelEnabled,
   translationParallelMaxConcurrency,
   translationMode,
   onClearTestState,
   onModelProviderChange,
   onNsfwModeChange,
+  onOneHandModeChange,
   onTranslationParallelEnabledChange,
   onTranslationParallelMaxConcurrencyChange,
   onTranslationModeChange
 }: GeneralSettingsSectionProps): React.JSX.Element {
   return (
     <>
-      <p className="muted-line modal-note">다음 번 번역 실행부터 적용됩니다.</p>
+      <p className="muted-line modal-note">모델과 번역 옵션은 다음 번 번역 실행부터 적용됩니다.</p>
+      <label className="settings-toggle-row">
+        한손모드
+        <button
+          type="button"
+          className={`settings-toggle-button ${oneHandMode ? "active" : ""}`}
+          onClick={() => {
+            onClearTestState();
+            onOneHandModeChange((current) => !current);
+          }}
+          disabled={controlsBusy}
+          aria-pressed={oneHandMode}
+        >
+          {oneHandMode ? "켜짐" : "꺼짐"}
+        </button>
+      </label>
+      <p className="muted-line">
+        켜두면 편집 화면에서 Q 키가 Delete/Backspace와 같은 삭제 동작으로 작동합니다. 텍스트 입력 중에는 적용되지
+        않습니다.
+      </p>
+
       <div className="settings-field-stack">
         <span>번역 모드</span>
         <div className="settings-mode-group" role="tablist" aria-label="번역 모드">

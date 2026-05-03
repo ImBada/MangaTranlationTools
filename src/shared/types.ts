@@ -32,6 +32,7 @@ export const DEFAULT_TRANSLATION_PARALLEL_ENABLED = false;
 export const DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY = 2;
 export const TRANSLATION_PARALLEL_MAX_CONCURRENCY_MIN = 1;
 export const TRANSLATION_PARALLEL_MAX_CONCURRENCY_MAX = 8;
+export const DEFAULT_ONE_HAND_MODE = false;
 
 export type AppSettings = {
   modelProvider: ModelProvider;
@@ -40,6 +41,7 @@ export type AppSettings = {
   translationMode: TranslationMode;
   translationParallel: TranslationParallelSettings;
   nsfwMode: boolean;
+  oneHandMode: boolean;
 };
 
 export type JobStatus =

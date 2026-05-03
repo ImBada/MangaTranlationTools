@@ -1,4 +1,5 @@
 import {
+  DEFAULT_ONE_HAND_MODE,
   DEFAULT_TRANSLATION_PARALLEL_ENABLED,
   DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY,
   type AppSettings,
@@ -39,7 +40,8 @@ export function withSettingsDefaults(settings: AppSettings): AppSettings {
     translationParallel: {
       enabled: settings.translationParallel?.enabled ?? DEFAULT_TRANSLATION_PARALLEL_ENABLED,
       maxConcurrency: settings.translationParallel?.maxConcurrency ?? DEFAULT_TRANSLATION_PARALLEL_MAX_CONCURRENCY
-    }
+    },
+    oneHandMode: settings.oneHandMode ?? DEFAULT_ONE_HAND_MODE
   };
 }
 
