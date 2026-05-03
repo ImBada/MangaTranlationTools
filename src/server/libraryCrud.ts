@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { readdir, rm } from "node:fs/promises";
+import { rm } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import type {
   ChapterSnapshot,
