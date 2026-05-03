@@ -24,6 +24,7 @@ export function AppFileInputs({
     <>
       <input
         ref={imageImportInputRef}
+        data-testid="image-import-input"
         type="file"
         accept="image/png,image/jpeg,image/webp"
         multiple
@@ -32,6 +33,7 @@ export function AppFileInputs({
       />
       <input
         ref={folderImportInputRef}
+        data-testid="folder-import-input"
         type="file"
         accept="image/png,image/jpeg,image/webp"
         multiple
@@ -41,6 +43,7 @@ export function AppFileInputs({
       />
       <input
         ref={zipImportInputRef}
+        data-testid="zip-import-input"
         type="file"
         accept=".zip,application/zip"
         hidden
@@ -48,6 +51,7 @@ export function AppFileInputs({
       />
       <input
         ref={batchImportInputRef}
+        data-testid="batch-import-input"
         type="file"
         accept="image/png,image/jpeg,image/webp,.zip,application/zip"
         multiple
@@ -57,6 +61,7 @@ export function AppFileInputs({
       />
       <input
         ref={inpaintPsdInputRef}
+        data-testid="inpaint-psd-input"
         type="file"
         accept=".psd,image/vnd.adobe.photoshop,application/octet-stream"
         hidden

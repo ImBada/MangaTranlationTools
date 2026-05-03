@@ -17,6 +17,7 @@
     "lama:prepare": "node scripts/prepare-lama-runtime.cjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
+    "test:e2e": "npm run build && playwright test",
     "preview": "npm run build && node scripts/preview.cjs"
   },
   "dependencies": {
@@ -30,6 +31,7 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.4",
     "@types/express": "^5.0.6",
     "@types/multer": "^2.1.0",

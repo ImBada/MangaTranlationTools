@@ -57,7 +57,12 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
           </label>
           <label>
             작품 제목
-            <input value={newWorkTitle} disabled={busy || targetMode !== "new"} onChange={(event) => setNewWorkTitle(event.target.value)} />
+            <input
+              data-testid="import-work-title-input"
+              value={newWorkTitle}
+              disabled={busy || targetMode !== "new"}
+              onChange={(event) => setNewWorkTitle(event.target.value)}
+            />
           </label>
           <label className="radio-row">
             <input
@@ -110,6 +115,7 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
                     <span className="draft-meta">{chapter.pages.length}페이지</span>
                   )}
                   <input
+                    data-testid="import-chapter-title-input"
                     value={selection.title}
                     disabled={busy || (preview.mode === "batch" && !selection.enabled)}
                     onChange={(event) => {
@@ -130,6 +136,7 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
             취소
           </button>
           <button
+            data-testid="import-submit-button"
             className="primary"
             disabled={busy || !isSubmittable(targetMode, newWorkTitle, existingWorkId, selections)}
             onClick={() =>

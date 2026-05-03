@@ -104,6 +104,7 @@ export function ImageStage({
     <div ref={wrapRef} className="stage-wrap">
       <div
         ref={stageRef}
+        data-testid="image-stage"
         className={`image-stage${panning || temporaryPanActive ? " panning" : ""}`}
         style={stageStyle}
         onPointerMove={handleStagePointerMove}

@@ -32,6 +32,8 @@ export function LayerControl({
 }: LayerControlProps): React.JSX.Element {
   return (
     <div
+      data-layer-label={label}
+      data-active={active ? "true" : "false"}
       className={`layer-control${active ? " active" : ""}${nested ? " nested" : ""}`}
       role="button"
       tabIndex={0}

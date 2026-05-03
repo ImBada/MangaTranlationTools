@@ -149,6 +149,8 @@ export function OverlayBlock({
 
   return (
     <div
+      data-testid="translation-block"
+      data-block-id={block.id}
       className={`${selected && editingEnabled ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
       style={style}
       title={layout.overflow && editingEnabled ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
