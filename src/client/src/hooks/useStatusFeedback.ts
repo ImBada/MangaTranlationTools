@@ -1,18 +1,22 @@
 import React from "react";
 
+export type StatusToastTone = "default" | "failed";
+
 export function useStatusFeedback(): {
   appendStatusLine: (line: string) => void;
-  pushStatus: (line: string) => void;
+  pushStatus: (line: string, tone?: StatusToastTone) => void;
   resetStatusLog: () => void;
   saveFlash: boolean;
   signalSaveComplete: () => void;
   statusLines: string[];
   statusToastLine: string | null;
+  statusToastTone: StatusToastTone;
   statusWidgetOpen: boolean;
   setStatusWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
 } {
   const [statusLines, setStatusLines] = React.useState<string[]>([]);
   const [statusToastLine, setStatusToastLine] = React.useState<string | null>(null);
+  const [statusToastTone, setStatusToastTone] = React.useState<StatusToastTone>("default");
   const [saveFlash, setSaveFlash] = React.useState(false);
   const [statusWidgetOpen, setStatusWidgetOpen] = React.useState(false);
   const saveFlashTimerRef = React.useRef<number | null>(null);
@@ -25,12 +29,13 @@ export function useStatusFeedback(): {
     }
   }, []);
 
-  const appendStatusLine = React.useCallback((line: string) => {
+  const appendStatusLine = React.useCallback((line: string, tone: StatusToastTone = "default") => {
     const next = line.trim();
     if (!next) {
       return;
     }
     setStatusToastLine(next);
+    setStatusToastTone(tone);
     clearStatusToastTimer();
     statusToastTimerRef.current = window.setTimeout(() => {
       setStatusToastLine(null);
@@ -59,12 +64,13 @@ export function useStatusFeedback(): {
     clearStatusToastTimer();
     setStatusLines([]);
     setStatusToastLine(null);
+    setStatusToastTone("default");
   }, [clearStatusToastTimer]);
 
   const pushStatus = React.useCallback(
-    (line: string) => {
+    (line: string, tone: StatusToastTone = "default") => {
       void window.mangaApi.writeLog("info", "UI status", { line });
-      appendStatusLine(line);
+      appendStatusLine(line, tone);
     },
     [appendStatusLine]
   );
@@ -86,6 +92,7 @@ export function useStatusFeedback(): {
     signalSaveComplete,
     statusLines,
     statusToastLine,
+    statusToastTone,
     statusWidgetOpen,
     setStatusWidgetOpen
   };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyBlockTypeFontPresetToBlock, ensureBlockTypeFontPresets } from "../src/shared/fontPresets";
+import { applyBlockTypeFontPresetToBlock, BLOCK_TYPE_FONT_PRESET_IDS, ensureBlockTypeFontPresets } from "../src/shared/fontPresets";
 import type { FontPreset, TranslationBlock } from "../src/shared/types";
 
 describe("block type font presets", () => {
@@ -11,10 +11,10 @@ describe("block type font presets", () => {
     expect(presets.every((preset) => preset.lineHeight === 1.18)).toBe(true);
   });
 
-  it("reuses existing presets with matching block type names", () => {
+  it("reuses existing block type presets by stable id even when renamed", () => {
     const existing: FontPreset = {
-      id: "custom-speech",
-      name: "speech",
+      id: BLOCK_TYPE_FONT_PRESET_IDS.speech,
+      name: "대사",
       fontSizePx: 36,
       lineHeight: 1.4,
       textColor: "#ff0000"
@@ -22,13 +22,14 @@ describe("block type font presets", () => {
 
     const presets = ensureBlockTypeFontPresets([existing]);
 
-    expect(presets.filter((preset) => preset.name === "speech")).toEqual([existing]);
+    expect(presets.filter((preset) => preset.id === BLOCK_TYPE_FONT_PRESET_IDS.speech)).toEqual([existing]);
+    expect(presets).toHaveLength(4);
   });
 
-  it("applies the matching preset to a translated block with linked values", () => {
+  it("applies the matching preset id to a translated block with linked values", () => {
     const preset: FontPreset = {
-      id: "custom-sfx",
-      name: "sfx",
+      id: BLOCK_TYPE_FONT_PRESET_IDS.sfx,
+      name: "효과음",
       fontFamily: "Preset Sans",
       fontSizePx: 40,
       lineHeight: 1.3,
@@ -40,7 +41,7 @@ describe("block type font presets", () => {
     const block = createBlock({ type: "sfx", fontSizePx: 18, lineHeight: 1.1 });
 
     expect(applyBlockTypeFontPresetToBlock(block, [preset])).toMatchObject({
-      fontPresetId: "custom-sfx",
+      fontPresetId: BLOCK_TYPE_FONT_PRESET_IDS.sfx,
       fontSizeLinkedToPreset: true,
       lineHeightLinkedToPreset: true,
       textColorLinkedToPreset: true,

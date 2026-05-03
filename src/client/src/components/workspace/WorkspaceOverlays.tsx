@@ -1,6 +1,7 @@
 import React from "react";
 import type { JobState } from "../../../../shared/types";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
+import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 
 export type PageInpaintNotice = {
   actionLabel?: string;
@@ -16,6 +17,7 @@ type NotificationDockProps = {
   onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   recoverableFailures: RecoverableFailure[];
   statusToastLine: string | null;
+  statusToastTone: StatusToastTone;
   statusWidgetTone: string;
 };
 
@@ -50,6 +52,7 @@ export function NotificationDock({
   onRetryRecoverableFailure,
   recoverableFailures,
   statusToastLine,
+  statusToastTone,
   statusWidgetTone
 }: NotificationDockProps): React.JSX.Element | null {
   if (!inpaintNotice && recoverableFailures.length === 0 && !statusToastLine) {
@@ -88,7 +91,7 @@ export function NotificationDock({
         </section>
       ))}
       {statusToastLine ? (
-        <section className={`notification-card ${statusWidgetTone}`}>
+        <section className={`notification-card ${statusToastTone === "default" ? statusWidgetTone : statusToastTone}`}>
           <div className="notification-copy">
             <strong>알림</strong>
             <span>{statusToastLine}</span>

@@ -23,9 +23,11 @@ type FontToolSectionProps = {
   selectedBlock: TranslationBlock | null;
   selectedPageEditLocked: boolean;
   onClearSelectedBlockFontPreset: () => void;
+  onClearEditingFontPreset: () => void;
   onCreateFontPreset: () => void;
   onDeleteFontPreset: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
+  onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
   onSelectFontPreset: (presetId: string) => void;
 };
@@ -122,12 +124,61 @@ export function FontToolSection({
   selectedBlock,
   selectedPageEditLocked,
   onClearSelectedBlockFontPreset,
+  onClearEditingFontPreset,
   onCreateFontPreset,
   onDeleteFontPreset,
   onFontPresetNameChange,
+  onFontPresetRename,
   onFontSettingChange,
   onSelectFontPreset
 }: FontToolSectionProps): React.JSX.Element {
+  const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
+  const [renamingFontPresetId, setRenamingFontPresetId] = React.useState<string | null>(null);
+  const [renamingFontPresetName, setRenamingFontPresetName] = React.useState("");
+  const skipNextRenameCommitRef = React.useRef(false);
+
+  React.useEffect(() => {
+    if (!renamingFontPresetId || renamingFontPresetId === activeFontPresetId) {
+      return;
+    }
+    setRenamingFontPresetId(null);
+    setRenamingFontPresetName("");
+  }, [activeFontPresetId, renamingFontPresetId]);
+
+  const commitFontPresetRename = React.useCallback(() => {
+    if (skipNextRenameCommitRef.current) {
+      skipNextRenameCommitRef.current = false;
+      return;
+    }
+    if (!renamingFontPresetId) {
+      return;
+    }
+    const currentPreset = fontPresets.find((preset) => preset.id === renamingFontPresetId);
+    if (!currentPreset) {
+      setRenamingFontPresetId(null);
+      setRenamingFontPresetName("");
+      return;
+    }
+    const nextName = renamingFontPresetName.trim();
+    if (!nextName || fontPresets.some((preset) => preset.id !== currentPreset.id && preset.name.trim() === nextName)) {
+      onFontPresetRename(currentPreset.id, nextName);
+      setRenamingFontPresetName(currentPreset.name);
+      setRenamingFontPresetId(null);
+      return;
+    }
+    if (nextName !== currentPreset.name) {
+      onFontPresetRename(currentPreset.id, nextName);
+    }
+    setRenamingFontPresetId(null);
+    setRenamingFontPresetName("");
+  }, [fontPresets, onFontPresetRename, renamingFontPresetId, renamingFontPresetName]);
+
+  const cancelFontPresetRename = React.useCallback(() => {
+    skipNextRenameCommitRef.current = true;
+    setRenamingFontPresetId(null);
+    setRenamingFontPresetName("");
+  }, []);
+
   return (
     <>
       {fontControlValues ? (
@@ -308,32 +359,56 @@ export function FontToolSection({
         <div className="font-preset-tags" aria-label="폰트 프리셋">
           {fontPresets.map((preset) => {
             const tagTextStyles = buildPresetTagTextStyles(preset);
+            const active = activeFontPresetId === preset.id;
+            const renaming = renamingFontPresetId === preset.id;
 
             return (
-              <span
-                key={preset.id}
-                className={`font-preset-tag ${
-                  selectedBlock?.fontPresetId === preset.id || (!selectedBlock && editingFontPresetId === preset.id) ? "active" : ""
-                }`}
-              >
-                <button
-                  type="button"
-                  className="font-preset-tag-name"
-                  disabled={selectedPageEditLocked}
-                  onClick={() => onSelectFontPreset(preset.id)}
-                  title={selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
-                >
-                  <span className="font-preset-tag-text-stack" style={tagTextStyles.stack}>
-                    {tagTextStyles.hasSecondaryOutline ? (
-                      <span className="overlay-text-content font-preset-tag-text-secondary" style={tagTextStyles.secondary} aria-hidden>
+              <span key={preset.id} className={`font-preset-tag ${active ? "active" : ""}`}>
+                {renaming ? (
+                  <input
+                    className="font-preset-tag-name-input"
+                    value={renamingFontPresetName}
+                    disabled={selectedPageEditLocked}
+                    aria-label={`${preset.name} 이름 변경`}
+                    autoFocus
+                    onBlur={commitFontPresetRename}
+                    onChange={(event) => setRenamingFontPresetName(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                      }
+                      if (event.key === "Escape") {
+                        cancelFontPresetRename();
+                      }
+                    }}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="font-preset-tag-name"
+                    disabled={selectedPageEditLocked}
+                    onClick={() => {
+                      if (!active) {
+                        onSelectFontPreset(preset.id);
+                        return;
+                      }
+                      setRenamingFontPresetId(preset.id);
+                      setRenamingFontPresetName(preset.name);
+                    }}
+                    title={active ? `${preset.name} 이름 변경` : selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
+                  >
+                    <span className="font-preset-tag-text-stack" style={tagTextStyles.stack}>
+                      {tagTextStyles.hasSecondaryOutline ? (
+                        <span className="overlay-text-content font-preset-tag-text-secondary" style={tagTextStyles.secondary} aria-hidden>
+                          {preset.name}
+                        </span>
+                      ) : null}
+                      <span className="overlay-text-content font-preset-tag-text-primary" style={tagTextStyles.primary}>
                         {preset.name}
                       </span>
-                    ) : null}
-                    <span className="overlay-text-content font-preset-tag-text-primary" style={tagTextStyles.primary}>
-                      {preset.name}
                     </span>
-                  </span>
-                </button>
+                  </button>
+                )}
                 <button
                   type="button"
                   className="font-preset-tag-remove"
@@ -349,6 +424,11 @@ export function FontToolSection({
           {selectedBlock?.fontPresetId ? (
             <button type="button" className="font-preset-clear" disabled={selectedPageEditLocked} onClick={onClearSelectedBlockFontPreset}>
               프리셋 해제
+            </button>
+          ) : null}
+          {!selectedBlock && editingFontPresetId ? (
+            <button type="button" className="font-preset-clear" disabled={selectedPageEditLocked} onClick={onClearEditingFontPreset}>
+              프리셋 선택 해제
             </button>
           ) : null}
         </div>

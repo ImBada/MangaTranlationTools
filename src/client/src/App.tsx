@@ -80,6 +80,7 @@ export default function App(): React.JSX.Element {
     signalSaveComplete,
     statusLines,
     statusToastLine,
+    statusToastTone,
     statusWidgetOpen,
     setStatusWidgetOpen
   } = useStatusFeedback();
@@ -306,6 +307,7 @@ export default function App(): React.JSX.Element {
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
+    renameFontPreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
@@ -500,6 +502,7 @@ export default function App(): React.JSX.Element {
       selectedBlock={selectedBlock}
       selectedPage={selectedPage}
       selectedPageEditLocked={selectedPageEditLocked}
+      onClearEditingFontPreset={() => setEditingFontPresetId(null)}
       onClearInpaintMaskData={() => updateSelectedPageInpaintMask(undefined)}
       onClearInpaintResultData={() => updateSelectedPageInpaintResult(undefined)}
       onClearSelectedBlockFontPreset={clearSelectedBlockFontPreset}
@@ -509,6 +512,7 @@ export default function App(): React.JSX.Element {
       onExportInpaintPsd={exportSelectedPageInpaintPsd}
       onFillSelectedInpaintSelection={fillSelectedInpaintSelection}
       onFontPresetNameChange={setFontPresetName}
+      onFontPresetRename={renameFontPreset}
       onFontSettingChange={updateSelectedBlockFontSetting}
       onInpaintBrushSizeChange={setInpaintBrushSize}
       onInpaintResultBrushColorChange={setInpaintResultBrushColor}
@@ -621,6 +625,7 @@ export default function App(): React.JSX.Element {
           stageZoomLabel={stageZoomLabel}
           statusLines={statusLines}
           statusToastLine={statusToastLine}
+          statusToastTone={statusToastTone}
           statusWidgetOpen={statusWidgetOpen}
           statusWidgetTone={statusWidgetTone}
           temporaryPanActive={temporaryPanActive}

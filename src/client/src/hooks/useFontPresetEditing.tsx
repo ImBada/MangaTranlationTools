@@ -16,9 +16,15 @@ import {
 
 export type FontControlValues = TranslationBlock | FontPreset | null;
 
+function isFontPresetNameTaken(fontPresets: FontPreset[], name: string, excludePresetId?: string): boolean {
+  const normalizedName = name.trim();
+  return fontPresets.some((preset) => preset.id !== excludePresetId && preset.name.trim() === normalizedName);
+}
+
 type UseFontPresetEditingOptions = {
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
+  pushStatus: (line: string, tone?: "failed") => void;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   selectedBlock: TranslationBlock | null;
   selectedPage: MangaPage | null;
@@ -39,6 +45,7 @@ type UseFontPresetEditingState = {
   fontPresetName: string;
   fontPresets: FontPreset[];
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
+  renameFontPreset: (presetId: string, name: string) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
@@ -48,6 +55,7 @@ type UseFontPresetEditingState = {
 export function useFontPresetEditing({
   currentChapter,
   editingFontPresetId,
+  pushStatus,
   recordTranslationUndoSnapshot,
   selectedBlock,
   selectedPage,
@@ -193,6 +201,10 @@ export function useFontPresetEditing({
     }
 
     const presetName = fontPresetName.trim() || `프리셋 ${(currentChapter?.fontPresets?.length ?? 0) + 1}`;
+    if (isFontPresetNameTaken(fontPresets, presetName)) {
+      pushStatus("이미 있는 프리셋 이름입니다.", "failed");
+      return;
+    }
     const preset = createFontPreset(presetName, selectedBlock ?? DEFAULT_FONT_PRESET);
     recordTranslationUndoSnapshot("폰트 프리셋 생성");
     updateCurrentChapter(selectedPage?.id, (current) => ({
@@ -229,7 +241,7 @@ export function useFontPresetEditing({
     }));
     setEditingFontPresetId(preset.id);
     setFontPresetName("");
-  }, [currentChapter, fontPresetName, recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
+  }, [currentChapter, fontPresetName, fontPresets, pushStatus, recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
 
   const selectFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
@@ -282,6 +294,30 @@ export function useFontPresetEditing({
     });
   }, [selectedBlock, updateSelectedBlock]);
 
+  const renameFontPreset = React.useCallback((presetId: string, name: string) => {
+    const nextName = name.trim();
+    if (!currentChapter || selectedPageEditLocked || !nextName) {
+      if (currentChapter && !selectedPageEditLocked) {
+        pushStatus("프리셋 이름을 입력하세요.", "failed");
+      }
+      return;
+    }
+    const currentPreset = fontPresets.find((preset) => preset.id === presetId);
+    if (!currentPreset || currentPreset.name === nextName) {
+      return;
+    }
+    if (isFontPresetNameTaken(fontPresets, nextName, presetId)) {
+      pushStatus("이미 있는 프리셋 이름입니다.", "failed");
+      return;
+    }
+
+    recordTranslationUndoSnapshot("폰트 프리셋 이름 변경");
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      fontPresets: (current.fontPresets ?? []).map((preset) => (preset.id === presetId ? { ...preset, name: nextName } : preset))
+    }));
+  }, [currentChapter, fontPresets, pushStatus, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
+
   const deleteFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
       return;
@@ -314,6 +350,7 @@ export function useFontPresetEditing({
     fontPresetName,
     fontPresets,
     renderFontPresetLinkButton,
+    renameFontPreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,

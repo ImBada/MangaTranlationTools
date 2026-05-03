@@ -63,6 +63,7 @@ type UseTranslationEditingState = {
   pasteTranslationBlockFromClipboard: () => Promise<void>;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
+  renameFontPreset: (presetId: string, name: string) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
@@ -173,6 +174,7 @@ export function useTranslationEditing({
     fontPresetName,
     fontPresets,
     renderFontPresetLinkButton,
+    renameFontPreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
@@ -180,6 +182,7 @@ export function useTranslationEditing({
   } = useFontPresetEditing({
     currentChapter,
     editingFontPresetId,
+    pushStatus,
     recordTranslationUndoSnapshot,
     selectedBlock,
     selectedPage,
@@ -229,6 +232,7 @@ export function useTranslationEditing({
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
+    renameFontPreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,

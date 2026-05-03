@@ -39,6 +39,7 @@ type LayerToolPanelProps = {
   selectedBlock: TranslationBlock | null;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
+  onClearEditingFontPreset: () => void;
   onClearInpaintMask: () => void;
   onClearInpaintResult: () => void;
   onClearSelectedBlockFontPreset: () => void;
@@ -48,6 +49,7 @@ type LayerToolPanelProps = {
   onExportInpaintPsd: () => void | Promise<void>;
   onFillSelectedInpaintSelection: () => void | Promise<void>;
   onFontPresetNameChange: (value: string) => void;
+  onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
   onInpaintBrushSizeChange: (value: number) => void;
   onInpaintResultBrushColorChange: (value: string) => void;
@@ -89,6 +91,7 @@ export function LayerToolPanel({
   selectedBlock,
   selectedPage,
   selectedPageEditLocked,
+  onClearEditingFontPreset,
   onClearInpaintMask,
   onClearInpaintResult,
   onClearSelectedBlockFontPreset,
@@ -98,6 +101,7 @@ export function LayerToolPanel({
   onExportInpaintPsd,
   onFillSelectedInpaintSelection,
   onFontPresetNameChange,
+  onFontPresetRename,
   onFontSettingChange,
   onInpaintBrushSizeChange,
   onInpaintResultBrushColorChange,
@@ -126,10 +130,12 @@ export function LayerToolPanel({
           renderFontPresetLinkButton={renderFontPresetLinkButton}
           selectedBlock={selectedBlock}
           selectedPageEditLocked={selectedPageEditLocked}
+          onClearEditingFontPreset={onClearEditingFontPreset}
           onClearSelectedBlockFontPreset={onClearSelectedBlockFontPreset}
           onCreateFontPreset={onCreateFontPreset}
           onDeleteFontPreset={onDeleteFontPreset}
           onFontPresetNameChange={onFontPresetNameChange}
+          onFontPresetRename={onFontPresetRename}
           onFontSettingChange={onFontSettingChange}
           onSelectFontPreset={onSelectFontPreset}
         />

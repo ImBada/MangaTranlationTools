@@ -9,6 +9,7 @@ import type {
 } from "../../../../shared/types";
 import { INPAINT_TOOL_SHORTCUTS } from "../../lib/editorShortcuts";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
+import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
 import type { ViewportSize } from "../../lib/overlayLayout";
@@ -63,6 +64,7 @@ type WorkspacePanelProps = {
   stageZoomLabel: string;
   statusLines: string[];
   statusToastLine: string | null;
+  statusToastTone: StatusToastTone;
   statusWidgetOpen: boolean;
   statusWidgetTone: string;
   temporaryPanActive: boolean;
@@ -127,6 +129,7 @@ export function WorkspacePanel({
   stageZoomLabel,
   statusLines,
   statusToastLine,
+  statusToastTone,
   statusWidgetOpen,
   statusWidgetTone,
   temporaryPanActive,
@@ -203,6 +206,7 @@ export function WorkspacePanel({
         onDismissRecoverableFailure={onDismissRecoverableFailure}
         onRetryRecoverableFailure={onRetryRecoverableFailure}
         statusToastLine={statusToastLine}
+        statusToastTone={statusToastTone}
         statusWidgetTone={statusWidgetTone}
       />
       {statusWidgetOpen ? (

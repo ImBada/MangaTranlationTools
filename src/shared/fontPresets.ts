@@ -19,6 +19,12 @@ export const DEFAULT_FONT_PRESET_VALUES: Omit<FontPreset, "id" | "name"> = {
 };
 
 export const BLOCK_TYPE_FONT_PRESET_NAMES: readonly BlockType[] = ["speech", "sfx", "caption", "other"];
+export const BLOCK_TYPE_FONT_PRESET_IDS = {
+  speech: "font-preset-speech",
+  sfx: "font-preset-sfx",
+  caption: "font-preset-caption",
+  other: "font-preset-other"
+} satisfies Record<BlockType, string>;
 
 const BLOCK_FONT_PRESET_LINK_FIELDS = [
   "fontSizeLinkedToPreset",
@@ -48,10 +54,11 @@ export function ensureBlockTypeFontPresets(fontPresets: FontPreset[] = []): Font
   const usedIds = new Set(next.map((preset) => preset.id));
 
   for (const name of BLOCK_TYPE_FONT_PRESET_NAMES) {
-    if (next.some((preset) => preset.name === name)) {
+    const baseId = BLOCK_TYPE_FONT_PRESET_IDS[name];
+    const existingById = next.find((preset) => preset.id === baseId);
+    if (existingById) {
       continue;
     }
-    const baseId = `font-preset-${name}`;
     let id = baseId;
     let suffix = 2;
     while (usedIds.has(id)) {
@@ -66,7 +73,7 @@ export function ensureBlockTypeFontPresets(fontPresets: FontPreset[] = []): Font
 }
 
 export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPresets: FontPreset[]): TranslationBlock {
-  const preset = fontPresets.find((candidate) => candidate.name === block.type);
+  const preset = fontPresets.find((candidate) => candidate.id === BLOCK_TYPE_FONT_PRESET_IDS[block.type]);
   if (!preset) {
     return block;
   }
