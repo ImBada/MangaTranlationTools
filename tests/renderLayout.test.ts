@@ -57,6 +57,33 @@ describe("render layout padding", () => {
     expect(layout.fontSizePx).toBeLessThanOrEqual(18);
     expect(layout.overflow).toBe(false);
   });
+
+  it("allows auto-fit text to grow beyond the previous 256px cap", () => {
+    installCanvasMeasureMock();
+
+    const block: TranslationBlock = {
+      id: "block-1",
+      type: "sfx",
+      bbox: { x: 0, y: 0, w: 1000, h: 1000 },
+      sourceText: "가",
+      translatedText: "가",
+      confidence: 1,
+      sourceDirection: "vertical",
+      renderDirection: "horizontal",
+      fontSizePx: 600,
+      lineHeight: 1,
+      textAlign: "center",
+      textColor: "#111111",
+      backgroundColor: "#fffdf5",
+      opacity: 1,
+      autoFitText: true
+    };
+
+    const layout = resolveBlockTextLayout(block, block.translatedText, { width: 1000, height: 1000 }, { width: 1000, height: 1000 });
+
+    expect(layout.fontSizePx).toBeGreaterThan(256);
+    expect(layout.overflow).toBe(false);
+  });
 });
 
 function installCanvasMeasureMock(): void {

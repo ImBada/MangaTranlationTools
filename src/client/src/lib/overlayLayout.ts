@@ -15,7 +15,6 @@ export {
 };
 
 const MIN_FONT_SIZE_PX = 2;
-const MAX_AUTOFIT_FONT_SIZE_PX = 256;
 const MAX_BLOCK_PADDING_PX = 14;
 const MIN_INNER_SIZE_PX = 1;
 const BLOCK_BORDER_PX = 1;
@@ -289,7 +288,7 @@ function resolveAutoFitUpperBound(block: TranslationBlock, preferredFontSize: nu
     return preferredFontSize;
   }
 
-  return clamp(Math.max(preferredFontSize, innerWidth, innerHeight), MIN_FONT_SIZE_PX, MAX_AUTOFIT_FONT_SIZE_PX);
+  return Math.max(MIN_FONT_SIZE_PX, preferredFontSize, innerWidth, innerHeight);
 }
 
 function measureVerticalText(

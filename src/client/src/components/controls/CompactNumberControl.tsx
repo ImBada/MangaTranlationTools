@@ -3,7 +3,7 @@ import React from "react";
 type CompactNumberControlProps = {
   ariaLabel: string;
   disabled: boolean;
-  max: number;
+  max?: number;
   min: number;
   onChange: (value: number) => void;
   step: number;
@@ -17,7 +17,8 @@ export function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, 
     if (!Number.isFinite(nextValue)) {
       return value;
     }
-    return Math.min(max, Math.max(min, Number(nextValue.toFixed(precision))));
+    const roundedValue = Math.max(min, Number(nextValue.toFixed(precision)));
+    return max === undefined ? roundedValue : Math.min(max, roundedValue);
   };
   const updateValue = (nextValue: number) => onChange(clampValue(nextValue));
 
@@ -36,7 +37,7 @@ export function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, 
         aria-label={ariaLabel}
         onChange={(event) => updateValue(Number(event.target.value))}
       />
-      <button type="button" aria-label={`${ariaLabel} 증가`} disabled={disabled || value >= max} onClick={() => updateValue(value + step)}>
+      <button type="button" aria-label={`${ariaLabel} 증가`} disabled={disabled || (max !== undefined && value >= max)} onClick={() => updateValue(value + step)}>
         +
       </button>
       <span>{suffix}</span>

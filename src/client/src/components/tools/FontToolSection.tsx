@@ -279,7 +279,6 @@ export function FontToolSection({
               <CompactNumberControl
                 ariaLabel="폰트 크기"
                 min={8}
-                max={120}
                 step={1}
                 value={fontControlValues.fontSizePx}
                 suffix="px"
