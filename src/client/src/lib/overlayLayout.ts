@@ -1,8 +1,18 @@
 import type { TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from "../../../shared/geometry";
-import { DEFAULT_OVERLAY_FONT_FAMILY } from "../../../shared/fontPresets";
+import {
+  DEFAULT_OVERLAY_FONT_FAMILY,
+  DEFAULT_OVERLAY_FONT_STYLE,
+  DEFAULT_OVERLAY_FONT_WEIGHT,
+  DEFAULT_OVERLAY_TEXT_DECORATION
+} from "../../../shared/fontPresets";
 
-export { DEFAULT_OVERLAY_FONT_FAMILY };
+export {
+  DEFAULT_OVERLAY_FONT_FAMILY,
+  DEFAULT_OVERLAY_FONT_STYLE,
+  DEFAULT_OVERLAY_FONT_WEIGHT,
+  DEFAULT_OVERLAY_TEXT_DECORATION
+};
 
 const MIN_FONT_SIZE_PX = 2;
 const MAX_AUTOFIT_FONT_SIZE_PX = 256;
@@ -45,7 +55,7 @@ export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, 
 
 export function resolveWrappedTextLines(block: TranslationBlock, text: string, fontSize: number, maxWidth: number): string[] {
   const context = getMeasureContext();
-  context.font = buildFont(fontSize, block.fontFamily);
+  context.font = buildFont(fontSize, block);
   return wrapTextToWidth(context, text, maxWidth);
 }
 
@@ -223,7 +233,7 @@ function doesTextFit(block: TranslationBlock, text: string, fontSize: number, in
   }
 
   const context = getMeasureContext();
-  context.font = buildFont(fontSize, block.fontFamily);
+  context.font = buildFont(fontSize, block);
   const measured = measureWrappedText(context, text, innerWidth, fontSize * block.lineHeight);
   return measured.totalHeight <= innerHeight && measured.maxLineWidth <= innerWidth;
 }
@@ -316,6 +326,13 @@ function getMeasureContext(): CanvasRenderingContext2D {
   return context;
 }
 
-function buildFont(fontSize: number, fontFamily = DEFAULT_OVERLAY_FONT_FAMILY): string {
-  return `700 ${fontSize}px ${fontFamily}`;
+export function buildOverlayCanvasFont(
+  fontSize: number,
+  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">
+): string {
+  return buildFont(fontSize, block);
+}
+
+function buildFont(fontSize: number, block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">): string {
+  return `${block.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE} ${block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT} ${fontSize}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
 }

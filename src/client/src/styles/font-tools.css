@@ -158,6 +158,78 @@
   font-size: 11px;
 }
 
+.font-style-field {
+  gap: 6px;
+}
+
+.font-style-control {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.font-style-basic {
+  display: inline-flex;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid #42505f;
+  border-radius: 6px;
+  background: #1f252d;
+}
+
+.font-style-basic button {
+  width: 28px;
+  min-width: 28px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+  border-radius: 4px;
+  color: #d6cbbb;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.font-style-basic button:nth-child(2) {
+  font-style: italic;
+}
+
+.font-style-basic button:nth-child(3) {
+  text-decoration: underline;
+}
+
+.font-style-basic button.active {
+  border-color: #78c7b2;
+  background: #24443d;
+  color: #e6fff7;
+}
+
+.font-weight-select {
+  flex: 1 1 130px;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 8px;
+  border: 1px solid #42505f;
+  border-radius: 6px;
+  background: #1f252d;
+  color: #f1eadf;
+  font: inherit;
+  font-size: 12px;
+}
+
+.font-style-link-group {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.font-style-link-group:empty {
+  display: none;
+}
+
 .font-checkbox-field {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto auto;

@@ -1,8 +1,9 @@
 import type { MangaPage, TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import {
-  DEFAULT_OVERLAY_FONT_FAMILY,
   hexToRgba,
+  buildOverlayCanvasFont,
+  DEFAULT_OVERLAY_TEXT_DECORATION,
   resolveScreentoneDotRadiusPx,
   resolveScreentoneTileSizePx,
   resolveBlockTextLayout,
@@ -39,7 +40,6 @@ export type OverlayRenderOptions = {
   editingEnabled: boolean;
 };
 
-const CANVAS_TEXT_RENDER_FONT_WEIGHT = 600;
 const CANVAS_TEXT_RENDER_FONT_SIZE_RATIO = 0.985;
 const OVERLAY_BLOCK_BORDER_PX = 1;
 const CANVAS_TEXT_RENDER_Y_OFFSET_RATIO = 0.04;
@@ -176,7 +176,7 @@ function drawRenderedBlock(
 
   context.fillStyle = block.textColor;
   context.lineJoin = "round";
-  context.font = `${CANVAS_TEXT_RENDER_FONT_WEIGHT} ${renderFontSizePx}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
+  context.font = buildOverlayCanvasFont(renderFontSizePx, block);
   context.textBaseline = "top";
 
   if (block.renderDirection === "vertical") {
@@ -212,7 +212,9 @@ function drawHorizontalRenderedText(
 
   context.textAlign = block.textAlign;
   for (const [index, line] of lines.entries()) {
-    drawFilledText(context, block, line, x, startY + index * lineHeightPx, fontSize);
+    const y = startY + index * lineHeightPx;
+    drawFilledText(context, block, line, x, y, fontSize);
+    drawTextDecoration(context, block, line, x, y, fontSize);
   }
 }
 
@@ -234,8 +236,28 @@ function drawVerticalRenderedText(
   const x = left + innerWidth / 2;
   context.textAlign = "center";
   for (const [index, char] of chars.entries()) {
-    drawFilledText(context, block, char, x, startY + index * lineHeightPx, fontSize);
+    const y = startY + index * lineHeightPx;
+    drawFilledText(context, block, char, x, y, fontSize);
+    drawTextDecoration(context, block, char, x, y, fontSize);
   }
+}
+
+function drawTextDecoration(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  if ((block.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION) !== "underline") {
+    return;
+  }
+
+  const width = context.measureText(text).width;
+  const startX = context.textAlign === "right" ? x - width : context.textAlign === "center" ? x - width / 2 : x;
+  const underlineY = y + fontSize * 1.05;
+  context.save();
+  context.strokeStyle = block.textColor;
+  context.lineWidth = Math.max(1, fontSize * 0.06);
+  context.beginPath();
+  context.moveTo(startX, underlineY);
+  context.lineTo(startX + width, underlineY);
+  context.stroke();
+  context.restore();
 }
 
 function strokeTextOutlines(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {

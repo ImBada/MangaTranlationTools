@@ -1,6 +1,10 @@
+import type { TextDecoration, TextFontStyle } from "../../../../shared/types";
+
 export type LayerToolFontControlValues = {
   autoFitText?: boolean;
   fontFamily?: string;
+  fontStyle?: TextFontStyle;
+  fontWeight?: number;
   fontSizePx: number;
   lineHeight: number;
   outlineColor?: string;
@@ -11,5 +15,6 @@ export type LayerToolFontControlValues = {
   screentoneFillIntensity?: number;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
+  textDecoration?: TextDecoration;
   textColor?: string;
 };

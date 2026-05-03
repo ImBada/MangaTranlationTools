@@ -6,6 +6,9 @@ import { FontOutlineControls } from "../font/FontOutlineControls";
 import type { BlockFontPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
+  DEFAULT_OVERLAY_FONT_STYLE,
+  DEFAULT_OVERLAY_FONT_WEIGHT,
+  DEFAULT_OVERLAY_TEXT_DECORATION,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize
 } from "../../lib/overlayLayout";
@@ -20,6 +23,7 @@ type FontToolSectionProps = {
   fontPresetName: string;
   fontPresets: FontPreset[];
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
+  renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
   selectedPageEditLocked: boolean;
   onClearSelectedBlockFontPreset: () => void;
@@ -33,6 +37,17 @@ type FontToolSectionProps = {
 };
 
 const PRESET_TAG_FONT_SIZE_PX = 12;
+const FONT_WEIGHT_LABELS: Record<number, string> = {
+  100: "Thin 100",
+  200: "Extra Light 200",
+  300: "Light 300",
+  400: "Regular 400",
+  500: "Medium 500",
+  600: "Semi Bold 600",
+  700: "Bold 700",
+  800: "Extra Bold 800",
+  900: "Black 900"
+};
 
 function resolvePresetTagTextMetrics(preset: FontPreset): {
   fontSizePx: number;
@@ -85,7 +100,9 @@ function buildPresetTagTextStyles(preset: FontPreset): {
     fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
     fontSize: `${fontSizePx}px`,
     lineHeight: preset.lineHeight,
-    fontWeight: "inherit"
+    fontWeight: preset.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT,
+    fontStyle: preset.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE,
+    textDecoration: preset.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION
   };
 
   return {
@@ -121,6 +138,7 @@ export function FontToolSection({
   fontPresetName,
   fontPresets,
   renderFontPresetLinkButton,
+  renderFontPresetLinkGroupButton,
   selectedBlock,
   selectedPageEditLocked,
   onClearSelectedBlockFontPreset,
@@ -136,6 +154,14 @@ export function FontToolSection({
   const [renamingFontPresetId, setRenamingFontPresetId] = React.useState<string | null>(null);
   const [renamingFontPresetName, setRenamingFontPresetName] = React.useState("");
   const skipNextRenameCommitRef = React.useRef(false);
+  const selectedFontFamilyOption = fontFamilyOptions.find((option) => option.value === (fontControlValues?.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY));
+  const selectedFontWeights = selectedFontFamilyOption?.weights ?? [];
+  const currentFontWeight = fontControlValues?.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
+  const fontWeightOptions = selectedFontWeights.length > 1
+    ? selectedFontWeights.includes(currentFontWeight)
+      ? selectedFontWeights
+      : [...selectedFontWeights, currentFontWeight].sort((a, b) => a - b)
+    : [];
 
   React.useEffect(() => {
     if (!renamingFontPresetId || renamingFontPresetId === activeFontPresetId) {
@@ -191,6 +217,61 @@ export function FontToolSection({
               disabled={selectedPageEditLocked}
               onChange={(fontFamily) => onFontSettingChange({ fontFamily })}
             />
+          </div>
+          <div className="compact-tool-field font-style-field">
+            <span>스타일</span>
+            <div className="font-style-control">
+              <div className="font-style-basic" role="group" aria-label="기본 텍스트 스타일">
+                <button
+                  type="button"
+                  className={currentFontWeight >= 600 ? "active" : ""}
+                  disabled={selectedPageEditLocked}
+                  onClick={() => onFontSettingChange({ fontWeight: currentFontWeight >= 600 ? 400 : DEFAULT_OVERLAY_FONT_WEIGHT })}
+                  aria-pressed={currentFontWeight >= 600}
+                  title="볼드"
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  className={(fontControlValues.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE) === "italic" ? "active" : ""}
+                  disabled={selectedPageEditLocked}
+                  onClick={() => onFontSettingChange({ fontStyle: (fontControlValues.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE) === "italic" ? DEFAULT_OVERLAY_FONT_STYLE : "italic" })}
+                  aria-pressed={(fontControlValues.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE) === "italic"}
+                  title="이탤릭"
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  className={(fontControlValues.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION) === "underline" ? "active" : ""}
+                  disabled={selectedPageEditLocked}
+                  onClick={() => onFontSettingChange({ textDecoration: (fontControlValues.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION) === "underline" ? DEFAULT_OVERLAY_TEXT_DECORATION : "underline" })}
+                  aria-pressed={(fontControlValues.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION) === "underline"}
+                  title="언더라인"
+                >
+                  U
+                </button>
+              </div>
+              {fontWeightOptions.length > 1 ? (
+                <select
+                  className="font-weight-select"
+                  value={currentFontWeight}
+                  disabled={selectedPageEditLocked}
+                  aria-label="폰트 자체 굵기"
+                  onChange={(event) => onFontSettingChange({ fontWeight: Number(event.target.value) })}
+                >
+                  {fontWeightOptions.map((weight) => (
+                    <option key={weight} value={weight}>
+                      {FONT_WEIGHT_LABELS[weight] ?? `Weight ${weight}`}
+                    </option>
+                  ))}
+                </select>
+              ) : null}
+              <span className="font-style-link-group">
+                {renderFontPresetLinkGroupButton(["fontWeight", "fontStyle", "textDecoration"], "스타일")}
+              </span>
+            </div>
           </div>
           <div className="font-metrics-row font-tool-grid">
             <label className="compact-tool-field font-number-field">

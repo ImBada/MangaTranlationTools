@@ -308,6 +308,7 @@ export default function App(): React.JSX.Element {
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
+    renderFontPresetLinkGroupButton,
     renameFontPreset,
     selectFontPreset,
     selectedFontPreset,
@@ -522,6 +523,7 @@ export default function App(): React.JSX.Element {
       layerVisibility={layerVisibility}
       rangeToolActive={rangeToolActive}
       renderFontPresetLinkButton={renderFontPresetLinkButton}
+      renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
       selectedBlock={selectedBlock}
       selectedPage={selectedPage}
       selectedPageEditLocked={selectedPageEditLocked}

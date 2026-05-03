@@ -1,9 +1,15 @@
 import type { BlockType, FontPreset, TranslationBlock } from "./types";
 
 export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif";
+export const DEFAULT_OVERLAY_FONT_WEIGHT = 700;
+export const DEFAULT_OVERLAY_FONT_STYLE = "normal";
+export const DEFAULT_OVERLAY_TEXT_DECORATION = "none";
 
 export const DEFAULT_FONT_PRESET_VALUES: Omit<FontPreset, "id" | "name"> = {
   fontFamily: DEFAULT_OVERLAY_FONT_FAMILY,
+  fontWeight: DEFAULT_OVERLAY_FONT_WEIGHT,
+  fontStyle: DEFAULT_OVERLAY_FONT_STYLE,
+  textDecoration: DEFAULT_OVERLAY_TEXT_DECORATION,
   fontSizePx: 24,
   lineHeight: 1.18,
   outlineColor: "#000000",
@@ -38,7 +44,10 @@ const BLOCK_FONT_PRESET_LINK_FIELDS = [
   "screentoneFillEnabledLinkedToPreset",
   "screentoneFillIntensityLinkedToPreset",
   "screentoneFillDensityLinkedToPreset",
-  "screentoneFillAntialiasLinkedToPreset"
+  "screentoneFillAntialiasLinkedToPreset",
+  "fontWeightLinkedToPreset",
+  "fontStyleLinkedToPreset",
+  "textDecorationLinkedToPreset"
 ] satisfies readonly (keyof TranslationBlock)[];
 
 export function createDefaultFontPreset(id: string, name: BlockType): FontPreset {
@@ -83,6 +92,9 @@ export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPre
     fontPresetId: preset.id,
     ...buildLinkedFontPresetFields(),
     fontFamily: preset.fontFamily,
+    fontWeight: preset.fontWeight,
+    fontStyle: preset.fontStyle,
+    textDecoration: preset.textDecoration,
     fontSizePx: preset.fontSizePx,
     lineHeight: preset.lineHeight,
     outlineColor: preset.outlineColor,

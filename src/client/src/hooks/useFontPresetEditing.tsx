@@ -16,6 +16,30 @@ import {
 
 export type FontControlValues = TranslationBlock | FontPreset | null;
 
+function renderFontPresetLinkToggle(
+  linked: boolean,
+  label: string,
+  disabled: boolean,
+  onToggle: () => void
+): React.ReactNode {
+  return (
+    <button
+      type="button"
+      className={`font-preset-link-toggle ${linked ? "linked" : "unlinked"}`}
+      disabled={disabled}
+      onClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onToggle();
+      }}
+      aria-label={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
+      title={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
+    >
+      <FontPresetLinkIcon linked={linked} />
+    </button>
+  );
+}
+
 function isFontPresetNameTaken(fontPresets: FontPreset[], name: string, excludePresetId?: string): boolean {
   const normalizedName = name.trim();
   return fontPresets.some((preset) => preset.id !== excludePresetId && preset.name.trim() === normalizedName);
@@ -45,6 +69,7 @@ type UseFontPresetEditingState = {
   fontPresetName: string;
   fontPresets: FontPreset[];
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
+  renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   renameFontPreset: (presetId: string, name: string) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
@@ -90,7 +115,10 @@ export function useFontPresetEditing({
         screentoneFillEnabled: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillEnabled"),
         screentoneFillIntensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillIntensity"),
         screentoneFillDensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillDensity"),
-        screentoneFillAntialias: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillAntialias")
+        screentoneFillAntialias: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillAntialias"),
+        fontWeight: isBlockFontPresetValueLinked(selectedBlock, "fontWeight"),
+        fontStyle: isBlockFontPresetValueLinked(selectedBlock, "fontStyle"),
+        textDecoration: isBlockFontPresetValueLinked(selectedBlock, "textDecoration")
       }
     : null;
   const fontFamilyOptions = React.useMemo(
@@ -171,29 +199,38 @@ export function useFontPresetEditing({
     });
   }, [selectedBlock, selectedFontPreset, updateSelectedBlock]);
 
+  const toggleSelectedBlockFontPresetLinkGroup = React.useCallback((keys: LinkableFontPresetKey[], linked: boolean) => {
+    if (!selectedBlock || !selectedFontPreset) {
+      return;
+    }
+
+    const patch: Partial<TranslationBlock> = {};
+    for (const key of keys) {
+      Object.assign(patch, buildFontPresetLinkPatch(key, linked));
+      if (linked) {
+        Object.assign(patch, { [key]: selectedFontPreset[key] });
+      }
+    }
+    updateSelectedBlock(patch);
+  }, [selectedBlock, selectedFontPreset, updateSelectedBlock]);
+
   const renderFontPresetLinkButton = React.useCallback((key: LinkableFontPresetKey, label: string) => {
     if (!selectedBlock?.fontPresetId || !selectedFontPreset || !selectedBlockFontPresetLinks) {
       return null;
     }
 
     const linked = selectedBlockFontPresetLinks[key];
-    return (
-      <button
-        type="button"
-        className={`font-preset-link-toggle ${linked ? "linked" : "unlinked"}`}
-        disabled={selectedPageEditLocked}
-        onClick={(event) => {
-          event.preventDefault();
-          event.stopPropagation();
-          toggleSelectedBlockFontPresetLink(key);
-        }}
-        aria-label={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
-        title={`${label} 프리셋 ${linked ? "연결 해제" : "연결"}`}
-      >
-        <FontPresetLinkIcon linked={linked} />
-      </button>
-    );
+    return renderFontPresetLinkToggle(linked, label, selectedPageEditLocked, () => toggleSelectedBlockFontPresetLink(key));
   }, [selectedBlock?.fontPresetId, selectedBlockFontPresetLinks, selectedFontPreset, selectedPageEditLocked, toggleSelectedBlockFontPresetLink]);
+
+  const renderFontPresetLinkGroupButton = React.useCallback((keys: LinkableFontPresetKey[], label: string) => {
+    if (!selectedBlock?.fontPresetId || !selectedFontPreset || !selectedBlockFontPresetLinks) {
+      return null;
+    }
+
+    const linked = keys.every((key) => selectedBlockFontPresetLinks[key]);
+    return renderFontPresetLinkToggle(linked, label, selectedPageEditLocked, () => toggleSelectedBlockFontPresetLinkGroup(keys, !linked));
+  }, [selectedBlock?.fontPresetId, selectedBlockFontPresetLinks, selectedFontPreset, selectedPageEditLocked, toggleSelectedBlockFontPresetLinkGroup]);
 
   const createFontPresetFromSelectedBlock = React.useCallback(() => {
     if (!currentChapter || selectedPageEditLocked) {
@@ -231,7 +268,10 @@ export function useFontPresetEditing({
                       screentoneFillEnabledLinkedToPreset: true,
                       screentoneFillIntensityLinkedToPreset: true,
                       screentoneFillDensityLinkedToPreset: true,
-                      screentoneFillAntialiasLinkedToPreset: true
+                      screentoneFillAntialiasLinkedToPreset: true,
+                      fontWeightLinkedToPreset: true,
+                      fontStyleLinkedToPreset: true,
+                      textDecorationLinkedToPreset: true
                     }
                   : block
               )
@@ -269,7 +309,10 @@ export function useFontPresetEditing({
       screentoneFillEnabledLinkedToPreset: true,
       screentoneFillIntensityLinkedToPreset: true,
       screentoneFillDensityLinkedToPreset: true,
-      screentoneFillAntialiasLinkedToPreset: true
+      screentoneFillAntialiasLinkedToPreset: true,
+      fontWeightLinkedToPreset: true,
+      fontStyleLinkedToPreset: true,
+      textDecorationLinkedToPreset: true
     });
   }, [fontPresets, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateSelectedBlock]);
 
@@ -290,7 +333,10 @@ export function useFontPresetEditing({
       screentoneFillEnabledLinkedToPreset: undefined,
       screentoneFillIntensityLinkedToPreset: undefined,
       screentoneFillDensityLinkedToPreset: undefined,
-      screentoneFillAntialiasLinkedToPreset: undefined
+      screentoneFillAntialiasLinkedToPreset: undefined,
+      fontWeightLinkedToPreset: undefined,
+      fontStyleLinkedToPreset: undefined,
+      textDecorationLinkedToPreset: undefined
     });
   }, [selectedBlock, updateSelectedBlock]);
 
@@ -350,6 +396,7 @@ export function useFontPresetEditing({
     fontPresetName,
     fontPresets,
     renderFontPresetLinkButton,
+    renderFontPresetLinkGroupButton,
     renameFontPreset,
     selectFontPreset,
     selectedFontPreset,

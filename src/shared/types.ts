@@ -2,6 +2,8 @@ export type BlockType = "speech" | "sfx" | "caption" | "other";
 
 export type SourceTextDirection = "horizontal" | "vertical";
 export type RenderTextDirection = "horizontal" | "vertical" | "hidden";
+export type TextFontStyle = "normal" | "italic";
+export type TextDecoration = "none" | "underline";
 
 export type JobKind = "model-analysis" | "library-import";
 export type ModelProvider = "openai-codex" | "openai-compatible";
@@ -105,7 +107,13 @@ export type TranslationBlock = {
   screentoneFillIntensityLinkedToPreset?: boolean;
   screentoneFillDensityLinkedToPreset?: boolean;
   screentoneFillAntialiasLinkedToPreset?: boolean;
+  fontWeightLinkedToPreset?: boolean;
+  fontStyleLinkedToPreset?: boolean;
+  textDecorationLinkedToPreset?: boolean;
   fontFamily?: string;
+  fontWeight?: number;
+  fontStyle?: TextFontStyle;
+  textDecoration?: TextDecoration;
   fontSizePx: number;
   lineHeight: number;
   outlineColor?: string;
@@ -129,6 +137,9 @@ export type FontPreset = {
   id: string;
   name: string;
   fontFamily?: string;
+  fontWeight?: number;
+  fontStyle?: TextFontStyle;
+  textDecoration?: TextDecoration;
   fontSizePx: number;
   lineHeight: number;
   outlineColor?: string;
@@ -147,6 +158,7 @@ export type SystemFont = {
   family: string;
   fullName?: string;
   postScriptName?: string;
+  weights?: number[];
   cssFamily: string;
 };
 

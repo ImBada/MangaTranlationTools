@@ -5,6 +5,7 @@ import { DEFAULT_OVERLAY_FONT_FAMILY } from "../../lib/overlayLayout";
 export type FontFamilyOption = {
   label: string;
   value: string;
+  weights?: number[];
 };
 
 type FontLanguageGroup = "ko" | "en" | "ja" | "other";
@@ -48,11 +49,14 @@ type FontFamilyPickerProps = {
 export function buildFontFamilyOptions(systemFonts: SystemFont[], selectedFontFamily?: string): FontFamilyOption[] {
   const options = new Map<string, FontFamilyOption>();
   for (const option of FONT_FAMILY_OPTIONS) {
-    options.set(option.value, option);
+    options.set(option.value, { ...option });
   }
   for (const font of systemFonts) {
-    if (!options.has(font.cssFamily)) {
-      options.set(font.cssFamily, { label: font.family, value: font.cssFamily });
+    const existing = options.get(font.cssFamily);
+    if (existing) {
+      existing.weights ??= font.weights;
+    } else {
+      options.set(font.cssFamily, { label: font.family, value: font.cssFamily, weights: font.weights });
     }
   }
   if (selectedFontFamily && !options.has(selectedFontFamily)) {

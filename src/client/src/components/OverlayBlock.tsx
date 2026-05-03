@@ -3,6 +3,9 @@ import type { TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
+  DEFAULT_OVERLAY_FONT_STYLE,
+  DEFAULT_OVERLAY_FONT_WEIGHT,
+  DEFAULT_OVERLAY_TEXT_DECORATION,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize,
   hexToRgba,
@@ -91,6 +94,9 @@ export function OverlayBlock({
     borderColor: editingEnabled ? undefined : "transparent",
     boxShadow: editingEnabled ? undefined : "none",
     fontFamily: block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
+    fontWeight: block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT,
+    fontStyle: block.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE,
+    textDecoration: block.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION,
     fontSize: `${layout.fontSizePx}px`,
     lineHeight: block.lineHeight,
     textAlign: block.textAlign,

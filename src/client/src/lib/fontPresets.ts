@@ -5,6 +5,9 @@ export type FontPresetPatch = Partial<
   Pick<
     FontPreset,
     | "fontFamily"
+    | "fontWeight"
+    | "fontStyle"
+    | "textDecoration"
     | "fontSizePx"
     | "lineHeight"
     | "outlineColor"
@@ -34,7 +37,10 @@ const PRESET_LINK_FIELD_BY_KEY = {
   screentoneFillEnabled: "screentoneFillEnabledLinkedToPreset",
   screentoneFillIntensity: "screentoneFillIntensityLinkedToPreset",
   screentoneFillDensity: "screentoneFillDensityLinkedToPreset",
-  screentoneFillAntialias: "screentoneFillAntialiasLinkedToPreset"
+  screentoneFillAntialias: "screentoneFillAntialiasLinkedToPreset",
+  fontWeight: "fontWeightLinkedToPreset",
+  fontStyle: "fontStyleLinkedToPreset",
+  textDecoration: "textDecorationLinkedToPreset"
 } satisfies Record<LinkableFontPresetKey, keyof TranslationBlock>;
 
 export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = DEFAULT_FONT_PRESET_VALUES;
@@ -44,6 +50,9 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     id: `font-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     fontFamily: source.fontFamily ?? DEFAULT_FONT_PRESET.fontFamily,
+    fontWeight: source.fontWeight ?? DEFAULT_FONT_PRESET.fontWeight,
+    fontStyle: source.fontStyle ?? DEFAULT_FONT_PRESET.fontStyle,
+    textDecoration: source.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
     fontSizePx: source.fontSizePx ?? DEFAULT_FONT_PRESET.fontSizePx,
     lineHeight: source.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
     outlineColor: source.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
@@ -85,6 +94,9 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
     screentoneFillIntensityLinkedToPreset: _screentoneFillIntensityLinkedToPreset,
     screentoneFillDensityLinkedToPreset: _screentoneFillDensityLinkedToPreset,
     screentoneFillAntialiasLinkedToPreset: _screentoneFillAntialiasLinkedToPreset,
+    fontWeightLinkedToPreset: _fontWeightLinkedToPreset,
+    fontStyleLinkedToPreset: _fontStyleLinkedToPreset,
+    textDecorationLinkedToPreset: _textDecorationLinkedToPreset,
     ...rest
   } = block;
   return rest;
@@ -100,6 +112,18 @@ export function applyFontPresetPatchToBlock(
   return {
     ...block,
     fontFamily: patch.fontFamily ?? block.fontFamily,
+    fontWeight:
+      patch.fontWeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontWeight"))
+        ? patch.fontWeight
+        : block.fontWeight,
+    fontStyle:
+      patch.fontStyle !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontStyle"))
+        ? patch.fontStyle
+        : block.fontStyle,
+    textDecoration:
+      patch.textDecoration !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textDecoration"))
+        ? patch.textDecoration
+        : block.textDecoration,
     fontSizePx:
       patch.fontSizePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontSizePx"))
         ? patch.fontSizePx
