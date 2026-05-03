@@ -6,7 +6,7 @@ describe("job progress helpers", () => {
     expect(
       formatJobEventLine({
         id: "job-1",
-        kind: "gemma-analysis",
+        kind: "model-analysis",
         status: "running",
         progressText: "raw",
         phase: "page_running",

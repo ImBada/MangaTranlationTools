@@ -1,11 +1,5 @@
-import type { AppSettings, CodexReasoningEffort, ModelProvider, ModelSource, TranslationMode } from "../shared/types";
+import type { AppSettings, CodexReasoningEffort, ModelProvider, TranslationMode } from "../shared/types";
 
-export const DEFAULT_GEMMA_MODEL_REPO = "unsloth/gemma-4-26B-A4B-it-GGUF";
-export const DEFAULT_GEMMA_MODEL_FILE_Q3 = "gemma-4-26B-A4B-it-UD-Q3_K_XL.gguf";
-export const DEFAULT_GEMMA_MODEL_FILE = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf";
-export const DEFAULT_GEMMA_MODEL_FILE_Q6 = "gemma-4-26B-A4B-it-UD-Q6_K_XL.gguf";
-export const MAX_GEMMA_GPU_LAYERS = 30;
-export const DEFAULT_GEMMA_GPU_LAYERS = 30;
 export const DEFAULT_MODEL_PROVIDER: ModelProvider = "openai-codex";
 export const DEFAULT_CODEX_MODEL = "gpt-5.5";
 export const DEFAULT_CODEX_REASONING_EFFORT: CodexReasoningEffort = "medium";
@@ -13,7 +7,6 @@ export const DEFAULT_CODEX_OAUTH_PORT = 10531;
 export const DEFAULT_OPENAI_COMPATIBLE_BASE_URL = "http://127.0.0.1:11434/v1";
 export const DEFAULT_OPENAI_COMPATIBLE_MODEL = "gemma4:31b";
 export const DEFAULT_TRANSLATION_MODE: TranslationMode = "fast";
-export const DEFAULT_MODEL_SOURCE: ModelSource = "huggingface";
 
 type TranslationModeDefaults = {
   maxTokens: number;
@@ -41,62 +34,31 @@ export type TranslationOptions = {
   imagePath: string;
   outputDir: string;
   modelProvider: ModelProvider;
-  port: number;
   promptMode: string;
   promptOverrideText?: string;
   nsfwMode: boolean;
   temperature: number;
   topP: number;
-  topK: number;
   maxTokens: number;
-  ctx: number;
-  batch: number;
-  ubatch: number;
-  gpuLayers: number;
-  fitTargetMb: number;
   imageMinTokens: number;
   imageMaxTokens: number;
   includeEnhancedVariant: boolean;
   enhancedMaxLongSide: number;
   enhancedContrast: number;
   imageFirst: boolean;
-  reuseServer: boolean;
-  workingDir: string;
-  toolsDir: string;
-  serverPath: string;
-  modelSource: ModelSource;
-  modelRepo: string;
-  modelFile: string;
-  localModelPath?: string;
-  localMmprojPath?: string;
   codexModel: string;
   codexReasoningEffort: CodexReasoningEffort;
   codexOauthPort: number;
   openAICompatibleBaseUrl: string;
   openAICompatibleApiKey: string;
   openAICompatibleModel: string;
-  hfHomeDir?: string;
-  hfHubCacheDir?: string;
   label: string;
   abortSignal?: AbortSignal;
 };
 
-export type TranslationOptionPaths = {
-  dataRoot: string;
-  toolsDir: string;
-  hfHomeDir?: string;
-  hfHubCacheDir?: string;
-};
-
-export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env, detectedGpuMemoryMb?: number | null): AppSettings {
+export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env): AppSettings {
   return {
     modelProvider: resolveModelProvider(env.MANGA_TRANSLATOR_MODEL_PROVIDER, DEFAULT_MODEL_PROVIDER),
-    gemma: {
-      modelSource: DEFAULT_MODEL_SOURCE,
-      modelRepo: resolveNonEmptyString(env.MANGA_TRANSLATOR_MODEL_HF, DEFAULT_GEMMA_MODEL_REPO),
-      modelFile: resolveNonEmptyString(env.LLAMA_ARG_HF_FILE, resolveRecommendedModelFile(detectedGpuMemoryMb)),
-      gpuLayers: resolveGpuLayerCount(env.MANGA_TRANSLATOR_GPU_LAYERS, DEFAULT_GEMMA_GPU_LAYERS)
-    },
     codex: {
       model: resolveNonEmptyString(env.MANGA_TRANSLATOR_CODEX_MODEL, DEFAULT_CODEX_MODEL),
       reasoningEffort: resolveCodexReasoningEffort(
@@ -117,21 +79,11 @@ export function resolveDefaultAppSettings(env: NodeJS.ProcessEnv = process.env, 
 
 export function normalizeAppSettings(raw: unknown, defaults = resolveDefaultAppSettings()): AppSettings {
   const record = asRecord(raw);
-  const gemma = record?.gemma;
   const codex = record?.codex;
   const openAICompatible = record?.openAICompatible;
-  const localModelPath = resolveOptionalString(asRecord(gemma)?.localModelPath);
-  const localMmprojPath = resolveOptionalString(asRecord(gemma)?.localMmprojPath);
+
   return {
     modelProvider: resolveModelProvider(record?.modelProvider, defaults.modelProvider),
-    gemma: {
-      modelSource: resolveModelSource(asRecord(gemma)?.modelSource, defaults.gemma.modelSource),
-      modelRepo: resolveNonEmptyString(asRecord(gemma)?.modelRepo, defaults.gemma.modelRepo),
-      modelFile: resolveNonEmptyString(asRecord(gemma)?.modelFile, defaults.gemma.modelFile),
-      ...(localModelPath ? { localModelPath } : {}),
-      ...(localMmprojPath ? { localMmprojPath } : {}),
-      gpuLayers: resolveGpuLayerCount(asRecord(gemma)?.gpuLayers, defaults.gemma.gpuLayers)
-    },
     codex: {
       model: resolveNonEmptyString(asRecord(codex)?.model, defaults.codex.model),
       reasoningEffort: resolveCodexReasoningEffort(asRecord(codex)?.reasoningEffort, defaults.codex.reasoningEffort),
@@ -162,13 +114,11 @@ export function parseStoredAppSettings(rawText: string | null | undefined, defau
 export function buildBaseTranslationOptions({
   jobId,
   runDir,
-  paths,
   settings,
   env = process.env
 }: {
   jobId: string;
   runDir: string;
-  paths: TranslationOptionPaths;
   settings: AppSettings;
   env?: NodeJS.ProcessEnv;
 }): TranslationOptions {
@@ -177,41 +127,23 @@ export function buildBaseTranslationOptions({
     imagePath: "",
     outputDir: runDir,
     modelProvider: settings.modelProvider,
-    port: readNumberEnv(env, "MANGA_TRANSLATOR_LLAMA_PORT", 18180),
     promptMode: "ko_bbox_lines_multiview",
     nsfwMode: settings.nsfwMode,
     temperature: readNumberEnv(env, "MANGA_TRANSLATOR_TEMPERATURE", 0),
     topP: readNumberEnv(env, "MANGA_TRANSLATOR_TOP_P", 0.85),
-    topK: readNumberEnv(env, "MANGA_TRANSLATOR_TOP_K", 40),
     maxTokens: readNumberEnv(env, "MANGA_TRANSLATOR_MAX_TOKENS", modeDefaults.maxTokens),
-    ctx: readNumberEnv(env, "MANGA_TRANSLATOR_CTX", 16384),
-    batch: readNumberEnv(env, "MANGA_TRANSLATOR_BATCH", 32),
-    ubatch: readNumberEnv(env, "MANGA_TRANSLATOR_UBATCH", 32),
-    gpuLayers: settings.gemma.gpuLayers,
-    fitTargetMb: readNumberEnv(env, "MANGA_TRANSLATOR_FIT_TARGET_MB", 4096),
     imageMinTokens: readNumberEnv(env, "MANGA_TRANSLATOR_IMAGE_MIN_TOKENS", modeDefaults.imageMinTokens),
     imageMaxTokens: readNumberEnv(env, "MANGA_TRANSLATOR_IMAGE_MAX_TOKENS", modeDefaults.imageMaxTokens),
     includeEnhancedVariant: modeDefaults.includeEnhancedVariant,
     enhancedMaxLongSide: 1900,
     enhancedContrast: 1.35,
     imageFirst: true,
-    reuseServer: true,
-    workingDir: paths.dataRoot,
-    toolsDir: paths.toolsDir,
-    serverPath: "",
-    modelSource: settings.gemma.modelSource,
-    modelRepo: settings.gemma.modelRepo,
-    modelFile: settings.gemma.modelFile,
-    localModelPath: settings.gemma.localModelPath,
-    localMmprojPath: settings.gemma.localMmprojPath,
     codexModel: settings.codex.model,
     codexReasoningEffort: settings.codex.reasoningEffort,
     codexOauthPort: settings.codex.oauthPort,
     openAICompatibleBaseUrl: settings.openAICompatible.baseUrl,
     openAICompatibleApiKey: settings.openAICompatible.apiKey,
     openAICompatibleModel: settings.openAICompatible.model,
-    hfHomeDir: paths.hfHomeDir,
-    hfHubCacheDir: paths.hfHubCacheDir,
     label: `app-${jobId}`
   };
 }
@@ -226,11 +158,7 @@ function resolveTranslationMode(value: unknown, fallback: TranslationMode): Tran
 }
 
 function resolveModelProvider(value: unknown, fallback: ModelProvider): ModelProvider {
-  return value === "gemma" || value === "openai-codex" || value === "openai-compatible" ? value : fallback;
-}
-
-function resolveModelSource(value: unknown, fallback: ModelSource): ModelSource {
-  return value === "local" || value === "huggingface" ? value : fallback;
+  return value === "openai-codex" || value === "openai-compatible" ? value : fallback;
 }
 
 function resolveCodexReasoningEffort(value: unknown, fallback: CodexReasoningEffort): CodexReasoningEffort {
@@ -257,18 +185,6 @@ function resolveString(value: unknown, fallback: string): string {
 function resolveBaseUrl(value: unknown, fallback: string): string {
   const raw = resolveNonEmptyString(value, fallback);
   return raw.replace(/\/+$/, "");
-}
-
-function resolveOptionalString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
-}
-
-function resolveGpuLayerCount(value: unknown, fallback: number): number {
-  const parsed = typeof value === "number" ? value : Number(value);
-  if (!Number.isInteger(parsed)) {
-    return fallback;
-  }
-  return clampInteger(parsed, 0, MAX_GEMMA_GPU_LAYERS);
 }
 
 function resolvePortNumber(value: unknown, fallback: number): number {
@@ -309,20 +225,4 @@ function resolveBoolean(value: unknown, fallback: boolean): boolean {
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value && typeof value === "object" ? (value as Record<string, unknown>) : null;
-}
-
-export function resolveRecommendedModelFile(gpuMemoryMb?: number | null): string {
-  if (typeof gpuMemoryMb !== "number" || !Number.isFinite(gpuMemoryMb) || gpuMemoryMb <= 0) {
-    return DEFAULT_GEMMA_MODEL_FILE;
-  }
-
-  if (gpuMemoryMb >= 32000) {
-    return DEFAULT_GEMMA_MODEL_FILE_Q6;
-  }
-
-  if (gpuMemoryMb >= 24000) {
-    return DEFAULT_GEMMA_MODEL_FILE;
-  }
-
-  return DEFAULT_GEMMA_MODEL_FILE_Q3;
 }

@@ -103,7 +103,6 @@
 
   .settings-mode-group,
   .settings-preset-group,
-  .settings-gpu-row,
   .settings-file-row {
     grid-template-columns: 1fr;
   }
@@ -547,10 +546,6 @@
   @apply border-warning bg-yellow-900/50 text-yellow-50;
 }
 
-.settings-gpu-slider {
-  @apply accent-accent;
-}
-
 .settings-test-result.success {
   @apply border-success bg-emerald-950/40;
 }
@@ -562,8 +557,7 @@
 
 /* Range inputs need to opt out of the generic text-input frame. */
 input[type="range"],
-input[type="range"].layer-opacity-slider,
-input[type="range"].settings-gpu-slider {
+input[type="range"].layer-opacity-slider {
   height: 18px;
   padding: 0 !important;
   border: 0 !important;
@@ -984,4 +978,3 @@ input[type="checkbox"] {
   font-size: 10.5px;
   line-height: 1.35;
 }
-

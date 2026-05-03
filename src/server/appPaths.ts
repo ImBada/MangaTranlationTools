@@ -12,8 +12,6 @@ export type AppPaths = {
   logFile: string;
   runtimeDir: string;
   toolsDir: string;
-  hfHomeDir?: string;
-  hfHubCacheDir?: string;
 };
 
 export function getAppPaths(): AppPaths {
@@ -26,10 +24,6 @@ export function getAppPaths(): AppPaths {
   const logsDir = join(dataRoot, "logs");
   const runtimeDir = join(repoRoot, "out", "app-runtime");
   const toolsDir = join(repoRoot, "tools");
-  const explicitHfHome = process.env.MANGA_TRANSLATOR_HF_HOME?.trim();
-  const explicitHubCache = process.env.HF_HUB_CACHE?.trim() || process.env.HUGGINGFACE_HUB_CACHE?.trim();
-  const hfHomeDir = explicitHfHome || undefined;
-  const hfHubCacheDir = explicitHubCache || undefined;
 
   return {
     repoRoot,
@@ -40,9 +34,7 @@ export function getAppPaths(): AppPaths {
     logsDir,
     logFile: join(logsDir, "app.log"),
     runtimeDir,
-    toolsDir,
-    hfHomeDir,
-    hfHubCacheDir
+    toolsDir
   };
 }
 
@@ -54,11 +46,5 @@ export function ensureWritableAppDirectories(): AppPaths {
   const paths = getAppPaths();
   mkdirSync(paths.libraryDir, { recursive: true });
   mkdirSync(paths.logsDir, { recursive: true });
-  if (paths.hfHomeDir) {
-    mkdirSync(paths.hfHomeDir, { recursive: true });
-  }
-  if (paths.hfHubCacheDir) {
-    mkdirSync(paths.hfHubCacheDir, { recursive: true });
-  }
   return paths;
 }

@@ -33,7 +33,7 @@ type UseAnalysisJobState = {
 
 const EMPTY_JOB: JobState = {
   id: "idle",
-  kind: "gemma-analysis",
+  kind: "model-analysis",
   status: "idle",
   progressText: "대기 중"
 };
@@ -118,7 +118,7 @@ export function useAnalysisJob({
         resetStatusLog();
         setJobState({
           id: "pending",
-          kind: "gemma-analysis",
+          kind: "model-analysis",
           status: "starting",
           progressText: "모델 준비 중",
           phase: "booting"

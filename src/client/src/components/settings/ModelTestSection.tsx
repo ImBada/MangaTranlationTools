@@ -7,7 +7,6 @@ type ModelTestSectionProps = {
   codexOauthPortValid: boolean;
   compatibleBaseUrlValid: boolean;
   controlsBusy: boolean;
-  gpuLayersValid: boolean;
   jobActive: boolean;
   modelProvider: ModelProvider;
   testState: TestState;
@@ -19,7 +18,6 @@ export function ModelTestSection({
   codexOauthPortValid,
   compatibleBaseUrlValid,
   controlsBusy,
-  gpuLayersValid,
   jobActive,
   modelProvider,
   testState,
@@ -50,9 +48,6 @@ export function ModelTestSection({
         ) : null}
       </div>
 
-      {modelProvider === "gemma" && !gpuLayersValid ? (
-        <p className="muted-line">GPU layers는 0 이상 30 이하의 정수여야 합니다.</p>
-      ) : null}
       {modelProvider === "openai-codex" && !codexOauthPortValid ? (
         <p className="muted-line">openai-oauth 포트는 0 이상 65535 이하의 정수여야 합니다.</p>
       ) : null}

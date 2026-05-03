@@ -3,19 +3,9 @@ export type BlockType = "speech" | "sfx" | "caption" | "other";
 export type SourceTextDirection = "horizontal" | "vertical";
 export type RenderTextDirection = "horizontal" | "vertical" | "hidden";
 
-export type JobKind = "gemma-analysis" | "library-import";
-export type ModelProvider = "gemma" | "openai-codex" | "openai-compatible";
-export type ModelSource = "huggingface" | "local";
+export type JobKind = "model-analysis" | "library-import";
+export type ModelProvider = "openai-codex" | "openai-compatible";
 export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
-
-export type GemmaSettings = {
-  modelSource: ModelSource;
-  modelRepo: string;
-  modelFile: string;
-  localModelPath?: string;
-  localMmprojPath?: string;
-  gpuLayers: number;
-};
 
 export type CodexSettings = {
   model: string;
@@ -33,7 +23,6 @@ export type TranslationMode = "fast" | "accuracy";
 
 export type AppSettings = {
   modelProvider: ModelProvider;
-  gemma: GemmaSettings;
   codex: CodexSettings;
   openAICompatible: OpenAICompatibleSettings;
   translationMode: TranslationMode;
@@ -400,17 +389,10 @@ export type JobEvent = JobState & {
   detail?: string;
 };
 
-export type LocalModelPickResult = {
-  modelPath: string;
-  detectedMmprojPath?: string;
-};
-
 export type ModelTestResult = {
   ok: boolean;
   message: string;
-  launchMode: "huggingface" | "cached-hf" | "local" | "openai-codex" | "openai-compatible";
-  resolvedModelPath?: string | null;
-  resolvedMmprojPath?: string | null;
+  launchMode: "openai-codex" | "openai-compatible";
   resolvedEndpoint?: string | null;
 };
 

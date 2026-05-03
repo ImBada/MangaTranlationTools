@@ -56,7 +56,7 @@ export async function startAnalysis(request: StartAnalysisRequest): Promise<Star
 
     emit({
       id,
-      kind: "gemma-analysis",
+      kind: "model-analysis",
       status: "completed",
       progressText: "번역 작업 완료",
       phase: "done",
@@ -72,7 +72,7 @@ export async function startAnalysis(request: StartAnalysisRequest): Promise<Star
       await finalizeRunningPages(request.chapterId, pageIds, "idle");
       emit({
         id,
-        kind: "gemma-analysis",
+        kind: "model-analysis",
         status: "cancelled",
         progressText: "작업이 취소되었습니다.",
         phase: "cancelled",
@@ -91,7 +91,7 @@ export async function startAnalysis(request: StartAnalysisRequest): Promise<Star
     logError("Analysis job failed", { jobId: id, request, runPaths, lastEvent, error });
     emit({
       id,
-      kind: "gemma-analysis",
+      kind: "model-analysis",
       status: "failed",
       progressText: "작업 실패",
       phase: "failed",

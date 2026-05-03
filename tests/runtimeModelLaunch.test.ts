@@ -1,10 +1,14 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
-import { tmpdir } from "node:os";
+import { describe, expect, it } from "vitest";
 
 const runtimeHelpers = require("../src/server/runtime/simple-page-translate.cjs") as {
-  buildLaunchArgs: (options: { [key: string]: unknown }) => string[];
+  buildChatRequestBody: (options: { [key: string]: unknown }, messages: unknown[], maxTokens?: number) => {
+    model: string;
+    reasoning_budget?: number;
+    reasoning_effort?: string;
+    enable_thinking?: boolean;
+    think?: boolean;
+    top_k?: number;
+  };
   buildResponsesRequestBody: (options: { [key: string]: unknown }, imageVariants: Array<{ role: string; dataUrl: string }>) => {
     model: string;
     instructions: string;
@@ -14,84 +18,58 @@ const runtimeHelpers = require("../src/server/runtime/simple-page-translate.cjs"
     store: boolean;
   };
   extractModelOutputText: (parsed: unknown) => string;
-  inspectModelLaunch: (options: { [key: string]: unknown }) => { launchMode: string; model?: string; reasoningEffort?: string };
-  isModelCached: (options: { [key: string]: unknown }) => boolean;
   parseResponsesSseText: (rawText: string) => { outputText: string; eventCount: number; rawResponse: unknown };
 };
 const {
-  buildLaunchArgs,
+  buildChatRequestBody,
   buildResponsesRequestBody,
   extractModelOutputText,
-  inspectModelLaunch,
-  isModelCached,
   parseResponsesSseText
 } = runtimeHelpers;
 
-const tempDirs: string[] = [];
+describe("runtime model request helpers", () => {
+  it("disables thinking for Ollama-compatible chat completion endpoints", () => {
+    const requestBody = buildChatRequestBody(
+      {
+        modelProvider: "openai-compatible",
+        openAICompatibleBaseUrl: "https://ollama.com/v1",
+        openAICompatibleModel: "kimi-k2.6",
+        temperature: 0,
+        topP: 0.85,
+        topK: 40
+      },
+      []
+    );
 
-afterEach(() => {
-  for (const dir of tempDirs.splice(0)) {
-    rmSync(dir, { recursive: true, force: true });
-  }
-});
-
-function createTempDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-function writeCachedAssets({
-  hubCacheDir,
-  repoId,
-  snapshot,
-  modelFile,
-  includeMmproj = true
-}: {
-  hubCacheDir: string;
-  repoId: string;
-  snapshot: string;
-  modelFile: string;
-  includeMmproj?: boolean;
-}): string {
-  const snapshotDir = join(hubCacheDir, `models--${repoId.replace(/\//g, "--")}`, "snapshots", snapshot);
-  mkdirSync(snapshotDir, { recursive: true });
-  writeFileSync(join(snapshotDir, modelFile), "model");
-  if (includeMmproj) {
-    writeFileSync(join(snapshotDir, "mmproj-BF16.gguf"), "mmproj");
-  }
-  return snapshotDir;
-}
-
-describe("runtime model launch helpers", () => {
-  it("treats OpenAI Codex as a remote OAuth-backed endpoint", () => {
-    const launch = inspectModelLaunch({
-      modelProvider: "openai-codex",
-      codexModel: "gpt-5.5",
-      codexReasoningEffort: "high"
+    expect(requestBody).toMatchObject({
+      model: "kimi-k2.6",
+      reasoning_budget: 0,
+      reasoning_effort: "none",
+      enable_thinking: false,
+      think: false
     });
-
-    expect(launch).toEqual({
-      launchMode: "openai-codex",
-      model: "gpt-5.5",
-      reasoningEffort: "high",
-      requiresDownload: false
-    });
-    expect(isModelCached({ modelProvider: "openai-codex" })).toBe(true);
+    expect(requestBody.top_k).toBeUndefined();
+    expect(requestBody.reasoning_effort).toBe("none");
   });
 
-  it("treats custom OpenAI-compatible providers as remote endpoints", () => {
-    const launch = inspectModelLaunch({
-      modelProvider: "openai-compatible",
-      openAICompatibleModel: "local-vision-model"
-    });
+  it("keeps generic OpenAI-compatible chat completion requests spec-shaped", () => {
+    const requestBody = buildChatRequestBody(
+      {
+        modelProvider: "openai-compatible",
+        openAICompatibleBaseUrl: "https://api.example.test/v1",
+        openAICompatibleModel: "vision-model",
+        temperature: 0,
+        topP: 0.85,
+        topK: 40
+      },
+      []
+    );
 
-    expect(launch).toEqual({
-      launchMode: "openai-compatible",
-      model: "local-vision-model",
-      requiresDownload: false
-    });
-    expect(isModelCached({ modelProvider: "openai-compatible" })).toBe(true);
+    expect(requestBody.reasoning_budget).toBeUndefined();
+    expect(requestBody.reasoning_effort).toBeUndefined();
+    expect(requestBody.enable_thinking).toBeUndefined();
+    expect(requestBody.think).toBeUndefined();
+    expect(requestBody.top_k).toBeUndefined();
   });
 
   it("builds Codex Responses requests with input_image data URLs", () => {
@@ -148,136 +126,5 @@ describe("runtime model launch helpers", () => {
 
     expect(parsed.outputText).toBe("id: 1\nko: 테스트");
     expect(parsed.eventCount).toBe(3);
-  });
-
-  it("launches an explicitly configured local GGUF without Hugging Face flags", () => {
-    const localDir = createTempDir("local-model-");
-    const modelPath = join(localDir, "supergemma-q4.gguf");
-    const mmprojPath = join(localDir, "mmproj-BF16.gguf");
-    writeFileSync(modelPath, "model");
-    writeFileSync(mmprojPath, "mmproj");
-
-    const args = buildLaunchArgs({
-      port: 18180,
-      fitTargetMb: 4096,
-      gpuLayers: 30,
-      ctx: 16384,
-      batch: 32,
-      ubatch: 32,
-      modelSource: "local",
-      localModelPath: modelPath,
-      localMmprojPath: mmprojPath
-    });
-
-    expect(args).toContain("-m");
-    expect(args).toContain(modelPath);
-    expect(args).toContain("--mmproj");
-    expect(args).toContain(mmprojPath);
-    expect(args).not.toContain("-hf");
-    expect(args).not.toContain("-hff");
-    expect(isModelCached({ modelSource: "local", localModelPath: modelPath })).toBe(true);
-  });
-
-  it("prefers cached local model and mmproj paths when both exist", () => {
-    const hubCacheDir = createTempDir("hf-cache-");
-    const modelFile = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf";
-    const repoId = "unsloth/gemma-4-26B-A4B-it-GGUF";
-    const snapshotDir = writeCachedAssets({
-      hubCacheDir,
-      repoId,
-      snapshot: "snapshot-new",
-      modelFile
-    });
-
-    const args = buildLaunchArgs({
-      port: 18180,
-      fitTargetMb: 4096,
-      gpuLayers: 30,
-      ctx: 16384,
-      batch: 32,
-      ubatch: 32,
-      modelRepo: repoId,
-      modelFile,
-      hfHubCacheDir: hubCacheDir
-    });
-
-    expect(args).toContain("-m");
-    expect(args).toContain(join(snapshotDir, modelFile));
-    expect(args).toContain("--mmproj");
-    expect(args).toContain(join(snapshotDir, "mmproj-BF16.gguf"));
-    expect(args).not.toContain("-hf");
-    expect(args).not.toContain("-hff");
-    expect(isModelCached({ modelRepo: repoId, modelFile, hfHubCacheDir: hubCacheDir })).toBe(true);
-  });
-
-  it("falls back to Hugging Face repo launch when mmproj is missing", () => {
-    const hubCacheDir = createTempDir("hf-cache-");
-    const modelFile = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf";
-    const repoId = "unsloth/gemma-4-26B-A4B-it-GGUF";
-    writeCachedAssets({
-      hubCacheDir,
-      repoId,
-      snapshot: "snapshot-partial",
-      modelFile,
-      includeMmproj: false
-    });
-
-    const args = buildLaunchArgs({
-      port: 18180,
-      fitTargetMb: 4096,
-      gpuLayers: 30,
-      ctx: 16384,
-      batch: 32,
-      ubatch: 32,
-      modelRepo: repoId,
-      modelFile,
-      hfHubCacheDir: hubCacheDir
-    });
-
-    expect(args).toContain("-hf");
-    expect(args).toContain(repoId);
-    expect(args).toContain("-hff");
-    expect(args).toContain(modelFile);
-    expect(args).not.toContain("--mmproj");
-    expect(isModelCached({ modelRepo: repoId, modelFile, hfHubCacheDir: hubCacheDir })).toBe(false);
-  });
-
-  it("detects cached assets from HF_HOME when HF_HUB_CACHE is unset", () => {
-    const hfHomeDir = createTempDir("hf-home-");
-    const previousHfHome = process.env.HF_HOME;
-    const previousHubCache = process.env.HF_HUB_CACHE;
-    const previousLegacyHubCache = process.env.HUGGINGFACE_HUB_CACHE;
-    delete process.env.HF_HUB_CACHE;
-    delete process.env.HUGGINGFACE_HUB_CACHE;
-    process.env.HF_HOME = hfHomeDir;
-
-    const modelFile = "gemma-4-26B-A4B-it-UD-Q4_K_XL.gguf";
-    const repoId = "unsloth/gemma-4-26B-A4B-it-GGUF";
-    writeCachedAssets({
-      hubCacheDir: join(hfHomeDir, "hub"),
-      repoId,
-      snapshot: "snapshot-env",
-      modelFile
-    });
-
-    try {
-      expect(isModelCached({ modelRepo: repoId, modelFile })).toBe(true);
-    } finally {
-      if (previousHfHome === undefined) {
-        delete process.env.HF_HOME;
-      } else {
-        process.env.HF_HOME = previousHfHome;
-      }
-      if (previousHubCache === undefined) {
-        delete process.env.HF_HUB_CACHE;
-      } else {
-        process.env.HF_HUB_CACHE = previousHubCache;
-      }
-      if (previousLegacyHubCache === undefined) {
-        delete process.env.HUGGINGFACE_HUB_CACHE;
-      } else {
-        process.env.HUGGINGFACE_HUB_CACHE = previousLegacyHubCache;
-      }
-    }
   });
 });

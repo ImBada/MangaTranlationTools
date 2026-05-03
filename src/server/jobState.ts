@@ -55,7 +55,7 @@ export async function cancelActiveJob(): Promise<boolean> {
   const job = activeJob;
   emitJobEvent({
     id: job.id,
-    kind: job.lastEvent?.kind ?? "gemma-analysis",
+    kind: job.lastEvent?.kind ?? "model-analysis",
     status: "cancelling",
     progressText: "작업 취소 중",
     progressCurrent: job.lastEvent?.progressCurrent,

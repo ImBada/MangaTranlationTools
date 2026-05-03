@@ -1,10 +1,7 @@
 import type { AppSettings, UpdateStatus } from "../../../../shared/types";
 import {
   DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
-  DEFAULT_OPENAI_COMPATIBLE_MODEL,
-  MAX_GPU_LAYERS,
-  MODEL_PRESETS,
-  type ModelPresetId
+  DEFAULT_OPENAI_COMPATIBLE_MODEL
 } from "./settingsModalConfig";
 
 export function resolveUpdateStatusText(status: UpdateStatus | null, busy: boolean): string {
@@ -26,37 +23,6 @@ export function resolveUpdateStatusText(status: UpdateStatus | null, busy: boole
   return "최신 릴리스 정보를 찾지 못했습니다.";
 }
 
-export function resolveModelPreset(modelRepo: string, modelFile: string): ModelPresetId {
-  const trimmedModelRepo = modelRepo.trim();
-  const trimmedModelFile = modelFile.trim();
-
-  if (matchesPreset(MODEL_PRESETS.q4, trimmedModelRepo, trimmedModelFile)) {
-    return "q4";
-  }
-
-  if (matchesPreset(MODEL_PRESETS.q3, trimmedModelRepo, trimmedModelFile)) {
-    return "q3";
-  }
-
-  if (matchesPreset(MODEL_PRESETS.q6, trimmedModelRepo, trimmedModelFile)) {
-    return "q6";
-  }
-
-  return "custom";
-}
-
-function matchesPreset(
-  preset: (typeof MODEL_PRESETS)[keyof typeof MODEL_PRESETS],
-  modelRepo: string,
-  modelFile: string
-): boolean {
-  return preset.modelRepo === modelRepo && preset.modelFile === modelFile;
-}
-
-export function clampGpuLayers(value: number): number {
-  return Math.min(MAX_GPU_LAYERS, Math.max(0, value));
-}
-
 export function withSettingsDefaults(settings: AppSettings): AppSettings {
   return {
     ...settings,
@@ -68,16 +34,8 @@ export function withSettingsDefaults(settings: AppSettings): AppSettings {
   };
 }
 
-export function buildTestDetail(
-  modelPath: string | null | undefined,
-  mmprojPath: string | null | undefined,
-  endpoint: string | null | undefined
-): string | null {
-  const lines = [
-    modelPath ? `모델: ${modelPath}` : null,
-    mmprojPath ? `mmproj: ${mmprojPath}` : null,
-    endpoint ? `엔드포인트: ${endpoint}` : null
-  ].filter(Boolean);
+export function buildTestDetail(endpoint: string | null | undefined): string | null {
+  const lines = [endpoint ? `엔드포인트: ${endpoint}` : null].filter(Boolean);
 
   return lines.length > 0 ? lines.join("\n") : null;
 }

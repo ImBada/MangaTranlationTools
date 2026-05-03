@@ -21,13 +21,7 @@ type PipelineOptions = {
   onPageFailed?: (page: MangaPage, errorMessage: string) => Promise<void>;
 };
 
-type ServerHandle = {
-  baseUrl: string;
-  child: unknown;
-  startedByScript: boolean;
-};
-
-type ModelEndpointHandle = ServerHandle | OpenAIOAuthEndpoint | OpenAICompatibleEndpoint;
+type ModelEndpointHandle = OpenAIOAuthEndpoint | OpenAICompatibleEndpoint;
 
 type TranslationResult = {
   outputText: string;
@@ -45,11 +39,8 @@ type OverlayItem = {
 
 type RuntimeModules = {
   simplePage: {
-    requestTranslation: (server: ServerHandle, options: TranslationOptions) => Promise<TranslationResult>;
+    requestTranslation: (server: { baseUrl: string }, options: TranslationOptions) => Promise<TranslationResult>;
     saveArtifacts: (options: TranslationOptions, result: TranslationResult) => Promise<void>;
-    startServer: (options: TranslationOptions) => Promise<ServerHandle>;
-    stopServer: (server: ServerHandle | null | undefined) => Promise<void>;
-    isModelCached: (options: TranslationOptions) => boolean;
   };
   overlayTools: {
     normalizeItems: (parsed: unknown) => OverlayItem[];
@@ -96,21 +87,19 @@ export async function runWholePagePipeline({
   const paths = getAppPaths();
   const appSettings = await getAppSettings(paths);
   const runtime = loadRuntimeModules();
-  const baseOptions = buildBaseOptions(jobId, runPaths.runDir, appSettings, paths);
+  const baseOptions = buildBaseOptions(jobId, runPaths.runDir, appSettings);
   const progressTotal = pages.length;
-  const modelCached = true;
 
   logInfo("Analysis pipeline initialized", {
     jobId,
     pageCount: pages.length,
     runPaths,
-    modelCached,
     settings: summarizeTranslationOptions(baseOptions)
   });
 
   emit({
     id: jobId,
-    kind: "gemma-analysis",
+    kind: "model-analysis",
     status: "starting",
     progressText: "번역 API 엔드포인트 준비 중",
     phase: "booting",
@@ -120,14 +109,14 @@ export async function runWholePagePipeline({
     detail: describeEndpoint(baseOptions)
   });
 
-  const server = await startModelEndpoint(runtime, baseOptions);
-  onCleanupReady?.(() => stopModelEndpoint(runtime, server));
+  const server = await startModelEndpoint(baseOptions);
+  onCleanupReady?.(() => stopModelEndpoint(server));
   const warnings: string[] = [];
   const maxAttempts = Math.max(1, readNumberEnv("MANGA_TRANSLATOR_PAGE_RETRIES", 5));
 
   emit({
     id: jobId,
-    kind: "gemma-analysis",
+    kind: "model-analysis",
     status: "running",
     progressText: "모델 준비 완료",
     phase: "ready",
@@ -155,7 +144,7 @@ export async function runWholePagePipeline({
         pageOptions.abortSignal = signal;
         emit({
           id: jobId,
-          kind: "gemma-analysis",
+          kind: "model-analysis",
           status: "running",
           progressText: `${page.name} 분석 중`,
           phase: "page_running",
@@ -214,7 +203,7 @@ export async function runWholePagePipeline({
           await onPageComplete?.(successPage);
           emit({
             id: jobId,
-            kind: "gemma-analysis",
+            kind: "model-analysis",
             status: "running",
             progressText: `${page.name} 완료`,
             phase: "page_done",
@@ -250,7 +239,7 @@ export async function runWholePagePipeline({
           if (attempt < maxAttempts) {
             emit({
               id: jobId,
-              kind: "gemma-analysis",
+              kind: "model-analysis",
               status: "running",
               progressText: `${page.name} 재시도`,
               phase: "page_retry",
@@ -296,7 +285,7 @@ export async function runWholePagePipeline({
       await onPageFailed?.(failedPage, lastErrorMessage);
       emit({
         id: jobId,
-        kind: "gemma-analysis",
+        kind: "model-analysis",
         status: "running",
         progressText: `${page.name} 건너뜀`,
         phase: "page_skipped",
@@ -310,7 +299,7 @@ export async function runWholePagePipeline({
 
     emit({
       id: jobId,
-      kind: "gemma-analysis",
+      kind: "model-analysis",
       status: "running",
       progressText: "결과 정리 중",
       phase: "finalizing",
@@ -322,7 +311,7 @@ export async function runWholePagePipeline({
 
     return { pages: nextPages, warnings };
   } finally {
-    await stopModelEndpoint(runtime, server);
+    await stopModelEndpoint(server);
   }
 }
 
@@ -330,13 +319,11 @@ export function buildBaseOptions(
   jobId: string,
   runDir: string,
   settings: AppSettings,
-  paths = getAppPaths(),
   env: NodeJS.ProcessEnv = process.env
 ): TranslationOptions {
   return buildBaseTranslationOptions({
     jobId,
     runDir,
-    paths,
     settings,
     env
   });
@@ -425,65 +412,39 @@ function summarizeTranslationOptions(options: TranslationOptions): Record<string
     imagePath: options.imagePath,
     outputDir: options.outputDir,
     modelProvider: options.modelProvider,
-    port: options.port,
     promptMode: options.promptMode,
     promptOverrideText: options.promptOverrideText ? summarizePreview(options.promptOverrideText, 600) : undefined,
     nsfwMode: options.nsfwMode,
     temperature: options.temperature,
     topP: options.topP,
-    topK: options.topK,
     maxTokens: options.maxTokens,
-    ctx: options.ctx,
-    batch: options.batch,
-    ubatch: options.ubatch,
-    gpuLayers: options.gpuLayers,
-    fitTargetMb: options.fitTargetMb,
     imageMinTokens: options.imageMinTokens,
     imageMaxTokens: options.imageMaxTokens,
     includeEnhancedVariant: options.includeEnhancedVariant,
     enhancedMaxLongSide: options.enhancedMaxLongSide,
     enhancedContrast: options.enhancedContrast,
     imageFirst: options.imageFirst,
-    reuseServer: options.reuseServer,
-    workingDir: options.workingDir,
-    toolsDir: options.toolsDir,
-    serverPath: options.serverPath,
-    modelRepo: options.modelRepo,
-    modelFile: options.modelFile,
     codexModel: options.codexModel,
     codexReasoningEffort: options.codexReasoningEffort,
     codexOauthPort: options.codexOauthPort,
     openAICompatibleBaseUrl: options.openAICompatibleBaseUrl,
-    openAICompatibleModel: options.openAICompatibleModel,
-    hfHomeDir: options.hfHomeDir ?? null,
-    hfHubCacheDir: options.hfHubCacheDir ?? null
+    openAICompatibleModel: options.openAICompatibleModel
   };
 }
 
-async function startModelEndpoint(runtime: RuntimeModules, options: TranslationOptions): Promise<ModelEndpointHandle> {
+async function startModelEndpoint(options: TranslationOptions): Promise<ModelEndpointHandle> {
   if (options.modelProvider === "openai-compatible") {
     return createOpenAICompatibleEndpoint(options);
   }
-  if (options.modelProvider === "openai-codex") {
-    return startOpenAIOAuthEndpoint(options);
-  }
-  return runtime.simplePage.startServer(options);
+  return startOpenAIOAuthEndpoint(options);
 }
 
-async function stopModelEndpoint(runtime: RuntimeModules, endpoint: ModelEndpointHandle | null | undefined): Promise<void> {
-  if (isOpenAIOAuthEndpoint(endpoint)) {
-    await stopOpenAIOAuthEndpoint(endpoint);
-    return;
-  }
+async function stopModelEndpoint(endpoint: ModelEndpointHandle | null | undefined): Promise<void> {
   if (isOpenAICompatibleEndpoint(endpoint)) {
     await stopOpenAICompatibleEndpoint(endpoint);
     return;
   }
-  await runtime.simplePage.stopServer(endpoint);
-}
-
-function isOpenAIOAuthEndpoint(endpoint: ModelEndpointHandle | null | undefined): endpoint is OpenAIOAuthEndpoint {
-  return Boolean(endpoint && "provider" in endpoint && endpoint.provider === "openai-codex");
+  await stopOpenAIOAuthEndpoint(endpoint);
 }
 
 function isOpenAICompatibleEndpoint(endpoint: ModelEndpointHandle | null | undefined): endpoint is OpenAICompatibleEndpoint {
@@ -514,11 +475,7 @@ function classifyFailure(error: unknown): string {
   if (message.includes("enhanced image variant") || message.includes("sharp for enhanced image variant")) {
     return "image-preprocessing";
   }
-  if (message.includes("llama-server") || message.includes("bundled llama-server") || message.includes("timed out while waiting")) {
-    return "server-startup";
-  }
   if (
-    message.includes("gemma request failed") ||
     message.includes("openai codex request failed") ||
     message.includes("request transport failed") ||
     message.includes("openai-oauth")

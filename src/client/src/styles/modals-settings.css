@@ -98,25 +98,6 @@
   border-color: #4aa58f;
 }
 
-.settings-gpu-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 88px;
-  gap: 12px;
-  align-items: center;
-}
-
-.settings-gpu-slider {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: transparent;
-  accent-color: #4aa58f;
-}
-
-.settings-gpu-input {
-  text-align: center;
-}
-
 .settings-file-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
@@ -319,4 +300,3 @@
 .settings-version.update-available span {
   color: #f3d7a1;
 }
-

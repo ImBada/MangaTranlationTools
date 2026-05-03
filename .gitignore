@@ -11,9 +11,6 @@ scripts/__pycache__/
 tmp-tiles/
 tmp-*.png
 tmp/
-tools/llama-b8808-cuda12/
-tools/llama-b8833-cuda12.4/
-tools/llama-b8833-cuda13.1/
 tools/Er0mangaInpaint/
 tools/inpaint-models/
 tools/lama-manga-venv/
