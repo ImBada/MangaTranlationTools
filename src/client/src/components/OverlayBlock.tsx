@@ -66,6 +66,7 @@ export function OverlayBlock({
   const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
+  const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
   const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
     ? {
         WebkitTextFillColor: "transparent",
@@ -116,7 +117,7 @@ export function OverlayBlock({
   };
   const contentFrameStyle: React.CSSProperties = {
     position: "relative",
-    width: `${block.renderDirection === "vertical" ? layout.fitInnerWidth : layout.innerWidth}px`,
+    width: block.renderDirection === "vertical" ? `${layout.fitInnerWidth}px` : "fit-content",
     height: block.renderDirection === "vertical" ? `${layout.fitInnerHeight}px` : undefined,
     maxWidth: "100%",
     maxHeight: "100%"
@@ -149,11 +150,11 @@ export function OverlayBlock({
       combinedSecondaryOutlineWidthPx > 0 ? `${combinedSecondaryOutlineWidthPx}px ${block.secondaryOutlineColor ?? "#ffffff"}` : undefined
   };
   const lineStyle: React.CSSProperties = {
-    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center",
+    alignSelf: horizontalLineAlignSelf,
     ...screentoneFillStyle
   };
   const secondaryOutlineLineStyle: React.CSSProperties = {
-    alignSelf: block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center"
+    alignSelf: horizontalLineAlignSelf
   };
   const renderTextContent = (contentLayerStyle: React.CSSProperties, contentLineStyle: React.CSSProperties, ariaHidden = false) => (
     <span className="overlay-text-content" style={contentLayerStyle} aria-hidden={ariaHidden}>

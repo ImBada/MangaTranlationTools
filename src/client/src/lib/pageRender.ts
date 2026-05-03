@@ -203,12 +203,14 @@ function drawHorizontalRenderedText(
   const lineHeightPx = fontSize * block.lineHeight;
   const totalHeight = lines.length * lineHeightPx;
   const startY = top + Math.max(0, (innerHeight - totalHeight) / 2) + Math.max(0, (lineHeightPx - fontSize) / 2);
+  const maxLineWidth = lines.reduce((widest, line) => Math.max(widest, context.measureText(line).width), 0);
+  const centeredTextLeft = left + innerWidth / 2 - maxLineWidth / 2;
   const x =
     block.textAlign === "left"
-      ? left
+      ? centeredTextLeft
       : block.textAlign === "right"
-        ? left + innerWidth
-        : left + innerWidth / 2;
+        ? centeredTextLeft + maxLineWidth
+        : centeredTextLeft + maxLineWidth / 2;
 
   context.textAlign = block.textAlign;
   for (const [index, line] of lines.entries()) {
