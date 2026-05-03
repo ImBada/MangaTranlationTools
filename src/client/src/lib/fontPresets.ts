@@ -1,5 +1,5 @@
 import type { FontPreset, TranslationBlock } from "../../../shared/types";
-import { DEFAULT_OVERLAY_FONT_FAMILY } from "./overlayLayout";
+import { DEFAULT_FONT_PRESET_VALUES } from "../../../shared/fontPresets";
 
 export type FontPresetPatch = Partial<
   Pick<
@@ -37,21 +37,7 @@ const PRESET_LINK_FIELD_BY_KEY = {
   screentoneFillAntialias: "screentoneFillAntialiasLinkedToPreset"
 } satisfies Record<LinkableFontPresetKey, keyof TranslationBlock>;
 
-export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = {
-  fontFamily: DEFAULT_OVERLAY_FONT_FAMILY,
-  fontSizePx: 24,
-  lineHeight: 1.18,
-  outlineColor: "#000000",
-  outlineWidthPx: 0,
-  secondaryOutlineColor: "#ffffff",
-  secondaryOutlineWidthPx: 0,
-  autoFitText: true,
-  textColor: "#111111",
-  screentoneFillEnabled: false,
-  screentoneFillIntensity: 0.55,
-  screentoneFillDensity: 0.55,
-  screentoneFillAntialias: true
-};
+export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = DEFAULT_FONT_PRESET_VALUES;
 
 export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT_FONT_PRESET): FontPreset {
   return {

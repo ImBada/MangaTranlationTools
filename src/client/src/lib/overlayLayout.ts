@@ -1,5 +1,8 @@
 import type { TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from "../../../shared/geometry";
+import { DEFAULT_OVERLAY_FONT_FAMILY } from "../../../shared/fontPresets";
+
+export { DEFAULT_OVERLAY_FONT_FAMILY };
 
 const MIN_FONT_SIZE_PX = 2;
 const MAX_AUTOFIT_FONT_SIZE_PX = 256;
@@ -8,7 +11,6 @@ const MIN_INNER_SIZE_PX = 1;
 const BLOCK_BORDER_PX = 1;
 const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
-export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif";
 export const DEFAULT_SCREENTONE_FILL_INTENSITY = 0.55;
 export const DEFAULT_SCREENTONE_FILL_DENSITY = 0.55;
 

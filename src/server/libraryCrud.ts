@@ -10,6 +10,7 @@ import type {
   MangaPage,
   SaveChapterPatchRequest
 } from "../shared/types";
+import { applyBlockTypeFontPresetToBlock, ensureBlockTypeFontPresets } from "../shared/fontPresets";
 import { getAppPaths } from "./appPaths";
 import { safeUnlink } from "./libraryFileIO";
 import {
@@ -296,17 +297,20 @@ export async function markChapterPagesRunning(chapterId: string, pageIds: string
 export async function updatePageAfterAnalysis(chapterId: string, page: MangaPage, warnings: string[], status: "completed" | "failed"): Promise<void> {
   await mutateExistingChapterFile(chapterId, (chapter) => {
     const now = new Date().toISOString();
+    const fontPresets = ensureBlockTypeFontPresets(chapter.fontPresets);
+    const blocks = applyAnalysisFontPresetsToBlocks(page.blocks, fontPresets);
     chapter.pages = chapter.pages.map((record) =>
       record.id === page.id
         ? {
             ...record,
-            blocks: page.blocks,
+            blocks,
             analysisStatus: status,
             lastError: status === "failed" ? warnings[warnings.length - 1] : undefined,
             updatedAt: now
           }
         : record
     );
+    chapter.fontPresets = fontPresets;
     chapter.updatedAt = now;
     chapter.status = resolveChapterStatus(chapter.pages);
     return chapter;
@@ -341,6 +345,7 @@ export async function updatePagesAfterAnalysis(chapterId: string, pages: MangaPa
   const pageMap = new Map(pages.map((page) => [page.id, page]));
   const chapter = await mutateExistingChapterFile(chapterId, (chapter) => {
     const now = new Date().toISOString();
+    const fontPresets = ensureBlockTypeFontPresets(chapter.fontPresets);
     chapter.pages = chapter.pages.map((record) => {
       const next = pageMap.get(record.id);
       if (!next) {
@@ -348,17 +353,22 @@ export async function updatePagesAfterAnalysis(chapterId: string, pages: MangaPa
       }
       return {
         ...record,
-        blocks: next.blocks,
+        blocks: applyAnalysisFontPresetsToBlocks(next.blocks, fontPresets),
         analysisStatus: next.analysisStatus,
         lastError: next.lastError,
         updatedAt: now
       };
     });
+    chapter.fontPresets = fontPresets;
     chapter.updatedAt = now;
     chapter.status = resolveChapterStatus(chapter.pages);
     return chapter;
   });
   return hydrateChapter(chapter);
+}
+
+function applyAnalysisFontPresetsToBlocks(blocks: MangaPage["blocks"], fontPresets: ReturnType<typeof ensureBlockTypeFontPresets>): MangaPage["blocks"] {
+  return blocks.map((block) => applyBlockTypeFontPresetToBlock(block, fontPresets));
 }
 
 export async function resolvePagesForRun(chapterId: string, runMode: "pending" | "all" | "single-page", pageId?: string): Promise<{
