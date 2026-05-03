@@ -42,6 +42,17 @@ describe("inpaint layer canvas helpers", () => {
       width: 800,
       height: 500
     });
+
+    expect(resolveMaskSelectionRect(
+      { x: -120.3, y: -80.2 },
+      { x: 240.4, y: 180.6 },
+      { width: 800, height: 600 }
+    )).toEqual({
+      x: 0,
+      y: 0,
+      width: 241,
+      height: 181
+    });
   });
 
   it("configures mask drawing for brush and eraser strokes", () => {

@@ -1,10 +1,16 @@
 import React from "react";
 import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { ViewportSize } from "../lib/overlayLayout";
+import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { useImageStageView } from "../hooks/useImageStageView";
 import type { InpaintTool } from "./InpaintLayerCanvas";
 import { ImageStageLayers, type ImageStageActiveLayer, type ImageStageLayerOpacity, type ImageStageLayerVisibility } from "./ImageStageLayers";
 import type { InpaintResultTool } from "./InpaintResultCanvas";
+
+type RangeSelectionDragState = {
+  pointerId: number;
+  start: DrawPoint;
+};
 
 type ImageStageProps = {
   page: MangaPage;
@@ -100,6 +106,40 @@ export function ImageStage({
     viewScale,
     zoomToolActive
   });
+  const rangeSelectionDragRef = React.useRef<RangeSelectionDragState | null>(null);
+  const [rangeSelectionPreviewRect, setRangeSelectionPreviewRect] = React.useState<ImageRect | null>(null);
+  const rangeSelectionActive = rangeToolActive && !rangeSelectionDisabled && !temporaryPanActive;
+
+  React.useEffect(() => {
+    if (rangeSelectionActive) {
+      return;
+    }
+    rangeSelectionDragRef.current = null;
+    setRangeSelectionPreviewRect(null);
+  }, [rangeSelectionActive]);
+
+  const resolveRangeSelectionPoint = React.useCallback((event: React.PointerEvent<HTMLElement>): DrawPoint | null => {
+    const stage = stageRef.current;
+    if (!stage) {
+      return null;
+    }
+    return resolveCanvasPoint(event.clientX, event.clientY, stage.getBoundingClientRect(), pageSize);
+  }, [pageSize, stageRef]);
+
+  const updateRangeSelectionPreview = React.useCallback((start: DrawPoint, current: DrawPoint) => {
+    setRangeSelectionPreviewRect(resolveSelectionRect(start, current, pageSize));
+  }, [pageSize]);
+
+  const finishRangeSelection = React.useCallback((current: DrawPoint) => {
+    const drag = rangeSelectionDragRef.current;
+    if (!drag) {
+      return;
+    }
+    const rect = resolveSelectionRect(drag.start, current, pageSize);
+    rangeSelectionDragRef.current = null;
+    setRangeSelectionPreviewRect(null);
+    onInpaintSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
+  }, [onInpaintSelectionChange, pageSize]);
 
   return (
     <div
@@ -128,12 +168,12 @@ export function ImageStage({
           inpaintResultTool={inpaintResultTool}
           inpaintResultToolStrength={inpaintResultToolStrength}
           inpaintSelectionRect={inpaintSelectionRect}
+          rangeSelectionPreviewRect={rangeSelectionPreviewRect}
           inpaintTool={inpaintTool}
           layerOpacity={layerOpacity}
           layerVisibility={layerVisibility}
           page={page}
           pageSize={pageSize}
-          rangeSelectionDisabled={rangeSelectionDisabled}
           rangeToolActive={rangeToolActive}
           selectedBlockId={selectedBlockId}
           stageSize={stageSize}
@@ -144,46 +184,106 @@ export function ImageStage({
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}
         />
-        {zoomToolActive && !temporaryPanActive ? (
-          <div
-            className="stage-zoom-hit-area"
-            aria-label="줌 도구"
-            onPointerEnter={updateZoomCursor}
-            onPointerMove={updateZoomCursor}
-            onPointerLeave={clearZoomCursor}
-            onPointerDown={(event) => {
-              if (event.button !== 0) {
-                return;
-              }
-              event.preventDefault();
-              event.stopPropagation();
-              updateZoomCursor(event);
-              onZoomToolClick(event.altKey ? "out" : "in");
-            }}
-            onPointerUp={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-            onPointerCancel={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-            }}
-          >
-            {zoomCursor ? (
-              <div
-                className={`stage-zoom-cursor ${zoomCursor.altKey ? "zoom-out" : "zoom-in"}`}
-                style={{
-                  left: `${zoomCursor.x}px`,
-                  top: `${zoomCursor.y}px`
-                }}
-                aria-hidden="true"
-              >
-                <span className="stage-zoom-cursor-mark" />
-              </div>
-            ) : null}
-          </div>
-        ) : null}
       </div>
+      {rangeSelectionActive ? (
+        <div
+          className="stage-range-hit-area"
+          aria-label="범위 선택"
+          onPointerDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
+            const point = resolveRangeSelectionPoint(event);
+            if (!point) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.setPointerCapture(event.pointerId);
+            rangeSelectionDragRef.current = { pointerId: event.pointerId, start: point };
+            updateRangeSelectionPreview(point, point);
+          }}
+          onPointerMove={(event) => {
+            const drag = rangeSelectionDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) {
+              return;
+            }
+            const point = resolveRangeSelectionPoint(event);
+            if (!point) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            updateRangeSelectionPreview(drag.start, point);
+          }}
+          onPointerUp={(event) => {
+            const drag = rangeSelectionDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) {
+              return;
+            }
+            const point = resolveRangeSelectionPoint(event);
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            if (point) {
+              finishRangeSelection(point);
+            } else {
+              rangeSelectionDragRef.current = null;
+              setRangeSelectionPreviewRect(null);
+            }
+          }}
+          onPointerCancel={(event) => {
+            const drag = rangeSelectionDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            rangeSelectionDragRef.current = null;
+            setRangeSelectionPreviewRect(null);
+          }}
+        />
+      ) : null}
+      {zoomToolActive && !temporaryPanActive ? (
+        <div
+          className="stage-zoom-hit-area"
+          aria-label="줌 도구"
+          onPointerEnter={updateZoomCursor}
+          onPointerMove={updateZoomCursor}
+          onPointerLeave={clearZoomCursor}
+          onPointerDown={(event) => {
+            if (event.button !== 0) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            updateZoomCursor(event);
+            onZoomToolClick(event.altKey ? "out" : "in");
+          }}
+          onPointerUp={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+          onPointerCancel={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+          }}
+        >
+          {zoomCursor ? (
+            <div
+              className={`stage-zoom-cursor ${zoomCursor.altKey ? "zoom-out" : "zoom-in"}`}
+              style={{
+                left: `${zoomCursor.x}px`,
+                top: `${zoomCursor.y}px`
+              }}
+              aria-hidden="true"
+            >
+              <span className="stage-zoom-cursor-mark" />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

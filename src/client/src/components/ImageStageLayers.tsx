@@ -36,12 +36,12 @@ type ImageStageLayersProps = {
   inpaintResultTool: InpaintResultTool;
   inpaintResultToolStrength: number;
   inpaintSelectionRect: ImageRect | null;
+  rangeSelectionPreviewRect: ImageRect | null;
   inpaintTool: InpaintTool;
   layerOpacity: ImageStageLayerOpacity;
   layerVisibility: ImageStageLayerVisibility;
   page: MangaPage;
   pageSize: ViewportSize;
-  rangeSelectionDisabled: boolean;
   rangeToolActive: boolean;
   selectedBlockId: string | null;
   stageSize: ViewportSize | null;
@@ -65,12 +65,12 @@ export function ImageStageLayers({
   inpaintResultTool,
   inpaintResultToolStrength,
   inpaintSelectionRect,
+  rangeSelectionPreviewRect,
   inpaintTool,
   layerOpacity,
   layerVisibility,
   page,
   pageSize,
-  rangeSelectionDisabled,
   rangeToolActive,
   selectedBlockId,
   stageSize,
@@ -210,13 +210,13 @@ export function ImageStageLayers({
           )
         : null}
       {rangeToolActive || inpaintSelectionRect ? (
-        <div className={`stage-range-selection-layer ${rangeToolActive ? "active" : ""}`}>
+        <div className="stage-range-selection-layer">
           <InpaintLayerCanvas
             pageSize={pageSize}
             tool="select"
             brushSize={1}
-            disabled={rangeSelectionDisabled || temporaryPanActive || !rangeToolActive}
-            selectionRect={inpaintSelectionRect}
+            disabled={true}
+            selectionRect={rangeSelectionPreviewRect ?? inpaintSelectionRect}
             onChange={() => undefined}
             onSelectionChange={onInpaintSelectionChange}
           />
