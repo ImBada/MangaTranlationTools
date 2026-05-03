@@ -706,6 +706,7 @@
 }
 
 .page-nav-button {
+  position: relative;
   display: grid;
   place-items: center;
   width: 28px;
@@ -915,7 +916,8 @@
   fill: currentColor;
 }
 
-.stage-tool-shortcut {
+.stage-tool-shortcut,
+.page-nav-shortcut {
   position: absolute;
   right: 3px;
   bottom: 2px;

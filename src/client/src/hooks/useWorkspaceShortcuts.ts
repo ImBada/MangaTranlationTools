@@ -285,6 +285,10 @@ export function useWorkspaceShortcuts({
       const activeElement = typeof document !== "undefined" ? document.activeElement : null;
       const navigation = resolveKeyboardPageNavigation({
         key: event.key,
+        code: event.code,
+        altKey: event.altKey,
+        ctrlKey: event.ctrlKey,
+        metaKey: event.metaKey,
         hasPages: pageIds.length > 0,
         modalOpen,
         editableTarget,

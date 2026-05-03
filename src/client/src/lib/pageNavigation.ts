@@ -2,6 +2,10 @@ export type PageNavigationDirection = "previous" | "next";
 
 type KeyboardPageNavigationOptions = {
   key: string;
+  code: string;
+  altKey: boolean;
+  ctrlKey: boolean;
+  metaKey: boolean;
   hasPages: boolean;
   modalOpen: boolean;
   editableTarget: boolean;
@@ -34,6 +38,10 @@ export function resolveAdjacentPageId(
 
 export function resolveKeyboardPageNavigation({
   key,
+  code,
+  altKey,
+  ctrlKey,
+  metaKey,
   hasPages,
   modalOpen,
   editableTarget,
@@ -52,6 +60,21 @@ export function resolveKeyboardPageNavigation({
       return centerPanelFocused ? { direction: "previous", preventDefault: true } : null;
     case "ArrowDown":
       return centerPanelFocused ? { direction: "next", preventDefault: true } : null;
+    default:
+      break;
+  }
+
+  if (altKey || ctrlKey || metaKey) {
+    return null;
+  }
+
+  switch (code || key.toLowerCase()) {
+    case "KeyD":
+    case "d":
+      return { direction: "previous", preventDefault: true };
+    case "KeyF":
+    case "f":
+      return { direction: "next", preventDefault: true };
     default:
       return null;
   }

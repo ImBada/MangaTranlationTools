@@ -58,9 +58,11 @@ export function PageList({
               }
             }}
             aria-label="이전 페이지"
-            title={previousPage ? `이전 페이지: ${previousPage.name}` : "이전 페이지 없음"}
+            aria-keyshortcuts="D"
+            title={previousPage ? `이전 페이지: ${previousPage.name} (D)` : "이전 페이지 없음 (D)"}
           >
             ←
+            <span className="page-nav-shortcut" aria-hidden="true">D</span>
           </button>
           <button
             type="button"
@@ -72,9 +74,11 @@ export function PageList({
               }
             }}
             aria-label="다음 페이지"
-            title={nextPage ? `다음 페이지: ${nextPage.name}` : "다음 페이지 없음"}
+            aria-keyshortcuts="F"
+            title={nextPage ? `다음 페이지: ${nextPage.name} (F)` : "다음 페이지 없음 (F)"}
           >
             →
+            <span className="page-nav-shortcut" aria-hidden="true">F</span>
           </button>
         </div>
       </div>
