@@ -4,7 +4,11 @@ import { CompactNumberControl } from "../controls/CompactNumberControl";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
 import type { BlockFontPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
-import { DEFAULT_OVERLAY_FONT_FAMILY } from "../../lib/overlayLayout";
+import {
+  DEFAULT_OVERLAY_FONT_FAMILY,
+  buildScreentoneFillCssBackground,
+  buildScreentoneFillCssSize
+} from "../../lib/overlayLayout";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
@@ -25,6 +29,87 @@ type FontToolSectionProps = {
   onFontSettingChange: (patch: BlockFontPatch) => void;
   onSelectFontPreset: (presetId: string) => void;
 };
+
+const PRESET_TAG_FONT_SIZE_PX = 12;
+
+function resolvePresetTagTextMetrics(preset: FontPreset): {
+  fontSizePx: number;
+  outlineWidthPx: number;
+  secondaryOutlineWidthPx: number;
+  scale: number;
+} {
+  const sourceFontSizePx = Math.max(1, preset.fontSizePx);
+  const sourceOutlineWidthPx = Math.max(0, preset.outlineWidthPx ?? 0);
+  const sourceSecondaryOutlineWidthPx = Math.max(0, preset.secondaryOutlineWidthPx ?? 0);
+  const sourceOuterStrokeWidthPx = sourceOutlineWidthPx + sourceSecondaryOutlineWidthPx * 2;
+  const scale = PRESET_TAG_FONT_SIZE_PX / Math.max(1, sourceFontSizePx + sourceOuterStrokeWidthPx * 2);
+
+  return {
+    fontSizePx: sourceFontSizePx,
+    outlineWidthPx: sourceOutlineWidthPx,
+    secondaryOutlineWidthPx: sourceSecondaryOutlineWidthPx,
+    scale
+  };
+}
+
+function buildPresetTagTextStyles(preset: FontPreset): {
+  stack: React.CSSProperties;
+  primary: React.CSSProperties;
+  secondary: React.CSSProperties;
+  hasSecondaryOutline: boolean;
+} {
+  const { fontSizePx, outlineWidthPx, secondaryOutlineWidthPx, scale } = resolvePresetTagTextMetrics(preset);
+  const hasSecondaryOutline = secondaryOutlineWidthPx > 0;
+  const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
+  const screentoneFillEnabled = preset.screentoneFillEnabled ?? false;
+  const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
+    ? {
+        WebkitTextFillColor: "transparent",
+        WebkitBackgroundClip: "text",
+        backgroundClip: "text",
+        backgroundColor: "#ffffff",
+        backgroundImage: buildScreentoneFillCssBackground(
+          preset.textColor ?? "#111111",
+          preset.screentoneFillIntensity,
+          preset.screentoneFillDensity,
+          preset.screentoneFillAntialias,
+          fontSizePx
+        ),
+        backgroundSize: buildScreentoneFillCssSize(fontSizePx, preset.screentoneFillDensity)
+      }
+    : {};
+
+  const baseTextStyle: React.CSSProperties = {
+    fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
+    fontSize: `${fontSizePx}px`,
+    lineHeight: preset.lineHeight,
+    fontWeight: "inherit"
+  };
+
+  return {
+    stack: {
+      fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
+      lineHeight: preset.lineHeight,
+      zoom: scale
+    },
+    primary: {
+      ...baseTextStyle,
+      color: screentoneFillEnabled ? undefined : preset.textColor ?? "#111111",
+      WebkitTextFillColor: screentoneFillEnabled ? "transparent" : preset.textColor ?? "#111111",
+      paintOrder: "stroke fill",
+      WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${preset.outlineColor ?? "#000000"}` : undefined,
+      ...screentoneFillStyle
+    },
+    secondary: {
+      ...baseTextStyle,
+      color: "transparent",
+      WebkitTextFillColor: "transparent",
+      WebkitTextStroke:
+        combinedSecondaryOutlineWidthPx > 0 ? `${combinedSecondaryOutlineWidthPx}px ${preset.secondaryOutlineColor ?? "#ffffff"}` : undefined
+    },
+    hasSecondaryOutline
+  };
+}
 
 export function FontToolSection({
   currentChapter,
@@ -221,33 +306,46 @@ export function FontToolSection({
           </button>
         </div>
         <div className="font-preset-tags" aria-label="폰트 프리셋">
-          {fontPresets.map((preset) => (
-            <span
-              key={preset.id}
-              className={`font-preset-tag ${
-                selectedBlock?.fontPresetId === preset.id || (!selectedBlock && editingFontPresetId === preset.id) ? "active" : ""
-              }`}
-            >
-              <button
-                type="button"
-                className="font-preset-tag-name"
-                disabled={selectedPageEditLocked}
-                onClick={() => onSelectFontPreset(preset.id)}
-                title={selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
+          {fontPresets.map((preset) => {
+            const tagTextStyles = buildPresetTagTextStyles(preset);
+
+            return (
+              <span
+                key={preset.id}
+                className={`font-preset-tag ${
+                  selectedBlock?.fontPresetId === preset.id || (!selectedBlock && editingFontPresetId === preset.id) ? "active" : ""
+                }`}
               >
-                {preset.name}
-              </button>
-              <button
-                type="button"
-                className="font-preset-tag-remove"
-                disabled={selectedPageEditLocked}
-                onClick={() => onDeleteFontPreset(preset.id)}
-                aria-label={`${preset.name} 삭제`}
-              >
-                ×
-              </button>
-            </span>
-          ))}
+                <button
+                  type="button"
+                  className="font-preset-tag-name"
+                  disabled={selectedPageEditLocked}
+                  onClick={() => onSelectFontPreset(preset.id)}
+                  title={selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
+                >
+                  <span className="font-preset-tag-text-stack" style={tagTextStyles.stack}>
+                    {tagTextStyles.hasSecondaryOutline ? (
+                      <span className="overlay-text-content font-preset-tag-text-secondary" style={tagTextStyles.secondary} aria-hidden>
+                        {preset.name}
+                      </span>
+                    ) : null}
+                    <span className="overlay-text-content font-preset-tag-text-primary" style={tagTextStyles.primary}>
+                      {preset.name}
+                    </span>
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="font-preset-tag-remove"
+                  disabled={selectedPageEditLocked}
+                  onClick={() => onDeleteFontPreset(preset.id)}
+                  aria-label={`${preset.name} 삭제`}
+                >
+                  ×
+                </button>
+              </span>
+            );
+          })}
           {selectedBlock?.fontPresetId ? (
             <button type="button" className="font-preset-clear" disabled={selectedPageEditLocked} onClick={onClearSelectedBlockFontPreset}>
               프리셋 해제

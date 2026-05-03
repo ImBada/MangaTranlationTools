@@ -440,7 +440,16 @@
 }
 
 .font-preset-tag {
-  @apply rounded-full border-line-strong bg-control text-soft;
+  @apply rounded-full;
+  border-color: #cfd7df;
+  background: #fffefa;
+  color: #111111;
+}
+
+.font-preset-tag.active {
+  border-color: #6aa9ff;
+  background: #fffefa;
+  color: #111111;
 }
 
 .font-preset-tag::before {
@@ -448,7 +457,7 @@
 }
 
 .font-preset-tag-remove {
-  @apply text-muted;
+  color: #5f6b76;
 }
 
 .font-preset-clear {

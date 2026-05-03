@@ -531,10 +531,10 @@
   align-items: center;
   max-width: 100%;
   min-height: 26px;
-  border: 1px solid #47515e;
+  border: 1px solid #cfd7df;
   border-radius: 4px 12px 12px 4px;
-  background: #1b2027;
-  color: #dce5ed;
+  background: #fffefa;
+  color: #111111;
   font-size: 12px;
   line-height: 1;
   overflow: hidden;
@@ -549,8 +549,9 @@
 
 .font-preset-tag.active {
   border-color: #6aa9ff;
-  background: #1f3247;
-  color: #eef6ff;
+  background: #fffefa;
+  color: #111111;
+  box-shadow: 0 0 0 1px rgba(106, 169, 255, 0.45);
 }
 
 .font-preset-tag-name,
@@ -566,6 +567,8 @@
 }
 
 .font-preset-tag-name {
+  display: flex;
+  align-items: center;
   max-width: 160px;
   padding: 0 8px;
   overflow: hidden;
@@ -573,10 +576,41 @@
   white-space: nowrap;
 }
 
+.font-preset-tag-text-stack {
+  position: relative;
+  isolation: isolate;
+  display: inline-block;
+  flex: 0 0 auto;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.font-preset-tag-text-stack .font-preset-tag-text-primary {
+  position: relative;
+  z-index: 1;
+  display: inline-block;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  white-space: nowrap;
+}
+
+.font-preset-tag-text-stack .font-preset-tag-text-secondary {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  display: inline-block;
+  max-width: none;
+  max-height: none;
+  overflow: visible;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
 .font-preset-tag-remove {
   width: 24px;
   padding: 0;
-  color: #aeb8c2;
+  color: #5f6b76;
 }
 
 .font-preset-clear {
@@ -788,4 +822,3 @@
 .job-pill.completed {
   background: #2f6f61;
 }
-
