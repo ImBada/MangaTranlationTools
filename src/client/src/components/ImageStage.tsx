@@ -1,7 +1,7 @@
 import React from "react";
 import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { ViewportSize } from "../lib/overlayLayout";
-import { resolveStageFitSize, resolveStagePanRange } from "../lib/stageFit";
+import { useImageStageView } from "../hooks/useImageStageView";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
 import { OverlayBlock } from "./OverlayBlock";
@@ -54,42 +54,6 @@ type ImageStageProps = {
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
 };
 
-type PanOffset = {
-  x: number;
-  y: number;
-};
-
-type StagePanState = {
-  pointerId: number;
-  startX: number;
-  startY: number;
-  startPan: PanOffset;
-};
-
-type ZoomCursorState = {
-  x: number;
-  y: number;
-  altKey: boolean;
-};
-
-function resolveStageFitBounds(wrap: HTMLDivElement): ViewportSize {
-  const clipElement = wrap.closest(".workspace") as HTMLElement | null;
-  if (!clipElement) {
-    return {
-      width: wrap.clientWidth,
-      height: wrap.clientHeight
-    };
-  }
-
-  const style = window.getComputedStyle(clipElement);
-  const paddingX = Number.parseFloat(style.paddingLeft) + Number.parseFloat(style.paddingRight);
-  const paddingY = Number.parseFloat(style.paddingTop) + Number.parseFloat(style.paddingBottom);
-  return {
-    width: Math.max(1, clipElement.clientWidth - paddingX),
-    height: Math.max(1, clipElement.clientHeight - paddingY)
-  };
-}
-
 export function ImageStage({
   page,
   imageRef,
@@ -124,222 +88,42 @@ export function ImageStage({
   onStagePointerDown,
   onBlockPointerDown
 }: ImageStageProps): React.JSX.Element {
-  const wrapRef = React.useRef<HTMLDivElement | null>(null);
-  const panRef = React.useRef<StagePanState | null>(null);
-  const panOffsetRef = React.useRef<PanOffset>({ x: 0, y: 0 });
-  const [fitSize, setFitSize] = React.useState<ViewportSize | null>(null);
-  const [panOffset, setPanOffset] = React.useState<PanOffset>({ x: 0, y: 0 });
-  const [panning, setPanning] = React.useState(false);
-  const [zoomCursor, setZoomCursor] = React.useState<ZoomCursorState | null>(null);
   const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
-
-  const applyPanOffset = React.useCallback((offset: PanOffset) => {
-    panOffsetRef.current = offset;
-    setPanOffset(offset);
-  }, []);
-
-  const clampPanOffset = React.useCallback((offset: PanOffset, size?: ViewportSize | null): PanOffset => {
-    const wrap = wrapRef.current;
-    if (!wrap) {
-      return offset;
-    }
-
-    const clipElement = wrap.closest(".workspace") as HTMLElement | null;
-    const clipRect = (clipElement ?? wrap).getBoundingClientRect();
-    const imageRect = size ? null : imageRef.current?.getBoundingClientRect();
-    const currentPan = panOffsetRef.current;
-    const wrapRect = wrap.getBoundingClientRect();
-    const stageRect = imageRect
-      ? {
-          left: imageRect.left - currentPan.x,
-          top: imageRect.top - currentPan.y,
-          right: imageRect.right - currentPan.x,
-          bottom: imageRect.bottom - currentPan.y,
-          width: imageRect.width,
-          height: imageRect.height
-        }
-      : size
-        ? {
-            left: wrapRect.left + (wrapRect.width - size.width) / 2,
-            top: wrapRect.top + (wrapRect.height - size.height) / 2,
-            right: wrapRect.left + (wrapRect.width + size.width) / 2,
-            bottom: wrapRect.top + (wrapRect.height + size.height) / 2,
-            width: size.width,
-            height: size.height
-          }
-        : null;
-    if (!stageRect) {
-      return offset;
-    }
-    const range = resolveStagePanRange(stageRect, {
-      left: clipRect.left,
-      top: clipRect.top,
-      right: clipRect.right,
-      bottom: clipRect.bottom,
-      width: clipRect.width || wrap.clientWidth,
-      height: clipRect.height || wrap.clientHeight
-    });
-    return {
-      x: Math.min(range.maxX, Math.max(range.minX, offset.x)),
-      y: Math.min(range.maxY, Math.max(range.minY, offset.y))
-    };
-  }, [imageRef]);
-
-  React.useLayoutEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap) {
-      return;
-    }
-
-    let frameId = 0;
-    const syncFitSize = () => {
-      const next = resolveStageFitSize(pageSize, resolveStageFitBounds(wrap), { viewScale });
-      setPanOffset((current) => {
-        const clamped = viewScale === null ? { x: 0, y: 0 } : clampPanOffset(current, next);
-        panOffsetRef.current = clamped;
-        return clamped;
-      });
-      setFitSize((current) => {
-        if (
-          current &&
-          Math.abs(current.width - next.width) < 0.5 &&
-          Math.abs(current.height - next.height) < 0.5
-        ) {
-          return current;
-        }
-        return next;
-      });
-    };
-    const scheduleSync = () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      frameId = requestAnimationFrame(() => {
-        frameId = 0;
-        syncFitSize();
-      });
-    };
-
-    syncFitSize();
-    const observer = new ResizeObserver(scheduleSync);
-    const clipElement = wrap.closest(".workspace") as HTMLElement | null;
-    observer.observe(wrap);
-    if (clipElement) {
-      observer.observe(clipElement);
-    }
-    window.addEventListener("resize", scheduleSync);
-
-    return () => {
-      if (frameId) {
-        cancelAnimationFrame(frameId);
-      }
-      observer.disconnect();
-      window.removeEventListener("resize", scheduleSync);
-    };
-  }, [pageSize, viewScale]);
-
-  React.useEffect(() => {
-    applyPanOffset({ x: 0, y: 0 });
-    panRef.current = null;
-    setPanning(false);
-  }, [applyPanOffset, page.id, viewResetKey]);
-
-  React.useEffect(() => {
-    if (!zoomToolActive || temporaryPanActive) {
-      setZoomCursor(null);
-      return;
-    }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Alt") {
-        return;
-      }
-      setZoomCursor((current) => current ? { ...current, altKey: true } : current);
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key !== "Alt") {
-        return;
-      }
-      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
-    };
-    const resetAlt = () => {
-      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", resetAlt);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", resetAlt);
-    };
-  }, [temporaryPanActive, zoomToolActive]);
-
-  const updateZoomCursor = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    setZoomCursor({
-      x: event.clientX - rect.left,
-      y: event.clientY - rect.top,
-      altKey: event.altKey
-    });
-  }, []);
+  const {
+    clearZoomCursor,
+    handleStagePointerCancel,
+    handleStagePointerDown,
+    handleStagePointerMove,
+    handleStagePointerUp,
+    panning,
+    stageStyle,
+    updateZoomCursor,
+    wrapRef,
+    zoomCursor
+  } = useImageStageView({
+    imageRef,
+    onStagePointerDown,
+    onStagePointerMove,
+    onStagePointerUp,
+    pageId: page.id,
+    pageSize,
+    temporaryPanActive,
+    viewResetKey,
+    viewScale,
+    zoomToolActive
+  });
 
   return (
     <div ref={wrapRef} className="stage-wrap">
       <div
         ref={stageRef}
         className={`image-stage${panning || temporaryPanActive ? " panning" : ""}`}
-        style={fitSize ? {
-          width: `${fitSize.width}px`,
-          height: `${fitSize.height}px`,
-          transform: `translate(${panOffset.x}px, ${panOffset.y}px)`
-        } : undefined}
-        onPointerMove={(event) => {
-          const pan = panRef.current;
-          if (pan && pan.pointerId === event.pointerId) {
-            event.preventDefault();
-            applyPanOffset(clampPanOffset({
-              x: pan.startPan.x + event.clientX - pan.startX,
-              y: pan.startPan.y + event.clientY - pan.startY
-            }));
-            return;
-          }
-          onStagePointerMove(event);
-        }}
-        onPointerUp={(event) => {
-          if (panRef.current?.pointerId === event.pointerId) {
-            event.preventDefault();
-            event.currentTarget.releasePointerCapture(event.pointerId);
-            panRef.current = null;
-            setPanning(false);
-          }
-          onStagePointerUp(event);
-        }}
-        onPointerCancel={(event) => {
-          if (panRef.current?.pointerId === event.pointerId) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
-            panRef.current = null;
-            setPanning(false);
-          }
-          onStagePointerUp(event);
-        }}
-        onPointerDown={(event) => {
-          onStagePointerDown(event);
-          if (event.button !== 0 || event.defaultPrevented) {
-            return;
-          }
-          event.preventDefault();
-          event.currentTarget.setPointerCapture(event.pointerId);
-          panRef.current = {
-            pointerId: event.pointerId,
-            startX: event.clientX,
-            startY: event.clientY,
-            startPan: panOffsetRef.current
-          };
-          setPanning(true);
-        }}
+        style={stageStyle}
+        onPointerMove={handleStagePointerMove}
+        onPointerUp={handleStagePointerUp}
+        onPointerCancel={handleStagePointerCancel}
+        onPointerDown={handleStagePointerDown}
       >
         <img
           ref={imageRef}
@@ -358,7 +142,7 @@ export function ImageStage({
               <InpaintResultCanvas
                 className="inpaint-result-canvas"
                 dataUrl={page.inpaintResultDataUrl}
-                pageSize={{ width: page.width, height: page.height }}
+                pageSize={pageSize}
                 tool={inpaintResultTool}
                 brushSize={inpaintResultBrushSize}
                 brushColor={inpaintResultBrushColor}
@@ -387,7 +171,7 @@ export function ImageStage({
               >
                 <InpaintLayerCanvas
                   dataUrl={inpaintMaskDataUrl}
-                  pageSize={{ width: page.width, height: page.height }}
+                  pageSize={pageSize}
                   tool={inpaintTool}
                   brushSize={inpaintBrushSize}
                   disabled={inpaintDisabled || temporaryPanActive}
@@ -410,15 +194,15 @@ export function ImageStage({
               >
                 <OverlayRenderCanvas
                   page={page}
-                  stageSize={stageSize ?? { width: page.width, height: page.height }}
+                  stageSize={stageSize ?? pageSize}
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                 />
                 {page.blocks.map((block) => (
                   <OverlayBlock
                     key={block.id}
                     block={block}
-                    pageSize={{ width: page.width, height: page.height }}
-                    stageSize={stageSize ?? { width: page.width, height: page.height }}
+                    pageSize={pageSize}
+                    stageSize={stageSize ?? pageSize}
                     selected={block.id === selectedBlockId}
                     editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                     visualContentVisible={false}
@@ -433,7 +217,7 @@ export function ImageStage({
         {rangeToolActive || inpaintSelectionRect ? (
           <div className={`stage-range-selection-layer ${rangeToolActive ? "active" : ""}`}>
             <InpaintLayerCanvas
-              pageSize={{ width: page.width, height: page.height }}
+              pageSize={pageSize}
               tool="select"
               brushSize={1}
               disabled={rangeSelectionDisabled || temporaryPanActive || !rangeToolActive}
@@ -449,7 +233,7 @@ export function ImageStage({
             aria-label="줌 도구"
             onPointerEnter={updateZoomCursor}
             onPointerMove={updateZoomCursor}
-            onPointerLeave={() => setZoomCursor(null)}
+            onPointerLeave={clearZoomCursor}
             onPointerDown={(event) => {
               if (event.button !== 0) {
                 return;
