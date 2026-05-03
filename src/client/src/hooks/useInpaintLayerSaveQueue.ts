@@ -1,5 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 export type PendingInpaintMaskSave = {
   chapterId: string;
@@ -14,11 +15,13 @@ export type PendingInpaintResultSave = {
 };
 
 type UseInpaintLayerSaveQueueOptions = {
+  clearRecoverableFailure?: (id: RecoverableFailureId) => void;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   dirty: boolean;
   mergeLiveChapter: (chapter: ChapterSnapshot) => void;
   pushStatus: (line: string) => void;
   refreshLibrary: () => Promise<void>;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   signalSaveComplete: () => void;
 };
@@ -32,11 +35,13 @@ type UseInpaintLayerSaveQueueState = {
 };
 
 export function useInpaintLayerSaveQueue({
+  clearRecoverableFailure,
   currentChapterRef,
   dirty,
   mergeLiveChapter,
   pushStatus,
   refreshLibrary,
+  reportRecoverableFailure,
   saveNow,
   signalSaveComplete
 }: UseInpaintLayerSaveQueueOptions): UseInpaintLayerSaveQueueState {
@@ -84,18 +89,40 @@ export function useInpaintLayerSaveQueue({
       if (!inpaintMaskSaveStateRef.current) {
         mergeLiveChapter(result.chapter);
         signalSaveComplete();
+        clearRecoverableFailure?.("inpaint-mask-save");
         void refreshLibrary();
       }
     } catch (error) {
       console.error(error);
-      pushStatus(error instanceof Error ? error.message : "인페인트 마스크 저장에 실패했습니다.");
+      if (!inpaintMaskSaveStateRef.current) {
+        inpaintMaskSaveStateRef.current = pending;
+      }
+      const message = error instanceof Error ? error.message : "인페인트 마스크 저장에 실패했습니다.";
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-mask-save",
+        title: "인페인트 마스크 저장 실패",
+        message: "마스크 편집 내용은 현재 화면에 남아 있습니다. 다시 저장을 시도하세요."
+      });
     } finally {
       inpaintMaskSavingRef.current = false;
       if (inpaintMaskSaveStateRef.current) {
-        void flushInpaintMaskSave();
+        if (inpaintMaskSaveStateRef.current !== pending) {
+          void flushInpaintMaskSave();
+        }
       }
     }
-  }, [currentChapterRef, dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
+  }, [
+    clearRecoverableFailure,
+    currentChapterRef,
+    dirty,
+    mergeLiveChapter,
+    pushStatus,
+    refreshLibrary,
+    reportRecoverableFailure,
+    saveNow,
+    signalSaveComplete
+  ]);
 
   const scheduleInpaintMaskSave = React.useCallback((pending: PendingInpaintMaskSave) => {
     inpaintMaskSaveStateRef.current = pending;
@@ -134,18 +161,40 @@ export function useInpaintLayerSaveQueue({
       if (!inpaintResultSaveStateRef.current) {
         mergeLiveChapter(result.chapter);
         signalSaveComplete();
+        clearRecoverableFailure?.("inpaint-result-save");
         void refreshLibrary();
       }
     } catch (error) {
       console.error(error);
-      pushStatus(error instanceof Error ? error.message : "인페인트 결과 레이어 저장에 실패했습니다.");
+      if (!inpaintResultSaveStateRef.current) {
+        inpaintResultSaveStateRef.current = pending;
+      }
+      const message = error instanceof Error ? error.message : "인페인트 결과 레이어 저장에 실패했습니다.";
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-result-save",
+        title: "인페인트 결과 저장 실패",
+        message: "결과 레이어는 현재 화면에 남아 있습니다. 다시 저장을 시도하세요."
+      });
     } finally {
       inpaintResultSavingRef.current = false;
       if (inpaintResultSaveStateRef.current) {
-        void flushInpaintResultSave();
+        if (inpaintResultSaveStateRef.current !== pending) {
+          void flushInpaintResultSave();
+        }
       }
     }
-  }, [currentChapterRef, dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
+  }, [
+    clearRecoverableFailure,
+    currentChapterRef,
+    dirty,
+    mergeLiveChapter,
+    pushStatus,
+    refreshLibrary,
+    reportRecoverableFailure,
+    saveNow,
+    signalSaveComplete
+  ]);
 
   const scheduleInpaintResultSave = React.useCallback((pending: PendingInpaintResultSave) => {
     inpaintResultSaveStateRef.current = pending;

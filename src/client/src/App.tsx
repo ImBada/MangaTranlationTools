@@ -13,6 +13,7 @@ import { useGlobalUndoHistory } from "./hooks/useGlobalUndoHistory";
 import { useInpaintActions } from "./hooks/useInpaintActions";
 import { useLibraryActions } from "./hooks/useLibraryActions";
 import { usePageRendering } from "./hooks/usePageRendering";
+import { useRecoverableFailures, type RecoverableFailureId } from "./hooks/useRecoverableFailures";
 import { useRuntimeSettings } from "./hooks/useRuntimeSettings";
 import { useStageInteraction } from "./hooks/useStageInteraction";
 import { useStatusFeedback } from "./hooks/useStatusFeedback";
@@ -80,6 +81,11 @@ export default function App(): React.JSX.Element {
     setStatusWidgetOpen
   } = useStatusFeedback();
   const {
+    clearRecoverableFailure,
+    recoverableFailures,
+    reportRecoverableFailure
+  } = useRecoverableFailures();
+  const {
     applyChapter,
     clearCurrentChapter,
     currentChapter,
@@ -105,6 +111,7 @@ export default function App(): React.JSX.Element {
     clearPendingChapterTimers,
     clearUndoStacks,
     pushStatus,
+    reportRecoverableFailure,
     signalSaveComplete
   });
   const {
@@ -176,17 +183,20 @@ export default function App(): React.JSX.Element {
     jobActive,
     jobState,
     progressSnapshot,
+    retryLastAnalysis,
     retranslatePage,
     runAnalysis,
     showProgressBar
   } = useAnalysisJob({
     appendStatusLine,
     applyChapter,
+    clearRecoverableFailure,
     currentChapter,
     currentChapterRef,
     mergeLiveChapter,
     pushStatus,
     refreshLibrary,
+    reportRecoverableFailure,
     resetStatusLog,
     saveNow,
     setCurrentChapter
@@ -212,6 +222,8 @@ export default function App(): React.JSX.Element {
     downloadLastImportedInpaintPsd,
     exportSelectedPageInpaintPsd,
     fillSelectedInpaintSelection,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
     handleInpaintPsdInputChange,
     inpaintBrushSize,
     inpaintBusy,
@@ -244,6 +256,7 @@ export default function App(): React.JSX.Element {
   } = useInpaintActions({
     activeLayer,
     applyChapter,
+    clearRecoverableFailure,
     consumeGlobalUndoEntry,
     currentChapter,
     currentChapterId,
@@ -254,6 +267,7 @@ export default function App(): React.JSX.Element {
     rangeToolActive,
     recordGlobalUndoEntry,
     refreshLibrary,
+    reportRecoverableFailure,
     saveNow,
     selectedBlock,
     selectedPage,
@@ -343,14 +357,20 @@ export default function App(): React.JSX.Element {
   });
   const saveStatusTone = saveFlash ? "saved" : dirty ? "unsaved" : "synced";
   const saveStatusLabel = saveFlash ? "저장 완료" : dirty ? "저장되지 않은 변경 있음" : "최신 상태";
-  const statusWidgetTone = `${jobState.status} ${saveStatusTone}`;
+  const statusWidgetTone = `${jobState.status} ${recoverableFailures.length ? "failed" : saveStatusTone}`;
   const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
   const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const selectedPageInpaintNotice =
     selectedPage?.inpaintStatus === "running"
       ? { tone: "running", title: "인페인트 중", message: selectedPage.name }
       : selectedPage?.inpaintStatus === "failed"
-        ? { tone: "failed", title: "인페인트 실패", message: selectedPage.name }
+        ? {
+            tone: "failed",
+            title: "인페인트 실패",
+            message: `${selectedPage.name} - 마스크와 레이어 상태는 유지됨`,
+            actionLabel: "다시 실행",
+            onAction: rerunInpaintWithCurrentMask
+          }
         : null;
   const statusIndicatorLabel = jobActive ? jobState.progressText : saveStatusLabel;
   const overlayBackgroundOpacity = selectedPage?.blocks[0]?.opacity ?? 1;
@@ -358,6 +378,50 @@ export default function App(): React.JSX.Element {
   React.useEffect(() => {
     void refreshLibrary();
   }, [refreshLibrary]);
+
+  const retryRecoverableFailure = useCallback(async (id: RecoverableFailureId) => {
+    try {
+      let shouldClearAfterRetry = true;
+      if (id === "chapter-save") {
+        await saveNow();
+      } else if (id === "inpaint-mask-save") {
+        await flushInpaintMaskSave();
+        shouldClearAfterRetry = false;
+      } else if (id === "inpaint-result-save") {
+        await flushInpaintResultSave();
+        shouldClearAfterRetry = false;
+      } else if (id === "analysis-run") {
+        await retryLastAnalysis();
+        shouldClearAfterRetry = false;
+      } else if (id === "analysis-sync") {
+        const chapterId = currentChapterRef.current?.id;
+        if (chapterId) {
+          mergeLiveChapter(await window.mangaApi.openChapter(chapterId));
+        }
+        await refreshLibrary();
+      } else if (id === "inpaint-run") {
+        await rerunInpaintWithCurrentMask();
+        shouldClearAfterRetry = false;
+      }
+      if (shouldClearAfterRetry) {
+        clearRecoverableFailure(id);
+      }
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "재시도에 실패했습니다.");
+    }
+  }, [
+    clearRecoverableFailure,
+    currentChapterRef,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
+    mergeLiveChapter,
+    pushStatus,
+    refreshLibrary,
+    rerunInpaintWithCurrentMask,
+    retryLastAnalysis,
+    saveNow
+  ]);
 
   const togglePageProgress = useCallback(
     (pageId: string) => {
@@ -585,6 +649,7 @@ export default function App(): React.JSX.Element {
         lamaNoticePlatform={lamaNoticePlatform}
         layerVisibility={layerVisibility}
         rangeToolActive={rangeToolActive}
+        recoverableFailures={recoverableFailures}
         selectedBlockId={selectedBlockId}
         selectedPage={selectedPage}
         selectedPageEditLocked={selectedPageEditLocked}
@@ -612,6 +677,8 @@ export default function App(): React.JSX.Element {
         onInpaintSelectionChange={setInpaintSelectionRect}
         onPrepareLama={prepareLamaFromEmptyState}
         onRefreshLamaStatus={refreshLamaStatus}
+        onDismissRecoverableFailure={clearRecoverableFailure}
+        onRetryRecoverableFailure={retryRecoverableFailure}
         onSelectBlock={setSelectedBlockId}
         onSelectImportFiles={selectImportFiles}
         onSelectPointerTool={selectPointerTool}

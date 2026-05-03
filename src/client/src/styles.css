@@ -1092,7 +1092,7 @@ input[type="number"]::-webkit-inner-spin-button {
 
 .notification-card {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   min-height: 48px;
@@ -1118,6 +1118,33 @@ input[type="number"]::-webkit-inner-spin-button {
   font-size: 12px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.notification-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.notification-action,
+.notification-dismiss {
+  min-height: 28px;
+  padding: 5px 9px;
+  border-radius: 6px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.notification-action {
+  border-color: rgba(241, 245, 249, 0.38);
+  background: rgba(241, 245, 249, 0.14);
+  color: #f8fafc;
+}
+
+.notification-dismiss {
+  border-color: rgba(203, 213, 225, 0.24);
+  background: rgba(15, 23, 42, 0.18);
+  color: #cbd5e1;
 }
 
 .status-history-panel {

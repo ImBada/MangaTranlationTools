@@ -1,14 +1,20 @@
 import React from "react";
 import type { JobState } from "../../../../shared/types";
+import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
 
 export type PageInpaintNotice = {
+  actionLabel?: string;
   message: string;
+  onAction?: () => void | Promise<void>;
   title: string;
   tone: string;
 };
 
 type NotificationDockProps = {
   inpaintNotice: PageInpaintNotice | null;
+  onDismissRecoverableFailure: (id: RecoverableFailureId) => void;
+  onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
+  recoverableFailures: RecoverableFailure[];
   statusToastLine: string | null;
   statusWidgetTone: string;
 };
@@ -38,8 +44,15 @@ type StageToolOverlayProps = {
   onSelectZoomTool: () => void;
 };
 
-export function NotificationDock({ inpaintNotice, statusToastLine, statusWidgetTone }: NotificationDockProps): React.JSX.Element | null {
-  if (!inpaintNotice && !statusToastLine) {
+export function NotificationDock({
+  inpaintNotice,
+  onDismissRecoverableFailure,
+  onRetryRecoverableFailure,
+  recoverableFailures,
+  statusToastLine,
+  statusWidgetTone
+}: NotificationDockProps): React.JSX.Element | null {
+  if (!inpaintNotice && recoverableFailures.length === 0 && !statusToastLine) {
     return null;
   }
 
@@ -51,8 +64,29 @@ export function NotificationDock({ inpaintNotice, statusToastLine, statusWidgetT
             <strong>{inpaintNotice.title}</strong>
             <span>{inpaintNotice.message}</span>
           </div>
+          {inpaintNotice.onAction ? (
+            <button type="button" className="notification-action" onClick={() => void inpaintNotice.onAction?.()}>
+              {inpaintNotice.actionLabel ?? "재시도"}
+            </button>
+          ) : null}
         </section>
       ) : null}
+      {recoverableFailures.map((failure) => (
+        <section className="notification-card failed" key={failure.id}>
+          <div className="notification-copy">
+            <strong>{failure.title}</strong>
+            <span>{failure.message}</span>
+          </div>
+          <div className="notification-actions">
+            <button type="button" className="notification-action" onClick={() => void onRetryRecoverableFailure(failure.id)}>
+              재시도
+            </button>
+            <button type="button" className="notification-dismiss" onClick={() => onDismissRecoverableFailure(failure.id)} aria-label={`${failure.title} 닫기`}>
+              닫기
+            </button>
+          </div>
+        </section>
+      ))}
       {statusToastLine ? (
         <section className={`notification-card ${statusWidgetTone}`}>
           <div className="notification-copy">

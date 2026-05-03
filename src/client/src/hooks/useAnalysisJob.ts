@@ -2,17 +2,20 @@ import React from "react";
 import type { ChapterSnapshot, JobState } from "../../../shared/types";
 import { markChapterPagesRunning } from "../lib/chapterSync";
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "../lib/jobProgress";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type AnalysisRunMode = "pending" | "all" | "single-page";
 
 type UseAnalysisJobOptions = {
   appendStatusLine: (line: string) => void;
   applyChapter: (chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => void;
+  clearRecoverableFailure?: (id: RecoverableFailureId) => void;
   currentChapter: ChapterSnapshot | null;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   mergeLiveChapter: (chapter: ChapterSnapshot) => void;
   pushStatus: (line: string) => void;
   refreshLibrary: () => Promise<void>;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   resetStatusLog: () => void;
   saveNow: () => Promise<void>;
   setCurrentChapter: React.Dispatch<React.SetStateAction<ChapterSnapshot | null>>;
@@ -23,6 +26,7 @@ type UseAnalysisJobState = {
   jobState: JobState;
   progressSnapshot: ReturnType<typeof resolveProgressSnapshot>;
   retranslatePage: (pageId: string) => Promise<void>;
+  retryLastAnalysis: () => Promise<void>;
   runAnalysis: (runMode: AnalysisRunMode, pageId?: string) => Promise<void>;
   showProgressBar: boolean;
 };
@@ -37,16 +41,19 @@ const EMPTY_JOB: JobState = {
 export function useAnalysisJob({
   appendStatusLine,
   applyChapter,
+  clearRecoverableFailure,
   currentChapter,
   currentChapterRef,
   mergeLiveChapter,
   pushStatus,
   refreshLibrary,
+  reportRecoverableFailure,
   resetStatusLog,
   saveNow,
   setCurrentChapter
 }: UseAnalysisJobOptions): UseAnalysisJobState {
   const [jobState, setJobState] = React.useState<JobState>(EMPTY_JOB);
+  const lastAnalysisRequestRef = React.useRef<{ pageId?: string; runMode: AnalysisRunMode } | null>(null);
   const jobActive = ["starting", "running", "cancelling"].includes(jobState.status);
   const progressSnapshot = React.useMemo(() => resolveProgressSnapshot(jobState), [jobState]);
   const showProgressBar = jobState.status !== "idle" && !!progressSnapshot;
@@ -86,48 +93,90 @@ export function useAnalysisJob({
           .then(() => refreshLibrary())
           .catch((error) => {
             console.error(error);
+            const message = error instanceof Error ? error.message : "분석 결과를 불러오지 못했습니다.";
+            pushStatus(message);
+            reportRecoverableFailure?.({
+              id: "analysis-sync",
+              title: "분석 결과 새로고침 실패",
+              message: "서버 저장 결과를 화면에 반영하지 못했습니다. 다시 불러오기를 시도하세요."
+            });
           });
       }
     });
     return unsubscribe;
-  }, [appendStatusLine, currentChapterRef, mergeLiveChapter, refreshLibrary]);
+  }, [appendStatusLine, currentChapterRef, mergeLiveChapter, pushStatus, refreshLibrary, reportRecoverableFailure]);
 
   const runAnalysis = React.useCallback(
     async (runMode: AnalysisRunMode, pageId?: string) => {
       if (!currentChapter || jobActive) {
         return;
       }
+      lastAnalysisRequestRef.current = { runMode, pageId };
 
-      await saveNow();
-      resetStatusLog();
-      setJobState({
-        id: "pending",
-        kind: "gemma-analysis",
-        status: "starting",
-        progressText: "모델 준비 중",
-        phase: "booting"
-      });
-      setCurrentChapter((chapter) => (chapter ? markChapterPagesRunning(chapter, runMode, pageId) : chapter));
+      try {
+        await saveNow();
+        resetStatusLog();
+        setJobState({
+          id: "pending",
+          kind: "gemma-analysis",
+          status: "starting",
+          progressText: "모델 준비 중",
+          phase: "booting"
+        });
+        setCurrentChapter((chapter) => (chapter ? markChapterPagesRunning(chapter, runMode, pageId) : chapter));
 
-      const result = await window.mangaApi.startAnalysis({ chapterId: currentChapter.id, runMode, pageId });
-      if (result.chapter) {
-        applyChapter(result.chapter);
-      }
-      await refreshLibrary();
-
-      if (result.status === "completed") {
-        const warningSummary = summarizeWarnings(result.warnings ?? []);
-        if (warningSummary) {
-          pushStatus(warningSummary);
+        const result = await window.mangaApi.startAnalysis({ chapterId: currentChapter.id, runMode, pageId });
+        if (result.chapter) {
+          applyChapter(result.chapter);
         }
-        return;
-      }
+        await refreshLibrary();
 
-      if (result.status === "failed" && result.error) {
-        pushStatus(result.error);
+        if (result.status === "completed") {
+          clearRecoverableFailure?.("analysis-run");
+          const warningSummary = summarizeWarnings(result.warnings ?? []);
+          if (warningSummary) {
+            pushStatus(warningSummary);
+          }
+          return;
+        }
+
+        if (result.status === "failed" && result.error) {
+          pushStatus(result.error);
+          reportRecoverableFailure?.({
+            id: "analysis-run",
+            title: pageId ? "페이지 번역 실패" : "번역 실행 실패",
+            message: "기존 편집 내용은 유지됩니다. 설정과 모델 상태를 확인한 뒤 다시 실행하세요."
+          });
+        }
+      } catch (error) {
+        console.error(error);
+        const message = error instanceof Error ? error.message : "번역 실행에 실패했습니다.";
+        pushStatus(message);
+        setJobState((current) => ({
+          ...current,
+          status: "failed",
+          progressText: "실패",
+          detail: message
+        }));
+        reportRecoverableFailure?.({
+          id: "analysis-run",
+          title: pageId ? "페이지 번역 실패" : "번역 실행 실패",
+          message: "기존 편집 내용은 유지됩니다. 설정과 모델 상태를 확인한 뒤 다시 실행하세요."
+        });
       }
     },
-    [applyChapter, currentChapter, jobActive, pushStatus, refreshLibrary, resetStatusLog, saveNow, setCurrentChapter]
+    [
+      applyChapter,
+      clearRecoverableFailure,
+      currentChapter,
+      jobActive,
+      pushStatus,
+      refreshLibrary,
+      reportRecoverableFailure,
+      resetStatusLog,
+      saveNow,
+      setCurrentChapter
+    ]
   );
 
   const retranslatePage = React.useCallback(
@@ -149,11 +198,21 @@ export function useAnalysisJob({
     [currentChapter, runAnalysis]
   );
 
+  const retryLastAnalysis = React.useCallback(async () => {
+    const request = lastAnalysisRequestRef.current;
+    if (!request) {
+      await runAnalysis("pending");
+      return;
+    }
+    await runAnalysis(request.runMode, request.pageId);
+  }, [runAnalysis]);
+
   return {
     jobActive,
     jobState,
     progressSnapshot,
     retranslatePage,
+    retryLastAnalysis,
     runAnalysis,
     showProgressBar
   };

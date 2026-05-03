@@ -2,11 +2,13 @@ import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
 import { mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "../lib/chapterSync";
 import { normalizeChapterTranslatedText } from "../lib/editorUtils";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type ChapterSessionOptions = {
   clearPendingChapterTimers?: () => void;
   clearUndoStacks: () => void;
   pushStatus: (line: string) => void;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   signalSaveComplete: () => void;
 };
 
@@ -48,6 +50,7 @@ export function useChapterSession({
   clearPendingChapterTimers,
   clearUndoStacks,
   pushStatus,
+  reportRecoverableFailure,
   signalSaveComplete
 }: ChapterSessionOptions): ChapterSessionState {
   const [currentChapter, setCurrentChapterState] = React.useState<ChapterSnapshot | null>(null);
@@ -166,13 +169,20 @@ export function useChapterSession({
         }
       } catch (error) {
         console.error(error);
+        const message = error instanceof Error ? error.message : "자동 저장에 실패했습니다.";
+        pushStatus(message);
+        reportRecoverableFailure?.({
+          id: "chapter-save",
+          title: "자동 저장 실패",
+          message: "변경 내용은 화면에 남아 있습니다. 네트워크 또는 저장 위치를 확인한 뒤 다시 저장하세요."
+        });
       } finally {
         saveTimerRef.current = null;
       }
     }, 400);
 
     return clearSaveTimer;
-  }, [clearSaveTimer, currentChapter, dirty, signalSaveComplete]);
+  }, [clearSaveTimer, currentChapter, dirty, pushStatus, reportRecoverableFailure, signalSaveComplete]);
 
   const saveNow = React.useCallback(async () => {
     if (!currentChapter) {

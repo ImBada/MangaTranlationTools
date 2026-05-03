@@ -3,8 +3,10 @@ import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
 import { createInpaintMaskUndoSnapshot, type InpaintMaskUndoSnapshot } from "../lib/editorUtils";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
 import { useInpaintLayerSaveQueue } from "./useInpaintLayerSaveQueue";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type UseInpaintLayerPersistenceOptions = {
+  clearRecoverableFailure?: (id: RecoverableFailureId) => void;
   consumeGlobalUndoEntry: (kind: GlobalUndoKind, pageId?: string) => void;
   currentChapter: ChapterSnapshot | null;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
@@ -13,6 +15,7 @@ type UseInpaintLayerPersistenceOptions = {
   pushStatus: (line: string) => void;
   recordGlobalUndoEntry: (entry: GlobalUndoHistoryEntry) => void;
   refreshLibrary: () => Promise<void>;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -36,6 +39,7 @@ type UseInpaintLayerPersistenceState = {
 };
 
 export function useInpaintLayerPersistence({
+  clearRecoverableFailure,
   consumeGlobalUndoEntry,
   currentChapter,
   currentChapterRef,
@@ -44,6 +48,7 @@ export function useInpaintLayerPersistence({
   pushStatus,
   recordGlobalUndoEntry,
   refreshLibrary,
+  reportRecoverableFailure,
   saveNow,
   selectedPage,
   selectedPageEditLocked,
@@ -59,11 +64,13 @@ export function useInpaintLayerPersistence({
     scheduleInpaintMaskSave,
     scheduleInpaintResultSave
   } = useInpaintLayerSaveQueue({
+    clearRecoverableFailure,
     currentChapterRef,
     dirty,
     mergeLiveChapter,
     pushStatus,
     refreshLibrary,
+    reportRecoverableFailure,
     saveNow,
     signalSaveComplete
   });

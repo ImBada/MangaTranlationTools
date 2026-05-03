@@ -8,10 +8,12 @@ import { useInpaintLayerPersistence } from "./useInpaintLayerPersistence";
 import { useInpaintPsdActions } from "./useInpaintPsdActions";
 import { useInpaintRunActions } from "./useInpaintRunActions";
 import { useInpaintSelectionActions } from "./useInpaintSelectionActions";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type UseInpaintActionsOptions = {
   activeLayer: ActiveLayer;
   applyChapter: (chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => void;
+  clearRecoverableFailure?: (id: RecoverableFailureId) => void;
   consumeGlobalUndoEntry: (kind: GlobalUndoKind, pageId?: string) => void;
   currentChapter: ChapterSnapshot | null;
   currentChapterId: string | null;
@@ -22,6 +24,7 @@ type UseInpaintActionsOptions = {
   rangeToolActive: boolean;
   recordGlobalUndoEntry: (entry: GlobalUndoHistoryEntry) => void;
   refreshLibrary: () => Promise<void>;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   selectedBlock: TranslationBlock | null;
   selectedPage: MangaPage | null;
@@ -45,6 +48,8 @@ type UseInpaintActionsState = {
   downloadLastImportedInpaintPsd: () => Promise<void>;
   exportSelectedPageInpaintPsd: () => Promise<void>;
   fillSelectedInpaintSelection: () => Promise<void>;
+  flushInpaintMaskSave: () => Promise<void>;
+  flushInpaintResultSave: () => Promise<void>;
   handleInpaintPsdInputChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   inpaintBrushSize: number;
   inpaintBusy: boolean;
@@ -79,6 +84,7 @@ type UseInpaintActionsState = {
 export function useInpaintActions({
   activeLayer,
   applyChapter,
+  clearRecoverableFailure,
   consumeGlobalUndoEntry,
   currentChapter,
   currentChapterId,
@@ -89,6 +95,7 @@ export function useInpaintActions({
   rangeToolActive,
   recordGlobalUndoEntry,
   refreshLibrary,
+  reportRecoverableFailure,
   saveNow,
   selectedBlock,
   selectedPage,
@@ -126,6 +133,7 @@ export function useInpaintActions({
     updateSelectedPageInpaintMask,
     updateSelectedPageInpaintResult
   } = useInpaintLayerPersistence({
+    clearRecoverableFailure,
     consumeGlobalUndoEntry,
     currentChapter,
     currentChapterRef,
@@ -134,6 +142,7 @@ export function useInpaintActions({
     pushStatus,
     recordGlobalUndoEntry,
     refreshLibrary,
+    reportRecoverableFailure,
     saveNow,
     selectedPage,
     selectedPageEditLocked,
@@ -178,11 +187,13 @@ export function useInpaintActions({
     rerunInpaintWithCurrentMask
   } = useInpaintRunActions({
     applyChapter,
+    clearRecoverableFailure,
     currentChapter,
     currentChapterRef,
     dirty,
     inpaintSelectionRect,
     pushStatus,
+    reportRecoverableFailure,
     refreshLibrary,
     saveNow,
     selectedBlock,
@@ -224,6 +235,8 @@ export function useInpaintActions({
     downloadLastImportedInpaintPsd,
     exportSelectedPageInpaintPsd,
     fillSelectedInpaintSelection,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
     handleInpaintPsdInputChange,
     inpaintBrushSize,
     inpaintBusy,

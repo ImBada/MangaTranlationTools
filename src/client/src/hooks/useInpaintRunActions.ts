@@ -2,15 +2,18 @@ import React from "react";
 import type { ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
 import { DEFAULT_INPAINT_SETTINGS } from "../lib/inpaintToolSettings";
+import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type UseInpaintRunActionsOptions = {
   applyChapter: (chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => void;
+  clearRecoverableFailure?: (id: RecoverableFailureId) => void;
   currentChapter: ChapterSnapshot | null;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   dirty: boolean;
   inpaintSelectionRect: ImageRect | null;
   pushStatus: (line: string) => void;
   refreshLibrary: () => Promise<void>;
+  reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   selectedBlock: TranslationBlock | null;
   selectedPage: MangaPage | null;
@@ -33,12 +36,14 @@ type UseInpaintRunActionsState = {
 
 export function useInpaintRunActions({
   applyChapter,
+  clearRecoverableFailure,
   currentChapter,
   currentChapterRef,
   dirty,
   inpaintSelectionRect,
   pushStatus,
   refreshLibrary,
+  reportRecoverableFailure,
   saveNow,
   selectedBlock,
   selectedPage,
@@ -73,16 +78,35 @@ export function useInpaintRunActions({
       });
       applyChapter(result.chapter);
       signalSaveComplete();
+      clearRecoverableFailure?.("inpaint-run");
       void refreshLibrary();
       pushStatus(result.engine === "local-fill-fallback" ? "로컬 인페인트 결과를 저장했습니다." : statusMessage);
     } catch (error) {
       console.error(error);
       updatePageInpaintStatus(page.id, "failed");
-      pushStatus(error instanceof Error ? error.message : "인페인트 실행에 실패했습니다.");
+      const message = error instanceof Error ? error.message : "인페인트 실행에 실패했습니다.";
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-run",
+        title: "인페인트 실패",
+        message: "마스크와 편집 상태는 유지됩니다. 설정을 확인한 뒤 다시 실행하세요."
+      });
     } finally {
       setInpaintBusy(false);
     }
-  }, [applyChapter, currentChapter, dirty, inpaintBusy, pushStatus, refreshLibrary, saveNow, signalSaveComplete, updatePageInpaintStatus]);
+  }, [
+    applyChapter,
+    clearRecoverableFailure,
+    currentChapter,
+    dirty,
+    inpaintBusy,
+    pushStatus,
+    refreshLibrary,
+    reportRecoverableFailure,
+    saveNow,
+    signalSaveComplete,
+    updatePageInpaintStatus
+  ]);
 
   const applyInpaintSelectedBlock = React.useCallback(async () => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
@@ -152,21 +176,30 @@ export function useInpaintRunActions({
       }
 
       signalSaveComplete();
+      clearRecoverableFailure?.("inpaint-run");
       void refreshLibrary();
       pushStatus(`전체 인페인트 완료: ${pagesWithBlocks.length}p`);
     } catch (error) {
       console.error(error);
-      pushStatus(error instanceof Error ? error.message : "전체 인페인트에 실패했습니다.");
+      const message = error instanceof Error ? error.message : "전체 인페인트에 실패했습니다.";
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-run",
+        title: "전체 인페인트 실패",
+        message: "완료된 페이지는 유지됩니다. 실패한 페이지부터 다시 실행하세요."
+      });
     } finally {
       setInpaintBusy(false);
     }
   }, [
     applyChapter,
+    clearRecoverableFailure,
     currentChapterRef,
     dirty,
     inpaintBusy,
     pushStatus,
     refreshLibrary,
+    reportRecoverableFailure,
     saveNow,
     selectedPageEditLocked,
     signalSaveComplete,
@@ -250,17 +283,25 @@ export function useInpaintRunActions({
       });
       applyChapter(saved.chapter);
       signalSaveComplete();
+      clearRecoverableFailure?.("inpaint-run");
       void refreshLibrary();
       pushStatus(result.engine === "local-fill-fallback" ? "선택 범위 로컬 인페인트 결과를 저장했습니다." : "선택 범위만 다시 인페인트했습니다.");
     } catch (error) {
       console.error(error);
       updatePageInpaintStatus(page.id, "failed");
-      pushStatus(error instanceof Error ? error.message : "부분 인페인트 실행에 실패했습니다.");
+      const message = error instanceof Error ? error.message : "부분 인페인트 실행에 실패했습니다.";
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-run",
+        title: "부분 인페인트 실패",
+        message: "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요."
+      });
     } finally {
       setInpaintBusy(false);
     }
   }, [
     applyChapter,
+    clearRecoverableFailure,
     currentChapter,
     currentChapterRef,
     dirty,
@@ -268,6 +309,7 @@ export function useInpaintRunActions({
     inpaintSelectionRect,
     pushStatus,
     refreshLibrary,
+    reportRecoverableFailure,
     saveNow,
     selectedPageEditLocked,
     selectedPageIdRef,

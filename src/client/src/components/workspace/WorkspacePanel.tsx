@@ -8,6 +8,7 @@ import type {
   TranslationBlock
 } from "../../../../shared/types";
 import { INPAINT_TOOL_SHORTCUTS } from "../../lib/editorShortcuts";
+import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
 import type { ViewportSize } from "../../lib/overlayLayout";
@@ -46,6 +47,7 @@ type WorkspacePanelProps = {
   lamaNoticePlatform: LamaNoticePlatform;
   layerVisibility: LayerVisibility;
   rangeToolActive: boolean;
+  recoverableFailures: RecoverableFailure[];
   selectedBlockId: string | null;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -73,6 +75,8 @@ type WorkspacePanelProps = {
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onPrepareLama: () => void | Promise<unknown>;
   onRefreshLamaStatus: () => void | Promise<unknown>;
+  onDismissRecoverableFailure: (id: RecoverableFailureId) => void;
+  onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   onSelectBlock: React.Dispatch<React.SetStateAction<string | null>>;
   onSelectImportFiles: (mode: ImportSourceKind) => void;
   onSelectPointerTool: () => void;
@@ -107,6 +111,7 @@ export function WorkspacePanel({
   lamaNoticePlatform,
   layerVisibility,
   rangeToolActive,
+  recoverableFailures,
   selectedBlockId,
   selectedPage,
   selectedPageEditLocked,
@@ -134,6 +139,8 @@ export function WorkspacePanel({
   onInpaintSelectionChange,
   onPrepareLama,
   onRefreshLamaStatus,
+  onDismissRecoverableFailure,
+  onRetryRecoverableFailure,
   onSelectBlock,
   onSelectImportFiles,
   onSelectPointerTool,
@@ -192,6 +199,9 @@ export function WorkspacePanel({
       ) : null}
       <NotificationDock
         inpaintNotice={selectedPageInpaintNotice}
+        recoverableFailures={recoverableFailures}
+        onDismissRecoverableFailure={onDismissRecoverableFailure}
+        onRetryRecoverableFailure={onRetryRecoverableFailure}
         statusToastLine={statusToastLine}
         statusWidgetTone={statusWidgetTone}
       />
