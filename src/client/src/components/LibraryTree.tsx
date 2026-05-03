@@ -153,16 +153,6 @@ function resolveChapterStatusLabel(status: string): string {
   }
 }
 
-function FoldIcon(): React.JSX.Element {
-  return (
-    <svg className="library-collapse-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">
-      <rect x="3" y="2" width="14" height="16" rx="2" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M3 7.5H17" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M7 5V10" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-    </svg>
-  );
-}
-
 function UnfoldIcon(): React.JSX.Element {
   return (
     <svg className="library-collapse-icon" viewBox="0 0 20 20" fill="none" aria-hidden="true">

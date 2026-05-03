@@ -187,10 +187,6 @@ async function seedLibraryIndex(dataDir: string): Promise<void> {
   );
 }
 
-async function pngDataUrl(pixel: [number, number, number, number]): Promise<string> {
-  return `data:image/png;base64,${(await pngBuffer(pixel)).toString("base64")}`;
-}
-
 async function rgbaDataUrl(width: number, height: number, pixels: [number, number, number, number][]): Promise<string> {
   return `data:image/png;base64,${(await rgbaBuffer(width, height, pixels)).toString("base64")}`;
 }

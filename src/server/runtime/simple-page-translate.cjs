@@ -1132,8 +1132,7 @@ async function requestTranslation(server, options) {
     };
   }
 
-  let rawText = "";
-  rawText = await readResponseText(response, requestSummary, options);
+  const rawText = await readResponseText(response, requestSummary, options);
 
   if (!response.ok) {
     throw createDetailedError(`${resolveProviderDisplayName(options)} request failed (${response.status}).`, {

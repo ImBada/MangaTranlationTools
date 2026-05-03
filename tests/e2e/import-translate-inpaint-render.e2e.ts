@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { _electron as electron, type ElectronApplication } from "playwright";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -22,7 +22,6 @@ test.describe("Electron user flow", () => {
     const mockModel = await startMockModelServer();
     const appPort = await getFreePort();
     let app: ElectronApplication | null = null;
-    let page: Page | null = null;
     const pageErrors: string[] = [];
 
     try {
@@ -48,7 +47,7 @@ test.describe("Electron user flow", () => {
         env: electronEnv
       });
 
-      page = await app.firstWindow();
+      const page = await app.firstWindow();
       page.on("pageerror", (error) => pageErrors.push(error.message));
       await expect(page.getByTestId("image-import-input")).toBeAttached();
 

@@ -3,7 +3,6 @@ import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from 
 
 const MIN_FONT_SIZE_PX = 2;
 const MAX_AUTOFIT_FONT_SIZE_PX = 256;
-const MIN_BLOCK_PADDING_PX = 0;
 const MAX_BLOCK_PADDING_PX = 14;
 const MIN_INNER_SIZE_PX = 1;
 const BLOCK_BORDER_PX = 1;

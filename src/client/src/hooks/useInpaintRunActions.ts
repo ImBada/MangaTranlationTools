@@ -171,7 +171,7 @@ export function useInpaintRunActions({
         } catch (error) {
           updatePageInpaintStatus(page.id, "failed");
           const message = error instanceof Error ? error.message : "인페인트 실행에 실패했습니다.";
-          throw new Error(`${page.name} 인페인트 실패: ${message}`);
+          throw new Error(`${page.name} 인페인트 실패: ${message}`, { cause: error });
         }
       }
 

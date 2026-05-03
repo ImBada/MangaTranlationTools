@@ -1,0 +1,15 @@
+dist/
+dist-app/
+node_modules/
+out/
+.tmp/
+coverage/
+library/
+logs/
+models/
+tools/Er0mangaInpaint/
+tools/inpaint-models/
+tools/lama-manga-venv/
+tools/llama-*/
+uploads/
+package-lock.json

@@ -1,6 +1,5 @@
 import type { AppSettings, UpdateStatus } from "../../../../shared/types";
 import {
-  DEFAULT_GEMMA_MODEL_REPO,
   DEFAULT_OPENAI_COMPATIBLE_BASE_URL,
   DEFAULT_OPENAI_COMPATIBLE_MODEL,
   MAX_GPU_LAYERS,

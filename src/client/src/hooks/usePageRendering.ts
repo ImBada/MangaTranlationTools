@@ -117,7 +117,7 @@ export function usePageRendering({
           await renderPageOutput(chapter.id, page);
         } catch (error) {
           const message = error instanceof Error ? error.message : "페이지 렌더에 실패했습니다.";
-          throw new Error(`${page.name} 출력 실패: ${message}`);
+          throw new Error(`${page.name} 출력 실패: ${message}`, { cause: error });
         }
       }
 

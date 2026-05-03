@@ -15,6 +15,10 @@
     "compile:server": "tsc -p tsconfig.server.json",
     "logs": "node scripts/tail-log.cjs",
     "lama:prepare": "node scripts/prepare-lama-runtime.cjs",
+    "lint": "eslint . --max-warnings=0",
+    "format": "prettier --write . --ignore-unknown",
+    "format:check": "prettier --check package.json .github/workflows/*.yml eslint.config.mjs .prettierrc.json --ignore-unknown",
+    "audit": "npm audit --audit-level=high",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
@@ -32,6 +36,7 @@
     "sharp": "^0.34.5"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@playwright/test": "^1.59.1",
     "@tailwindcss/vite": "^4.2.4",
     "@types/express": "^5.0.6",
@@ -42,8 +47,13 @@
     "@vitejs/plugin-react-swc": "^4.3.0",
     "electron": "^41.3.0",
     "electron-builder": "^26.8.1",
+    "eslint": "^10.3.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.6.0",
+    "prettier": "^3.8.3",
     "tailwindcss": "^4.2.4",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.59.1",
     "vite": "^7.3.0",
     "vitest": "^4.0.16"
   },

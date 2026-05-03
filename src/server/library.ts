@@ -1374,9 +1374,8 @@ async function writeChapterFile(chapter: ChapterFile): Promise<void> {
 
 async function enqueueChapterMutation<T>(chapterId: string, task: () => Promise<T>): Promise<T> {
   const previous = chapterWriteQueues.get(chapterId) ?? Promise.resolve();
-  let release: Promise<void> | null = null;
   const run = previous.catch(() => undefined).then(task);
-  release = run.then(
+  const release = run.then(
     () => undefined,
     () => undefined
   );
