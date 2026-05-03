@@ -18,6 +18,7 @@
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build && playwright test",
+    "test:e2e:ci": "npm run build && xvfb-run --auto-servernum --server-args='-screen 0 1280x960x24' playwright test",
     "preview": "npm run build && node scripts/preview.cjs"
   },
   "dependencies": {
