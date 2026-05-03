@@ -1,4 +1,5 @@
 import type { ChapterSnapshot, RunMode } from "../../../shared/types";
+import { filterAnalysisTargetsForRun } from "../../../shared/analysisTargets";
 
 type ChapterSelection = {
   selectedPageId: string | null;
@@ -73,12 +74,7 @@ export function mergeLiveChapterPreservingDirtyCompletedPages(
 }
 
 export function markChapterPagesRunning(chapter: ChapterSnapshot, runMode: RunMode, pageId?: string): ChapterSnapshot {
-  const targetPageIds =
-    runMode === "all"
-      ? new Set(chapter.pages.map((page) => page.id))
-      : runMode === "single-page"
-        ? new Set(pageId ? [pageId] : [])
-        : new Set(chapter.pages.filter((page) => page.analysisStatus !== "completed").map((page) => page.id));
+  const targetPageIds = new Set(filterAnalysisTargetsForRun(chapter.pages, runMode, pageId).map((page) => page.id));
 
   if (targetPageIds.size === 0) {
     return chapter;

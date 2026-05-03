@@ -88,6 +88,24 @@ describe("chapter sync helpers", () => {
     expect(next.pages[1].lastError).toBeUndefined();
   });
 
+  it("skips completed-check pages when starting 이어서 번역", () => {
+    const chapter = makeChapter();
+    chapter.pages[1].progressCompleted = true;
+
+    const next = markChapterPagesRunning(chapter, "pending");
+
+    expect(next).toBe(chapter);
+  });
+
+  it("skips completed-check pages when starting 전체 번역", () => {
+    const chapter = makeChapter();
+    chapter.pages[0].progressCompleted = true;
+
+    const next = markChapterPagesRunning(chapter, "all");
+
+    expect(next.pages.map((page) => page.analysisStatus)).toEqual(["completed", "running"]);
+  });
+
   it("marks the requested page as running for single-page retranslation", () => {
     const next = markChapterPagesRunning(makeChapter(), "single-page", "page-1");
 

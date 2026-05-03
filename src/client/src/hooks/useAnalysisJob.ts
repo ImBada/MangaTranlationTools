@@ -1,5 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot, JobState } from "../../../shared/types";
+import { filterAnalysisTargetsForRun } from "../../../shared/analysisTargets";
 import { markChapterPagesRunning } from "../lib/chapterSync";
 import { formatJobEventLine, formatJobLabel, resolveProgressSnapshot, summarizeWarnings } from "../lib/jobProgress";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
@@ -109,6 +110,10 @@ export function useAnalysisJob({
   const runAnalysis = React.useCallback(
     async (runMode: AnalysisRunMode, pageId?: string) => {
       if (!currentChapter || jobActive) {
+        return;
+      }
+      if (runMode !== "single-page" && filterAnalysisTargetsForRun(currentChapter.pages, runMode).length === 0) {
+        pushStatus("번역할 미완료 페이지가 없습니다.");
         return;
       }
       lastAnalysisRequestRef.current = { runMode, pageId };

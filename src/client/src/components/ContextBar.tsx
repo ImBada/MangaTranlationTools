@@ -152,7 +152,7 @@ export function ContextBar({
               전체 번역 (AI)
             </button>
             <button onClick={() => void onApplyInpaintAllPages()} disabled={batchInpaintDisabled}>
-              {inpaintBusy ? "전체 인페인트 중" : "전체 인페인트 (완료 제외)"}
+              {inpaintBusy ? "전체 인페인트 중" : "전체 인페인트"}
             </button>
             <button onClick={() => void onRenderSelectedPage()} disabled={!currentChapter || !selectedPage || jobActive || renderBusy}>
               {renderProgress?.mode === "page" ? "출력 중" : "페이지 출력"}

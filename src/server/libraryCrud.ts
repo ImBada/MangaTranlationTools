@@ -10,6 +10,7 @@ import type {
   MangaPage,
   SaveChapterPatchRequest
 } from "../shared/types";
+import { filterAnalysisTargetsForRun } from "../shared/analysisTargets";
 import { applyBlockTypeFontPresetToBlock, ensureBlockTypeFontPresets } from "../shared/fontPresets";
 import { getAppPaths } from "./appPaths";
 import { safeUnlink } from "./libraryFileIO";
@@ -385,12 +386,7 @@ export async function resolvePagesForRun(chapterId: string, runMode: "pending" |
   }
 
   const orderedPages = reorderRecords(chapterFile.pages, chapterFile.pageOrder);
-  const selectedRecords =
-    runMode === "all"
-      ? orderedPages
-      : runMode === "single-page"
-        ? orderedPages.filter((page) => page.id === pageId)
-        : orderedPages.filter((page) => page.analysisStatus !== "completed");
+  const selectedRecords = filterAnalysisTargetsForRun(orderedPages, runMode, pageId);
   const pages = await Promise.all(selectedRecords.map((page: LibraryPageRecord) => hydratePageDataUrls(chapterFile.id, page)));
 
   return {
