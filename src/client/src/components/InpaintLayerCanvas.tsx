@@ -1,5 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
+import {
+  drawMaskSegment,
+  isCanvasBlank,
+  resolveCanvasPoint,
+  resolveSelectionRect,
+  type DrawPoint,
+  type SelectionDragState
+} from "../lib/inpaintLayerCanvas";
 
 export type InpaintTool = "select" | "brush" | "eraser";
 
@@ -15,16 +23,6 @@ type InpaintLayerCanvasProps = {
   selectionRect: ImageRect | null;
   onChange: (dataUrl: string | undefined) => void;
   onSelectionChange: (rect: ImageRect | null) => void;
-};
-
-type DrawPoint = {
-  x: number;
-  y: number;
-};
-
-type SelectionDragState = {
-  start: DrawPoint;
-  current: DrawPoint;
 };
 
 export function InpaintLayerCanvas({
@@ -80,26 +78,12 @@ export function InpaintLayerCanvas({
       return;
     }
 
-    context.save();
-    context.lineCap = "round";
-    context.lineJoin = "round";
-    context.lineWidth = Math.max(1, brushSize);
-    context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
-    context.strokeStyle = "#ffffff";
-    context.beginPath();
-    context.moveTo(from.x, from.y);
-    context.lineTo(to.x, to.y);
-    context.stroke();
-    context.restore();
+    drawMaskSegment(context, from, to, brushSize, tool === "eraser");
     changedRef.current = true;
   };
 
   const resolvePoint = (event: React.PointerEvent<HTMLCanvasElement>): DrawPoint => {
-    const rect = event.currentTarget.getBoundingClientRect();
-    return {
-      x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * pageSize.width,
-      y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * pageSize.height
-    };
+    return resolveCanvasPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), pageSize);
   };
 
   const commitChange = () => {
@@ -110,19 +94,6 @@ export function InpaintLayerCanvas({
 
     changedRef.current = false;
     onChange(isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png"));
-  };
-
-  const resolveSelectionRect = (from: DrawPoint, to: DrawPoint): ImageRect => {
-    const left = Math.max(0, Math.min(from.x, to.x));
-    const top = Math.max(0, Math.min(from.y, to.y));
-    const right = Math.min(pageSize.width, Math.max(from.x, to.x));
-    const bottom = Math.min(pageSize.height, Math.max(from.y, to.y));
-    return {
-      x: Math.floor(left),
-      y: Math.floor(top),
-      width: Math.max(0, Math.ceil(right) - Math.floor(left)),
-      height: Math.max(0, Math.ceil(bottom) - Math.floor(top))
-    };
   };
 
   return (
@@ -138,7 +109,7 @@ export function InpaintLayerCanvas({
             event.currentTarget.setPointerCapture(event.pointerId);
             const point = resolvePoint(event);
             selectionDragRef.current = { start: point, current: point };
-            setPreviewSelectionRect(resolveSelectionRect(point, point));
+            setPreviewSelectionRect(resolveSelectionRect(point, point, pageSize));
             return;
           }
           if (!pointerEnabled) {
@@ -168,7 +139,7 @@ export function InpaintLayerCanvas({
             const drag = selectionDragRef.current;
             if (drag) {
               drag.current = point;
-              setPreviewSelectionRect(resolveSelectionRect(drag.start, point));
+              setPreviewSelectionRect(resolveSelectionRect(drag.start, point, pageSize));
             }
             return;
           }
@@ -195,7 +166,7 @@ export function InpaintLayerCanvas({
             event.preventDefault();
             event.stopPropagation();
             const point = resolvePoint(event);
-            const rect = resolveSelectionRect(selectionDragRef.current.start, point);
+            const rect = resolveSelectionRect(selectionDragRef.current.start, point, pageSize);
             event.currentTarget.releasePointerCapture(event.pointerId);
             selectionDragRef.current = null;
             setPreviewSelectionRect(null);
@@ -255,19 +226,4 @@ export function InpaintLayerCanvas({
       ) : null}
     </>
   );
-}
-
-function isCanvasBlank(canvas: HTMLCanvasElement): boolean {
-  const context = canvas.getContext("2d");
-  if (!context) {
-    return true;
-  }
-
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  for (let index = 3; index < pixels.length; index += 4) {
-    if (pixels[index] !== 0) {
-      return false;
-    }
-  }
-  return true;
 }
