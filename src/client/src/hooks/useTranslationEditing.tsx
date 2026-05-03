@@ -1,7 +1,7 @@
 import React from "react";
 import type { ChapterSnapshot, FontPreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
 import {
-  clampBbox,
+  clampEditableBbox,
   clampRotationDeg,
   clampTextPaddingPx,
   enforceRenderDirection
@@ -155,8 +155,8 @@ export function useTranslationEditing({
                       : Object.prototype.hasOwnProperty.call(patch, "textPaddingPx")
                         ? undefined
                         : block.textPaddingPx,
-                  bbox: patch.bbox ? clampBbox(patch.bbox) : block.bbox,
-                  renderBbox: patch.renderBbox ? clampBbox(patch.renderBbox) : block.renderBbox
+                  bbox: patch.bbox ? clampEditableBbox(patch.bbox) : block.bbox,
+                  renderBbox: patch.renderBbox ? clampEditableBbox(patch.renderBbox) : block.renderBbox
                 };
               })
             }

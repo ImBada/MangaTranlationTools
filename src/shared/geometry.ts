@@ -15,6 +15,15 @@ export function clampBbox(bbox: BBox): BBox {
   return { x, y, w, h };
 }
 
+export function clampEditableBbox(bbox: BBox): BBox {
+  return {
+    x: clamp(bbox.x, -10000, 10000),
+    y: clamp(bbox.y, -10000, 10000),
+    w: clamp(bbox.w, 1, 10000),
+    h: clamp(bbox.h, 1, 10000)
+  };
+}
+
 export function bboxToPixels(bbox: BBox, width: number, height: number): BBox {
   return {
     x: (bbox.x / 1000) * width,
@@ -34,7 +43,7 @@ export function pixelsToBbox(bbox: BBox, width: number, height: number): BBox {
 }
 
 export function resolveBlockRenderBbox(block: Pick<TranslationBlock, "bbox" | "renderBbox">): BBox {
-  return clampBbox(block.renderBbox ?? block.bbox);
+  return clampEditableBbox(block.renderBbox ?? block.bbox);
 }
 
 export function estimateBlockFontSizePx(
@@ -47,14 +56,14 @@ export function estimateBlockFontSizePx(
 
 export function resolveEditableBlockBbox(block: Pick<TranslationBlock, "bbox" | "renderBbox">): { key: "bbox" | "renderBbox"; bbox: BBox } {
   if (block.renderBbox) {
-    return { key: "renderBbox", bbox: clampBbox(block.renderBbox) };
+    return { key: "renderBbox", bbox: clampEditableBbox(block.renderBbox) };
   }
-  return { key: "bbox", bbox: clampBbox(block.bbox) };
+  return { key: "bbox", bbox: clampEditableBbox(block.bbox) };
 }
 
 export function applyEditableBlockBbox(block: TranslationBlock, nextBbox: BBox): TranslationBlock {
   const target = resolveEditableBlockBbox(block);
-  const clamped = clampBbox(nextBbox);
+  const clamped = clampEditableBbox(nextBbox);
   return target.key === "renderBbox" ? { ...block, renderBbox: clamped } : { ...block, bbox: clamped };
 }
 
@@ -136,7 +145,7 @@ export function estimateFontSizePx(text: string, bbox: BBox, pageSize: { width: 
 }
 
 function offsetBbox(bbox: BBox, dx: number, dy: number): BBox {
-  return clampBbox({
+  return clampEditableBbox({
     ...bbox,
     x: bbox.x + dx,
     y: bbox.y + dy

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   applyEditableBlockBbox,
   clampBbox,
+  clampEditableBbox,
   clampRotationDeg,
   enforceRenderDirection,
   estimateBlockFontSizePx,
@@ -18,6 +19,15 @@ describe("geometry helpers", () => {
       y: 10,
       w: 1000,
       h: 990
+    });
+  });
+
+  it("allows manual edit boxes to use off-page coordinates", () => {
+    expect(clampEditableBbox({ x: -30, y: -20, w: 1200, h: 1500 })).toEqual({
+      x: -30,
+      y: -20,
+      w: 1200,
+      h: 1500
     });
   });
 
@@ -74,6 +84,30 @@ describe("geometry helpers", () => {
 
     expect(next.bbox).toEqual({ x: 100, y: 100, w: 80, h: 120 });
     expect(next.renderBbox).toEqual({ x: 120, y: 140, w: 240, h: 280 });
+  });
+
+  it("preserves negative coordinates when manually dragging a block", () => {
+    const next = applyEditableBlockBbox(
+      {
+        id: "block-1",
+        type: "speech",
+        bbox: { x: 20, y: 30, w: 80, h: 120 },
+        sourceText: "",
+        translatedText: "",
+        confidence: 1,
+        sourceDirection: "vertical",
+        renderDirection: "horizontal",
+        fontSizePx: 24,
+        lineHeight: 1.18,
+        textAlign: "center",
+        textColor: "#111111",
+        backgroundColor: "#fffdf5",
+        opacity: 0.8
+      },
+      { x: -40, y: -25, w: 80, h: 120 }
+    );
+
+    expect(next.bbox).toEqual({ x: -40, y: -25, w: 80, h: 120 });
   });
 
   it("offsets both source and render boxes when duplicating a block", () => {
