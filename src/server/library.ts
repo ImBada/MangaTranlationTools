@@ -15,6 +15,7 @@ import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import sharp from "sharp";
 import type {
   ChapterSnapshot,
+  ChapterPagePatch,
   CreateImportRequest,
   CreateImportResult,
   ImportChapterDraft,
@@ -29,7 +30,9 @@ import type {
   LibraryWork,
   LibraryWorkSummary,
   MangaPage,
-  RenderPageResult
+  PageImageLayer,
+  RenderPageResult,
+  SaveChapterPatchRequest
 } from "../shared/types";
 import { normalizeRenderDirection } from "../shared/geometry";
 import { getAppPaths } from "./appPaths";
@@ -66,6 +69,12 @@ type ChapterFile = LibraryChapter;
 
 type SaveChapterSnapshotOptions = {
   dirtyPageIds?: string[];
+};
+
+export type PageImageAsset = {
+  buffer: Buffer;
+  mime: string;
+  updatedAt: string;
 };
 
 export type ChapterRunPaths = {
@@ -132,6 +141,50 @@ export async function saveChapterSnapshot(snapshot: ChapterSnapshot, options: Sa
   return hydrateChapter(saved);
 }
 
+export async function patchChapterSnapshot(chapterId: string, request: SaveChapterPatchRequest): Promise<ChapterSnapshot> {
+  const saved = await mutateExistingChapterFile(chapterId, (current) => {
+    if (request.chapter.id && request.chapter.id !== current.id) {
+      throw new Error("저장할 화 정보가 일치하지 않습니다.");
+    }
+    if (request.chapter.workId && request.chapter.workId !== current.workId) {
+      throw new Error("저장할 작품 정보가 일치하지 않습니다.");
+    }
+
+    const pagePatches = new Map((request.pages ?? []).map((page) => [page.id, toStoredPagePatch(page)]));
+    const pages = current.pages.map((page) => {
+      const patch = pagePatches.get(page.id);
+      if (!patch) {
+        return page;
+      }
+      return {
+        ...page,
+        ...patch,
+        id: page.id,
+        imagePath: page.imagePath,
+        createdAt: page.createdAt,
+        blocks: patch.blocks ? patch.blocks.map(normalizeStoredBlock) : page.blocks
+      };
+    });
+    const pageOrder = request.chapter.pageOrder ? reorderIds(current.pageOrder, request.chapter.pageOrder) : current.pageOrder;
+    const updatedAt = maxIsoTimestamp(
+      request.chapter.updatedAt ?? current.updatedAt,
+      current.updatedAt,
+      ...pages.map((page) => page.updatedAt)
+    );
+
+    return {
+      ...current,
+      title: request.chapter.title ?? current.title,
+      fontPresets: request.chapter.fontPresets ?? current.fontPresets,
+      pageOrder,
+      pages: reorderRecords(pages, pageOrder),
+      status: resolveChapterStatus(pages),
+      updatedAt
+    };
+  });
+  return hydrateChapter(saved);
+}
+
 export async function saveRenderedPage(chapterId: string, pageId: string, dataUrl: string): Promise<RenderPageResult> {
   const locator = await findChapterLocation(chapterId);
   if (!locator) {
@@ -153,6 +206,46 @@ export async function saveRenderedPage(chapterId: string, pageId: string, dataUr
   const outputPath = join(outputDir, outputFilename);
   await writeFile(outputPath, buffer);
   return { outputPath };
+}
+
+export async function readPageImageAsset(chapterId: string, pageId: string, layer: PageImageLayer): Promise<PageImageAsset> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
+  if (layer === "source") {
+    return readImageFileAsset(page.imagePath, page.updatedAt);
+  }
+
+  if (layer === "inpaint-mask") {
+    if (page.inpaintMaskPath && existsSync(page.inpaintMaskPath)) {
+      return readImageFileAsset(page.inpaintMaskPath, page.updatedAt);
+    }
+    const legacyDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+    if (legacyDataUrl) {
+      return dataUrlToImageAsset(legacyDataUrl, page.updatedAt);
+    }
+  }
+
+  if (layer === "inpaint-result") {
+    if (page.inpaintResultPath && existsSync(page.inpaintResultPath)) {
+      return readImageFileAsset(page.inpaintResultPath, page.updatedAt);
+    }
+    if (page.inpaintResultDataUrl) {
+      return dataUrlToImageAsset(page.inpaintResultDataUrl, page.updatedAt);
+    }
+  }
+
+  throw new Error("요청한 이미지 레이어를 찾지 못했습니다.");
 }
 
 export async function saveInpaintResult(
@@ -795,16 +888,26 @@ export async function resolvePagesForRun(chapterId: string, runMode: "pending" |
   chapter: ChapterSnapshot;
   pages: MangaPage[];
 }> {
-  const chapter = await openChapter(chapterId);
-  const pages =
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapterFile = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapterFile) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+
+  const orderedPages = reorderRecords(chapterFile.pages, chapterFile.pageOrder);
+  const selectedRecords =
     runMode === "all"
-      ? chapter.pages
+      ? orderedPages
       : runMode === "single-page"
-        ? chapter.pages.filter((page) => page.id === pageId)
-        : chapter.pages.filter((page) => page.analysisStatus !== "completed");
+        ? orderedPages.filter((page) => page.id === pageId)
+        : orderedPages.filter((page) => page.analysisStatus !== "completed");
+  const pages = await Promise.all(selectedRecords.map((page) => hydratePageDataUrls(chapterFile.id, page)));
 
   return {
-    chapter,
+    chapter: await hydrateChapter(chapterFile),
     pages
   };
 }
@@ -1018,36 +1121,61 @@ function firstPathSegment(value: string | undefined): string {
 }
 
 async function hydrateChapter(chapter: ChapterFile): Promise<ChapterSnapshot> {
-  const pages = await Promise.all(
-    reorderRecords(chapter.pages, chapter.pageOrder).map(async (page) => {
-      const inpaintMaskDataUrl = page.inpaintMaskPath && existsSync(page.inpaintMaskPath)
-        ? await fileToDataUrl(page.inpaintMaskPath)
-        : page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
-      const inpaintResultDataUrl = page.inpaintResultPath && existsSync(page.inpaintResultPath)
-        ? await fileToDataUrl(page.inpaintResultPath)
-        : page.inpaintResultDataUrl;
-      const clippedInpaintResultDataUrl = inpaintMaskDataUrl && inpaintResultDataUrl
-        ? await clipOpaqueInpaintResultToMask(inpaintResultDataUrl, inpaintMaskDataUrl)
-        : inpaintResultDataUrl;
-      if (page.inpaintResultPath && inpaintResultDataUrl && clippedInpaintResultDataUrl && clippedInpaintResultDataUrl !== inpaintResultDataUrl) {
-        await writeFile(page.inpaintResultPath, dataUrlToBuffer(clippedInpaintResultDataUrl));
-      }
-      return {
-        ...page,
-        blocks: page.blocks.map(normalizeStoredBlock),
-        inpaintMaskDataUrl,
-        inpaintResultDataUrl: clippedInpaintResultDataUrl,
-        inpaintStatus: page.inpaintStatus ?? (clippedInpaintResultDataUrl ? "completed" : "idle"),
-        dataUrl: await fileToDataUrl(page.imagePath)
-      };
-    })
-  );
+  const pages = reorderRecords(chapter.pages, chapter.pageOrder).map((page) => hydratePageImageRefs(chapter.id, page));
 
   return {
     ...chapter,
     pageOrder: pages.map((page) => page.id),
     pages
   };
+}
+
+function hydratePageImageRefs(chapterId: string, page: LibraryPageRecord): MangaPage {
+  const hasInpaintMask = Boolean(
+    (page.inpaintMaskPath && existsSync(page.inpaintMaskPath)) ||
+      page.inpaintMaskDataUrl ||
+      page.inpaintLayerDataUrl
+  );
+  const hasInpaintResult = Boolean((page.inpaintResultPath && existsSync(page.inpaintResultPath)) || page.inpaintResultDataUrl);
+
+  return {
+    ...page,
+    blocks: page.blocks.map(normalizeStoredBlock),
+    inpaintMaskDataUrl: hasInpaintMask ? pageImageUrl(chapterId, page.id, "inpaint-mask", page.updatedAt) : undefined,
+    inpaintResultDataUrl: hasInpaintResult ? pageImageUrl(chapterId, page.id, "inpaint-result", page.updatedAt) : undefined,
+    inpaintLayerDataUrl: undefined,
+    inpaintStatus: page.inpaintStatus ?? (hasInpaintResult ? "completed" : "idle"),
+    dataUrl: pageImageUrl(chapterId, page.id, "source", page.updatedAt)
+  };
+}
+
+async function hydratePageDataUrls(chapterId: string, page: LibraryPageRecord): Promise<MangaPage> {
+  const inpaintMaskDataUrl = page.inpaintMaskPath && existsSync(page.inpaintMaskPath)
+    ? await fileToDataUrl(page.inpaintMaskPath)
+    : page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+  const inpaintResultDataUrl = page.inpaintResultPath && existsSync(page.inpaintResultPath)
+    ? await fileToDataUrl(page.inpaintResultPath)
+    : page.inpaintResultDataUrl;
+  const clippedInpaintResultDataUrl = inpaintMaskDataUrl && inpaintResultDataUrl
+    ? await clipOpaqueInpaintResultToMask(inpaintResultDataUrl, inpaintMaskDataUrl)
+    : inpaintResultDataUrl;
+  if (page.inpaintResultPath && inpaintResultDataUrl && clippedInpaintResultDataUrl && clippedInpaintResultDataUrl !== inpaintResultDataUrl) {
+    await writeFile(page.inpaintResultPath, dataUrlToBuffer(clippedInpaintResultDataUrl));
+  }
+
+  return {
+    ...page,
+    blocks: page.blocks.map(normalizeStoredBlock),
+    inpaintMaskDataUrl,
+    inpaintResultDataUrl: clippedInpaintResultDataUrl,
+    inpaintLayerDataUrl: undefined,
+    inpaintStatus: page.inpaintStatus ?? (clippedInpaintResultDataUrl ? "completed" : "idle"),
+    dataUrl: await fileToDataUrl(page.imagePath)
+  };
+}
+
+function pageImageUrl(chapterId: string, pageId: string, layer: PageImageLayer, version: string): string {
+  return `/api/library/chapters/${encodeURIComponent(chapterId)}/pages/${encodeURIComponent(pageId)}/images/${layer}?v=${encodeURIComponent(version)}`;
 }
 
 function toStoredChapter(snapshot: ChapterSnapshot): ChapterFile {
@@ -1064,6 +1192,22 @@ function toStoredChapter(snapshot: ChapterSnapshot): ChapterFile {
       blocks: page.blocks.map(normalizeStoredBlock),
       inpaintStatus: page.inpaintStatus ?? (page.inpaintResultPath ? "completed" : "idle")
     }))
+  };
+}
+
+function toStoredPagePatch(page: ChapterPagePatch): ChapterPagePatch {
+  const {
+    dataUrl: _dataUrl,
+    inpaintMaskDataUrl: _inpaintMaskDataUrl,
+    inpaintResultDataUrl: _inpaintResultDataUrl,
+    inpaintLayerDataUrl: _inpaintLayerDataUrl,
+    imagePath: _imagePath,
+    createdAt: _createdAt,
+    ...patch
+  } = page as ChapterPagePatch & Partial<MangaPage>;
+  return {
+    ...patch,
+    blocks: patch.blocks?.map(normalizeStoredBlock)
   };
 }
 
@@ -1303,6 +1447,29 @@ function isSupportedImagePath(filePath: string): boolean {
 async function fileToDataUrl(filePath: string): Promise<string> {
   const buffer = await readFile(filePath);
   return `data:${mimeFromPath(filePath)};base64,${buffer.toString("base64")}`;
+}
+
+async function readImageFileAsset(filePath: string, updatedAt: string): Promise<PageImageAsset> {
+  if (!existsSync(filePath)) {
+    throw new Error("이미지 파일을 찾지 못했습니다.");
+  }
+  return {
+    buffer: await readFile(filePath),
+    mime: mimeFromPath(filePath),
+    updatedAt
+  };
+}
+
+function dataUrlToImageAsset(dataUrl: string, updatedAt: string): PageImageAsset {
+  const match = /^data:(image\/(?:png|jpeg|jpg|webp));base64,([A-Za-z0-9+/=]+)$/u.exec(dataUrl);
+  if (!match) {
+    throw new Error("이미지 데이터 URL이 올바르지 않습니다.");
+  }
+  return {
+    buffer: Buffer.from(match[2], "base64"),
+    mime: match[1] === "image/jpg" ? "image/jpeg" : match[1],
+    updatedAt
+  };
 }
 
 function mimeFromPath(filePath: string): string {

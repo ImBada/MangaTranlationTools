@@ -38,6 +38,12 @@ function resolveStateAction<T>(action: React.SetStateAction<T>, current: T): T {
   return typeof action === "function" ? (action as (current: T) => T)(current) : action;
 }
 
+function resolveChangedPageIds(current: ChapterSnapshot, next: ChapterSnapshot): string[] {
+  return next.pages
+    .filter((page, index) => page !== current.pages[index] || page.id !== current.pages[index]?.id)
+    .map((page) => page.id);
+}
+
 export function useChapterSession({
   clearPendingChapterTimers,
   clearUndoStacks,
@@ -52,6 +58,7 @@ export function useChapterSession({
   const saveTimerRef = React.useRef<number | null>(null);
   const dirtyVersionRef = React.useRef(0);
   const dirtyPageIdsRef = React.useRef<Set<string>>(new Set());
+  const dirtyAllPagesRef = React.useRef(false);
   const currentChapterRef = React.useRef<ChapterSnapshot | null>(null);
   const selectedPageIdRef = React.useRef<string | null>(null);
   const selectedBlockIdRef = React.useRef<string | null>(null);
@@ -100,6 +107,8 @@ export function useChapterSession({
     dirtyVersionRef.current += 1;
     if (pageId) {
       dirtyPageIdsRef.current = new Set([...dirtyPageIdsRef.current, pageId]);
+    } else {
+      dirtyAllPagesRef.current = true;
     }
     setDirty(true);
   }, []);
@@ -135,19 +144,23 @@ export function useChapterSession({
     }
 
     const version = dirtyVersionRef.current;
-    const dirtyPageIds = [...dirtyPageIdsRef.current];
+    const saveAllPages = dirtyAllPagesRef.current;
+    const dirtyPageIds = saveAllPages ? currentChapter.pages.map((page) => page.id) : [...dirtyPageIdsRef.current];
     saveTimerRef.current = window.setTimeout(async () => {
       try {
         const normalized = normalizeChapterTranslatedText(currentChapter);
         const chapterToSave = normalized.chapter;
-        const pageIdsToSave = [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
-        await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave.length > 0 ? pageIdsToSave : undefined);
+        const pageIdsToSave = saveAllPages
+          ? chapterToSave.pages.map((page) => page.id)
+          : [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
+        await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave);
         if (dirtyVersionRef.current === version) {
           if (chapterToSave !== currentChapter) {
             currentChapterRef.current = chapterToSave;
             setCurrentChapterState((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
           }
           dirtyPageIdsRef.current.clear();
+          dirtyAllPagesRef.current = false;
           setDirty(false);
           signalSaveComplete();
         }
@@ -166,16 +179,20 @@ export function useChapterSession({
       return;
     }
     clearSaveTimer();
-    const dirtyPageIds = [...dirtyPageIdsRef.current];
+    const saveAllPages = dirtyAllPagesRef.current;
+    const dirtyPageIds = saveAllPages ? currentChapter.pages.map((page) => page.id) : [...dirtyPageIdsRef.current];
     const normalized = normalizeChapterTranslatedText(currentChapter);
     const chapterToSave = normalized.chapter;
-    const pageIdsToSave = [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
-    await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave.length > 0 ? pageIdsToSave : undefined);
+    const pageIdsToSave = saveAllPages
+      ? chapterToSave.pages.map((page) => page.id)
+      : [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
+    await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave);
     if (chapterToSave !== currentChapter) {
       currentChapterRef.current = chapterToSave;
       setCurrentChapterState((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
     }
     dirtyPageIdsRef.current.clear();
+    dirtyAllPagesRef.current = false;
     setDirty(false);
     signalSaveComplete();
   }, [clearSaveTimer, currentChapter, signalSaveComplete]);
@@ -193,6 +210,7 @@ export function useChapterSession({
     editingFontPresetIdRef.current = null;
     clearUndoStacks();
     dirtyPageIdsRef.current.clear();
+    dirtyAllPagesRef.current = false;
     setDirty(false);
   }, [clearPendingChapterTimers, clearSaveTimer, clearUndoStacks]);
 
@@ -203,6 +221,7 @@ export function useChapterSession({
       }
       const chapter = await window.mangaApi.openChapter(chapterId);
       dirtyPageIdsRef.current.clear();
+      dirtyAllPagesRef.current = false;
       clearUndoStacks();
       currentChapterRef.current = chapter;
       setCurrentChapterState(chapter);
@@ -221,6 +240,7 @@ export function useChapterSession({
       return;
     }
     dirtyPageIdsRef.current.clear();
+    dirtyAllPagesRef.current = false;
     clearUndoStacks();
     currentChapterRef.current = chapter;
     setCurrentChapterState(chapter);
@@ -253,10 +273,15 @@ export function useChapterSession({
         return current;
       }
       const next = updater(current);
-      markDirty(pageId);
+      dirtyVersionRef.current += 1;
+      const pageIds = pageId ? [pageId] : resolveChangedPageIds(current, next);
+      if (pageIds.length > 0) {
+        dirtyPageIdsRef.current = new Set([...dirtyPageIdsRef.current, ...pageIds]);
+      }
+      setDirty(true);
       return next;
     });
-  }, [markDirty, setCurrentChapter]);
+  }, [setCurrentChapter]);
 
   return {
     applyChapter,

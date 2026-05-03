@@ -1,5 +1,6 @@
 import type {
   AppSettings,
+  ChapterPagePatch,
   ChapterSnapshot,
   CreateImportRequest,
   CreateImportResult,
@@ -12,6 +13,7 @@ import type {
   LamaRuntimeStatus,
   LibraryIndex,
   ModelTestResult,
+  PageImageLayer,
   RenderPageRequest,
   RenderPageResult,
   SaveInpaintResultLayerRequest,
@@ -55,6 +57,64 @@ async function requestBlob(url: string, init?: RequestInit): Promise<Blob> {
   return response.blob();
 }
 
+function isImageDataUrl(value: string | undefined): value is string {
+  return typeof value === "string" && /^data:image\/(?:png|jpeg|jpg|webp);base64,/u.test(value);
+}
+
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result ?? ""));
+    reader.onerror = () => reject(reader.error ?? new Error("이미지를 읽지 못했습니다."));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function resolveImageDataUrl(value: string): Promise<string> {
+  if (isImageDataUrl(value)) {
+    return value;
+  }
+  const response = await fetch(value);
+  if (!response.ok) {
+    throw new Error(`${response.status} ${response.statusText}`);
+  }
+  return blobToDataUrl(await response.blob());
+}
+
+async function resolveOptionalImageDataUrl(value: string | undefined): Promise<string | undefined> {
+  return value ? resolveImageDataUrl(value) : undefined;
+}
+
+function toChapterPagePatch(page: ChapterSnapshot["pages"][number]): ChapterPagePatch {
+  const {
+    dataUrl: _dataUrl,
+    inpaintMaskDataUrl: _inpaintMaskDataUrl,
+    inpaintResultDataUrl: _inpaintResultDataUrl,
+    inpaintLayerDataUrl: _inpaintLayerDataUrl,
+    ...patch
+  } = page;
+  return patch;
+}
+
+function buildChapterPatchBody(chapter: ChapterSnapshot, dirtyPageIds?: string[]) {
+  const dirtyPageIdSet = dirtyPageIds ? new Set(dirtyPageIds) : null;
+  const pages = dirtyPageIdSet
+    ? chapter.pages.filter((page) => dirtyPageIdSet.has(page.id)).map(toChapterPagePatch)
+    : chapter.pages.map(toChapterPagePatch);
+  return {
+    chapter: {
+      id: chapter.id,
+      workId: chapter.workId,
+      title: chapter.title,
+      status: chapter.status,
+      fontPresets: chapter.fontPresets,
+      pageOrder: chapter.pageOrder,
+      updatedAt: chapter.updatedAt
+    },
+    pages
+  };
+}
+
 async function previewImport(kind: ImportKind, files: File[]): Promise<ImportPreviewResult | null> {
   if (files.length === 0) {
     return null;
@@ -78,7 +138,11 @@ export const mangaApi = {
   getLibrary: (): Promise<LibraryIndex> => requestJson("/api/library"),
   openChapter: (chapterId: string): Promise<ChapterSnapshot> => requestJson(`/api/library/chapters/${encodeURIComponent(chapterId)}`),
   saveChapter: (chapter: ChapterSnapshot, dirtyPageIds?: string[]): Promise<ChapterSnapshot> =>
-    postJson("/api/library/chapters", dirtyPageIds ? { chapter, dirtyPageIds } : chapter),
+    postJson(`/api/library/chapters/${encodeURIComponent(chapter.id)}/patch`, buildChapterPatchBody(chapter, dirtyPageIds)),
+  resolveImageDataUrl,
+  resolveOptionalImageDataUrl,
+  pageImageUrl: (chapterId: string, pageId: string, layer: PageImageLayer): string =>
+    `/api/library/chapters/${encodeURIComponent(chapterId)}/pages/${encodeURIComponent(pageId)}/images/${layer}`,
   renderPage: (request: RenderPageRequest): Promise<RenderPageResult> => postJson("/api/render/page", request),
   inpaintPage: (request: InpaintPageRequest): Promise<InpaintPageResult> => postJson("/api/inpaint/page", request),
   saveInpaintMask: (request: SaveInpaintMaskRequest): Promise<SaveInpaintMaskResult> => postJson("/api/inpaint/mask", request),

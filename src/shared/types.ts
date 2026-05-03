@@ -152,6 +152,7 @@ export type MangaPage = {
   id: string;
   name: string;
   imagePath: string;
+  /** Same-origin image URL for client snapshots, or a data URL when an image payload is explicitly hydrated. */
   dataUrl: string;
   inpaintMaskPath?: string;
   inpaintResultPath?: string;
@@ -194,6 +195,18 @@ export type SaveChapterSnapshotRequest = {
   chapter: ChapterSnapshot;
   dirtyPageIds?: string[];
 };
+
+export type ChapterPagePatch = Partial<LibraryPageRecord> & {
+  id: string;
+};
+
+export type SaveChapterPatchRequest = {
+  chapter: Pick<ChapterSnapshot, "id" | "workId" | "updatedAt"> &
+    Partial<Pick<ChapterSnapshot, "fontPresets" | "status" | "title" | "pageOrder">>;
+  pages?: ChapterPagePatch[];
+};
+
+export type PageImageLayer = "source" | "inpaint-mask" | "inpaint-result";
 
 export type LibraryChapterSummary = Pick<LibraryChapter, "id" | "workId" | "title" | "status" | "createdAt" | "updatedAt"> & {
   pageCount: number;

@@ -21,18 +21,22 @@ describe("inpaint artifacts", () => {
     }
   });
 
-  it("stores inpaint mask and result as files and hydrates them as data URLs", async () => {
+  it("stores inpaint mask and result as files and exposes them as image URLs", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-artifacts-"));
     tempDirs.push(dataDir);
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
     vi.resetModules();
 
-    const { saveChapterSnapshot, saveInpaintResult } = await import("../src/server/library");
+    const { readPageImageAsset, saveChapterSnapshot, saveInpaintResult } = await import("../src/server/library");
     const pagePath = join(dataDir, "page.png");
     await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
     await seedLibraryIndex(dataDir);
 
     const chapter = await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+    expect(chapter.pages[0]?.dataUrl.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/source")).toBe(true);
+    const sourceAsset = await readPageImageAsset(chapter.id, "page-1", "source");
+    expect(sourceAsset.mime).toBe("image/png");
+    expect(sourceAsset.buffer.length).toBeGreaterThan(0);
     const saved = await saveInpaintResult(
       chapter.id,
       "page-1",
@@ -48,8 +52,8 @@ describe("inpaint artifacts", () => {
     const hydratedPage = saved.pages[0];
     expect(hydratedPage?.inpaintMaskPath).toBeTruthy();
     expect(hydratedPage?.inpaintResultPath).toBeTruthy();
-    expect(hydratedPage?.inpaintMaskDataUrl?.startsWith("data:image/png;base64,")).toBe(true);
-    expect(hydratedPage?.inpaintResultDataUrl?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(hydratedPage?.inpaintMaskDataUrl?.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/inpaint-mask")).toBe(true);
+    expect(hydratedPage?.inpaintResultDataUrl?.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/inpaint-result")).toBe(true);
     expect(existsSync(hydratedPage?.inpaintMaskPath ?? "")).toBe(true);
     expect(existsSync(hydratedPage?.inpaintResultPath ?? "")).toBe(true);
     const maskPixels = await decodePng(hydratedPage?.inpaintMaskPath ?? "");
@@ -84,7 +88,7 @@ describe("inpaint artifacts", () => {
     const hydratedPage = saved.pages[0];
 
     expect(hydratedPage?.inpaintMaskPath).toBeTruthy();
-    expect(hydratedPage?.inpaintMaskDataUrl?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(hydratedPage?.inpaintMaskDataUrl?.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/inpaint-mask")).toBe(true);
     expect(existsSync(hydratedPage?.inpaintMaskPath ?? "")).toBe(true);
     expect([...(await decodePng(hydratedPage?.inpaintMaskPath ?? ""))]).toEqual([0, 0, 0, 0, 255, 255, 255, 255]);
 
@@ -122,7 +126,7 @@ describe("inpaint artifacts", () => {
 
     expect(hydratedPage?.inpaintMaskPath).toBe(masked.pages[0]?.inpaintMaskPath);
     expect(hydratedPage?.inpaintResultPath).toBeTruthy();
-    expect(hydratedPage?.inpaintResultDataUrl?.startsWith("data:image/png;base64,")).toBe(true);
+    expect(hydratedPage?.inpaintResultDataUrl?.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/inpaint-result")).toBe(true);
     expect([...(await decodePng(hydratedPage?.inpaintResultPath ?? ""))]).toEqual([12, 34, 56, 255, 78, 90, 123, 128]);
 
     const reopened = await openChapter(chapter.id);

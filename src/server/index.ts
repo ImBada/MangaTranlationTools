@@ -23,7 +23,9 @@ import {
   listLibrary,
   markChapterPagesRunning,
   openChapter,
+  patchChapterSnapshot,
   previewUploadedFiles,
+  readPageImageAsset,
   renameChapter,
   renameWork,
   reorderChapters,
@@ -56,6 +58,7 @@ import type {
   ImportSourceKind,
   JobEvent,
   ModelTestResult,
+  PageImageLayer,
   RenderPageRequest,
   SaveInpaintResultLayerRequest,
   SaveInpaintResultLayerResult,
@@ -165,11 +168,28 @@ app.get("/api/library/chapters/:chapterId", asyncHandler(async (req, res) => {
   res.json(await openChapter(String(req.params.chapterId)));
 }));
 
+app.get("/api/library/chapters/:chapterId/pages/:pageId/images/:layer", asyncHandler(async (req, res) => {
+  const layer = String(req.params.layer);
+  if (!isPageImageLayer(layer)) {
+    res.status(404).json({ error: "요청한 이미지 레이어를 찾지 못했습니다." });
+    return;
+  }
+  const asset = await readPageImageAsset(String(req.params.chapterId), String(req.params.pageId), layer);
+  res.setHeader("Content-Type", asset.mime);
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("Last-Modified", new Date(asset.updatedAt).toUTCString());
+  res.end(asset.buffer);
+}));
+
 app.post("/api/library/chapters", asyncHandler(async (req, res) => {
   const body = req.body;
   const chapter = body?.chapter ?? body;
   const dirtyPageIds = Array.isArray(body?.dirtyPageIds) ? body.dirtyPageIds.filter((id: unknown) => typeof id === "string") : undefined;
   res.json(await saveChapterSnapshot(chapter, { dirtyPageIds }));
+}));
+
+app.post("/api/library/chapters/:chapterId/patch", asyncHandler(async (req, res) => {
+  res.json(await patchChapterSnapshot(String(req.params.chapterId), req.body));
 }));
 
 app.post("/api/render/page", asyncHandler(async (req, res) => {
@@ -557,6 +577,10 @@ function assertImageDataUrl(value: string, label: string): void {
   if (!/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/u.test(value)) {
     throw new Error(`${label} 데이터 URL이 올바르지 않습니다.`);
   }
+}
+
+function isPageImageLayer(value: string): value is PageImageLayer {
+  return value === "source" || value === "inpaint-mask" || value === "inpaint-result";
 }
 
 async function testModelSettings(settings: AppSettings): Promise<ModelTestResult> {

@@ -66,6 +66,52 @@ describe("chapter save conflict handling", () => {
     expect(chapterJson.pages[1]?.blocks[0]?.translatedText).toBe("번역 완료");
     expect(chapterJson.pages[1]?.analysisStatus).toBe("completed");
   });
+
+  it("patches dirty pages without resending or overwriting the rest of the chapter", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-chapter-patch-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { patchChapterSnapshot, saveChapterSnapshot, updatePageAfterAnalysis } = await import("../src/server/library");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer());
+    await seedLibraryIndex(dataDir);
+
+    const initial = makeChapterSnapshot(pagePath);
+    await saveChapterSnapshot(initial);
+    await updatePageAfterAnalysis(
+      initial.id,
+      {
+        ...initial.pages[1],
+        blocks: [{ ...initial.pages[1].blocks[0], translatedText: "번역 완료" }]
+      },
+      [],
+      "completed"
+    );
+
+    await patchChapterSnapshot(initial.id, {
+      chapter: {
+        id: initial.id,
+        workId: initial.workId,
+        updatedAt: "2026-01-01T00:03:00.000Z"
+      },
+      pages: [
+        {
+          id: "page-1",
+          blocks: [{ ...initial.pages[0].blocks[0], translatedText: "패치 저장" }],
+          updatedAt: "2026-01-01T00:03:00.000Z"
+        }
+      ]
+    });
+
+    const chapterJson = JSON.parse(
+      await readFile(join(dataDir, "library", "works", "work-1", "chapters", "chapter-1", "chapter.json"), "utf8")
+    ) as ChapterSnapshot;
+    expect(chapterJson.pages[0]?.blocks[0]?.translatedText).toBe("패치 저장");
+    expect(chapterJson.pages[1]?.blocks[0]?.translatedText).toBe("번역 완료");
+    expect(chapterJson.pages[1]?.analysisStatus).toBe("completed");
+  });
 });
 
 function makeChapterSnapshot(imagePath: string): ChapterSnapshot {

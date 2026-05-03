@@ -74,10 +74,11 @@ export function useInpaintLayerSaveQueue({
       if (dirty && currentChapterRef.current?.id === pending.chapterId) {
         await saveNow();
       }
+      const maskDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(pending.dataUrl);
       const result = await window.mangaApi.saveInpaintMask({
         chapterId: pending.chapterId,
         pageId: pending.pageId,
-        maskDataUrl: pending.dataUrl
+        maskDataUrl
       });
 
       if (!inpaintMaskSaveStateRef.current) {
@@ -123,10 +124,11 @@ export function useInpaintLayerSaveQueue({
       if (dirty && currentChapterRef.current?.id === pending.chapterId) {
         await saveNow();
       }
+      const resultDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(pending.dataUrl);
       const result = await window.mangaApi.saveInpaintResultLayer({
         chapterId: pending.chapterId,
         pageId: pending.pageId,
-        resultDataUrl: pending.dataUrl
+        resultDataUrl
       });
 
       if (!inpaintResultSaveStateRef.current) {

@@ -85,15 +85,18 @@ export function useInpaintPsdActions({
 
     setInpaintPsdBusy(true);
     try {
+      const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(selectedPage.dataUrl);
+      const maskDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl);
+      const resultDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(selectedPage.inpaintResultDataUrl);
       const blob = await window.mangaApi.exportInpaintPsd({
         chapterId: currentChapter.id,
         pageId: selectedPage.id,
         pageName: selectedPage.name,
         width: selectedPage.width,
         height: selectedPage.height,
-        sourceDataUrl: selectedPage.dataUrl,
-        maskDataUrl: selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl,
-        resultDataUrl: selectedPage.inpaintResultDataUrl
+        sourceDataUrl,
+        maskDataUrl,
+        resultDataUrl
       });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");

@@ -62,11 +62,13 @@ export function useInpaintRunActions({
         await saveNow();
       }
       updatePageInpaintStatus(page.id, "running");
+      const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(page.dataUrl);
+      const resolvedMaskDataUrl = await window.mangaApi.resolveImageDataUrl(maskDataUrl);
       const result = await window.mangaApi.inpaintPage({
         chapterId: currentChapter.id,
         pageId: page.id,
-        sourceDataUrl: page.dataUrl,
-        maskDataUrl,
+        sourceDataUrl,
+        maskDataUrl: resolvedMaskDataUrl,
         settings: DEFAULT_INPAINT_SETTINGS
       });
       applyChapter(result.chapter);
@@ -132,10 +134,11 @@ export function useInpaintRunActions({
 
         updatePageInpaintStatus(page.id, "running");
         try {
+          const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(page.dataUrl);
           const result = await window.mangaApi.inpaintPage({
             chapterId,
             pageId: page.id,
-            sourceDataUrl: page.dataUrl,
+            sourceDataUrl,
             maskDataUrl,
             settings: DEFAULT_INPAINT_SETTINGS
           });
@@ -223,10 +226,11 @@ export function useInpaintRunActions({
       }
 
       updatePageInpaintStatus(page.id, "running");
+      const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(page.dataUrl);
       const result = await window.mangaApi.inpaintPage({
         chapterId: currentChapter.id,
         pageId: page.id,
-        sourceDataUrl: page.dataUrl,
+        sourceDataUrl,
         maskDataUrl: selectionMaskDataUrl,
         settings: DEFAULT_INPAINT_SETTINGS,
         persistResult: false
