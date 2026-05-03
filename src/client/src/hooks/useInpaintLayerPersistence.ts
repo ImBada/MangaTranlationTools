@@ -2,18 +2,7 @@ import React from "react";
 import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
 import { createInpaintMaskUndoSnapshot, type InpaintMaskUndoSnapshot } from "../lib/editorUtils";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
-
-type PendingInpaintMaskSave = {
-  chapterId: string;
-  pageId: string;
-  dataUrl: string | undefined;
-};
-
-type PendingInpaintResultSave = {
-  chapterId: string;
-  pageId: string;
-  dataUrl: string | undefined;
-};
+import { useInpaintLayerSaveQueue } from "./useInpaintLayerSaveQueue";
 
 type UseInpaintLayerPersistenceOptions = {
   consumeGlobalUndoEntry: (kind: GlobalUndoKind, pageId?: string) => void;
@@ -63,12 +52,21 @@ export function useInpaintLayerPersistence({
 }: UseInpaintLayerPersistenceOptions): UseInpaintLayerPersistenceState {
   const inpaintUndoStackRef = React.useRef<Map<string, InpaintMaskUndoSnapshot[]>>(new Map());
   const inpaintResultUndoStackRef = React.useRef<Map<string, (string | undefined)[]>>(new Map());
-  const inpaintMaskSaveTimerRef = React.useRef<number | null>(null);
-  const inpaintMaskSaveStateRef = React.useRef<PendingInpaintMaskSave | null>(null);
-  const inpaintMaskSavingRef = React.useRef(false);
-  const inpaintResultSaveTimerRef = React.useRef<number | null>(null);
-  const inpaintResultSaveStateRef = React.useRef<PendingInpaintResultSave | null>(null);
-  const inpaintResultSavingRef = React.useRef(false);
+  const {
+    clearPendingInpaintSaves,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
+    scheduleInpaintMaskSave,
+    scheduleInpaintResultSave
+  } = useInpaintLayerSaveQueue({
+    currentChapterRef,
+    dirty,
+    mergeLiveChapter,
+    pushStatus,
+    refreshLibrary,
+    saveNow,
+    signalSaveComplete
+  });
 
   const clearInpaintUndoStacks = React.useCallback(() => {
     inpaintUndoStackRef.current.clear();
@@ -84,17 +82,6 @@ export function useInpaintLayerPersistence({
     inpaintUndoStackRef.current.set(page.id, stack.slice(-30));
     recordGlobalUndoEntry({ kind: "inpaint-mask", chapterId: currentChapter.id, pageId: page.id });
   }, [currentChapter, recordGlobalUndoEntry]);
-
-  const clearPendingInpaintSaves = React.useCallback(() => {
-    if (inpaintMaskSaveTimerRef.current) {
-      window.clearTimeout(inpaintMaskSaveTimerRef.current);
-      inpaintMaskSaveTimerRef.current = null;
-    }
-    if (inpaintResultSaveTimerRef.current) {
-      window.clearTimeout(inpaintResultSaveTimerRef.current);
-      inpaintResultSaveTimerRef.current = null;
-    }
-  }, []);
 
   const updatePageInpaintStatus = React.useCallback((pageId: string, status: MangaPage["inpaintStatus"]) => {
     setCurrentChapter((current) => {
@@ -115,104 +102,6 @@ export function useInpaintLayerPersistence({
       };
     });
   }, [setCurrentChapter]);
-
-  const flushInpaintMaskSave = React.useCallback(async () => {
-    if (inpaintMaskSavingRef.current) {
-      return;
-    }
-
-    const pending = inpaintMaskSaveStateRef.current;
-    if (!pending) {
-      return;
-    }
-
-    inpaintMaskSaveStateRef.current = null;
-    inpaintMaskSavingRef.current = true;
-    try {
-      if (dirty && currentChapterRef.current?.id === pending.chapterId) {
-        await saveNow();
-      }
-      const result = await window.mangaApi.saveInpaintMask({
-        chapterId: pending.chapterId,
-        pageId: pending.pageId,
-        maskDataUrl: pending.dataUrl
-      });
-
-      if (!inpaintMaskSaveStateRef.current) {
-        mergeLiveChapter(result.chapter);
-        signalSaveComplete();
-        void refreshLibrary();
-      }
-    } catch (error) {
-      console.error(error);
-      pushStatus(error instanceof Error ? error.message : "인페인트 마스크 저장에 실패했습니다.");
-    } finally {
-      inpaintMaskSavingRef.current = false;
-      if (inpaintMaskSaveStateRef.current) {
-        void flushInpaintMaskSave();
-      }
-    }
-  }, [currentChapterRef, dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
-
-  const scheduleInpaintMaskSave = React.useCallback((pending: PendingInpaintMaskSave) => {
-    inpaintMaskSaveStateRef.current = pending;
-    if (inpaintMaskSaveTimerRef.current) {
-      window.clearTimeout(inpaintMaskSaveTimerRef.current);
-    }
-    inpaintMaskSaveTimerRef.current = window.setTimeout(() => {
-      inpaintMaskSaveTimerRef.current = null;
-      void flushInpaintMaskSave();
-    }, 250);
-  }, [flushInpaintMaskSave]);
-
-  const flushInpaintResultSave = React.useCallback(async () => {
-    if (inpaintResultSavingRef.current) {
-      return;
-    }
-
-    const pending = inpaintResultSaveStateRef.current;
-    if (!pending) {
-      return;
-    }
-
-    inpaintResultSaveStateRef.current = null;
-    inpaintResultSavingRef.current = true;
-    try {
-      if (dirty && currentChapterRef.current?.id === pending.chapterId) {
-        await saveNow();
-      }
-      const result = await window.mangaApi.saveInpaintResultLayer({
-        chapterId: pending.chapterId,
-        pageId: pending.pageId,
-        resultDataUrl: pending.dataUrl
-      });
-
-      if (!inpaintResultSaveStateRef.current) {
-        mergeLiveChapter(result.chapter);
-        signalSaveComplete();
-        void refreshLibrary();
-      }
-    } catch (error) {
-      console.error(error);
-      pushStatus(error instanceof Error ? error.message : "인페인트 결과 레이어 저장에 실패했습니다.");
-    } finally {
-      inpaintResultSavingRef.current = false;
-      if (inpaintResultSaveStateRef.current) {
-        void flushInpaintResultSave();
-      }
-    }
-  }, [currentChapterRef, dirty, mergeLiveChapter, pushStatus, refreshLibrary, saveNow, signalSaveComplete]);
-
-  const scheduleInpaintResultSave = React.useCallback((pending: PendingInpaintResultSave) => {
-    inpaintResultSaveStateRef.current = pending;
-    if (inpaintResultSaveTimerRef.current) {
-      window.clearTimeout(inpaintResultSaveTimerRef.current);
-    }
-    inpaintResultSaveTimerRef.current = window.setTimeout(() => {
-      inpaintResultSaveTimerRef.current = null;
-      void flushInpaintResultSave();
-    }, 250);
-  }, [flushInpaintResultSave]);
 
   const updateSelectedPageInpaintMask = React.useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
