@@ -132,9 +132,15 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
         </section>
 
         <div className="modal-actions">
-          <button onClick={onCancel} disabled={busy}>
-            취소
-          </button>
+          {busy ? (
+            <button className="danger" onClick={() => void window.mangaApi.cancelJob()}>
+              가져오기 중단
+            </button>
+          ) : (
+            <button onClick={onCancel}>
+              취소
+            </button>
+          )}
           <button
             data-testid="import-submit-button"
             className="primary"

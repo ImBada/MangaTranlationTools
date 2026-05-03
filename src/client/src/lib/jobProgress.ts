@@ -22,6 +22,10 @@ export function formatJobLabel(job: JobWithProgress): string {
       return "모델 준비 중";
     case "model_downloading":
       return "모델 다운로드/서버 준비 중";
+    case "importing":
+      return formatPageLabel(job, "가져오는 중");
+    case "import_done":
+      return formatPageLabel(job, "가져오기 완료");
     case "ready":
       return "모델 준비 완료";
     case "page_running":
@@ -35,7 +39,7 @@ export function formatJobLabel(job: JobWithProgress): string {
     case "finalizing":
       return "결과 정리 중";
     case "done":
-      return "번역 완료";
+      return job.status === "completed" ? "작업 완료" : "번역 완료";
     case "cancelled":
       return "작업이 취소됨";
     case "failed":
@@ -114,7 +118,7 @@ function fallbackFromStatus(status: JobState["status"]): string {
     case "failed":
       return "작업 실패";
     case "completed":
-      return "번역 완료";
+      return "작업 완료";
     default:
       return "대기 중";
   }

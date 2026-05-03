@@ -299,7 +299,58 @@ app.post("/api/import/preview/:kind", upload.array("files"), asyncHandler(async 
 }));
 
 app.post("/api/import/create", asyncHandler(async (req, res) => {
-  res.json(await createImport(req.body as CreateImportRequest));
+  if (activeJob) {
+    res.status(409).json({ error: "이미 실행 중인 작업이 있습니다." });
+    return;
+  }
+
+  const request = req.body as CreateImportRequest;
+  const id = randomUUID();
+  const abortController = new AbortController();
+  activeJob = { id, abortController };
+  const emit = (event: JobEvent) => {
+    if (activeJob?.id === id) {
+      activeJob.lastEvent = event;
+    }
+    writeLog(event.status === "failed" ? "error" : event.status === "cancelled" ? "warn" : "info", `job:${event.kind}:${event.status}`, event);
+    emitJobEvent(event);
+  };
+
+  try {
+    const result = await createImport(request, { jobId: id, signal: abortController.signal, emit });
+    res.json(result);
+  } catch (error) {
+    const lastEvent = activeJob?.id === id ? activeJob.lastEvent : undefined;
+    if (isAbortError(error) || abortController.signal.aborted) {
+      emit({
+        id,
+        kind: "library-import",
+        status: "cancelled",
+        progressText: "가져오기가 취소되었습니다.",
+        phase: "cancelled",
+        progressCurrent: lastEvent?.progressCurrent,
+        progressTotal: lastEvent?.progressTotal,
+        pageIndex: lastEvent?.pageIndex,
+        pageTotal: lastEvent?.pageTotal
+      });
+      res.status(499).json({ error: "가져오기가 취소되었습니다." });
+      return;
+    }
+
+    const message = error instanceof Error ? error.message : String(error);
+    logError("Import job failed", { jobId: id, request, lastEvent, error });
+    emit({
+      id,
+      kind: "library-import",
+      status: "failed",
+      progressText: "가져오기 실패",
+      phase: "failed",
+      detail: message
+    });
+    res.status(500).json({ error: message });
+  } finally {
+    activeJob = null;
+  }
 }));
 
 app.post("/api/jobs/start-analysis", asyncHandler(async (req, res) => {
@@ -315,7 +366,7 @@ app.post("/api/jobs/cancel", asyncHandler(async (_req, res) => {
   const job = activeJob;
   emitJobEvent({
     id: job.id,
-    kind: "gemma-analysis",
+    kind: job.lastEvent?.kind ?? "gemma-analysis",
     status: "cancelling",
     progressText: "작업 취소 중",
     progressCurrent: job.lastEvent?.progressCurrent,

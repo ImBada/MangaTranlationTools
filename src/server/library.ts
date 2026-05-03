@@ -34,6 +34,7 @@ import type {
   RenderPageResult,
   SaveChapterPatchRequest
 } from "../shared/types";
+import type { JobEvent } from "../shared/types";
 import { normalizeRenderDirection } from "../shared/geometry";
 import { getAppPaths } from "./appPaths";
 import { readImageDimensions } from "./imageDimensions";
@@ -48,10 +49,26 @@ type AdmZipLike = {
   getEntries: () => ZipEntryLike[];
 };
 
+type CachedZip = {
+  entriesByName: Map<string, ZipEntryLike>;
+  imageEntries: ZipEntryLike[];
+};
+
+type ImportMaterializeContext = {
+  createdChapterDirs: string[];
+  current: number;
+  emit?: (event: JobEvent) => void;
+  jobId?: string;
+  signal?: AbortSignal;
+  total: number;
+  zipCache: Map<string, CachedZip>;
+};
+
 const LIBRARY_ROOT = getAppPaths().libraryDir;
 const INDEX_PATH = join(LIBRARY_ROOT, "index.json");
 const WORKS_ROOT = join(LIBRARY_ROOT, "works");
 const DEFAULT_WORK_TITLE = "미정 작품";
+const IMPORT_PAGE_CONCURRENCY = 4;
 
 const AdmZip = require("adm-zip") as {
   new (archivePath: string): AdmZipLike;
@@ -86,6 +103,12 @@ export type UploadedImportFile = {
   path: string;
   name: string;
   relativePath?: string;
+};
+
+export type CreateImportOptions = {
+  emit?: (event: JobEvent) => void;
+  jobId?: string;
+  signal?: AbortSignal;
 };
 
 export function getLibraryRoot(): string {
@@ -766,34 +789,55 @@ export async function previewUploadedFiles(kind: ImportSourceKind, files: Upload
   };
 }
 
-export async function createImport(request: CreateImportRequest): Promise<CreateImportResult> {
+export async function createImport(request: CreateImportRequest, options: CreateImportOptions = {}): Promise<CreateImportResult> {
   const target = request.target.mode === "new" ? await createWork(request.target.title || request.preview.suggestedWorkTitle) : await ensureExistingWork(request.target.workId);
   const selections = new Map(request.selections.map((selection) => [selection.draftId, selection]));
   const createdChapterIds: string[] = [];
+  const context: ImportMaterializeContext = {
+    createdChapterDirs: [],
+    current: 0,
+    emit: options.emit,
+    jobId: options.jobId,
+    signal: options.signal,
+    total: countSelectedImportPages(request),
+    zipCache: new Map()
+  };
   let openedChapter: ChapterSnapshot | undefined;
 
-  for (const draft of request.preview.chapters) {
-    const selection = selections.get(draft.draftId);
-    if (!selection?.enabled) {
-      continue;
+  try {
+    throwIfAborted(options.signal);
+    emitImportProgress(context, "가져오기 준비 중", "starting", "importing");
+
+    for (const draft of request.preview.chapters) {
+      const selection = selections.get(draft.draftId);
+      if (!selection?.enabled) {
+        continue;
+      }
+
+      const chapter = await createChapterFromDraft(target.id, draft, selection.title, context);
+      createdChapterIds.push(chapter.id);
+      if (!openedChapter) {
+        openedChapter = await hydrateChapter(chapter);
+      }
     }
 
-    const chapter = await createChapterFromDraft(target.id, draft, selection.title);
-    createdChapterIds.push(chapter.id);
-    if (!openedChapter) {
-      openedChapter = await hydrateChapter(chapter);
+    if (createdChapterIds.length === 0) {
+      throw new Error("생성할 화가 없습니다.");
     }
-  }
 
-  if (createdChapterIds.length === 0) {
-    throw new Error("생성할 화가 없습니다.");
-  }
+    emitImportProgress(context, "가져오기 완료", "completed", "done");
 
-  return {
-    workId: target.id,
-    chapterIds: createdChapterIds,
-    openedChapter
-  };
+    return {
+      workId: target.id,
+      chapterIds: createdChapterIds,
+      openedChapter
+    };
+  } catch (error) {
+    if (isAbortError(error) || options.signal?.aborted) {
+      await cleanupAbortedImport(target.id, request.target.mode === "new", createdChapterIds, context.createdChapterDirs);
+    }
+    throw error;
+  }
 }
 
 export async function markChapterPagesRunning(chapterId: string, pageIds: string[]): Promise<ChapterSnapshot> {
@@ -952,19 +996,24 @@ async function ensureExistingWork(workId: string): Promise<LibraryWork> {
   return work;
 }
 
-async function createChapterFromDraft(workId: string, draft: ImportChapterDraft, requestedTitle: string): Promise<LibraryChapter> {
+async function createChapterFromDraft(
+  workId: string,
+  draft: ImportChapterDraft,
+  requestedTitle: string,
+  context: ImportMaterializeContext
+): Promise<LibraryChapter> {
   const work = await ensureExistingWork(workId);
   const now = new Date().toISOString();
   const chapterId = randomUUID();
   const title = await makeUniqueChapterTitle(workId, sanitizeTitle(requestedTitle || draft.title, "제목없음"));
   const chapterDir = join(WORKS_ROOT, workId, "chapters", chapterId);
   const pagesDir = join(chapterDir, "pages");
+  context.createdChapterDirs.push(chapterDir);
   await mkdir(pagesDir, { recursive: true });
 
-  const pages: LibraryPageRecord[] = [];
-  for (const [index, pageDraft] of draft.pages.entries()) {
-    pages.push(await materializePageRecord(pageDraft, pagesDir, index));
-  }
+  const pages = await mapWithConcurrency(draft.pages, IMPORT_PAGE_CONCURRENCY, (pageDraft, index) =>
+    materializePageRecord(pageDraft, pagesDir, index, context)
+  );
 
   const chapter: LibraryChapter = {
     id: chapterId,
@@ -985,15 +1034,20 @@ async function createChapterFromDraft(workId: string, draft: ImportChapterDraft,
   return chapter;
 }
 
-async function materializePageRecord(pageDraft: ImportPageDraft, pagesDir: string, index: number): Promise<LibraryPageRecord> {
+async function materializePageRecord(
+  pageDraft: ImportPageDraft,
+  pagesDir: string,
+  index: number,
+  context: ImportMaterializeContext
+): Promise<LibraryPageRecord> {
+  throwIfAborted(context.signal);
   const pageId = randomUUID();
   const targetExt =
     pageDraft.sourceKind === "zip-entry" ? extname(pageDraft.zipEntryName ?? "").toLowerCase() || ".png" : extname(pageDraft.sourcePath).toLowerCase() || ".png";
   const outputPath = join(pagesDir, `${String(index + 1).padStart(3, "0")}-${pageId}${targetExt}`);
 
   if (pageDraft.sourceKind === "zip-entry") {
-    const zip = new AdmZip(pageDraft.sourcePath);
-    const entry = zip.getEntries().find((candidate) => candidate.entryName === pageDraft.zipEntryName);
+    const entry = getCachedZipEntry(context.zipCache, pageDraft.sourcePath, pageDraft.zipEntryName);
     if (!entry) {
       throw new Error(`ZIP 항목을 찾지 못했습니다: ${pageDraft.zipEntryName ?? pageDraft.sourcePath}`);
     }
@@ -1004,6 +1058,8 @@ async function materializePageRecord(pageDraft: ImportPageDraft, pagesDir: strin
 
   const size = await readImageDimensions(outputPath);
   const now = new Date().toISOString();
+  context.current += 1;
+  emitImportProgress(context, `${pageDraft.name} 가져오기 완료`, "running", "import_done");
 
   return {
     id: pageId,
@@ -1429,11 +1485,104 @@ async function listNestedImageFolders(rootPath: string): Promise<string[]> {
 }
 
 function listImageEntriesInZip(zipPath: string): ZipEntryLike[] {
-  const zip = new AdmZip(zipPath);
-  return zip
-    .getEntries()
-    .filter((entry) => !entry.isDirectory && isSupportedImagePath(entry.entryName))
-    .sort((left, right) => left.entryName.localeCompare(right.entryName, undefined, { numeric: true, sensitivity: "base" }));
+  return getCachedZip(new Map(), zipPath).imageEntries;
+}
+
+function getCachedZipEntry(cache: Map<string, CachedZip>, zipPath: string, entryName: string | undefined): ZipEntryLike | undefined {
+  if (!entryName) {
+    return undefined;
+  }
+  return getCachedZip(cache, zipPath).entriesByName.get(entryName);
+}
+
+function getCachedZip(cache: Map<string, CachedZip>, zipPath: string): CachedZip {
+  const cached = cache.get(zipPath);
+  if (cached) {
+    return cached;
+  }
+
+  const entries = new AdmZip(zipPath).getEntries();
+  const next = {
+    entriesByName: new Map(entries.map((entry) => [entry.entryName, entry])),
+    imageEntries: entries
+      .filter((entry) => !entry.isDirectory && isSupportedImagePath(entry.entryName))
+      .sort((left, right) => left.entryName.localeCompare(right.entryName, undefined, { numeric: true, sensitivity: "base" }))
+  };
+  cache.set(zipPath, next);
+  return next;
+}
+
+function countSelectedImportPages(request: CreateImportRequest): number {
+  const selections = new Map(request.selections.map((selection) => [selection.draftId, selection]));
+  return request.preview.chapters.reduce((total, draft) => total + (selections.get(draft.draftId)?.enabled ? draft.pages.length : 0), 0);
+}
+
+function emitImportProgress(
+  context: ImportMaterializeContext,
+  progressText: string,
+  status: JobEvent["status"],
+  phase: JobEvent["phase"]
+): void {
+  if (!context.emit || !context.jobId) {
+    return;
+  }
+  context.emit({
+    id: context.jobId,
+    kind: "library-import",
+    status,
+    phase,
+    progressText,
+    progressCurrent: context.current,
+    progressTotal: context.total,
+    pageIndex: Math.min(context.current, context.total),
+    pageTotal: context.total
+  });
+}
+
+async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let nextIndex = 0;
+  const workerCount = Math.min(Math.max(1, concurrency), items.length);
+
+  async function worker(): Promise<void> {
+    while (nextIndex < items.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await mapper(items[index], index);
+    }
+  }
+
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
+}
+
+function throwIfAborted(signal: AbortSignal | undefined): void {
+  if (signal?.aborted) {
+    throw new DOMException("Aborted", "AbortError");
+  }
+}
+
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === "AbortError";
+}
+
+async function cleanupAbortedImport(workId: string, removeWork: boolean, createdChapterIds: string[], createdChapterDirs: string[]): Promise<void> {
+  if (removeWork) {
+    const index = await readIndexFile();
+    index.workOrder = index.workOrder.filter((id) => id !== workId);
+    await writeIndexFile(index);
+    await rm(join(WORKS_ROOT, workId), { recursive: true, force: true }).catch(() => undefined);
+    return;
+  }
+
+  const work = await readWorkFile(workId);
+  if (work) {
+    work.chapterOrder = work.chapterOrder.filter((id) => !createdChapterIds.includes(id));
+    work.updatedAt = new Date().toISOString();
+    await writeWorkFile(work);
+  }
+
+  await Promise.all(createdChapterDirs.map((chapterDir) => rm(chapterDir, { recursive: true, force: true }).catch(() => undefined)));
 }
 
 function normalizeImportPageName(entryName: string): string {

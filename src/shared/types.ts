@@ -3,7 +3,7 @@ export type BlockType = "speech" | "sfx" | "caption" | "other";
 export type SourceTextDirection = "horizontal" | "vertical";
 export type RenderTextDirection = "horizontal" | "vertical" | "hidden";
 
-export type JobKind = "gemma-analysis";
+export type JobKind = "gemma-analysis" | "library-import";
 export type ModelProvider = "gemma" | "openai-codex" | "openai-compatible";
 export type ModelSource = "huggingface" | "local";
 export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
@@ -52,6 +52,8 @@ export type JobStatus =
 export type JobPhase =
   | "booting"
   | "model_downloading"
+  | "importing"
+  | "import_done"
   | "ready"
   | "page_running"
   | "page_retry"

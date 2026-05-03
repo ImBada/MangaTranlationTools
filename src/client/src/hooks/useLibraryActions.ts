@@ -144,11 +144,14 @@ export function useLibraryActions({
             }
           }
         }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        pushStatus(message);
       } finally {
         setImportBusy(false);
       }
     },
-    [applyChapter, importPreview, openChapter, refreshLibrary]
+    [applyChapter, importPreview, openChapter, pushStatus, refreshLibrary]
   );
 
   const renameWork = React.useCallback((workId: string) => {
