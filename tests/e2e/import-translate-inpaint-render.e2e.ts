@@ -1,4 +1,4 @@
-import { expect, test, type Locator } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import { _electron as electron, type ElectronApplication } from "playwright";
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
 import { mkdir, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
@@ -77,7 +77,7 @@ test.describe("Electron user flow", () => {
         throw new Error("Translation block was not measurable.");
       }
 
-      await dragByPointerEvents(block, 24, 16);
+      await dragByMouse(page, block, 24, 16);
       await expect.poll(async () => (await block.boundingBox())?.x ?? initialBlockBox.x, { timeout: 10_000 }).toBeGreaterThan(initialBlockBox.x);
       await page.locator('[data-block-text-field="translated"]').fill("수정된 번역");
 
@@ -106,47 +106,20 @@ test.describe("Electron user flow", () => {
   });
 });
 
-async function dragByPointerEvents(locator: Locator, dx: number, dy: number): Promise<void> {
-  await locator.evaluate((element, offset) => {
-    const rect = element.getBoundingClientRect();
-    const startX = rect.left + rect.width / 2;
-    const startY = rect.top + rect.height / 2;
-    const pointerId = 1001;
-    const base = {
-      bubbles: true,
-      cancelable: true,
-      composed: true,
-      pointerId,
-      pointerType: "mouse",
-      isPrimary: true
-    };
+async function dragByMouse(page: Page, locator: Locator, dx: number, dy: number): Promise<void> {
+  const box = await locator.boundingBox();
+  if (!box) {
+    throw new Error("Translation block was not measurable for dragging.");
+  }
+  const startX = box.x + box.width / 2;
+  const startY = box.y + box.height / 2;
 
-    element.dispatchEvent(new PointerEvent("pointerdown", {
-      ...base,
-      button: 0,
-      buttons: 1,
-      clientX: startX,
-      clientY: startY
-    }));
-
-    for (const step of [0.25, 0.5, 0.75, 1]) {
-      element.dispatchEvent(new PointerEvent("pointermove", {
-        ...base,
-        button: -1,
-        buttons: 1,
-        clientX: startX + offset.dx * step,
-        clientY: startY + offset.dy * step
-      }));
-    }
-
-    element.dispatchEvent(new PointerEvent("pointerup", {
-      ...base,
-      button: 0,
-      buttons: 0,
-      clientX: startX + offset.dx,
-      clientY: startY + offset.dy
-    }));
-  }, { dx, dy });
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await page.mouse.move(startX + dx * step, startY + dy * step);
+  }
+  await page.mouse.up();
 }
 
 async function startMockModelServer(): Promise<MockModelServer> {
