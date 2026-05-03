@@ -81,6 +81,7 @@ test.describe("Electron user flow", () => {
       await page.mouse.down();
       await page.mouse.move(initialBlockBox.x + initialBlockBox.width / 2 + 24, initialBlockBox.y + initialBlockBox.height / 2 + 16, { steps: 4 });
       await page.mouse.up();
+      await expect.poll(async () => (await block.boundingBox())?.x ?? initialBlockBox.x, { timeout: 10_000 }).toBeGreaterThan(initialBlockBox.x);
       await page.locator('[data-block-text-field="translated"]').fill("수정된 번역");
 
       await page.getByRole("button", { name: "인페인트 실행" }).click();

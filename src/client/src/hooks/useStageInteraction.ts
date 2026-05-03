@@ -18,6 +18,7 @@ type StageZoomDirection = "in" | "out";
 type DragState = {
   mode: DragMode;
   blockId: string;
+  captureElement: Element | null;
   startX: number;
   startY: number;
   startBbox: BBox;
@@ -183,6 +184,7 @@ export function useStageInteraction({
     dragRef.current = {
       mode,
       blockId: block.id,
+      captureElement: event.currentTarget,
       startX: event.clientX,
       startY: event.clientY,
       startBbox: target.bbox,
@@ -194,7 +196,7 @@ export function useStageInteraction({
       textFocusSnapshot: captureBlockTextFocusSnapshot(),
       textFocusPaused: false
     };
-    stageRef.current.setPointerCapture(event.pointerId);
+    event.currentTarget.setPointerCapture(event.pointerId);
   }, [activeLayer, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
@@ -254,8 +256,8 @@ export function useStageInteraction({
 
   const onStagePointerUp = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;
-    if (drag && stageRef.current) {
-      stageRef.current.releasePointerCapture(event.pointerId);
+    if (drag?.captureElement?.hasPointerCapture(event.pointerId)) {
+      drag.captureElement.releasePointerCapture(event.pointerId);
     }
     if (drag?.textFocusPaused && drag.textFocusSnapshot) {
       restoreBlockTextFocus(drag.textFocusSnapshot);
