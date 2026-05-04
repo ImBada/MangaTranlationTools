@@ -2,6 +2,16 @@ export type BlockType = "speech" | "sfx" | "caption" | "other";
 
 export type SourceTextDirection = "horizontal" | "vertical";
 export type RenderTextDirection = "horizontal" | "vertical" | "hidden";
+export type TextPosition =
+  | "top-left"
+  | "top"
+  | "top-right"
+  | "left"
+  | "center"
+  | "right"
+  | "bottom-left"
+  | "bottom"
+  | "bottom-right";
 export type TextFontStyle = "normal" | "italic";
 export type TextDecoration = "none" | "underline";
 
@@ -124,6 +134,7 @@ export type TranslationBlock = {
   secondaryOutlineWidthPx?: number;
   textPaddingPx?: number;
   textAlign: "left" | "center" | "right";
+  textPosition?: TextPosition;
   textColor: string;
   screentoneFillEnabled?: boolean;
   screentoneFillIntensity?: number;

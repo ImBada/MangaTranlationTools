@@ -1,4 +1,4 @@
-import type { TranslationBlock } from "../../../shared/types";
+import type { TextPosition, TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from "../../../shared/geometry";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
@@ -22,6 +22,7 @@ const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
 export const DEFAULT_SCREENTONE_FILL_INTENSITY = 0.55;
 export const DEFAULT_SCREENTONE_FILL_DENSITY = 0.55;
+export const DEFAULT_OVERLAY_TEXT_POSITION: TextPosition = "center";
 
 let measureCanvas: HTMLCanvasElement | null = null;
 
@@ -47,6 +48,39 @@ export type BlockTextLayout = {
   fontSizePx: number;
   overflow: boolean;
 };
+
+export type TextPositionFactors = {
+  x: number;
+  y: number;
+};
+
+export function resolveTextPosition(position: TextPosition | undefined): TextPosition {
+  return position ?? DEFAULT_OVERLAY_TEXT_POSITION;
+}
+
+export function resolveTextPositionFactors(position: TextPosition | undefined): TextPositionFactors {
+  switch (resolveTextPosition(position)) {
+    case "top-left":
+      return { x: 0, y: 0 };
+    case "top":
+      return { x: 0.5, y: 0 };
+    case "top-right":
+      return { x: 1, y: 0 };
+    case "left":
+      return { x: 0, y: 0.5 };
+    case "right":
+      return { x: 1, y: 0.5 };
+    case "bottom-left":
+      return { x: 0, y: 1 };
+    case "bottom":
+      return { x: 0.5, y: 1 };
+    case "bottom-right":
+      return { x: 1, y: 1 };
+    case "center":
+    default:
+      return { x: 0.5, y: 0.5 };
+  }
+}
 
 export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, pageSize: ViewportSize, stageSize: ViewportSize): number {
   return resolveBlockTextLayout(block, text, pageSize, stageSize).fontSizePx;

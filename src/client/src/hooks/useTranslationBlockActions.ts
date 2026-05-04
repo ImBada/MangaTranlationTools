@@ -213,6 +213,7 @@ export function useTranslationBlockActions({
       secondaryOutlineWidthPx: sourcePreset.secondaryOutlineWidthPx,
       autoFitText: sourcePreset.autoFitText,
       textAlign: "center",
+      textPosition: "center",
       textColor: sourcePreset.textColor ?? "#111111",
       screentoneFillEnabled: sourcePreset.screentoneFillEnabled,
       screentoneFillIntensity: sourcePreset.screentoneFillIntensity,

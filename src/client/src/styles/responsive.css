@@ -325,6 +325,7 @@
 
 .library-search-shell,
 .text-align-control,
+.text-position-control,
 .segmented-control {
   @apply rounded-md border border-line bg-workspace shadow-sm;
 }
@@ -380,6 +381,7 @@
 .layer-control.active,
 .font-picker-option.active,
 .text-align-control button.active,
+.text-position-control button.active,
 .segmented-control button.active,
 .settings-preset-button.active,
 .font-preset-tag.active,

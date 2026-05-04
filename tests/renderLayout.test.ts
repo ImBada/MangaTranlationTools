@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBlockPaddingPx, resolveBlockTextLayout } from "../src/client/src/lib/overlayLayout";
+import { resolveBlockPaddingPx, resolveBlockTextLayout, resolveTextPositionFactors } from "../src/client/src/lib/overlayLayout";
 import type { TranslationBlock } from "../src/shared/types";
 
 const originalDocument = globalThis.document;
@@ -29,6 +29,12 @@ describe("render layout padding", () => {
         { width: 500, height: 500 }
       )
     ).toBe(6);
+  });
+
+  it("resolves text position anchors with center as the default", () => {
+    expect(resolveTextPositionFactors(undefined)).toEqual({ x: 0.5, y: 0.5 });
+    expect(resolveTextPositionFactors("top-left")).toEqual({ x: 0, y: 0 });
+    expect(resolveTextPositionFactors("bottom-right")).toEqual({ x: 1, y: 1 });
   });
 
   it("shrinks horizontal single-character text to fit narrow block width", () => {

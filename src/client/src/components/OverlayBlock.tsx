@@ -10,6 +10,7 @@ import {
   buildScreentoneFillCssSize,
   hexToRgba,
   resolveBlockTextLayout,
+  resolveTextPositionFactors,
   resolveWrappedTextLines,
   type ViewportSize
 } from "../lib/overlayLayout";
@@ -67,6 +68,9 @@ export function OverlayBlock({
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
   const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
+  const textPositionFactors = resolveTextPositionFactors(block.textPosition);
+  const textPositionJustifyContent = textPositionFactors.x === 0 ? "flex-start" : textPositionFactors.x === 1 ? "flex-end" : "center";
+  const textPositionAlignItems = textPositionFactors.y === 0 ? "flex-start" : textPositionFactors.y === 1 ? "flex-end" : "center";
   const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
     ? {
         WebkitTextFillColor: "transparent",
@@ -113,7 +117,9 @@ export function OverlayBlock({
     maxWidth: "100%",
     height: layout.innerHeight,
     maxHeight: "100%",
-    overflow: "hidden"
+    overflow: "hidden",
+    justifyContent: textPositionJustifyContent,
+    alignItems: textPositionAlignItems
   };
   const contentFrameStyle: React.CSSProperties = {
     position: "relative",

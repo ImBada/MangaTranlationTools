@@ -147,9 +147,16 @@ export function useFontPresetEditing({
   }, [currentChapter, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
 
   const updateSelectedBlockFontSetting = React.useCallback((patch: BlockFontPatch) => {
-    if ("textAlign" in patch) {
+    if ("textAlign" in patch || "textPosition" in patch) {
+      const blockPatch: Partial<Pick<TranslationBlock, "textAlign" | "textPosition">> = {};
       if (patch.textAlign) {
-        updateSelectedBlock({ textAlign: patch.textAlign });
+        blockPatch.textAlign = patch.textAlign;
+      }
+      if (patch.textPosition) {
+        blockPatch.textPosition = patch.textPosition;
+      }
+      if (Object.keys(blockPatch).length > 0) {
+        updateSelectedBlock(blockPatch);
       }
       return;
     }

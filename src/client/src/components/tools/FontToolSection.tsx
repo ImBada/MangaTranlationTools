@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, TranslationBlock } from "../../../../shared/types";
+import type { ChapterSnapshot, FontPreset, TextPosition, TranslationBlock } from "../../../../shared/types";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
@@ -10,7 +10,8 @@ import {
   DEFAULT_OVERLAY_FONT_WEIGHT,
   DEFAULT_OVERLAY_TEXT_DECORATION,
   buildScreentoneFillCssBackground,
-  buildScreentoneFillCssSize
+  buildScreentoneFillCssSize,
+  resolveTextPosition
 } from "../../lib/overlayLayout";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
@@ -48,6 +49,18 @@ const FONT_WEIGHT_LABELS: Record<number, string> = {
   800: "Extra Bold 800",
   900: "Black 900"
 };
+
+const TEXT_POSITION_OPTIONS: { value: TextPosition; label: string }[] = [
+  { value: "top-left", label: "상단 좌측" },
+  { value: "top", label: "상단 중앙" },
+  { value: "top-right", label: "상단 우측" },
+  { value: "left", label: "중앙 좌측" },
+  { value: "center", label: "중앙" },
+  { value: "right", label: "중앙 우측" },
+  { value: "bottom-left", label: "하단 좌측" },
+  { value: "bottom", label: "하단 중앙" },
+  { value: "bottom-right", label: "하단 우측" }
+];
 
 function resolvePresetTagTextMetrics(preset: FontPreset): {
   fontSizePx: number;
@@ -157,6 +170,7 @@ export function FontToolSection({
   const selectedFontFamilyOption = fontFamilyOptions.find((option) => option.value === (fontControlValues?.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY));
   const selectedFontWeights = selectedFontFamilyOption?.weights ?? [];
   const currentFontWeight = fontControlValues?.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
+  const selectedTextPosition = resolveTextPosition(selectedBlock?.textPosition);
   const fontWeightOptions = selectedFontWeights.length > 1
     ? selectedFontWeights.includes(currentFontWeight)
       ? selectedFontWeights
@@ -383,30 +397,50 @@ export function FontToolSection({
             </div>
           </div>
           {selectedBlock ? (
-            <div className="compact-tool-field font-align-field">
-              <span>정렬</span>
-              <div className="text-align-control" role="group" aria-label="텍스트 정렬">
-                <button
-                  className={selectedBlock.textAlign === "left" ? "active" : ""}
-                  disabled={selectedPageEditLocked}
-                  onClick={() => onFontSettingChange({ textAlign: "left" })}
-                >
-                  좌
-                </button>
-                <button
-                  className={selectedBlock.textAlign === "center" ? "active" : ""}
-                  disabled={selectedPageEditLocked}
-                  onClick={() => onFontSettingChange({ textAlign: "center" })}
-                >
-                  중앙
-                </button>
-                <button
-                  className={selectedBlock.textAlign === "right" ? "active" : ""}
-                  disabled={selectedPageEditLocked}
-                  onClick={() => onFontSettingChange({ textAlign: "right" })}
-                >
-                  우
-                </button>
+            <div className="font-align-position-row">
+              <div className="compact-tool-field font-align-field">
+                <span>정렬</span>
+                <div className="text-align-control" role="group" aria-label="텍스트 정렬">
+                  <button
+                    className={selectedBlock.textAlign === "left" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "left" })}
+                  >
+                    좌
+                  </button>
+                  <button
+                    className={selectedBlock.textAlign === "center" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "center" })}
+                  >
+                    중앙
+                  </button>
+                  <button
+                    className={selectedBlock.textAlign === "right" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "right" })}
+                  >
+                    우
+                  </button>
+                </div>
+              </div>
+              <div className="compact-tool-field font-position-field">
+                <span>위치</span>
+                <div className="text-position-control" role="group" aria-label="텍스트 위치">
+                  {TEXT_POSITION_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      className={selectedTextPosition === option.value ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      title={option.label}
+                      aria-label={option.label}
+                      aria-pressed={selectedTextPosition === option.value}
+                      onClick={() => onFontSettingChange({ textPosition: option.value })}
+                    >
+                      <span className="text-position-dot" aria-hidden />
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           ) : null}

@@ -22,7 +22,7 @@ export type FontPresetPatch = Partial<
     | "screentoneFillAntialias"
   >
 >;
-export type BlockFontPatch = FontPresetPatch & Partial<Pick<TranslationBlock, "textAlign">>;
+export type BlockFontPatch = FontPresetPatch & Partial<Pick<TranslationBlock, "textAlign" | "textPosition">>;
 export type LinkableFontPresetKey = Exclude<keyof FontPresetPatch, "fontFamily">;
 
 const PRESET_LINK_FIELD_BY_KEY = {
