@@ -56,7 +56,8 @@ type FontToolSectionProps = {
   onSelectFontSizePreset: (presetId: string | null) => void;
 };
 
-const PRESET_TAG_FONT_SIZE_PX = 12;
+const PRESET_TAG_FONT_SIZE_PX = 18;
+const PRESET_TAG_LINE_HEIGHT = 1;
 const FONT_WEIGHT_LABELS: Record<number, string> = {
   100: "Thin 100",
   200: "Extra Light 200",
@@ -132,7 +133,7 @@ function buildPresetTagTextStyles(preset: FontPreset): {
   const baseTextStyle: React.CSSProperties = {
     fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
     fontSize: `${fontSizePx}px`,
-    lineHeight: preset.lineHeight,
+    lineHeight: PRESET_TAG_LINE_HEIGHT,
     letterSpacing: `${preset.letterSpacingPx ?? 0}px`,
     fontWeight: preset.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT,
     fontStyle: preset.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE,
@@ -142,7 +143,7 @@ function buildPresetTagTextStyles(preset: FontPreset): {
   return {
     stack: {
       fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
-      lineHeight: preset.lineHeight,
+      lineHeight: PRESET_TAG_LINE_HEIGHT,
       letterSpacing: `${preset.letterSpacingPx ?? 0}px`,
       zoom: scale
     },

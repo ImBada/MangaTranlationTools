@@ -577,7 +577,7 @@
   display: inline-flex;
   align-items: center;
   max-width: 100%;
-  min-height: 26px;
+  min-height: 32px;
   border: 1px solid #cfd7df;
   border-radius: 4px 12px 12px 4px;
   background: #fffefa;
@@ -609,9 +609,8 @@
 }
 
 .font-preset-tag-name,
-.font-preset-tag-remove,
-.font-preset-clear {
-  height: 24px;
+.font-preset-tag-remove {
+  height: 30px;
   min-width: 0;
   border: 0;
   border-radius: 0;
@@ -623,8 +622,8 @@
 .font-preset-tag-name {
   display: flex;
   align-items: center;
-  max-width: 160px;
-  padding: 0 8px;
+  max-width: 190px;
+  padding: 0 10px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -633,7 +632,7 @@
 .font-preset-tag-name-input {
   width: 120px;
   max-width: 160px;
-  height: 24px;
+  height: 30px;
   min-width: 0;
   padding: 0 8px;
   border: 0;
@@ -680,17 +679,20 @@
 }
 
 .font-preset-tag-remove {
-  width: 24px;
+  width: 28px;
   padding: 0;
   color: #5f6b76;
 }
 
 .font-preset-clear {
+  height: 24px;
+  min-width: 0;
   padding: 0 8px;
   border: 1px solid #47515e;
   border-radius: 13px;
   background: #15181d;
   color: #dce5ed;
+  font-size: 12px;
 }
 
 .block-panel-heading {
