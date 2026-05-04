@@ -198,6 +198,7 @@ export function FontToolSection({
       : [...selectedFontWeights, currentFontWeight].sort((a, b) => a - b)
     : [];
   const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0);
+  const screentoneFillActive = fontControlValues?.screentoneFillEnabled ?? false;
 
   React.useEffect(() => {
     if (!renamingFontPresetId || renamingFontPresetId === activeFontPresetId) {
@@ -310,6 +311,7 @@ export function FontToolSection({
             </div>
           </div>
           <div className="compact-tool-field font-size-row-field">
+            <span className="font-size-row-label">크기</span>
             <CompactNumberControl
               ariaLabel="폰트 크기"
               min={8}
@@ -400,6 +402,65 @@ export function FontToolSection({
             onChange={onFontSettingChange}
             renderLinkButton={renderFontPresetLinkButton}
           />
+          {selectedBlock ? (
+            <div className="font-align-position-row">
+              <div className="compact-tool-field font-align-field">
+                <span>정렬</span>
+                <div className="text-align-control" role="group" aria-label="텍스트 정렬">
+                  <button
+                    className={selectedBlock.textAlign === "left" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "left" })}
+                  >
+                    좌
+                  </button>
+                  <button
+                    className={selectedBlock.textAlign === "center" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "center" })}
+                  >
+                    중앙
+                  </button>
+                  <button
+                    className={selectedBlock.textAlign === "right" ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ textAlign: "right" })}
+                  >
+                    우
+                  </button>
+                </div>
+              </div>
+              <div className="compact-tool-field font-position-field">
+                <span>위치</span>
+                <div className="text-position-control" role="group" aria-label="텍스트 위치">
+                  {TEXT_POSITION_OPTIONS.map((option) => (
+                    <button
+                      key={option.value}
+                      className={selectedTextPosition === option.value ? "active" : ""}
+                      disabled={selectedPageEditLocked}
+                      title={option.label}
+                      aria-label={option.label}
+                      aria-pressed={selectedTextPosition === option.value}
+                      onClick={() => onFontSettingChange({ textPosition: option.value })}
+                    >
+                      <span className="text-position-dot" aria-hidden />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+          ) : null}
+          <label className="tool-checkbox compact-tool-field font-checkbox-field">
+            <input
+              type="checkbox"
+              {...mouseOnlyCheckboxProps}
+              checked={fontControlValues.autoFitText ?? true}
+              disabled={selectedPageEditLocked}
+              onChange={(event) => onFontSettingChange({ autoFitText: event.target.checked })}
+            />
+            <span>자동 맞춤</span>
+            {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
+          </label>
           <div className="compact-tool-field font-outline-section font-shadow-section font-effect-section">
             <div className="font-outline-section-header">
               <span>그림자</span>
@@ -484,36 +545,24 @@ export function FontToolSection({
             <div className="font-screentone-header">
               <div className="font-screentone-title">
                 <span>스크린톤 채우기</span>
-                <button
-                  type="button"
-                  className={`font-inline-toggle ${fontControlValues.screentoneFillAntialias ?? true ? "active" : ""}`}
-                  disabled={selectedPageEditLocked}
-                  onClick={() => {
-                    onFontSettingChange({ screentoneFillAntialias: !(fontControlValues.screentoneFillAntialias ?? true) });
-                  }}
-                  aria-pressed={fontControlValues.screentoneFillAntialias ?? true}
-                  title={`스크린톤 안티 ${(fontControlValues.screentoneFillAntialias ?? true) ? "끄기" : "켜기"}`}
-                >
-                  안티
-                </button>
               </div>
               <div className="font-screentone-header-actions">
                 <div className="font-outline-mode" aria-label="스크린톤 채우기 사용">
                   <button
                     type="button"
-                    className={!(fontControlValues.screentoneFillEnabled ?? false) ? "active" : ""}
+                    className={!screentoneFillActive ? "active" : ""}
                     disabled={selectedPageEditLocked}
                     onClick={() => onFontSettingChange({ screentoneFillEnabled: false })}
-                    aria-pressed={!(fontControlValues.screentoneFillEnabled ?? false)}
+                    aria-pressed={!screentoneFillActive}
                   >
                     OFF
                   </button>
                   <button
                     type="button"
-                    className={fontControlValues.screentoneFillEnabled ?? false ? "active" : ""}
+                    className={screentoneFillActive ? "active" : ""}
                     disabled={selectedPageEditLocked}
                     onClick={() => onFontSettingChange({ screentoneFillEnabled: true })}
-                    aria-pressed={fontControlValues.screentoneFillEnabled ?? false}
+                    aria-pressed={screentoneFillActive}
                   >
                     ON
                   </button>
@@ -521,102 +570,61 @@ export function FontToolSection({
                 {renderFontPresetLinkButton("screentoneFillEnabled", "스크린톤 채우기")}
               </div>
             </div>
-            <div className="font-screentone-range-row">
-              <label className="compact-tool-field font-range-field">
-                <span>
-                  <span>강도</span>
-                  <strong>{Math.round((fontControlValues.screentoneFillIntensity ?? 0.55) * 100)}%</strong>
-                </span>
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.01}
-                  value={fontControlValues.screentoneFillIntensity ?? 0.55}
-                  style={rangeProgressStyle(fontControlValues.screentoneFillIntensity ?? 0.55, 0.05, 1)}
-                  disabled={selectedPageEditLocked}
-                  onChange={(event) => onFontSettingChange({ screentoneFillIntensity: Number(event.target.value) })}
-                />
-                {renderFontPresetLinkButton("screentoneFillIntensity", "스크린톤 강도")}
-              </label>
-              <label className="compact-tool-field font-range-field">
-                <span>
-                  <span>밀도</span>
-                  <strong>{Math.round((fontControlValues.screentoneFillDensity ?? 0.55) * 100)}%</strong>
-                </span>
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.01}
-                  value={fontControlValues.screentoneFillDensity ?? 0.55}
-                  style={rangeProgressStyle(fontControlValues.screentoneFillDensity ?? 0.55, 0.05, 1)}
-                  disabled={selectedPageEditLocked}
-                  onChange={(event) => onFontSettingChange({ screentoneFillDensity: Number(event.target.value) })}
-                />
-                {renderFontPresetLinkButton("screentoneFillDensity", "스크린톤 밀도")}
-              </label>
-            </div>
-          </div>
-          {selectedBlock ? (
-            <div className="font-align-position-row">
-              <div className="compact-tool-field font-align-field">
-                <span>정렬</span>
-                <div className="text-align-control" role="group" aria-label="텍스트 정렬">
+            {screentoneFillActive ? (
+              <>
+                <div className="font-screentone-option-row">
                   <button
-                    className={selectedBlock.textAlign === "left" ? "active" : ""}
+                    type="button"
+                    className={`font-inline-toggle ${fontControlValues.screentoneFillAntialias ?? true ? "active" : ""}`}
                     disabled={selectedPageEditLocked}
-                    onClick={() => onFontSettingChange({ textAlign: "left" })}
+                    onClick={() => {
+                      onFontSettingChange({ screentoneFillAntialias: !(fontControlValues.screentoneFillAntialias ?? true) });
+                    }}
+                    aria-pressed={fontControlValues.screentoneFillAntialias ?? true}
+                    title={`스크린톤 안티 ${(fontControlValues.screentoneFillAntialias ?? true) ? "끄기" : "켜기"}`}
                   >
-                    좌
-                  </button>
-                  <button
-                    className={selectedBlock.textAlign === "center" ? "active" : ""}
-                    disabled={selectedPageEditLocked}
-                    onClick={() => onFontSettingChange({ textAlign: "center" })}
-                  >
-                    중앙
-                  </button>
-                  <button
-                    className={selectedBlock.textAlign === "right" ? "active" : ""}
-                    disabled={selectedPageEditLocked}
-                    onClick={() => onFontSettingChange({ textAlign: "right" })}
-                  >
-                    우
+                    안티
                   </button>
                 </div>
-              </div>
-              <div className="compact-tool-field font-position-field">
-                <span>위치</span>
-                <div className="text-position-control" role="group" aria-label="텍스트 위치">
-                  {TEXT_POSITION_OPTIONS.map((option) => (
-                    <button
-                      key={option.value}
-                      className={selectedTextPosition === option.value ? "active" : ""}
+                <div className="font-screentone-range-row">
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>강도</span>
+                      <strong>{Math.round((fontControlValues.screentoneFillIntensity ?? 0.55) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.01}
+                      value={fontControlValues.screentoneFillIntensity ?? 0.55}
+                      style={rangeProgressStyle(fontControlValues.screentoneFillIntensity ?? 0.55, 0.05, 1)}
                       disabled={selectedPageEditLocked}
-                      title={option.label}
-                      aria-label={option.label}
-                      aria-pressed={selectedTextPosition === option.value}
-                      onClick={() => onFontSettingChange({ textPosition: option.value })}
-                    >
-                      <span className="text-position-dot" aria-hidden />
-                    </button>
-                  ))}
+                      onChange={(event) => onFontSettingChange({ screentoneFillIntensity: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("screentoneFillIntensity", "스크린톤 강도")}
+                  </label>
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>밀도</span>
+                      <strong>{Math.round((fontControlValues.screentoneFillDensity ?? 0.55) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      min={0.05}
+                      max={1}
+                      step={0.01}
+                      value={fontControlValues.screentoneFillDensity ?? 0.55}
+                      style={rangeProgressStyle(fontControlValues.screentoneFillDensity ?? 0.55, 0.05, 1)}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => onFontSettingChange({ screentoneFillDensity: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("screentoneFillDensity", "스크린톤 밀도")}
+                  </label>
                 </div>
-              </div>
-            </div>
-          ) : null}
-          <label className="tool-checkbox compact-tool-field font-checkbox-field">
-            <input
-              type="checkbox"
-              {...mouseOnlyCheckboxProps}
-              checked={fontControlValues.autoFitText ?? true}
-              disabled={selectedPageEditLocked}
-              onChange={(event) => onFontSettingChange({ autoFitText: event.target.checked })}
-            />
-            <span>자동 맞춤</span>
-            {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
-          </label>
+              </>
+            ) : null}
+          </div>
         </div>
       ) : (
         <p className="muted-line">블록이나 프리셋을 선택하면 폰트값을 조정할 수 있습니다.</p>
