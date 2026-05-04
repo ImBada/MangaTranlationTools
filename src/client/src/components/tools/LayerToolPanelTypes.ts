@@ -16,6 +16,10 @@ export type LayerToolFontControlValues = {
   screentoneFillIntensity?: number;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
+  shadowAngleDeg?: number;
+  shadowColor?: string;
+  shadowDistancePx?: number;
+  shadowEnabled?: boolean;
   textDecoration?: TextDecoration;
   textColor?: string;
 };

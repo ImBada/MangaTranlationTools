@@ -291,6 +291,7 @@ function strokeTextOutlines(context: CanvasRenderingContext2D, block: Translatio
 }
 
 function drawOutlinedText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  drawTextShadow(context, block, text, x, y, fontSize);
   strokeTextOutlines(context, block, text, x, y, fontSize);
   drawTextRun(context, block, text, x, y, fontSize, "fill");
 }
@@ -301,6 +302,7 @@ function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlo
     return;
   }
 
+  drawTextShadow(context, block, text, x, y, fontSize);
   strokeTextOutlines(context, block, text, x, y, fontSize);
 
   context.save();
@@ -315,6 +317,47 @@ function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlo
     fontSize
   );
   context.fillStyle = pattern ?? block.textColor;
+  drawTextRun(context, block, text, x, y, fontSize, "fill");
+  context.restore();
+}
+
+function drawTextShadow(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+  if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0))) {
+    return;
+  }
+
+  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
+  if (shadowDistancePx === 0) {
+    return;
+  }
+
+  const angleRad = ((block.shadowAngleDeg ?? 45) * Math.PI) / 180;
+  const dx = Math.cos(angleRad) * shadowDistancePx;
+  const dy = Math.sin(angleRad) * shadowDistancePx;
+  const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
+  const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
+  const shadowColor = block.shadowColor ?? "#000000";
+
+  context.save();
+  context.translate(dx, dy);
+
+  if (secondaryOutlineWidthPx > 0) {
+    context.save();
+    context.strokeStyle = shadowColor;
+    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.restore();
+  }
+
+  if (outlineWidthPx > 0) {
+    context.save();
+    context.strokeStyle = shadowColor;
+    context.lineWidth = outlineWidthPx;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.restore();
+  }
+
+  context.fillStyle = shadowColor;
   drawTextRun(context, block, text, x, y, fontSize, "fill");
   context.restore();
 }

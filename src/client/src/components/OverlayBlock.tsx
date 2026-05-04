@@ -74,6 +74,12 @@ export function OverlayBlock({
   const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
   const secondaryOutlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
   const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
+  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const shadowAngleRad = ((block.shadowAngleDeg ?? 45) * Math.PI) / 180;
+  const shadowOffsetX = Math.cos(shadowAngleRad) * shadowDistancePx;
+  const shadowOffsetY = Math.sin(shadowAngleRad) * shadowDistancePx;
+  const shadowStrokeWidthPx = secondaryOutlineWidthPx > 0 ? combinedSecondaryOutlineWidthPx : outlineWidthPx;
+  const shadowEnabled = visualContentVisible && (block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0)) && shadowDistancePx > 0;
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
   const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
@@ -151,7 +157,7 @@ export function OverlayBlock({
   const contentStyle: React.CSSProperties = {
     ...baseContentStyle,
     position: "relative",
-    zIndex: 1,
+    zIndex: 2,
     WebkitTextStroke: outlineWidthPx > 0 ? `${outlineWidthPx}px ${block.outlineColor ?? "#000000"}` : undefined,
     ...screentoneFillStyle
   };
@@ -159,12 +165,23 @@ export function OverlayBlock({
     ...baseContentStyle,
     position: "absolute",
     inset: 0,
-    zIndex: 0,
+    zIndex: 1,
     pointerEvents: "none",
     color: "transparent",
     WebkitTextFillColor: "transparent",
     WebkitTextStroke:
       combinedSecondaryOutlineWidthPx > 0 ? `${combinedSecondaryOutlineWidthPx}px ${block.secondaryOutlineColor ?? "#ffffff"}` : undefined
+  };
+  const shadowStyle: React.CSSProperties = {
+    ...baseContentStyle,
+    position: "absolute",
+    inset: 0,
+    zIndex: 0,
+    pointerEvents: "none",
+    color: block.shadowColor ?? "#000000",
+    WebkitTextFillColor: block.shadowColor ?? "#000000",
+    WebkitTextStroke: shadowStrokeWidthPx > 0 ? `${shadowStrokeWidthPx}px ${block.shadowColor ?? "#000000"}` : undefined,
+    transform: `translate(${shadowOffsetX}px, ${shadowOffsetY}px)`
   };
   const lineStyle: React.CSSProperties = {
     alignSelf: horizontalLineAlignSelf,
@@ -227,6 +244,7 @@ export function OverlayBlock({
       {visualContentVisible ? (
         <div className="overlay-text" style={textWrapStyle}>
           <span className="overlay-text-layer-stack" style={contentFrameStyle}>
+            {shadowEnabled ? renderTextContent(shadowStyle, secondaryOutlineLineStyle, true) : null}
             {secondaryOutlineWidthPx > 0 ? renderTextContent(secondaryOutlineStyle, secondaryOutlineLineStyle, true) : null}
             {renderTextContent(contentStyle, lineStyle)}
           </span>

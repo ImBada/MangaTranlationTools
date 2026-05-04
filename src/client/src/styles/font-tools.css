@@ -7,6 +7,31 @@
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.font-shadow-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.font-shadow-row .font-color-field {
+  grid-column: 1 / -1;
+}
+
+.font-shadow-header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.font-shadow-header-actions .font-preset-link-toggle {
+  width: 20px;
+  min-width: 20px;
+  max-width: 20px;
+  height: 20px;
+  min-height: 20px;
+  max-height: 20px;
+  padding: 0;
+  border-radius: 5px;
+}
+
 .font-picker-field {
   color: var(--color-muted);
 }

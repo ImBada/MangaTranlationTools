@@ -35,6 +35,10 @@ describe("block type font presets", () => {
       lineHeight: 1.3,
       outlineColor: "#ffffff",
       outlineWidthPx: 2,
+      shadowEnabled: true,
+      shadowColor: "#334455",
+      shadowAngleDeg: 30,
+      shadowDistancePx: 4,
       textColor: "#222222",
       autoFitText: true
     };
@@ -50,6 +54,10 @@ describe("block type font presets", () => {
       lineHeight: 1.3,
       outlineColor: "#ffffff",
       outlineWidthPx: 2,
+      shadowEnabled: true,
+      shadowColor: "#334455",
+      shadowAngleDeg: 30,
+      shadowDistancePx: 4,
       textColor: "#222222",
       autoFitText: true
     });

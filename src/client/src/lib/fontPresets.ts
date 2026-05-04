@@ -15,6 +15,10 @@ export type FontPresetPatch = Partial<
     | "outlineWidthPx"
     | "secondaryOutlineColor"
     | "secondaryOutlineWidthPx"
+    | "shadowEnabled"
+    | "shadowColor"
+    | "shadowAngleDeg"
+    | "shadowDistancePx"
     | "autoFitText"
     | "textColor"
     | "screentoneFillEnabled"
@@ -34,6 +38,10 @@ const PRESET_LINK_FIELD_BY_KEY = {
   outlineWidthPx: "outlineWidthLinkedToPreset",
   secondaryOutlineColor: "secondaryOutlineColorLinkedToPreset",
   secondaryOutlineWidthPx: "secondaryOutlineWidthLinkedToPreset",
+  shadowEnabled: "shadowEnabledLinkedToPreset",
+  shadowColor: "shadowColorLinkedToPreset",
+  shadowAngleDeg: "shadowAngleDegLinkedToPreset",
+  shadowDistancePx: "shadowDistancePxLinkedToPreset",
   autoFitText: "autoFitTextLinkedToPreset",
   textColor: "textColorLinkedToPreset",
   screentoneFillEnabled: "screentoneFillEnabledLinkedToPreset",
@@ -95,6 +103,10 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     outlineWidthPx: source.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
     secondaryOutlineColor: source.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
     secondaryOutlineWidthPx: source.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
+    shadowEnabled: source.shadowEnabled ?? DEFAULT_FONT_PRESET.shadowEnabled,
+    shadowColor: source.shadowColor ?? DEFAULT_FONT_PRESET.shadowColor,
+    shadowAngleDeg: source.shadowAngleDeg ?? DEFAULT_FONT_PRESET.shadowAngleDeg,
+    shadowDistancePx: source.shadowDistancePx ?? DEFAULT_FONT_PRESET.shadowDistancePx,
     autoFitText: source.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
     textColor: source.textColor ?? DEFAULT_FONT_PRESET.textColor,
     screentoneFillEnabled: source.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
@@ -137,6 +149,10 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
     outlineWidthLinkedToPreset: _outlineWidthLinkedToPreset,
     secondaryOutlineColorLinkedToPreset: _secondaryOutlineColorLinkedToPreset,
     secondaryOutlineWidthLinkedToPreset: _secondaryOutlineWidthLinkedToPreset,
+    shadowEnabledLinkedToPreset: _shadowEnabledLinkedToPreset,
+    shadowColorLinkedToPreset: _shadowColorLinkedToPreset,
+    shadowAngleDegLinkedToPreset: _shadowAngleDegLinkedToPreset,
+    shadowDistancePxLinkedToPreset: _shadowDistancePxLinkedToPreset,
     autoFitTextLinkedToPreset: _autoFitTextLinkedToPreset,
     textColorLinkedToPreset: _textColorLinkedToPreset,
     screentoneFillEnabledLinkedToPreset: _screentoneFillEnabledLinkedToPreset,
@@ -201,6 +217,22 @@ export function applyFontPresetPatchToBlock(
       patch.secondaryOutlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineWidthPx"))
         ? patch.secondaryOutlineWidthPx
         : block.secondaryOutlineWidthPx,
+    shadowEnabled:
+      patch.shadowEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowEnabled"))
+        ? patch.shadowEnabled
+        : block.shadowEnabled,
+    shadowColor:
+      patch.shadowColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowColor"))
+        ? patch.shadowColor
+        : block.shadowColor,
+    shadowAngleDeg:
+      patch.shadowAngleDeg !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowAngleDeg"))
+        ? patch.shadowAngleDeg
+        : block.shadowAngleDeg,
+    shadowDistancePx:
+      patch.shadowDistancePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowDistancePx"))
+        ? patch.shadowDistancePx
+        : block.shadowDistancePx,
     autoFitText:
       patch.autoFitText !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "autoFitText"))
         ? patch.autoFitText

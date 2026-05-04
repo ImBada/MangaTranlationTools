@@ -114,6 +114,10 @@ export type TranslationBlock = {
   outlineWidthLinkedToPreset?: boolean;
   secondaryOutlineColorLinkedToPreset?: boolean;
   secondaryOutlineWidthLinkedToPreset?: boolean;
+  shadowEnabledLinkedToPreset?: boolean;
+  shadowColorLinkedToPreset?: boolean;
+  shadowAngleDegLinkedToPreset?: boolean;
+  shadowDistancePxLinkedToPreset?: boolean;
   autoFitTextLinkedToPreset?: boolean;
   textColorLinkedToPreset?: boolean;
   screentoneFillEnabledLinkedToPreset?: boolean;
@@ -134,6 +138,10 @@ export type TranslationBlock = {
   outlineWidthPx?: number;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
+  shadowEnabled?: boolean;
+  shadowColor?: string;
+  shadowAngleDeg?: number;
+  shadowDistancePx?: number;
   textPaddingPx?: number;
   textAlign: "left" | "center" | "right";
   textPosition?: TextPosition;
@@ -163,6 +171,10 @@ export type FontPreset = {
   outlineWidthPx?: number;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
+  shadowEnabled?: boolean;
+  shadowColor?: string;
+  shadowAngleDeg?: number;
+  shadowDistancePx?: number;
   autoFitText?: boolean;
   textColor?: string;
   screentoneFillEnabled?: boolean;
