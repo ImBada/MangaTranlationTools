@@ -244,7 +244,7 @@ export function FontToolSection({
   return (
     <>
       {fontControlValues ? (
-        <>
+        <div className="font-control-stack">
           <div className="compact-tool-field font-picker-field">
             <span>서체</span>
             <FontFamilyPicker
@@ -387,7 +387,7 @@ export function FontToolSection({
             onChange={onFontSettingChange}
             renderLinkButton={renderFontPresetLinkButton}
           />
-          <div className="font-outline-section font-shadow-section">
+          <div className="compact-tool-field font-outline-section font-shadow-section font-effect-section">
             <div className="font-outline-section-header">
               <span>그림자</span>
               <div className="font-shadow-header-actions">
@@ -481,30 +481,46 @@ export function FontToolSection({
             {renderFontPresetLinkButton("textColor", "글자색")}
           </label>
           <div className="compact-tool-field font-screentone-field">
-            <label className="tool-checkbox font-checkbox-field">
-              <input
-                type="checkbox"
-                {...mouseOnlyCheckboxProps}
-                checked={fontControlValues.screentoneFillEnabled ?? false}
-                disabled={selectedPageEditLocked}
-                onChange={(event) => onFontSettingChange({ screentoneFillEnabled: event.target.checked })}
-              />
-              <span>스크린톤 채우기</span>
-              <button
-                type="button"
-                className={`font-inline-toggle ${fontControlValues.screentoneFillAntialias ?? true ? "active" : ""}`}
-                disabled={selectedPageEditLocked}
-                onClick={(event) => {
-                  event.preventDefault();
-                  onFontSettingChange({ screentoneFillAntialias: !(fontControlValues.screentoneFillAntialias ?? true) });
-                }}
-                aria-pressed={fontControlValues.screentoneFillAntialias ?? true}
-                title={`스크린톤 안티 ${(fontControlValues.screentoneFillAntialias ?? true) ? "끄기" : "켜기"}`}
-              >
-                안티
-              </button>
-              {renderFontPresetLinkButton("screentoneFillEnabled", "스크린톤 채우기")}
-            </label>
+            <div className="font-screentone-header">
+              <div className="font-screentone-title">
+                <span>스크린톤 채우기</span>
+                <button
+                  type="button"
+                  className={`font-inline-toggle ${fontControlValues.screentoneFillAntialias ?? true ? "active" : ""}`}
+                  disabled={selectedPageEditLocked}
+                  onClick={() => {
+                    onFontSettingChange({ screentoneFillAntialias: !(fontControlValues.screentoneFillAntialias ?? true) });
+                  }}
+                  aria-pressed={fontControlValues.screentoneFillAntialias ?? true}
+                  title={`스크린톤 안티 ${(fontControlValues.screentoneFillAntialias ?? true) ? "끄기" : "켜기"}`}
+                >
+                  안티
+                </button>
+              </div>
+              <div className="font-screentone-header-actions">
+                <div className="font-outline-mode" aria-label="스크린톤 채우기 사용">
+                  <button
+                    type="button"
+                    className={!(fontControlValues.screentoneFillEnabled ?? false) ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ screentoneFillEnabled: false })}
+                    aria-pressed={!(fontControlValues.screentoneFillEnabled ?? false)}
+                  >
+                    OFF
+                  </button>
+                  <button
+                    type="button"
+                    className={fontControlValues.screentoneFillEnabled ?? false ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ screentoneFillEnabled: true })}
+                    aria-pressed={fontControlValues.screentoneFillEnabled ?? false}
+                  >
+                    ON
+                  </button>
+                </div>
+                {renderFontPresetLinkButton("screentoneFillEnabled", "스크린톤 채우기")}
+              </div>
+            </div>
             <div className="font-screentone-range-row">
               <label className="compact-tool-field font-range-field">
                 <span>
@@ -601,7 +617,7 @@ export function FontToolSection({
             <span>자동 맞춤</span>
             {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
           </label>
-        </>
+        </div>
       ) : (
         <p className="muted-line">블록이나 프리셋을 선택하면 폰트값을 조정할 수 있습니다.</p>
       )}

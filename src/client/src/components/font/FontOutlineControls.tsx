@@ -33,7 +33,7 @@ export function FontOutlineControls({ disabled, onChange, renderLinkButton, valu
   };
 
   return (
-    <div className="font-outline-section">
+    <div className="compact-tool-field font-outline-section font-effect-section">
       <div className="font-outline-section-header">
         <span>외곽선</span>
         <div className="font-outline-mode" aria-label="외곽선 개수">
