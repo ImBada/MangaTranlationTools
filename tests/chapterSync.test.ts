@@ -156,6 +156,41 @@ describe("chapter sync helpers", () => {
     expect(merged.chapter.pages[1]?.blocks[0]?.translatedText).toBe("KO2");
   });
 
+  it("preserves dirty local font presets during live refresh", () => {
+    const local = {
+      ...makeChapter(),
+      fontPresets: [
+        {
+          id: "font-preset-custom",
+          name: "custom",
+          fontFamily: "Local Sans",
+          fontWeight: 700,
+          fontStyle: "italic" as const,
+          fontSizePx: 32,
+          lineHeight: 1.2
+        }
+      ],
+      fontSizePresets: [{ id: "font-size-preset-a", name: "A", fontSizePx: 32 }]
+    };
+    const live = {
+      ...makeChapter(),
+      fontPresets: [
+        {
+          id: "font-preset-speech",
+          name: "speech",
+          fontSizePx: 24,
+          lineHeight: 1.18
+        }
+      ]
+    };
+
+    const merged = mergeLiveChapterPreservingDirtyCompletedPages(live, local, [], { preserveLocalChapterPresets: true });
+
+    expect(merged.preservedDirtyPageIds).toEqual([]);
+    expect(merged.chapter.fontPresets).toEqual(local.fontPresets);
+    expect(merged.chapter.fontSizePresets).toEqual(local.fontSizePresets);
+  });
+
   it("does not preserve dirty pages once they are no longer completed", () => {
     const local = makeChapter();
     local.pages[0] = {

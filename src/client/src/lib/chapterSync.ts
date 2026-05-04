@@ -11,6 +11,10 @@ export type LiveChapterMergeResult = {
   preservedDirtyPageIds: string[];
 };
 
+type LiveChapterMergeOptions = {
+  preserveLocalChapterPresets?: boolean;
+};
+
 export function resolveSelectionAfterChapterSync(
   chapter: ChapterSnapshot,
   selectedPageId: string | null,
@@ -30,7 +34,8 @@ export function resolveSelectionAfterChapterSync(
 export function mergeLiveChapterPreservingDirtyCompletedPages(
   liveChapter: ChapterSnapshot,
   localChapter: ChapterSnapshot | null,
-  dirtyPageIds: Iterable<string>
+  dirtyPageIds: Iterable<string>,
+  options: LiveChapterMergeOptions = {}
 ): LiveChapterMergeResult {
   if (!localChapter || localChapter.id !== liveChapter.id) {
     return {
@@ -40,7 +45,8 @@ export function mergeLiveChapterPreservingDirtyCompletedPages(
   }
 
   const dirtyPageIdSet = new Set(dirtyPageIds);
-  if (dirtyPageIdSet.size === 0) {
+  const preserveLocalChapterPresets = options.preserveLocalChapterPresets === true;
+  if (dirtyPageIdSet.size === 0 && !preserveLocalChapterPresets) {
     return {
       chapter: liveChapter,
       preservedDirtyPageIds: []
@@ -53,6 +59,8 @@ export function mergeLiveChapterPreservingDirtyCompletedPages(
   return {
     chapter: {
       ...liveChapter,
+      fontPresets: preserveLocalChapterPresets ? localChapter.fontPresets : liveChapter.fontPresets,
+      fontSizePresets: preserveLocalChapterPresets ? localChapter.fontSizePresets : liveChapter.fontSizePresets,
       pages: liveChapter.pages.map((page) => {
         const localPage = localPages.get(page.id);
         if (!localPage || !dirtyPageIdSet.has(page.id)) {

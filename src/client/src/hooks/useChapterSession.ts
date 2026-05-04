@@ -62,6 +62,7 @@ export function useChapterSession({
   const dirtyVersionRef = React.useRef(0);
   const dirtyPageIdsRef = React.useRef<Set<string>>(new Set());
   const dirtyAllPagesRef = React.useRef(false);
+  const dirtyChapterPresetsRef = React.useRef(false);
   const currentChapterRef = React.useRef<ChapterSnapshot | null>(null);
   const selectedPageIdRef = React.useRef<string | null>(null);
   const selectedBlockIdRef = React.useRef<string | null>(null);
@@ -106,6 +107,12 @@ export function useChapterSession({
     }
   }, []);
 
+  const clearDirtyTracking = React.useCallback(() => {
+    dirtyPageIdsRef.current.clear();
+    dirtyAllPagesRef.current = false;
+    dirtyChapterPresetsRef.current = false;
+  }, []);
+
   const markDirty = React.useCallback((pageId?: string) => {
     dirtyVersionRef.current += 1;
     if (pageId) {
@@ -122,7 +129,9 @@ export function useChapterSession({
       return;
     }
 
-    const mergeResult = mergeLiveChapterPreservingDirtyCompletedPages(chapter, current, dirtyPageIdsRef.current);
+    const mergeResult = mergeLiveChapterPreservingDirtyCompletedPages(chapter, current, dirtyPageIdsRef.current, {
+      preserveLocalChapterPresets: dirtyChapterPresetsRef.current
+    });
     dirtyPageIdsRef.current = new Set(mergeResult.preservedDirtyPageIds);
     currentChapterRef.current = mergeResult.chapter;
 
@@ -138,7 +147,7 @@ export function useChapterSession({
     selectedBlockIdRef.current = selection.selectedBlockId;
     setSelectedPageIdState(selection.selectedPageId);
     setSelectedBlockIdState(selection.selectedBlockId);
-    setDirty(mergeResult.preservedDirtyPageIds.length > 0);
+    setDirty(mergeResult.preservedDirtyPageIds.length > 0 || dirtyChapterPresetsRef.current);
   }, []);
 
   React.useEffect(() => {
@@ -162,8 +171,7 @@ export function useChapterSession({
             currentChapterRef.current = chapterToSave;
             setCurrentChapterState((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
           }
-          dirtyPageIdsRef.current.clear();
-          dirtyAllPagesRef.current = false;
+          clearDirtyTracking();
           setDirty(false);
           signalSaveComplete();
         }
@@ -182,7 +190,7 @@ export function useChapterSession({
     }, 400);
 
     return clearSaveTimer;
-  }, [clearSaveTimer, currentChapter, dirty, pushStatus, reportRecoverableFailure, signalSaveComplete]);
+  }, [clearDirtyTracking, clearSaveTimer, currentChapter, dirty, pushStatus, reportRecoverableFailure, signalSaveComplete]);
 
   const saveNow = React.useCallback(async () => {
     if (!currentChapter) {
@@ -201,11 +209,10 @@ export function useChapterSession({
       currentChapterRef.current = chapterToSave;
       setCurrentChapterState((current) => (current?.id === chapterToSave.id ? chapterToSave : current));
     }
-    dirtyPageIdsRef.current.clear();
-    dirtyAllPagesRef.current = false;
+    clearDirtyTracking();
     setDirty(false);
     signalSaveComplete();
-  }, [clearSaveTimer, currentChapter, signalSaveComplete]);
+  }, [clearDirtyTracking, clearSaveTimer, currentChapter, signalSaveComplete]);
 
   const clearCurrentChapter = React.useCallback(() => {
     clearSaveTimer();
@@ -219,10 +226,9 @@ export function useChapterSession({
     setEditingFontPresetIdState(null);
     editingFontPresetIdRef.current = null;
     clearUndoStacks();
-    dirtyPageIdsRef.current.clear();
-    dirtyAllPagesRef.current = false;
+    clearDirtyTracking();
     setDirty(false);
-  }, [clearPendingChapterTimers, clearSaveTimer, clearUndoStacks]);
+  }, [clearDirtyTracking, clearPendingChapterTimers, clearSaveTimer, clearUndoStacks]);
 
   const openChapter = React.useCallback(
     async (chapterId: string) => {
@@ -230,8 +236,7 @@ export function useChapterSession({
         await saveNow();
       }
       const chapter = await window.mangaApi.openChapter(chapterId);
-      dirtyPageIdsRef.current.clear();
-      dirtyAllPagesRef.current = false;
+      clearDirtyTracking();
       clearUndoStacks();
       currentChapterRef.current = chapter;
       setCurrentChapterState(chapter);
@@ -242,15 +247,14 @@ export function useChapterSession({
       setSelectedBlockIdState(null);
       setDirty(false);
     },
-    [clearUndoStacks, dirty, saveNow]
+    [clearDirtyTracking, clearUndoStacks, dirty, saveNow]
   );
 
   const applyChapter = React.useCallback((chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => {
     if (!chapter) {
       return;
     }
-    dirtyPageIdsRef.current.clear();
-    dirtyAllPagesRef.current = false;
+    clearDirtyTracking();
     clearUndoStacks();
     currentChapterRef.current = chapter;
     setCurrentChapterState(chapter);
@@ -265,7 +269,7 @@ export function useChapterSession({
     if (fallbackStatus) {
       pushStatus(fallbackStatus);
     }
-  }, [clearUndoStacks, pushStatus]);
+  }, [clearDirtyTracking, clearUndoStacks, pushStatus]);
 
   const selectPageForReading = React.useCallback((pageId: string | null) => {
     if (!pageId) {
@@ -284,6 +288,9 @@ export function useChapterSession({
       }
       const next = updater(current);
       dirtyVersionRef.current += 1;
+      if (next.fontPresets !== current.fontPresets || next.fontSizePresets !== current.fontSizePresets) {
+        dirtyChapterPresetsRef.current = true;
+      }
       const pageIds = pageId ? [pageId] : resolveChangedPageIds(current, next);
       if (pageIds.length > 0) {
         dirtyPageIdsRef.current = new Set([...dirtyPageIdsRef.current, ...pageIds]);
