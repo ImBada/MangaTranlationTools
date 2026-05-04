@@ -217,7 +217,7 @@
 
 .layer-tool-panel {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   align-content: start;
 }
 

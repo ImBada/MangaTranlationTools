@@ -408,7 +408,7 @@
 .layer-panel,
 .layer-tool-panel {
   display: grid;
-  gap: 10px;
+  gap: 8px;
   padding: 11px;
   border: 1px solid #303640;
   border-radius: 10px;
