@@ -254,6 +254,10 @@
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.12);
 }
 
+.overlay-layer-preview.duplicate-block-mode .overlay-block {
+  cursor: copy;
+}
+
 .overlay-block.selected {
   outline: 2px solid #6aa9ff;
   outline-offset: 2px;

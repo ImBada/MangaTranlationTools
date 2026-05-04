@@ -6,6 +6,7 @@ import {
   resolveBlockRotationDeg,
   resolveEditableBlockBbox
 } from "../../../shared/geometry";
+import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
 import { angleBetweenPointsDeg, isEditableTarget } from "../lib/editorUtils";
 import type { ActiveLayer } from "../lib/layerState";
 import type { ViewportSize } from "../lib/overlayLayout";
@@ -32,6 +33,7 @@ type DragState = {
 type UseStageInteractionOptions = {
   activeLayer: ActiveLayer;
   currentChapter: ChapterSnapshot | null;
+  duplicateBlock: (block: TranslationBlock) => void;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -57,6 +59,11 @@ type UseStageInteractionState = {
 };
 
 const STAGE_ZOOM_STEP = 1.2;
+
+function isBlockDuplicateModifierPressed(event: React.PointerEvent): boolean {
+  const platform = typeof navigator === "undefined" ? "" : navigator.platform;
+  return isBlockDuplicateModifier(event, platform);
+}
 
 function blurActiveEditableElement(): void {
   if (typeof document === "undefined" || typeof HTMLElement === "undefined") {
@@ -92,6 +99,7 @@ function tryReleasePointerCapture(element: Element | null, pointerId: number): v
 export function useStageInteraction({
   activeLayer,
   currentChapter,
+  duplicateBlock,
   recordTranslationUndoSnapshot,
   selectedPage,
   selectedPageEditLocked,
@@ -145,6 +153,10 @@ export function useStageInteraction({
     event.preventDefault();
     event.stopPropagation();
     blurActiveEditableElement();
+    if (mode === "move" && isBlockDuplicateModifierPressed(event)) {
+      duplicateBlock(block);
+      return;
+    }
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
     const stageRect = stageRef.current.getBoundingClientRect();
@@ -164,7 +176,7 @@ export function useStageInteraction({
       undoRecorded: false
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
-  }, [activeLayer, selectedPageEditLocked, setSelectedBlockId]);
+  }, [activeLayer, duplicateBlock, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;

@@ -300,6 +300,7 @@ export default function App(): React.JSX.Element {
     createFontPresetFromSelectedBlock,
     deleteFontPreset,
     deleteSelectedBlock,
+    duplicateBlock,
     duplicateSelectedBlock,
     fontControlValues,
     fontFamilyOptions,
@@ -361,6 +362,7 @@ export default function App(): React.JSX.Element {
   } = useStageInteraction({
     activeLayer,
     currentChapter,
+    duplicateBlock,
     recordTranslationUndoSnapshot,
     selectedPage,
     selectedPageEditLocked,

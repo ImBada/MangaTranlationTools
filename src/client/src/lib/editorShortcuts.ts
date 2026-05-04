@@ -1,4 +1,7 @@
+import { isMacLikePlatform } from "./globalUndo";
+
 type InpaintToolKey = "select" | "brush" | "eraser";
+type ModifierKeyEvent = Pick<KeyboardEvent | PointerEvent, "ctrlKey" | "metaKey">;
 
 export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
   select: "T",
@@ -44,6 +47,10 @@ export function isBlockPasteShortcut(event: KeyboardEvent): boolean {
   const hasPasteModifier = event.metaKey || event.ctrlKey;
   const plainPasteKey = !event.shiftKey && !event.metaKey && !event.ctrlKey;
   return !event.altKey && (hasPasteModifier || plainPasteKey) && (event.code === "KeyV" || event.key.toLowerCase() === "v");
+}
+
+export function isBlockDuplicateModifier(event: ModifierKeyEvent, platform: string): boolean {
+  return isMacLikePlatform(platform) ? event.metaKey : event.ctrlKey;
 }
 
 export function isDeleteShortcut(event: KeyboardEvent, oneHandMode: boolean): boolean {

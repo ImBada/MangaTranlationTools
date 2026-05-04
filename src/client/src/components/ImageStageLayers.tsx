@@ -1,5 +1,6 @@
 import React from "react";
 import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
+import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
@@ -86,6 +87,12 @@ export function ImageStageLayers({
   const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
   const resolvedStageSize = stageSize ?? pageSize;
   const [inlineEdit, setInlineEdit] = React.useState<{ blockId: string; draft: string } | null>(null);
+  const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
+  const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
+
+  const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
+    isBlockDuplicateModifier(event, duplicateModifierPlatform)
+  ), [duplicateModifierPlatform]);
 
   const commitInlineEdit = React.useCallback(() => {
     if (!inlineEdit) {
@@ -110,6 +117,22 @@ export function ImageStageLayers({
       commitInlineEdit();
     }
   }, [commitInlineEdit, inlineEdit, page.blocks, selectedBlockId]);
+
+  React.useEffect(() => {
+    const updateFromKeyboardEvent = (event: KeyboardEvent) => {
+      setDuplicateBlockMode(resolveDuplicateModifierState(event));
+    };
+    const clearDuplicateMode = () => setDuplicateBlockMode(false);
+
+    window.addEventListener("keydown", updateFromKeyboardEvent);
+    window.addEventListener("keyup", updateFromKeyboardEvent);
+    window.addEventListener("blur", clearDuplicateMode);
+    return () => {
+      window.removeEventListener("keydown", updateFromKeyboardEvent);
+      window.removeEventListener("keyup", updateFromKeyboardEvent);
+      window.removeEventListener("blur", clearDuplicateMode);
+    };
+  }, [resolveDuplicateModifierState]);
 
   return (
     <>
@@ -174,11 +197,14 @@ export function ImageStageLayers({
       {layerVisibility.overlay
         ? (
             <div
-              className="overlay-layer-preview"
+              className={`overlay-layer-preview${duplicateBlockMode ? " duplicate-block-mode" : ""}`}
               style={{
                 opacity: layerOpacity.overlay,
                 pointerEvents: activeLayer === "overlay" && !temporaryPanActive ? "auto" : "none"
               }}
+              onPointerEnter={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
+              onPointerMove={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
+              onPointerLeave={() => setDuplicateBlockMode(false)}
             >
               <OverlayRenderCanvas
                 page={page}

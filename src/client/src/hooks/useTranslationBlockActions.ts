@@ -27,6 +27,7 @@ type UseTranslationBlockActionsState = {
   copySelectedBlockToClipboard: () => Promise<void>;
   createEmptyBlock: () => void;
   deleteSelectedBlock: () => void;
+  duplicateBlock: (block: TranslationBlock) => void;
   duplicateSelectedBlock: () => void;
   pasteTranslationBlockFromClipboard: () => Promise<void>;
   updateSelectedPageBlockOpacity: (opacity: number) => void;
@@ -145,13 +146,13 @@ export function useTranslationBlockActions({
     setSelectedBlockId(pastedBlock.id);
   }, [pushStatus, recordTranslationUndoSnapshot, selectLayer, selectedPage, selectedPageEditLocked, setSelectedBlockId, showOverlayLayer, updateCurrentChapter]);
 
-  const duplicateSelectedBlock = React.useCallback(() => {
-    if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
+  const duplicateBlock = React.useCallback((block: TranslationBlock) => {
+    if (!selectedPage || selectedPageEditLocked) {
       return;
     }
     const copy = {
-      ...offsetBlockBboxes(selectedBlock, 16, 16),
-      id: `${selectedBlock.id}-copy-${Date.now()}`
+      ...offsetBlockBboxes(block, 16, 16),
+      id: `${block.id}-copy-${Date.now()}`
     };
     recordTranslationUndoSnapshot("번역 블록 복제");
     updateCurrentChapter(selectedPage.id, (current) => ({
@@ -167,7 +168,14 @@ export function useTranslationBlockActions({
       )
     }));
     setSelectedBlockId(copy.id);
-  }, [recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+
+  const duplicateSelectedBlock = React.useCallback(() => {
+    if (!selectedBlock) {
+      return;
+    }
+    duplicateBlock(selectedBlock);
+  }, [duplicateBlock, selectedBlock]);
 
   const createEmptyBlock = React.useCallback(() => {
     if (!selectedPage || selectedPageEditLocked || inpaintBusy) {
@@ -245,6 +253,7 @@ export function useTranslationBlockActions({
     copySelectedBlockToClipboard,
     createEmptyBlock,
     deleteSelectedBlock,
+    duplicateBlock,
     duplicateSelectedBlock,
     pasteTranslationBlockFromClipboard,
     updateSelectedPageBlockOpacity
