@@ -1,3 +1,3 @@
 export function normalizeKoreanText(value: string): string {
-  return value.replace(/\.{3,}/g, "…");
+  return value.replace(/\.{3,}/g, "…").replace(/--/g, "—");
 }
