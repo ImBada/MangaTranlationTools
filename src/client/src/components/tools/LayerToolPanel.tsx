@@ -1,5 +1,14 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, FontPresetBackupSnapshot, FontSizePreset, ImageRect, MangaPage, TranslationBlock } from "../../../../shared/types";
+import type {
+  ChapterSnapshot,
+  FontPreset,
+  FontPresetBackupSnapshot,
+  FontPresetBackupSummary,
+  FontSizePreset,
+  ImageRect,
+  MangaPage,
+  TranslationBlock
+} from "../../../../shared/types";
 import type { FontFamilyOption } from "../font/FontFamilyPicker";
 import type { InpaintTool } from "../InpaintLayerCanvas";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
@@ -49,6 +58,7 @@ type LayerToolPanelProps = {
   onCreateFontPreset: () => void;
   onCreateFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   onCreateFontSizePreset: () => void;
+  onDeleteFontPresetBackup: (backupId: string) => Promise<FontPresetBackupSummary[]>;
   onDeleteFontPreset: (presetId: string) => void;
   onDeleteFontSizePreset: (presetId: string) => void;
   onDownloadLastImportedInpaintPsd: () => void | Promise<void>;
@@ -65,6 +75,7 @@ type LayerToolPanelProps = {
   onInpaintSelectionClear: () => void;
   onRerunInpaintForSelection: () => void | Promise<void>;
   onRerunInpaintWithCurrentMask: () => void | Promise<void>;
+  onListFontPresetBackups: () => Promise<FontPresetBackupSummary[]>;
   onRestoreFontPresetListBackup: (backupId: string) => Promise<void>;
   onSelectFontPreset: (presetId: string) => void;
   onSelectFontSizePreset: (presetId: string | null) => void;
@@ -109,6 +120,7 @@ export function LayerToolPanel({
   onCreateFontPreset,
   onCreateFontPresetListBackup,
   onCreateFontSizePreset,
+  onDeleteFontPresetBackup,
   onDeleteFontPreset,
   onDeleteFontSizePreset,
   onDownloadLastImportedInpaintPsd,
@@ -125,6 +137,7 @@ export function LayerToolPanel({
   onInpaintSelectionClear,
   onRerunInpaintForSelection,
   onRerunInpaintWithCurrentMask,
+  onListFontPresetBackups,
   onRestoreFontPresetListBackup,
   onSelectFontPreset,
   onSelectFontSizePreset,
@@ -154,11 +167,13 @@ export function LayerToolPanel({
           onCreateFontPreset={onCreateFontPreset}
           onCreateFontPresetListBackup={onCreateFontPresetListBackup}
           onCreateFontSizePreset={onCreateFontSizePreset}
+          onDeleteFontPresetBackup={onDeleteFontPresetBackup}
           onDeleteFontPreset={onDeleteFontPreset}
           onDeleteFontSizePreset={onDeleteFontSizePreset}
           onFontPresetNameChange={onFontPresetNameChange}
           onFontPresetRename={onFontPresetRename}
           onFontSettingChange={onFontSettingChange}
+          onListFontPresetBackups={onListFontPresetBackups}
           onRestoreFontPresetListBackup={onRestoreFontPresetListBackup}
           onSelectFontPreset={onSelectFontPreset}
           onSelectFontSizePreset={onSelectFontSizePreset}

@@ -3,6 +3,7 @@ import type {
   ChapterSnapshot,
   FontPreset,
   FontPresetBackupSnapshot,
+  FontPresetBackupSummary,
   FontSizePreset,
   MangaPage,
   SystemFont,
@@ -118,6 +119,7 @@ type UseFontPresetEditingState = {
   createFontPresetFromSelectedBlock: () => void;
   createFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   createFontSizePresetFromCurrentFontSize: () => void;
+  deleteFontPresetBackup: (backupId: string) => Promise<FontPresetBackupSummary[]>;
   deleteFontPreset: (presetId: string) => void;
   deleteFontSizePreset: (presetId: string) => void;
   editingFontPreset: FontPreset | null;
@@ -129,6 +131,7 @@ type UseFontPresetEditingState = {
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   activeFontSizePresetId: string | null;
+  listFontPresetBackups: () => Promise<FontPresetBackupSummary[]>;
   renameFontPreset: (presetId: string, name: string) => void;
   restoreFontPresetListBackup: (backupId: string) => Promise<void>;
   selectFontSizePreset: (presetId: string | null) => void;
@@ -473,6 +476,10 @@ export function useFontPresetEditing({
     return backup;
   }, [currentChapter, pushStatus]);
 
+  const listFontPresetBackups = React.useCallback(() => window.mangaApi.listFontPresetBackups(), []);
+
+  const deleteFontPresetBackup = React.useCallback((backupId: string) => window.mangaApi.deleteFontPresetBackup(backupId), []);
+
   const restoreFontPresetListBackup = React.useCallback(async (backupId: string) => {
     if (!currentChapter || selectedPageEditLocked) {
       return;
@@ -655,6 +662,7 @@ export function useFontPresetEditing({
     createFontPresetFromSelectedBlock,
     createFontPresetListBackup,
     createFontSizePresetFromCurrentFontSize,
+    deleteFontPresetBackup,
     deleteFontPreset,
     deleteFontSizePreset,
     editingFontPreset,
@@ -663,6 +671,7 @@ export function useFontPresetEditing({
     fontPresetName,
     fontPresets,
     fontSizePresets,
+    listFontPresetBackups,
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,

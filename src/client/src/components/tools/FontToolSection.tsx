@@ -11,6 +11,7 @@ import type {
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
+import { FontPresetBackupModal, type FontPresetBackupDialogMode } from "./FontPresetBackupModal";
 import type { BlockFontPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
@@ -43,11 +44,13 @@ type FontToolSectionProps = {
   onCreateFontPreset: () => void;
   onCreateFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   onCreateFontSizePreset: () => void;
+  onDeleteFontPresetBackup: (backupId: string) => Promise<FontPresetBackupSummary[]>;
   onDeleteFontPreset: (presetId: string) => void;
   onDeleteFontSizePreset: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
   onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
+  onListFontPresetBackups: () => Promise<FontPresetBackupSummary[]>;
   onRestoreFontPresetListBackup: (backupId: string) => Promise<void>;
   onSelectFontPreset: (presetId: string) => void;
   onSelectFontSizePreset: (presetId: string | null) => void;
@@ -78,7 +81,6 @@ const TEXT_POSITION_OPTIONS: { value: TextPosition; label: string }[] = [
   { value: "bottom-right", label: "하단 우측" }
 ];
 const DEFAULT_SHADOW_DISTANCE_PX = 4;
-type FontPresetBackupDialogMode = "backup" | "restore";
 
 function resolvePresetTagTextMetrics(preset: FontPreset): {
   fontSizePx: number;
@@ -181,11 +183,13 @@ export function FontToolSection({
   onCreateFontPreset,
   onCreateFontPresetListBackup,
   onCreateFontSizePreset,
+  onDeleteFontPresetBackup,
   onDeleteFontPreset,
   onDeleteFontSizePreset,
   onFontPresetNameChange,
   onFontPresetRename,
   onFontSettingChange,
+  onListFontPresetBackups,
   onRestoreFontPresetListBackup,
   onSelectFontPreset,
   onSelectFontSizePreset
@@ -194,11 +198,6 @@ export function FontToolSection({
   const [renamingFontPresetId, setRenamingFontPresetId] = React.useState<string | null>(null);
   const [renamingFontPresetName, setRenamingFontPresetName] = React.useState("");
   const [backupDialogMode, setBackupDialogMode] = React.useState<FontPresetBackupDialogMode | null>(null);
-  const [backupDialogBusy, setBackupDialogBusy] = React.useState(false);
-  const [backupDialogError, setBackupDialogError] = React.useState<string | null>(null);
-  const [backupName, setBackupName] = React.useState("");
-  const [backupSummaries, setBackupSummaries] = React.useState<FontPresetBackupSummary[]>([]);
-  const [selectedBackupId, setSelectedBackupId] = React.useState<string | null>(null);
   const skipNextRenameCommitRef = React.useRef(false);
   const selectedFontFamilyOption = fontFamilyOptions.find((option) => option.value === (fontControlValues?.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY));
   const selectedFontWeights = selectedFontFamilyOption?.weights ?? [];
@@ -259,90 +258,6 @@ export function FontToolSection({
     skipNextRenameCommitRef.current = true;
     setRenamingFontPresetId(null);
     setRenamingFontPresetName("");
-  }, []);
-
-  const refreshFontPresetBackups = React.useCallback(async () => {
-    const backups = await window.mangaApi.listFontPresetBackups();
-    setBackupSummaries(backups);
-    setSelectedBackupId((current) => (current && backups.some((backup) => backup.id === current) ? current : backups[0]?.id ?? null));
-  }, []);
-
-  const openFontPresetBackupDialog = React.useCallback(async (mode: FontPresetBackupDialogMode) => {
-    setBackupDialogMode(mode);
-    setBackupDialogError(null);
-    setBackupName(`폰트 프리셋 백업 ${new Date().toLocaleString("ko-KR")}`);
-    setBackupDialogBusy(true);
-    try {
-      await refreshFontPresetBackups();
-    } catch (error) {
-      setBackupDialogError(error instanceof Error ? error.message : "백업 목록을 불러오지 못했습니다.");
-    } finally {
-      setBackupDialogBusy(false);
-    }
-  }, [refreshFontPresetBackups]);
-
-  const saveFontPresetBackup = React.useCallback(async () => {
-    const name = backupName.trim();
-    if (!name) {
-      setBackupDialogError("백업 이름을 입력하세요.");
-      return;
-    }
-
-    setBackupDialogBusy(true);
-    setBackupDialogError(null);
-    try {
-      const backup = await onCreateFontPresetListBackup(name);
-      setBackupName(`폰트 프리셋 백업 ${new Date().toLocaleString("ko-KR")}`);
-      await refreshFontPresetBackups();
-      if (backup) {
-        setSelectedBackupId(backup.id);
-      }
-    } catch (error) {
-      setBackupDialogError(error instanceof Error ? error.message : "폰트 프리셋 백업 저장에 실패했습니다.");
-    } finally {
-      setBackupDialogBusy(false);
-    }
-  }, [backupName, onCreateFontPresetListBackup, refreshFontPresetBackups]);
-
-  const restoreFontPresetBackup = React.useCallback(async () => {
-    if (!selectedBackupId) {
-      setBackupDialogError("복원할 백업을 선택하세요.");
-      return;
-    }
-
-    setBackupDialogBusy(true);
-    setBackupDialogError(null);
-    try {
-      await onRestoreFontPresetListBackup(selectedBackupId);
-      setBackupDialogMode(null);
-    } catch (error) {
-      setBackupDialogError(error instanceof Error ? error.message : "폰트 프리셋 백업 복원에 실패했습니다.");
-    } finally {
-      setBackupDialogBusy(false);
-    }
-  }, [onRestoreFontPresetListBackup, selectedBackupId]);
-
-  const deleteFontPresetBackup = React.useCallback(async (backup: FontPresetBackupSummary) => {
-    const confirmed = await window.mangaApi.confirm(
-      "폰트 프리셋 백업 삭제",
-      `"${backup.name}" 백업을 삭제할까요?`,
-      "삭제한 백업은 복원할 수 없습니다."
-    );
-    if (!confirmed) {
-      return;
-    }
-
-    setBackupDialogBusy(true);
-    setBackupDialogError(null);
-    try {
-      const backups = await window.mangaApi.deleteFontPresetBackup(backup.id);
-      setBackupSummaries(backups);
-      setSelectedBackupId((current) => (current && backups.some((candidate) => candidate.id === current) ? current : backups[0]?.id ?? null));
-    } catch (error) {
-      setBackupDialogError(error instanceof Error ? error.message : "폰트 프리셋 백업 삭제에 실패했습니다.");
-    } finally {
-      setBackupDialogBusy(false);
-    }
   }, []);
 
   return (
@@ -824,97 +739,28 @@ export function FontToolSection({
           <button
             type="button"
             disabled={!currentChapter}
-            onClick={() => void openFontPresetBackupDialog("backup")}
+            onClick={() => setBackupDialogMode("backup")}
           >
             백업
           </button>
           <button
             type="button"
             disabled={!currentChapter || selectedPageEditLocked}
-            onClick={() => void openFontPresetBackupDialog("restore")}
+            onClick={() => setBackupDialogMode("restore")}
           >
             복원
           </button>
         </div>
       </div>
       {backupDialogMode ? (
-        <div className="modal-backdrop">
-          <div className="modal-card font-preset-backup-modal">
-            <div className="modal-header">
-              <h2>{backupDialogMode === "backup" ? "폰트 프리셋 백업" : "폰트 프리셋 복원"}</h2>
-              <button className="ghost-button" disabled={backupDialogBusy} onClick={() => setBackupDialogMode(null)}>
-                닫기
-              </button>
-            </div>
-            <section className="modal-section">
-              {backupDialogMode === "backup" ? (
-                <label className="font-preset-backup-name-field">
-                  백업 이름
-                  <input
-                    value={backupName}
-                    disabled={backupDialogBusy}
-                    autoFocus
-                    onChange={(event) => setBackupName(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        void saveFontPresetBackup();
-                      }
-                    }}
-                  />
-                </label>
-              ) : null}
-              <div className="font-preset-backup-list" aria-label="폰트 프리셋 백업 목록">
-                {backupSummaries.length > 0 ? (
-                  backupSummaries.map((backup) => (
-                    <div
-                      key={backup.id}
-                      className={`font-preset-backup-list-item ${selectedBackupId === backup.id ? "active" : ""}`}
-                    >
-                      <button
-                        type="button"
-                        className="font-preset-backup-select"
-                        disabled={backupDialogBusy}
-                        onClick={() => setSelectedBackupId(backup.id)}
-                      >
-                        <span>{backup.name}</span>
-                        <small>
-                          {new Date(backup.createdAt).toLocaleString("ko-KR")} · 폰트 프리셋 {backup.fontPresetCount}개 · 크기 프리셋 {backup.fontSizePresetCount}개
-                        </small>
-                      </button>
-                      <button
-                        type="button"
-                        className="font-preset-backup-delete"
-                        disabled={backupDialogBusy}
-                        onClick={() => void deleteFontPresetBackup(backup)}
-                        aria-label={`${backup.name} 백업 삭제`}
-                        title="백업 삭제"
-                      >
-                        삭제
-                      </button>
-                    </div>
-                  ))
-                ) : (
-                  <p className="muted-line modal-note">저장된 백업이 없습니다.</p>
-                )}
-              </div>
-              {backupDialogError ? <p className="muted-line modal-note font-preset-backup-error">{backupDialogError}</p> : null}
-            </section>
-            <div className="modal-actions">
-              <button onClick={() => setBackupDialogMode(null)} disabled={backupDialogBusy}>
-                취소
-              </button>
-              {backupDialogMode === "backup" ? (
-                <button className="primary" onClick={() => void saveFontPresetBackup()} disabled={backupDialogBusy || !backupName.trim()}>
-                  저장
-                </button>
-              ) : (
-                <button className="primary" onClick={() => void restoreFontPresetBackup()} disabled={backupDialogBusy || !selectedBackupId}>
-                  복원
-                </button>
-              )}
-            </div>
-          </div>
-        </div>
+        <FontPresetBackupModal
+          mode={backupDialogMode}
+          onCancel={() => setBackupDialogMode(null)}
+          onCreateBackup={onCreateFontPresetListBackup}
+          onDeleteBackup={onDeleteFontPresetBackup}
+          onListBackups={onListFontPresetBackups}
+          onRestoreBackup={onRestoreFontPresetListBackup}
+        />
       ) : null}
     </>
   );
