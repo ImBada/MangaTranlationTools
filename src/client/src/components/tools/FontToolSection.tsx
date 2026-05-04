@@ -274,7 +274,7 @@ export function FontToolSection({
             </div>
           </div>
           <div className="font-metrics-row font-tool-grid">
-            <label className="compact-tool-field font-number-field">
+            <div className="compact-tool-field font-number-field">
               <span>폰트 크기</span>
               <CompactNumberControl
                 ariaLabel="폰트 크기"
@@ -286,8 +286,8 @@ export function FontToolSection({
                 onChange={(fontSizePx) => onFontSettingChange({ fontSizePx })}
               />
               {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
-            </label>
-            <label className="compact-tool-field font-number-field">
+            </div>
+            <div className="compact-tool-field font-number-field">
               <span>줄 간격</span>
               <CompactNumberControl
                 ariaLabel="줄 간격"
@@ -300,7 +300,7 @@ export function FontToolSection({
                 onChange={(lineHeight) => onFontSettingChange({ lineHeight })}
               />
               {renderFontPresetLinkButton("lineHeight", "줄 간격")}
-            </label>
+            </div>
           </div>
           <FontOutlineControls
             values={fontControlValues}
