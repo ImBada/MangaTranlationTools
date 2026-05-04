@@ -138,7 +138,12 @@ export function useWorkspaceShortcuts({
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
-      const editableTarget = isEditableTarget(event.target);
+      const selectTarget = getSelectElementTarget(event.target);
+      const selectTargetShortcutOverride = !modalOpen && selectTarget !== null && isPlainSelectOverrideShortcut(event);
+      const editableTarget = isEditableTarget(event.target) && !selectTargetShortcutOverride;
+      if (selectTargetShortcutOverride && selectTarget) {
+        selectTarget.blur();
+      }
       if (event.key === "Escape" && libraryWidgetOpen) {
         setLibraryWidgetOpen(false);
         return;
@@ -349,4 +354,29 @@ export function useWorkspaceShortcuts({
     workspacePanelRef,
     zoomToolActive
   ]);
+}
+
+function getSelectElementTarget(target: EventTarget | null): HTMLSelectElement | null {
+  if (typeof HTMLSelectElement === "undefined" || !(target instanceof HTMLSelectElement)) {
+    return null;
+  }
+  return target;
+}
+
+function isPlainSelectOverrideShortcut(event: KeyboardEvent): boolean {
+  if (event.altKey || event.ctrlKey || event.metaKey) {
+    return false;
+  }
+
+  return (
+    event.key >= "1" && event.key <= "5" ||
+    isZoomToolShortcut(event) ||
+    isPointerToolShortcut(event) ||
+    isRangeToolShortcut(event) ||
+    Boolean(resolveInpaintToolShortcut(event)) ||
+    event.code === "KeyD" ||
+    event.code === "KeyF" ||
+    event.key.toLowerCase() === "d" ||
+    event.key.toLowerCase() === "f"
+  );
 }
