@@ -89,6 +89,7 @@ type WorkspacePanelProps = {
   onSetStatusWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
+  onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onZoomInStage: () => void;
   onZoomOutStage: () => void;
@@ -156,6 +157,7 @@ export function WorkspacePanel({
   onSetStatusWidgetOpen,
   onStagePointerMove,
   onStagePointerUp,
+  onSelectedBlockRangeChange,
   onBlockTextAlignChange,
   onZoomInStage,
   onZoomOutStage
@@ -195,6 +197,7 @@ export function WorkspacePanel({
       ) : null}
       {selectedPage ? (
         <StageToolOverlay
+          activeLayer={activeLayer}
           rangeShortcut={INPAINT_TOOL_SHORTCUTS.select ?? "T"}
           rangeToolActive={rangeToolActive}
           selectedPageEditLocked={selectedPageEditLocked}
@@ -256,6 +259,7 @@ export function WorkspacePanel({
             inpaintDisabled={inpaintDisabled}
             inpaintResultDisabled={inpaintResultDisabled}
             rangeSelectionDisabled={rangeSelectionDisabled}
+            blockRangeSelectionDisabled={selectedPageEditLocked}
             temporaryPanActive={temporaryPanActive}
             inpaintSelectionRect={inpaintSelectionRect}
             onInpaintLayerChange={onInpaintLayerChange}
@@ -270,6 +274,7 @@ export function WorkspacePanel({
               }
             }}
             onBlockPointerDown={onBlockPointerDown}
+            onSelectedBlockRangeChange={onSelectedBlockRangeChange}
             onBlockTextUpdate={onBlockTextUpdate}
             onBlockTextAlignChange={onBlockTextAlignChange}
           />

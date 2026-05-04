@@ -1,5 +1,5 @@
 import React from "react";
-import type { BBox, ChapterSnapshot, MangaPage, TranslationBlock } from "../../../shared/types";
+import type { BBox, ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import {
   applyEditableBlockBbox,
   clampRotationDeg,
@@ -46,6 +46,7 @@ type UseStageInteractionState = {
   handleZoomToolClick: (direction: StageZoomDirection) => void;
   imageRef: React.RefObject<HTMLImageElement | null>;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => void;
+  onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   stageRef: React.RefObject<HTMLDivElement | null>;
@@ -238,11 +239,42 @@ export function useStageInteraction({
     dragRef.current = null;
   }, []);
 
+  const onSelectedBlockRangeChange = React.useCallback((blockId: string, selectionRect: ImageRect) => {
+    const page = selectedPage;
+    if (!page || !currentChapter || selectedPageEditLocked) {
+      return;
+    }
+    const nextBbox = {
+      x: (selectionRect.x / Math.max(1, page.width)) * 1000,
+      y: (selectionRect.y / Math.max(1, page.height)) * 1000,
+      w: (selectionRect.width / Math.max(1, page.width)) * 1000,
+      h: (selectionRect.height / Math.max(1, page.height)) * 1000
+    };
+
+    recordTranslationUndoSnapshot("번역 블록 범위 변경");
+    setSelectedBlockId(blockId);
+    updateCurrentChapter(page.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((candidate) =>
+        candidate.id !== page.id
+          ? candidate
+          : {
+              ...candidate,
+              updatedAt: new Date().toISOString(),
+              blocks: candidate.blocks.map((block) =>
+                block.id === blockId ? applyEditableBlockBbox(block, nextBbox) : block
+              )
+            }
+      )
+    }));
+  }, [currentChapter, recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+
   return {
     fitStageToWorkspace,
     handleZoomToolClick,
     imageRef,
     onBlockPointerDown,
+    onSelectedBlockRangeChange,
     onStagePointerMove,
     onStagePointerUp,
     stageRef,

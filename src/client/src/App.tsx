@@ -358,6 +358,7 @@ export default function App(): React.JSX.Element {
     handleZoomToolClick,
     imageRef,
     onBlockPointerDown,
+    onSelectedBlockRangeChange,
     onStagePointerMove,
     onStagePointerUp,
     stageRef,
@@ -678,6 +679,7 @@ export default function App(): React.JSX.Element {
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={onBlockPointerDown}
+          onSelectedBlockRangeChange={onSelectedBlockRangeChange}
           onBlockTextUpdate={updateInlineBlockText}
           onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}

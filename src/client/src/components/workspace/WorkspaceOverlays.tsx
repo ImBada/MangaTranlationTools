@@ -2,6 +2,7 @@ import React from "react";
 import type { JobState } from "../../../../shared/types";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
+import type { ActiveLayer } from "../../lib/layerState";
 
 export type PageInpaintNotice = {
   actionLabel?: string;
@@ -37,6 +38,7 @@ type StageZoomOverlayProps = {
 };
 
 type StageToolOverlayProps = {
+  activeLayer: ActiveLayer;
   rangeShortcut: string;
   rangeToolActive: boolean;
   selectedPageEditLocked: boolean;
@@ -155,6 +157,7 @@ export function StageZoomOverlay({
 }
 
 export function StageToolOverlay({
+  activeLayer,
   rangeShortcut,
   rangeToolActive,
   selectedPageEditLocked,
@@ -163,55 +166,66 @@ export function StageToolOverlay({
   onSelectRangeTool,
   onSelectZoomTool
 }: StageToolOverlayProps): React.JSX.Element {
+  const pointerToolActive = !zoomToolActive && !rangeToolActive;
+  const showPointerToolHints = activeLayer === "overlay" && pointerToolActive;
+
   return (
-    <div className="stage-tool-overlay" aria-label="전역 도구">
-      <button
-        type="button"
-        className={!zoomToolActive && !rangeToolActive ? "active" : ""}
-        aria-label="일반 마우스"
-        aria-pressed={!zoomToolActive && !rangeToolActive}
-        aria-keyshortcuts="A"
-        title="일반 마우스 (A)"
-        onClick={onSelectPointerTool}
-      >
-        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M6 3l12 11-6.2 1.1L8.3 21 6 3z" />
-        </svg>
-        <span className="stage-tool-shortcut" aria-hidden="true">A</span>
-      </button>
-      <button
-        type="button"
-        className={rangeToolActive ? "active" : ""}
-        aria-label="범위 선택"
-        aria-pressed={rangeToolActive}
-        aria-keyshortcuts={rangeShortcut}
-        title={`범위 선택 (${rangeShortcut})`}
-        onClick={onSelectRangeTool}
-        disabled={selectedPageEditLocked}
-      >
-        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <rect x="4" y="4" width="11" height="11" rx="2" strokeDasharray="2.4 2.4" />
-          <path d="M13 12l6 6-3 1-1 3-6-6 4-4z" />
-        </svg>
-        <span className="stage-tool-shortcut" aria-hidden="true">{rangeShortcut}</span>
-      </button>
-      <button
-        type="button"
-        className={zoomToolActive ? "active" : ""}
-        aria-label="줌 도구"
-        aria-pressed={zoomToolActive}
-        aria-keyshortcuts="Z"
-        title="줌 도구 (Z)"
-        onClick={onSelectZoomTool}
-      >
-        <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <circle cx="10.5" cy="10.5" r="5.8" />
-          <path d="M15 15l5 5" />
-          <path d="M10.5 7.5v6" />
-          <path d="M7.5 10.5h6" />
-        </svg>
-        <span className="stage-tool-shortcut" aria-hidden="true">Z</span>
-      </button>
-    </div>
+    <>
+      <div className="stage-tool-overlay" aria-label="전역 도구">
+        <button
+          type="button"
+          className={pointerToolActive ? "active" : ""}
+          aria-label="일반 마우스"
+          aria-pressed={pointerToolActive}
+          aria-keyshortcuts="A"
+          title="일반 마우스 (A)"
+          onClick={onSelectPointerTool}
+        >
+          <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M6 3l12 11-6.2 1.1L8.3 21 6 3z" />
+          </svg>
+          <span className="stage-tool-shortcut" aria-hidden="true">A</span>
+        </button>
+        <button
+          type="button"
+          className={rangeToolActive ? "active" : ""}
+          aria-label="범위 선택"
+          aria-pressed={rangeToolActive}
+          aria-keyshortcuts={rangeShortcut}
+          title={`범위 선택 (${rangeShortcut})`}
+          onClick={onSelectRangeTool}
+          disabled={selectedPageEditLocked}
+        >
+          <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="4" y="4" width="11" height="11" rx="2" strokeDasharray="2.4 2.4" />
+            <path d="M13 12l6 6-3 1-1 3-6-6 4-4z" />
+          </svg>
+          <span className="stage-tool-shortcut" aria-hidden="true">{rangeShortcut}</span>
+        </button>
+        <button
+          type="button"
+          className={zoomToolActive ? "active" : ""}
+          aria-label="줌 도구"
+          aria-pressed={zoomToolActive}
+          aria-keyshortcuts="Z"
+          title="줌 도구 (Z)"
+          onClick={onSelectZoomTool}
+        >
+          <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="10.5" cy="10.5" r="5.8" />
+            <path d="M15 15l5 5" />
+            <path d="M10.5 7.5v6" />
+            <path d="M7.5 10.5h6" />
+          </svg>
+          <span className="stage-tool-shortcut" aria-hidden="true">Z</span>
+        </button>
+      </div>
+      {showPointerToolHints ? (
+        <div className="stage-tool-hints" aria-label="선택 도구 보조키 안내">
+          <span>Alt+드래그: 선택 블록 범위 변경</span>
+          <span>Ctrl(맥 Cmd)+클릭: 블록 복제</span>
+        </div>
+      ) : null}
+    </>
   );
 }

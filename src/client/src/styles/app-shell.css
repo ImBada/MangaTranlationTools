@@ -934,6 +934,26 @@
   color: #ffffff;
 }
 
+.stage-tool-hints {
+  position: absolute;
+  top: 114px;
+  left: 12px;
+  z-index: 71;
+  display: grid;
+  gap: 2px;
+  padding: 6px 8px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: rgba(20, 23, 27, 0.88);
+  color: rgba(241, 245, 249, 0.78);
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.35;
+  white-space: nowrap;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+}
+
 .notification-card,
 .status-history-panel {
   pointer-events: auto;

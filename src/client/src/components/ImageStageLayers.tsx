@@ -238,7 +238,7 @@ export function ImageStageLayers({
             </div>
           )
         : null}
-      {rangeToolActive || inpaintSelectionRect ? (
+      {rangeToolActive || rangeSelectionPreviewRect || inpaintSelectionRect ? (
         <div className="stage-range-selection-layer">
           <InpaintLayerCanvas
             pageSize={pageSize}

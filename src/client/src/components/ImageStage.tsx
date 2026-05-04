@@ -2,6 +2,7 @@ import React from "react";
 import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
+import { isEditableTarget } from "../lib/editorUtils";
 import { useImageStageView } from "../hooks/useImageStageView";
 import type { InpaintTool } from "./InpaintLayerCanvas";
 import { ImageStageLayers, type ImageStageActiveLayer, type ImageStageLayerOpacity, type ImageStageLayerVisibility } from "./ImageStageLayers";
@@ -10,6 +11,7 @@ import type { InpaintResultTool } from "./InpaintResultCanvas";
 type RangeSelectionDragState = {
   pointerId: number;
   start: DrawPoint;
+  target: "inpaint" | "block";
 };
 
 type ImageStageProps = {
@@ -35,6 +37,7 @@ type ImageStageProps = {
   inpaintDisabled: boolean;
   inpaintResultDisabled: boolean;
   rangeSelectionDisabled: boolean;
+  blockRangeSelectionDisabled: boolean;
   temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
@@ -45,6 +48,7 @@ type ImageStageProps = {
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
 };
@@ -72,6 +76,7 @@ export function ImageStage({
   inpaintDisabled,
   inpaintResultDisabled,
   rangeSelectionDisabled,
+  blockRangeSelectionDisabled,
   temporaryPanActive,
   inpaintSelectionRect,
   onInpaintLayerChange,
@@ -82,6 +87,7 @@ export function ImageStage({
   onStagePointerUp,
   onStagePointerDown,
   onBlockPointerDown,
+  onSelectedBlockRangeChange,
   onBlockTextUpdate,
   onBlockTextAlignChange
 }: ImageStageProps): React.JSX.Element {
@@ -109,15 +115,50 @@ export function ImageStage({
   });
   const rangeSelectionDragRef = React.useRef<RangeSelectionDragState | null>(null);
   const [rangeSelectionPreviewRect, setRangeSelectionPreviewRect] = React.useState<ImageRect | null>(null);
-  const rangeSelectionActive = rangeToolActive && !rangeSelectionDisabled && !temporaryPanActive;
+  const [blockRangeSelectionModeActive, setBlockRangeSelectionModeActive] = React.useState(false);
+  const [blockRangeSelectionDragActive, setBlockRangeSelectionDragActive] = React.useState(false);
+  const selectedBlock = React.useMemo(
+    () => page.blocks.find((block) => block.id === selectedBlockId) ?? null,
+    [page.blocks, selectedBlockId]
+  );
+  const inpaintRangeSelectionActive = rangeToolActive && !rangeSelectionDisabled && !temporaryPanActive;
+  const blockRangeSelectionActive =
+    activeLayer === "overlay" &&
+    !zoomToolActive &&
+    !rangeToolActive &&
+    !blockRangeSelectionDisabled &&
+    !temporaryPanActive &&
+    layerVisibility.overlay &&
+    Boolean(selectedBlock) &&
+    (blockRangeSelectionModeActive || blockRangeSelectionDragActive);
+  const rangeSelectionActive = inpaintRangeSelectionActive || blockRangeSelectionActive;
 
   React.useEffect(() => {
     if (rangeSelectionActive) {
       return;
     }
     rangeSelectionDragRef.current = null;
+    setBlockRangeSelectionDragActive(false);
     setRangeSelectionPreviewRect(null);
   }, [rangeSelectionActive]);
+
+  React.useEffect(() => {
+    const updateBlockRangeSelectionMode = (event: KeyboardEvent) => {
+      setBlockRangeSelectionModeActive(event.altKey && !isEditableTarget(event.target));
+    };
+    const clearBlockRangeSelectionMode = () => setBlockRangeSelectionModeActive(false);
+
+    window.addEventListener("keydown", updateBlockRangeSelectionMode);
+    window.addEventListener("keyup", updateBlockRangeSelectionMode);
+    window.addEventListener("blur", clearBlockRangeSelectionMode);
+    document.addEventListener("visibilitychange", clearBlockRangeSelectionMode);
+    return () => {
+      window.removeEventListener("keydown", updateBlockRangeSelectionMode);
+      window.removeEventListener("keyup", updateBlockRangeSelectionMode);
+      window.removeEventListener("blur", clearBlockRangeSelectionMode);
+      document.removeEventListener("visibilitychange", clearBlockRangeSelectionMode);
+    };
+  }, []);
 
   const resolveRangeSelectionPoint = React.useCallback((event: React.PointerEvent<HTMLElement>): DrawPoint | null => {
     const stage = stageRef.current;
@@ -138,9 +179,20 @@ export function ImageStage({
     }
     const rect = resolveSelectionRect(drag.start, current, pageSize);
     rangeSelectionDragRef.current = null;
+    setBlockRangeSelectionDragActive(false);
     setRangeSelectionPreviewRect(null);
-    onInpaintSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
-  }, [onInpaintSelectionChange, pageSize]);
+    if (rect.width < 2 || rect.height < 2) {
+      if (drag.target === "inpaint") {
+        onInpaintSelectionChange(null);
+      }
+      return;
+    }
+    if (drag.target === "block" && selectedBlockId) {
+      onSelectedBlockRangeChange(selectedBlockId, rect);
+      return;
+    }
+    onInpaintSelectionChange(rect);
+  }, [onInpaintSelectionChange, onSelectedBlockRangeChange, pageSize, selectedBlockId]);
 
   return (
     <div
@@ -202,7 +254,9 @@ export function ImageStage({
             event.preventDefault();
             event.stopPropagation();
             event.currentTarget.setPointerCapture(event.pointerId);
-            rangeSelectionDragRef.current = { pointerId: event.pointerId, start: point };
+            const target = blockRangeSelectionActive ? "block" : "inpaint";
+            rangeSelectionDragRef.current = { pointerId: event.pointerId, start: point, target };
+            setBlockRangeSelectionDragActive(target === "block");
             updateRangeSelectionPreview(point, point);
           }}
           onPointerMove={(event) => {
@@ -231,6 +285,7 @@ export function ImageStage({
               finishRangeSelection(point);
             } else {
               rangeSelectionDragRef.current = null;
+              setBlockRangeSelectionDragActive(false);
               setRangeSelectionPreviewRect(null);
             }
           }}
@@ -243,6 +298,7 @@ export function ImageStage({
             event.stopPropagation();
             event.currentTarget.releasePointerCapture(event.pointerId);
             rangeSelectionDragRef.current = null;
+            setBlockRangeSelectionDragActive(false);
             setRangeSelectionPreviewRect(null);
           }}
         />
