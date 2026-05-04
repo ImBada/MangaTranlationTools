@@ -381,6 +381,19 @@ export function FontToolSection({
               {renderFontPresetLinkButton("letterSpacingPx", "글자 간격")}
             </div>
           </div>
+          <label className="compact-tool-field font-color-field">
+            <span>글자색</span>
+            <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
+              <input
+                type="color"
+                className="outline-color-input"
+                value={fontControlValues.textColor ?? "#111111"}
+                disabled={selectedPageEditLocked}
+                onChange={(event) => onFontSettingChange({ textColor: event.target.value })}
+              />
+            </span>
+            {renderFontPresetLinkButton("textColor", "글자색")}
+          </label>
           <FontOutlineControls
             values={fontControlValues}
             disabled={selectedPageEditLocked}
@@ -467,19 +480,6 @@ export function FontToolSection({
               </div>
             ) : null}
           </div>
-          <label className="compact-tool-field font-color-field">
-            <span>글자색</span>
-            <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
-              <input
-                type="color"
-                className="outline-color-input"
-                value={fontControlValues.textColor ?? "#111111"}
-                disabled={selectedPageEditLocked}
-                onChange={(event) => onFontSettingChange({ textColor: event.target.value })}
-              />
-            </span>
-            {renderFontPresetLinkButton("textColor", "글자색")}
-          </label>
           <div className="compact-tool-field font-screentone-field">
             <div className="font-screentone-header">
               <div className="font-screentone-title">
