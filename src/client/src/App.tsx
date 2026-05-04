@@ -299,6 +299,7 @@ export default function App(): React.JSX.Element {
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
+    createFontPresetListBackup,
     createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
     deleteFontSizePreset,
@@ -315,6 +316,7 @@ export default function App(): React.JSX.Element {
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    restoreFontPresetListBackup,
     selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
@@ -542,6 +544,7 @@ export default function App(): React.JSX.Element {
       onClearInpaintResultData={() => updateSelectedPageInpaintResult(undefined)}
       onClearSelectedBlockFontPreset={clearSelectedBlockFontPreset}
       onCreateFontPreset={createFontPresetFromSelectedBlock}
+      onCreateFontPresetListBackup={createFontPresetListBackup}
       onCreateFontSizePreset={createFontSizePresetFromCurrentFontSize}
       onDeleteFontPreset={deleteFontPreset}
       onDeleteFontSizePreset={deleteFontSizePreset}
@@ -559,6 +562,7 @@ export default function App(): React.JSX.Element {
       onClearInpaintSelectionRect={() => setInpaintSelectionRect(null)}
       onRerunInpaintForSelection={rerunInpaintForSelection}
       onRerunInpaintWithCurrentMask={rerunInpaintWithCurrentMask}
+      onRestoreFontPresetListBackup={restoreFontPresetListBackup}
       onSelectFontPreset={selectFontPreset}
       onSelectFontSizePreset={selectFontSizePreset}
       onSelectInpaintPsdFile={selectInpaintPsdFile}

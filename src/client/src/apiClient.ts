@@ -2,9 +2,12 @@ import type {
   AppSettings,
   ChapterPagePatch,
   ChapterSnapshot,
+  CreateFontPresetBackupRequest,
   CreateImportRequest,
   CreateImportResult,
   ExportInpaintPsdRequest,
+  FontPresetBackupSnapshot,
+  FontPresetBackupSummary,
   ImportInpaintPsdResult,
   ImportPreviewResult,
   InpaintPageRequest,
@@ -178,6 +181,13 @@ export const mangaApi = {
   saveSettings: (settings: AppSettings): Promise<AppSettings> => postJson("/api/settings", settings),
   resetSettings: (): Promise<AppSettings> => postJson("/api/settings/reset"),
   testModelSettings: (settings: AppSettings): Promise<ModelTestResult> => postJson("/api/settings/test-model", settings),
+  listFontPresetBackups: (): Promise<FontPresetBackupSummary[]> => requestJson("/api/font-preset-backups"),
+  createFontPresetBackup: (request: CreateFontPresetBackupRequest): Promise<FontPresetBackupSnapshot> =>
+    postJson("/api/font-preset-backups", request),
+  getFontPresetBackup: (backupId: string): Promise<FontPresetBackupSnapshot> =>
+    requestJson(`/api/font-preset-backups/${encodeURIComponent(backupId)}`),
+  deleteFontPresetBackup: (backupId: string): Promise<FontPresetBackupSummary[]> =>
+    requestJson(`/api/font-preset-backups/${encodeURIComponent(backupId)}`, { method: "DELETE" }),
   getLamaRuntimeStatus: (): Promise<LamaRuntimeStatus> => requestJson("/api/lama/status"),
   prepareLamaRuntime: (): Promise<LamaRuntimeStatus> => postJson("/api/lama/prepare"),
   downloadLamaModel: (): Promise<LamaRuntimeStatus> => postJson("/api/lama/model/download"),

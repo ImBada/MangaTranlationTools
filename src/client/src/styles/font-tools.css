@@ -539,3 +539,109 @@
   padding-bottom: 5px;
   font-size: 11px;
 }
+
+.font-preset-backup-actions {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.font-preset-backup-actions button {
+  min-height: 30px;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.font-preset-backup-modal {
+  width: min(560px, 100%);
+}
+
+.font-preset-backup-name-field {
+  display: grid;
+  gap: 6px;
+}
+
+.font-preset-backup-list {
+  display: grid;
+  gap: 8px;
+  max-height: min(360px, 42vh);
+  padding-right: 2px;
+  overflow: auto;
+}
+
+.font-preset-backup-list-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 48px;
+  gap: 8px;
+  align-items: center;
+  padding: 6px;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: #15181d;
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease;
+}
+
+.font-preset-backup-list-item.active {
+  border-color: #4aa58f;
+  background: rgba(47, 111, 97, 0.18);
+}
+
+.font-preset-backup-select {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 8px 10px;
+  border-color: transparent;
+  background: transparent;
+  text-align: left;
+}
+
+.font-preset-backup-select:hover:not(:disabled) {
+  border-color: rgba(106, 169, 255, 0.34);
+  background: rgba(48, 56, 70, 0.42);
+}
+
+.font-preset-backup-list-item.active .font-preset-backup-select {
+  border-color: transparent;
+  background: transparent;
+}
+
+.font-preset-backup-delete {
+  width: 48px;
+  min-width: 48px;
+  height: 32px;
+  min-height: 32px;
+  padding: 0;
+  border-color: rgba(248, 113, 113, 0.36);
+  background: rgba(59, 31, 38, 0.76);
+  color: #fecaca;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.font-preset-backup-delete:hover:not(:disabled) {
+  border-color: rgba(248, 113, 113, 0.68);
+  background: rgba(124, 48, 48, 0.74);
+  color: #fff1f1;
+}
+
+.font-preset-backup-select span,
+.font-preset-backup-select small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.font-preset-backup-select small {
+  color: #aeb8c2;
+  font-size: 11px;
+}
+
+.font-preset-backup-error {
+  color: #ffb4a8;
+}

@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, FontSizePreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontPresetBackupSnapshot, FontSizePreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
 import {
   clampEditableBbox,
   clampRotationDeg,
@@ -53,6 +53,7 @@ type UseTranslationEditingState = {
   copySelectedBlockToClipboard: () => Promise<void>;
   createEmptyBlock: () => void;
   createFontPresetFromSelectedBlock: () => void;
+  createFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   createFontSizePresetFromCurrentFontSize: () => void;
   deleteFontPreset: (presetId: string) => void;
   deleteFontSizePreset: (presetId: string) => void;
@@ -70,6 +71,7 @@ type UseTranslationEditingState = {
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   renameFontPreset: (presetId: string, name: string) => void;
+  restoreFontPresetListBackup: (backupId: string) => Promise<void>;
   selectFontSizePreset: (presetId: string | null) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
@@ -175,6 +177,7 @@ export function useTranslationEditing({
     activeFontSizePresetId,
     clearSelectedBlockFontPreset,
     createFontPresetFromSelectedBlock,
+    createFontPresetListBackup,
     createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
     deleteFontSizePreset,
@@ -187,6 +190,7 @@ export function useTranslationEditing({
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    restoreFontPresetListBackup,
     selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
@@ -236,6 +240,7 @@ export function useTranslationEditing({
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
+    createFontPresetListBackup,
     createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
     deleteFontSizePreset,
@@ -253,6 +258,7 @@ export function useTranslationEditing({
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    restoreFontPresetListBackup,
     selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,

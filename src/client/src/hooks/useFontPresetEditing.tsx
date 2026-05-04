@@ -1,5 +1,13 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, FontSizePreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
+import type {
+  ChapterSnapshot,
+  FontPreset,
+  FontPresetBackupSnapshot,
+  FontSizePreset,
+  MangaPage,
+  SystemFont,
+  TranslationBlock
+} from "../../../shared/types";
 import { buildFontFamilyOptions } from "../components/font/FontFamilyPicker";
 import { FontPresetLinkIcon } from "../components/font/FontPresetLinkIcon";
 import {
@@ -52,6 +60,43 @@ function resolveOptionalFontPreset(preset: FontPreset | null | undefined, fontSi
   return preset ? resolveFontPreset(preset, fontSizePresets) : null;
 }
 
+function applyFontPresetListBackupToChapter(chapter: ChapterSnapshot, backup: FontPresetBackupSnapshot): ChapterSnapshot {
+  const nextFontPresets = backup.fontPresets.map((preset) => ({ ...preset }));
+  const nextFontSizePresets = backup.fontSizePresets.map((preset) => ({ ...preset }));
+  const presetById = new Map(nextFontPresets.map((preset) => [preset.id, resolveFontPreset(preset, nextFontSizePresets)]));
+  const now = new Date().toISOString();
+
+  return {
+    ...chapter,
+    fontPresets: nextFontPresets,
+    fontSizePresets: nextFontSizePresets,
+    updatedAt: now,
+    pages: chapter.pages.map((page) => {
+      let pageChanged = false;
+      const blocks = page.blocks.map((block) => {
+        if (!block.fontPresetId) {
+          return block;
+        }
+        const preset = presetById.get(block.fontPresetId);
+        pageChanged = true;
+        if (!preset) {
+          const { fontPresetId: _fontPresetId, ...rest } = block;
+          return clearFontPresetLinkFields(rest);
+        }
+        return applyFontPresetPatchToBlock(block, preset);
+      });
+
+      return pageChanged
+        ? {
+            ...page,
+            blocks,
+            updatedAt: now
+          }
+        : page;
+    })
+  };
+}
+
 type AssignedFontPresetPatch = FontPresetPatch & Partial<Pick<FontPreset, "fontSizePresetId">>;
 
 type UseFontPresetEditingOptions = {
@@ -71,6 +116,7 @@ type UseFontPresetEditingOptions = {
 type UseFontPresetEditingState = {
   clearSelectedBlockFontPreset: () => void;
   createFontPresetFromSelectedBlock: () => void;
+  createFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   createFontSizePresetFromCurrentFontSize: () => void;
   deleteFontPreset: (presetId: string) => void;
   deleteFontSizePreset: (presetId: string) => void;
@@ -84,6 +130,7 @@ type UseFontPresetEditingState = {
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   activeFontSizePresetId: string | null;
   renameFontPreset: (presetId: string, name: string) => void;
+  restoreFontPresetListBackup: (backupId: string) => Promise<void>;
   selectFontSizePreset: (presetId: string | null) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
@@ -411,6 +458,33 @@ export function useFontPresetEditing({
     }));
   }, [currentChapter, fontControlValues, fontSizePresets, rawEditingFontPreset?.id, recordTranslationUndoSnapshot, selectedBlock, selectedPageEditLocked, updateCurrentChapter]);
 
+  const createFontPresetListBackup = React.useCallback(async (name: string) => {
+    if (!currentChapter) {
+      pushStatus("백업할 화를 먼저 여세요.", "failed");
+      return null;
+    }
+
+    const backup = await window.mangaApi.createFontPresetBackup({
+      name,
+      fontPresets: currentChapter.fontPresets ?? [],
+      fontSizePresets: currentChapter.fontSizePresets ?? []
+    });
+    pushStatus("폰트 프리셋 백업을 저장했습니다.");
+    return backup;
+  }, [currentChapter, pushStatus]);
+
+  const restoreFontPresetListBackup = React.useCallback(async (backupId: string) => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+
+    const backup = await window.mangaApi.getFontPresetBackup(backupId);
+    recordTranslationUndoSnapshot("폰트 프리셋 백업 복원");
+    updateCurrentChapter(undefined, (current) => applyFontPresetListBackupToChapter(current, backup));
+    setEditingFontPresetId((current) => (current && backup.fontPresets.some((preset) => preset.id === current) ? current : null));
+    pushStatus("폰트 프리셋 백업을 복원했습니다.");
+  }, [currentChapter, pushStatus, recordTranslationUndoSnapshot, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
+
   const selectFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
       return;
@@ -579,6 +653,7 @@ export function useFontPresetEditing({
     activeFontSizePresetId,
     clearSelectedBlockFontPreset,
     createFontPresetFromSelectedBlock,
+    createFontPresetListBackup,
     createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
     deleteFontSizePreset,
@@ -591,6 +666,7 @@ export function useFontPresetEditing({
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    restoreFontPresetListBackup,
     selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,

@@ -189,6 +189,25 @@ export type FontSizePreset = {
   fontSizePx: number;
 };
 
+export type FontPresetBackupSummary = {
+  id: string;
+  name: string;
+  createdAt: string;
+  fontPresetCount: number;
+  fontSizePresetCount: number;
+};
+
+export type FontPresetBackupSnapshot = FontPresetBackupSummary & {
+  fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
+};
+
+export type CreateFontPresetBackupRequest = {
+  name: string;
+  fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
+};
+
 export type SystemFont = {
   family: string;
   fullName?: string;

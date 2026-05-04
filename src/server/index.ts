@@ -11,6 +11,7 @@ import { getLogPath, logError, logInfo, resetAppLog } from "./logger";
 import { createImportRoutes } from "./routes/importRoutes";
 import { createInpaintRoutes } from "./routes/inpaintRoutes";
 import { createJobRoutes } from "./routes/jobRoutes";
+import { createFontPresetBackupRoutes } from "./routes/fontPresetBackupRoutes";
 import { createLibraryRoutes } from "./routes/libraryRoutes";
 import { createRenderRoutes } from "./routes/renderRoutes";
 import { createRuntimeRoutes } from "./routes/runtimeRoutes";
@@ -61,6 +62,7 @@ app.get("/api/health", (_req, res) => {
 });
 
 app.use(createSettingsRoutes(appPaths));
+app.use(createFontPresetBackupRoutes(appPaths));
 app.use(createLibraryRoutes());
 app.use(createRenderRoutes());
 app.use(createInpaintRoutes(upload));

@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, FontSizePreset, ImageRect, MangaPage, TranslationBlock } from "../../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontPresetBackupSnapshot, FontSizePreset, ImageRect, MangaPage, TranslationBlock } from "../../../../shared/types";
 import type { FontFamilyOption } from "../font/FontFamilyPicker";
 import type { InpaintTool } from "../InpaintLayerCanvas";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
@@ -47,6 +47,7 @@ type LayerToolPanelProps = {
   onClearInpaintResult: () => void;
   onClearSelectedBlockFontPreset: () => void;
   onCreateFontPreset: () => void;
+  onCreateFontPresetListBackup: (name: string) => Promise<FontPresetBackupSnapshot | null>;
   onCreateFontSizePreset: () => void;
   onDeleteFontPreset: (presetId: string) => void;
   onDeleteFontSizePreset: (presetId: string) => void;
@@ -64,6 +65,7 @@ type LayerToolPanelProps = {
   onInpaintSelectionClear: () => void;
   onRerunInpaintForSelection: () => void | Promise<void>;
   onRerunInpaintWithCurrentMask: () => void | Promise<void>;
+  onRestoreFontPresetListBackup: (backupId: string) => Promise<void>;
   onSelectFontPreset: (presetId: string) => void;
   onSelectFontSizePreset: (presetId: string | null) => void;
   onSelectInpaintPsdFile: () => void;
@@ -105,6 +107,7 @@ export function LayerToolPanel({
   onClearInpaintResult,
   onClearSelectedBlockFontPreset,
   onCreateFontPreset,
+  onCreateFontPresetListBackup,
   onCreateFontSizePreset,
   onDeleteFontPreset,
   onDeleteFontSizePreset,
@@ -122,6 +125,7 @@ export function LayerToolPanel({
   onInpaintSelectionClear,
   onRerunInpaintForSelection,
   onRerunInpaintWithCurrentMask,
+  onRestoreFontPresetListBackup,
   onSelectFontPreset,
   onSelectFontSizePreset,
   onSelectInpaintPsdFile,
@@ -148,12 +152,14 @@ export function LayerToolPanel({
           onClearEditingFontPreset={onClearEditingFontPreset}
           onClearSelectedBlockFontPreset={onClearSelectedBlockFontPreset}
           onCreateFontPreset={onCreateFontPreset}
+          onCreateFontPresetListBackup={onCreateFontPresetListBackup}
           onCreateFontSizePreset={onCreateFontSizePreset}
           onDeleteFontPreset={onDeleteFontPreset}
           onDeleteFontSizePreset={onDeleteFontSizePreset}
           onFontPresetNameChange={onFontPresetNameChange}
           onFontPresetRename={onFontPresetRename}
           onFontSettingChange={onFontSettingChange}
+          onRestoreFontPresetListBackup={onRestoreFontPresetListBackup}
           onSelectFontPreset={onSelectFontPreset}
           onSelectFontSizePreset={onSelectFontSizePreset}
         />
