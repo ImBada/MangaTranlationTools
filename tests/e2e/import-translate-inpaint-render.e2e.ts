@@ -120,6 +120,46 @@ async function dragByMouse(page: Page, locator: Locator, dx: number, dy: number)
     await page.mouse.move(startX + dx * step, startY + dy * step);
   }
   await page.mouse.up();
+
+  const movedBox = await locator.boundingBox();
+  if (movedBox && (Math.abs(movedBox.x - box.x) > 0.5 || Math.abs(movedBox.y - box.y) > 0.5)) {
+    return;
+  }
+
+  await dragByPointerEvents(locator, startX, startY, dx, dy);
+}
+
+async function dragByPointerEvents(locator: Locator, startX: number, startY: number, dx: number, dy: number): Promise<void> {
+  const pointerId = 1;
+  await locator.dispatchEvent("pointerdown", {
+    pointerId,
+    pointerType: "mouse",
+    isPrimary: true,
+    clientX: startX,
+    clientY: startY,
+    button: 0,
+    buttons: 1
+  });
+  for (const step of [0.25, 0.5, 0.75, 1]) {
+    await locator.dispatchEvent("pointermove", {
+      pointerId,
+      pointerType: "mouse",
+      isPrimary: true,
+      clientX: startX + dx * step,
+      clientY: startY + dy * step,
+      button: 0,
+      buttons: 1
+    });
+  }
+  await locator.dispatchEvent("pointerup", {
+    pointerId,
+    pointerType: "mouse",
+    isPrimary: true,
+    clientX: startX + dx,
+    clientY: startY + dy,
+    button: 0,
+    buttons: 0
+  });
 }
 
 async function startMockModelServer(): Promise<MockModelServer> {
