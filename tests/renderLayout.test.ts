@@ -91,7 +91,7 @@ describe("render layout padding", () => {
     expect(layout.overflow).toBe(false);
   });
 
-  it("wraps attached ellipses without rendering an inserted space", () => {
+  it("wraps attached trailing marks without rendering an inserted space", () => {
     installCanvasMeasureMock();
 
     const block = {
@@ -103,6 +103,9 @@ describe("render layout padding", () => {
     expect(resolveWrappedTextLines(block, "장난이 심하면 곤란해……", 10, 40)).toEqual(["장난이", "심하면", "곤란해", "……"]);
     expect(resolveWrappedTextLines(block, "곤란해……", 10, 120)).toEqual(["곤란해……"]);
     expect(resolveWrappedTextLines(block, "곤란해...", 10, 40)).toEqual(["곤란해", "..."]);
+    expect(resolveWrappedTextLines(block, "곤란해~", 10, 35)).toEqual(["곤란해", "~"]);
+    expect(resolveWrappedTextLines(block, "곤란해～", 10, 35)).toEqual(["곤란해", "～"]);
+    expect(resolveWrappedTextLines(block, "곤란해~", 10, 120)).toEqual(["곤란해~"]);
   });
 });
 

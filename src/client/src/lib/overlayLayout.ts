@@ -317,7 +317,7 @@ function splitTextWrapSegments(text: string): TextWrapSegment[] {
   const segments: TextWrapSegment[] = [];
 
   for (const word of text.split(" ")) {
-    const parts = splitWordAtEllipses(word);
+    const parts = splitWordAtSoftWrapMarks(word);
     for (const [index, part] of parts.entries()) {
       segments.push({
         text: part,
@@ -329,8 +329,8 @@ function splitTextWrapSegments(text: string): TextWrapSegment[] {
   return segments;
 }
 
-function splitWordAtEllipses(word: string): string[] {
-  const parts = word.split(/((?:[…⋯]+|\.{3,}))/u).filter(Boolean);
+function splitWordAtSoftWrapMarks(word: string): string[] {
+  const parts = word.split(/((?:[…⋯]+|\.{3,}|[~～〜]+))/u).filter(Boolean);
   return parts.length > 0 ? parts : [word];
 }
 
