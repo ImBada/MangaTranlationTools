@@ -103,9 +103,18 @@ describe("render layout padding", () => {
     expect(resolveWrappedTextLines(block, "장난이 심하면 곤란해……", 10, 40)).toEqual(["장난이", "심하면", "곤란해", "……"]);
     expect(resolveWrappedTextLines(block, "곤란해……", 10, 120)).toEqual(["곤란해……"]);
     expect(resolveWrappedTextLines(block, "곤란해...", 10, 40)).toEqual(["곤란해", "..."]);
+    expect(resolveWrappedTextLines(block, "지금…!!", 10, 40)).toEqual(["지금", "…!!"]);
+    expect(resolveWrappedTextLines(block, "지금...?!", 10, 40)).toEqual(["지금", "...?!"]);
+    expect(resolveWrappedTextLines(block, "지금…!!", 10, 120)).toEqual(["지금…!!"]);
     expect(resolveWrappedTextLines(block, "곤란해~", 10, 35)).toEqual(["곤란해", "~"]);
     expect(resolveWrappedTextLines(block, "곤란해～", 10, 35)).toEqual(["곤란해", "～"]);
     expect(resolveWrappedTextLines(block, "곤란해~", 10, 120)).toEqual(["곤란해~"]);
+    expect(resolveWrappedTextLines(block, "곤란해~!!", 10, 40)).toEqual(["곤란해", "~!!"]);
+    expect(resolveWrappedTextLines(block, "곤란해～?", 10, 40)).toEqual(["곤란해", "～?"]);
+    expect(resolveWrappedTextLines(block, "곤란해ー", 10, 35)).toEqual(["곤란해", "ー"]);
+    expect(resolveWrappedTextLines(block, "곤란해ー!!", 10, 40)).toEqual(["곤란해", "ー!!"]);
+    expect(resolveWrappedTextLines(block, "곤란해ー.", 10, 40)).toEqual(["곤란해", "ー."]);
+    expect(resolveWrappedTextLines(block, "곤란해ーー", 10, 120)).toEqual(["곤란해ーー"]);
   });
 });
 

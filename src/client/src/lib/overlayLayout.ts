@@ -354,7 +354,7 @@ function splitTextWrapSegments(text: string): TextWrapSegment[] {
 }
 
 function splitWordAtSoftWrapMarks(word: string): string[] {
-  const parts = word.split(/((?:[…⋯]+|\.{3,}|[~～〜]+))/u).filter(Boolean);
+  const parts = word.split(/((?:[…⋯]+|\.{3,}|[~～〜ー]+)[.!?！？。．…⋯]*)/u).filter(Boolean);
   return parts.length > 0 ? parts : [word];
 }
 
