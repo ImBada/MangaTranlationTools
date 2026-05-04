@@ -106,6 +106,9 @@ describe("render layout padding", () => {
     expect(resolveWrappedTextLines(block, "지금…!!", 10, 40)).toEqual(["지금", "…!!"]);
     expect(resolveWrappedTextLines(block, "지금...?!", 10, 40)).toEqual(["지금", "...?!"]);
     expect(resolveWrappedTextLines(block, "지금…!!", 10, 120)).toEqual(["지금…!!"]);
+    expect(resolveWrappedTextLines(block, "다음은—…", 10, 40)).toEqual(["다음은", "—…"]);
+    expect(resolveWrappedTextLines(block, "다음은—…!!", 10, 40)).toEqual(["다음은", "—…!!"]);
+    expect(resolveWrappedTextLines(block, "다음은—…", 10, 120)).toEqual(["다음은—…"]);
     expect(resolveWrappedTextLines(block, "곤란해~", 10, 35)).toEqual(["곤란해", "~"]);
     expect(resolveWrappedTextLines(block, "곤란해～", 10, 35)).toEqual(["곤란해", "～"]);
     expect(resolveWrappedTextLines(block, "곤란해~", 10, 120)).toEqual(["곤란해~"]);
