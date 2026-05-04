@@ -7,6 +7,7 @@ export type LayerToolFontControlValues = {
   fontWeight?: number;
   fontSizePx: number;
   lineHeight: number;
+  letterSpacingPx?: number;
   outlineColor?: string;
   outlineWidthPx?: number;
   screentoneFillAntialias?: boolean;

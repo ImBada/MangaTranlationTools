@@ -12,6 +12,7 @@ export const DEFAULT_FONT_PRESET_VALUES: Omit<FontPreset, "id" | "name"> = {
   textDecoration: DEFAULT_OVERLAY_TEXT_DECORATION,
   fontSizePx: 24,
   lineHeight: 1.18,
+  letterSpacingPx: 0,
   outlineColor: "#000000",
   outlineWidthPx: 0,
   secondaryOutlineColor: "#ffffff",
@@ -35,6 +36,7 @@ export const BLOCK_TYPE_FONT_PRESET_IDS = {
 const BLOCK_FONT_PRESET_LINK_FIELDS = [
   "fontSizeLinkedToPreset",
   "lineHeightLinkedToPreset",
+  "letterSpacingLinkedToPreset",
   "outlineColorLinkedToPreset",
   "outlineWidthLinkedToPreset",
   "secondaryOutlineColorLinkedToPreset",
@@ -97,6 +99,7 @@ export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPre
     textDecoration: preset.textDecoration,
     fontSizePx: preset.fontSizePx,
     lineHeight: preset.lineHeight,
+    letterSpacingPx: preset.letterSpacingPx,
     outlineColor: preset.outlineColor,
     outlineWidthPx: preset.outlineWidthPx,
     secondaryOutlineColor: preset.secondaryOutlineColor,

@@ -381,6 +381,7 @@ function overlayItemToBlock(item: OverlayItem, page: MangaPage, index: number): 
     renderDirection: "horizontal",
     fontSizePx: estimateBlockFontSizePx(translatedText || sourceText || "...", { bbox }, { width: page.width, height: page.height }),
     lineHeight: 1.18,
+    letterSpacingPx: 0,
     outlineColor: "#000000",
     outlineWidthPx: 0,
     secondaryOutlineColor: "#ffffff",

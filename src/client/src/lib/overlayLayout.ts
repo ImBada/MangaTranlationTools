@@ -87,14 +87,32 @@ export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, 
 }
 
 export function resolveWrappedTextLines(
-  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">,
+  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle"> & Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
   text: string,
   fontSize: number,
   maxWidth: number
 ): string[] {
   const context = getMeasureContext();
   context.font = buildFont(fontSize, block);
-  return wrapTextToWidth(context, text, maxWidth);
+  return wrapTextToWidth(context, block, text, fontSize, maxWidth);
+}
+
+export function resolveTextLetterSpacingPx(block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>, fontSize: number): number {
+  const sourceFontSizePx = Math.max(1, block.fontSizePx ?? fontSize);
+  return (block.letterSpacingPx ?? 0) * (fontSize / sourceFontSizePx);
+}
+
+export function measureTextWidthWithLetterSpacing(
+  context: Pick<CanvasRenderingContext2D, "measureText">,
+  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  text: string,
+  fontSize: number
+): number {
+  const glyphCount = [...text].length;
+  if (glyphCount <= 1) {
+    return context.measureText(text).width;
+  }
+  return context.measureText(text).width + resolveTextLetterSpacingPx(block, fontSize) * (glyphCount - 1);
 }
 
 function resolveAutoBlockPaddingPx(rect: PixelRect): number {
@@ -267,12 +285,12 @@ function resolveTextFontSizePx(
 
 function doesTextFit(block: TranslationBlock, text: string, fontSize: number, innerWidth: number, innerHeight: number): boolean {
   if (block.renderDirection === "vertical") {
-    return measureVerticalText(text, fontSize, innerWidth, innerHeight, fontSize * block.lineHeight).fits;
+    return measureVerticalText(block, text, fontSize, innerWidth, innerHeight, fontSize * block.lineHeight).fits;
   }
 
   const context = getMeasureContext();
   context.font = buildFont(fontSize, block);
-  const measured = measureWrappedText(context, text, innerWidth, fontSize * block.lineHeight);
+  const measured = measureWrappedText(context, block, text, fontSize, innerWidth, fontSize * block.lineHeight);
   return measured.totalHeight <= innerHeight && measured.maxLineWidth <= innerWidth;
 }
 
@@ -281,7 +299,13 @@ type TextWrapSegment = {
   separator: "" | " ";
 };
 
-function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
+function wrapTextToWidth(
+  context: CanvasRenderingContext2D,
+  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  text: string,
+  fontSize: number,
+  maxWidth: number
+): string[] {
   const paragraphs = text.replace(/\r/g, "").split("\n");
   const lines: string[] = [];
 
@@ -296,7 +320,7 @@ function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWid
     let current = segments[0]?.text ?? "";
     for (const segment of segments.slice(1)) {
       const candidate = `${current}${segment.separator}${segment.text}`;
-      if (context.measureText(candidate).width <= maxWidth) {
+      if (measureTextWidthWithLetterSpacing(context, block, candidate, fontSize) <= maxWidth) {
         current = candidate;
         continue;
       }
@@ -336,15 +360,17 @@ function splitWordAtSoftWrapMarks(word: string): string[] {
 
 function measureWrappedText(
   context: CanvasRenderingContext2D,
+  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
   text: string,
+  fontSize: number,
   maxWidth: number,
   lineHeight: number
 ) : { lines: string[]; totalHeight: number; maxLineWidth: number } {
-  const lines = wrapTextToWidth(context, text, maxWidth);
+  const lines = wrapTextToWidth(context, block, text, fontSize, maxWidth);
   return {
     lines,
     totalHeight: lines.length * lineHeight,
-    maxLineWidth: lines.reduce((widest, line) => Math.max(widest, context.measureText(line).width), 0)
+    maxLineWidth: lines.reduce((widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize)), 0)
   };
 }
 
@@ -357,6 +383,7 @@ function resolveAutoFitUpperBound(block: TranslationBlock, preferredFontSize: nu
 }
 
 function measureVerticalText(
+  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
   text: string,
   fontSize: number,
   maxWidth: number,
@@ -368,7 +395,9 @@ function measureVerticalText(
     return { columnCount: 0, fits: true };
   }
 
-  const charsPerColumn = Math.max(1, Math.floor(maxHeight / Math.max(fontSize, lineHeight)));
+  const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
+  const charAdvancePx = Math.max(1, Math.max(fontSize, lineHeight) + letterSpacingPx);
+  const charsPerColumn = Math.max(1, Math.floor((maxHeight + letterSpacingPx) / Math.max(1, charAdvancePx)));
   const columnCount = Math.max(1, Math.ceil(compact.length / charsPerColumn));
   const estimatedColumnWidth = fontSize * 1.15;
   return {

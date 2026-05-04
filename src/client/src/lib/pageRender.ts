@@ -7,6 +7,8 @@ import {
   resolveScreentoneDotRadiusPx,
   resolveScreentoneTileSizePx,
   resolveBlockTextLayout,
+  measureTextWidthWithLetterSpacing,
+  resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines
 } from "./overlayLayout";
@@ -205,14 +207,14 @@ function drawHorizontalRenderedText(
   const totalHeight = lines.length * lineHeightPx;
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const startY = top + (innerHeight - totalHeight) * textPositionFactors.y + Math.max(0, (lineHeightPx - fontSize) / 2);
-  const maxLineWidth = lines.reduce((widest, line) => Math.max(widest, context.measureText(line).width), 0);
-  const textLeft = left + (innerWidth - maxLineWidth) * textPositionFactors.x;
+  const maxSpacedLineWidth = lines.reduce((widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize)), 0);
+  const textLeft = left + (innerWidth - maxSpacedLineWidth) * textPositionFactors.x;
   const x =
     block.textAlign === "left"
       ? textLeft
       : block.textAlign === "right"
-        ? textLeft + maxLineWidth
-        : textLeft + maxLineWidth / 2;
+        ? textLeft + maxSpacedLineWidth
+        : textLeft + maxSpacedLineWidth / 2;
 
   context.textAlign = block.textAlign;
   for (const [index, line] of lines.entries()) {
@@ -235,13 +237,15 @@ function drawVerticalRenderedText(
 ): void {
   const chars = [...text.replace(/\s+/g, "")];
   const lineHeightPx = fontSize * lineHeight;
-  const totalHeight = chars.length * lineHeightPx;
+  const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
+  const charAdvancePx = Math.max(1, lineHeightPx + letterSpacingPx);
+  const totalHeight = chars.length * lineHeightPx + Math.max(0, chars.length - 1) * (charAdvancePx - lineHeightPx);
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const startY = top + (innerHeight - totalHeight) * textPositionFactors.y;
   const x = left + (innerWidth - fontSize) * textPositionFactors.x + fontSize / 2;
   context.textAlign = "center";
   for (const [index, char] of chars.entries()) {
-    const y = startY + index * lineHeightPx;
+    const y = startY + index * charAdvancePx;
     drawFilledText(context, block, char, x, y, fontSize);
     drawTextDecoration(context, block, char, x, y, fontSize);
   }
@@ -252,7 +256,7 @@ function drawTextDecoration(context: CanvasRenderingContext2D, block: Translatio
     return;
   }
 
-  const width = context.measureText(text).width;
+  const width = measureTextWidthWithLetterSpacing(context, block, text, fontSize);
   const startX = context.textAlign === "right" ? x - width : context.textAlign === "center" ? x - width / 2 : x;
   const underlineY = y + fontSize * 1.05;
   context.save();
@@ -273,7 +277,7 @@ function strokeTextOutlines(context: CanvasRenderingContext2D, block: Translatio
     context.save();
     context.strokeStyle = block.secondaryOutlineColor ?? "#ffffff";
     context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2;
-    context.strokeText(text, x, y);
+    drawTextRun(context, block, text, x, y, fontSize, "stroke");
     context.restore();
   }
 
@@ -281,14 +285,14 @@ function strokeTextOutlines(context: CanvasRenderingContext2D, block: Translatio
     context.save();
     context.strokeStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
     context.lineWidth = outlineWidthPx;
-    context.strokeText(text, x, y);
+    drawTextRun(context, block, text, x, y, fontSize, "stroke");
     context.restore();
   }
 }
 
 function drawOutlinedText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
   strokeTextOutlines(context, block, text, x, y, fontSize);
-  context.fillText(text, x, y);
+  drawTextRun(context, block, text, x, y, fontSize, "fill");
 }
 
 function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
@@ -301,7 +305,7 @@ function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlo
 
   context.save();
   context.fillStyle = "#ffffff";
-  context.fillText(text, x, y);
+  drawTextRun(context, block, text, x, y, fontSize, "fill");
   const pattern = createScreentonePattern(
     context,
     block.textColor,
@@ -311,7 +315,42 @@ function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlo
     fontSize
   );
   context.fillStyle = pattern ?? block.textColor;
-  context.fillText(text, x, y);
+  drawTextRun(context, block, text, x, y, fontSize, "fill");
+  context.restore();
+}
+
+function drawTextRun(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  mode: "fill" | "stroke"
+): void {
+  const chars = [...text];
+  const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
+  if (letterSpacingPx === 0) {
+    if (mode === "stroke") {
+      context.strokeText(text, x, y);
+    } else {
+      context.fillText(text, x, y);
+    }
+    return;
+  }
+  const runWidth = measureTextWidthWithLetterSpacing(context, block, text, fontSize);
+  let cursorX = context.textAlign === "right" ? x - runWidth : context.textAlign === "center" ? x - runWidth / 2 : x;
+
+  context.save();
+  context.textAlign = "left";
+  for (const char of chars) {
+    if (mode === "stroke") {
+      context.strokeText(char, cursorX, y);
+    } else {
+      context.fillText(char, cursorX, y);
+    }
+    cursorX += context.measureText(char).width + letterSpacingPx;
+  }
   context.restore();
 }
 

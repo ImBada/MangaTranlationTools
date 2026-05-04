@@ -10,6 +10,7 @@ import {
   buildScreentoneFillCssSize,
   hexToRgba,
   resolveBlockTextLayout,
+  resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
   type ViewportSize
@@ -79,6 +80,7 @@ export function OverlayBlock({
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const textPositionJustifyContent = textPositionFactors.x === 0 ? "flex-start" : textPositionFactors.x === 1 ? "flex-end" : "center";
   const textPositionAlignItems = textPositionFactors.y === 0 ? "flex-start" : textPositionFactors.y === 1 ? "flex-end" : "center";
+  const letterSpacingPx = resolveTextLetterSpacingPx(block, layout.fontSizePx);
   const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
     ? {
         WebkitTextFillColor: "transparent",
@@ -112,6 +114,7 @@ export function OverlayBlock({
     textDecoration: block.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION,
     fontSize: `${layout.fontSizePx}px`,
     lineHeight: block.lineHeight,
+    letterSpacing: `${letterSpacingPx}px`,
     textAlign: block.textAlign,
     pointerEvents: editingEnabled ? undefined : "none",
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,

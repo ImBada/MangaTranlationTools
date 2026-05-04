@@ -109,6 +109,7 @@ export type TranslationBlock = {
   fontPresetId?: string;
   fontSizeLinkedToPreset?: boolean;
   lineHeightLinkedToPreset?: boolean;
+  letterSpacingLinkedToPreset?: boolean;
   outlineColorLinkedToPreset?: boolean;
   outlineWidthLinkedToPreset?: boolean;
   secondaryOutlineColorLinkedToPreset?: boolean;
@@ -128,6 +129,7 @@ export type TranslationBlock = {
   textDecoration?: TextDecoration;
   fontSizePx: number;
   lineHeight: number;
+  letterSpacingPx?: number;
   outlineColor?: string;
   outlineWidthPx?: number;
   secondaryOutlineColor?: string;
@@ -156,6 +158,7 @@ export type FontPreset = {
   textDecoration?: TextDecoration;
   fontSizePx: number;
   lineHeight: number;
+  letterSpacingPx?: number;
   outlineColor?: string;
   outlineWidthPx?: number;
   secondaryOutlineColor?: string;

@@ -10,6 +10,7 @@ export type FontPresetPatch = Partial<
     | "textDecoration"
     | "fontSizePx"
     | "lineHeight"
+    | "letterSpacingPx"
     | "outlineColor"
     | "outlineWidthPx"
     | "secondaryOutlineColor"
@@ -28,6 +29,7 @@ export type LinkableFontPresetKey = Exclude<keyof FontPresetPatch, "fontFamily">
 const PRESET_LINK_FIELD_BY_KEY = {
   fontSizePx: "fontSizeLinkedToPreset",
   lineHeight: "lineHeightLinkedToPreset",
+  letterSpacingPx: "letterSpacingLinkedToPreset",
   outlineColor: "outlineColorLinkedToPreset",
   outlineWidthPx: "outlineWidthLinkedToPreset",
   secondaryOutlineColor: "secondaryOutlineColorLinkedToPreset",
@@ -88,6 +90,7 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     textDecoration: source.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
     fontSizePx: source.fontSizePx ?? DEFAULT_FONT_PRESET.fontSizePx,
     lineHeight: source.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
+    letterSpacingPx: source.letterSpacingPx ?? DEFAULT_FONT_PRESET.letterSpacingPx,
     outlineColor: source.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
     outlineWidthPx: source.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
     secondaryOutlineColor: source.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
@@ -129,6 +132,7 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
   const {
     fontSizeLinkedToPreset: _fontSizeLinkedToPreset,
     lineHeightLinkedToPreset: _lineHeightLinkedToPreset,
+    letterSpacingLinkedToPreset: _letterSpacingLinkedToPreset,
     outlineColorLinkedToPreset: _outlineColorLinkedToPreset,
     outlineWidthLinkedToPreset: _outlineWidthLinkedToPreset,
     secondaryOutlineColorLinkedToPreset: _secondaryOutlineColorLinkedToPreset,
@@ -177,6 +181,10 @@ export function applyFontPresetPatchToBlock(
       patch.lineHeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "lineHeight"))
         ? patch.lineHeight
         : block.lineHeight,
+    letterSpacingPx:
+      patch.letterSpacingPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "letterSpacingPx"))
+        ? patch.letterSpacingPx
+        : block.letterSpacingPx,
     outlineColor:
       patch.outlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineColor"))
         ? patch.outlineColor

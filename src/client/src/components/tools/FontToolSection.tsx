@@ -119,6 +119,7 @@ function buildPresetTagTextStyles(preset: FontPreset): {
     fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
     fontSize: `${fontSizePx}px`,
     lineHeight: preset.lineHeight,
+    letterSpacing: `${preset.letterSpacingPx ?? 0}px`,
     fontWeight: preset.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT,
     fontStyle: preset.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE,
     textDecoration: preset.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION
@@ -128,6 +129,7 @@ function buildPresetTagTextStyles(preset: FontPreset): {
     stack: {
       fontFamily: preset.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY,
       lineHeight: preset.lineHeight,
+      letterSpacing: `${preset.letterSpacingPx ?? 0}px`,
       zoom: scale
     },
     primary: {
@@ -361,6 +363,20 @@ export function FontToolSection({
                 onChange={(lineHeight) => onFontSettingChange({ lineHeight })}
               />
               {renderFontPresetLinkButton("lineHeight", "줄 간격")}
+            </div>
+            <div className="compact-tool-field font-number-field">
+              <span>글자 간격</span>
+              <CompactNumberControl
+                ariaLabel="글자 간격"
+                min={-10}
+                max={30}
+                step={0.5}
+                value={fontControlValues.letterSpacingPx ?? 0}
+                suffix="px"
+                disabled={selectedPageEditLocked}
+                onChange={(letterSpacingPx) => onFontSettingChange({ letterSpacingPx })}
+              />
+              {renderFontPresetLinkButton("letterSpacingPx", "글자 간격")}
             </div>
           </div>
           <FontOutlineControls
