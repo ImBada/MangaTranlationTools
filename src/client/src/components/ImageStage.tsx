@@ -46,6 +46,7 @@ type ImageStageProps = {
   onStagePointerDown: (event: React.PointerEvent) => void;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
 };
 
 export function ImageStage({
@@ -81,7 +82,8 @@ export function ImageStage({
   onStagePointerUp,
   onStagePointerDown,
   onBlockPointerDown,
-  onBlockTextUpdate
+  onBlockTextUpdate,
+  onBlockTextAlignChange
 }: ImageStageProps): React.JSX.Element {
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
   const {
@@ -180,6 +182,7 @@ export function ImageStage({
           temporaryPanActive={temporaryPanActive}
           onBlockPointerDown={onBlockPointerDown}
           onBlockTextUpdate={onBlockTextUpdate}
+          onBlockTextAlignChange={onBlockTextAlignChange}
           onInpaintLayerChange={onInpaintLayerChange}
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}

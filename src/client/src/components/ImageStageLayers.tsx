@@ -48,6 +48,7 @@ type ImageStageLayersProps = {
   temporaryPanActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -77,6 +78,7 @@ export function ImageStageLayers({
   temporaryPanActive,
   onBlockPointerDown,
   onBlockTextUpdate,
+  onBlockTextAlignChange,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
   onInpaintSelectionChange
@@ -202,6 +204,7 @@ export function ImageStageLayers({
                   onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
                   onInlineEditCancel={() => setInlineEdit(null)}
                   onInlineEditCommit={commitInlineEdit}
+                  onTextAlignChange={onBlockTextAlignChange}
                   onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}
                   onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
                 />

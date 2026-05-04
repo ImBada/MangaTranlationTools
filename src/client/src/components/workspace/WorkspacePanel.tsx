@@ -89,6 +89,7 @@ type WorkspacePanelProps = {
   onSetStatusWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
+  onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onZoomInStage: () => void;
   onZoomOutStage: () => void;
 };
@@ -155,6 +156,7 @@ export function WorkspacePanel({
   onSetStatusWidgetOpen,
   onStagePointerMove,
   onStagePointerUp,
+  onBlockTextAlignChange,
   onZoomInStage,
   onZoomOutStage
 }: WorkspacePanelProps): React.JSX.Element {
@@ -269,6 +271,7 @@ export function WorkspacePanel({
             }}
             onBlockPointerDown={onBlockPointerDown}
             onBlockTextUpdate={onBlockTextUpdate}
+            onBlockTextAlignChange={onBlockTextAlignChange}
           />
         </div>
       ) : (

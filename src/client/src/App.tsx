@@ -659,6 +659,7 @@ export default function App(): React.JSX.Element {
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={onBlockPointerDown}
           onBlockTextUpdate={updateInlineBlockText}
+          onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}
           onInpaintLayerChange={updateSelectedPageInpaintMask}
           onInpaintResultLayerChange={updateSelectedPageInpaintResult}

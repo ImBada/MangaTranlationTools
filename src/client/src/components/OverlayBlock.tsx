@@ -27,10 +27,17 @@ type OverlayBlockProps = {
   onInlineEditChange?: (value: string) => void;
   onInlineEditCommit?: () => void;
   onStartInlineEdit?: (event: React.MouseEvent) => void;
+  onTextAlignChange?: (textAlign: TranslationBlock["textAlign"]) => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onResizePointerDown: (event: React.PointerEvent) => void;
   onRotatePointerDown: (event: React.PointerEvent) => void;
 };
+
+const TEXT_ALIGN_OPTIONS: readonly { value: TranslationBlock["textAlign"]; label: string; shortLabel: string }[] = [
+  { value: "left", label: "좌측 정렬", shortLabel: "좌" },
+  { value: "center", label: "가운데 정렬", shortLabel: "중" },
+  { value: "right", label: "우측 정렬", shortLabel: "우" }
+];
 
 function stopInlineEditorEvent(event: React.SyntheticEvent): void {
   event.stopPropagation();
@@ -48,6 +55,7 @@ export function OverlayBlock({
   onInlineEditChange,
   onInlineEditCommit,
   onStartInlineEdit,
+  onTextAlignChange,
   onPointerDown,
   onResizePointerDown,
   onRotatePointerDown
@@ -109,7 +117,7 @@ export function OverlayBlock({
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center center",
     zIndex: inlineEditDraft !== undefined ? 70 : selected && editingEnabled ? 50 : undefined,
-    overflow: inlineEditDraft !== undefined ? "visible" : "hidden"
+    overflow: inlineEditDraft !== undefined || (selected && editingEnabled) ? "visible" : "hidden"
   };
   const textWrapStyle: React.CSSProperties = {
     boxSizing: "border-box",
@@ -219,6 +227,32 @@ export function OverlayBlock({
             {secondaryOutlineWidthPx > 0 ? renderTextContent(secondaryOutlineStyle, secondaryOutlineLineStyle, true) : null}
             {renderTextContent(contentStyle, lineStyle)}
           </span>
+        </div>
+      ) : null}
+      {selected && editingEnabled && onTextAlignChange ? (
+        <div
+          className="overlay-align-controls"
+          role="group"
+          aria-label="텍스트 정렬"
+          onPointerDown={stopInlineEditorEvent}
+          onClick={stopInlineEditorEvent}
+          onDoubleClick={stopInlineEditorEvent}
+        >
+          {TEXT_ALIGN_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              className={block.textAlign === option.value ? "active" : ""}
+              aria-label={option.label}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onTextAlignChange(option.value);
+              }}
+            >
+              {option.shortLabel}
+            </button>
+          ))}
         </div>
       ) : null}
       {selected && editingEnabled ? <button className="rotate-handle" onPointerDown={onRotatePointerDown} aria-label="Rotate" /> : null}
