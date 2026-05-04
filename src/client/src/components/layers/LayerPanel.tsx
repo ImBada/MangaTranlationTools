@@ -1,5 +1,6 @@
 import React from "react";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
+import { mouseOnlyCheckboxProps } from "../../lib/mouseOnlyCheckbox";
 import { LayerControl } from "./LayerControl";
 
 type LayerPanelProps = {
@@ -39,6 +40,7 @@ export function LayerPanel({
           <span>FOCUS MODE</span>
           <input
             type="checkbox"
+            {...mouseOnlyCheckboxProps}
             checked={focusModeEnabled}
             onChange={(event) => onFocusModeChange(event.target.checked)}
           />

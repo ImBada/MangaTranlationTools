@@ -1,4 +1,5 @@
 import React from "react";
+import { mouseOnlyCheckboxProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type LayerControlProps = {
@@ -50,6 +51,7 @@ export function LayerControl({
         {viewOnly ? null : (
           <input
             type="checkbox"
+            {...mouseOnlyCheckboxProps}
             checked={visible}
             onClick={(event) => event.stopPropagation()}
             onChange={(event) => onVisibleChange(event.target.checked)}
@@ -62,6 +64,7 @@ export function LayerControl({
         <label className="layer-edit-toggle" onClick={(event) => event.stopPropagation()}>
           <input
             type="checkbox"
+            {...mouseOnlyCheckboxProps}
             checked={Boolean(opacityEditMode)}
             onChange={(event) => onOpacityEditModeChange(event.target.checked)}
           />

@@ -1,5 +1,6 @@
 import React from "react";
 import type { MangaPage } from "../../../shared/types";
+import { mouseOnlyCheckboxProps } from "../lib/mouseOnlyCheckbox";
 
 type PageListProps = {
   pages: MangaPage[];
@@ -127,6 +128,7 @@ export function PageList({
             >
               <input
                 type="checkbox"
+                {...mouseOnlyCheckboxProps}
                 className="page-progress-checkbox"
                 checked={page.progressCompleted ?? false}
                 onChange={() => onToggleProgress(page.id)}

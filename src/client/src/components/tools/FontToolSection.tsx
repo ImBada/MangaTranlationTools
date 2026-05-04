@@ -13,6 +13,7 @@ import {
   buildScreentoneFillCssSize,
   resolveTextPosition
 } from "../../lib/overlayLayout";
+import { mouseOnlyCheckboxProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
@@ -339,6 +340,7 @@ export function FontToolSection({
             <label className="tool-checkbox font-checkbox-field">
               <input
                 type="checkbox"
+                {...mouseOnlyCheckboxProps}
                 checked={fontControlValues.screentoneFillEnabled ?? false}
                 disabled={selectedPageEditLocked}
                 onChange={(event) => onFontSettingChange({ screentoneFillEnabled: event.target.checked })}
@@ -447,6 +449,7 @@ export function FontToolSection({
           <label className="tool-checkbox compact-tool-field font-checkbox-field">
             <input
               type="checkbox"
+              {...mouseOnlyCheckboxProps}
               checked={fontControlValues.autoFitText ?? true}
               disabled={selectedPageEditLocked}
               onChange={(event) => onFontSettingChange({ autoFitText: event.target.checked })}

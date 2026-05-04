@@ -1,5 +1,6 @@
 import React from "react";
 import type { ImportCreateSelection, ImportPreviewResult, LibraryIndex } from "../../../shared/types";
+import { mouseOnlyCheckboxProps } from "../lib/mouseOnlyCheckbox";
 
 export type ImportModalSubmit = {
   target:
@@ -101,6 +102,7 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
                     <label className="checkbox-row">
                       <input
                         type="checkbox"
+                        {...mouseOnlyCheckboxProps}
                         checked={selection.enabled}
                         disabled={busy}
                         onChange={(event) => {
