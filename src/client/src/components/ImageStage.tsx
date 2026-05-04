@@ -101,7 +101,6 @@ export function ImageStage({
     onStagePointerDown,
     onStagePointerMove,
     onStagePointerUp,
-    pageId: page.id,
     pageSize,
     temporaryPanActive,
     viewResetKey,

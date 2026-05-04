@@ -24,7 +24,6 @@ type UseImageStageViewOptions = {
   onStagePointerDown: (event: React.PointerEvent) => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
-  pageId: string;
   pageSize: ViewportSize;
   temporaryPanActive: boolean;
   viewResetKey: number;
@@ -49,7 +48,6 @@ export function useImageStageView({
   onStagePointerDown,
   onStagePointerMove,
   onStagePointerUp,
-  pageId,
   pageSize,
   temporaryPanActive,
   viewResetKey,
@@ -78,11 +76,6 @@ export function useImageStageView({
     let frameId = 0;
     const syncFitSize = () => {
       const next = resolveStageFitSize(pageSize, resolveStageFitBounds(wrap), { viewScale });
-      setPanOffset((current) => {
-        const nextPan = viewScale === null ? { x: 0, y: 0 } : current;
-        panOffsetRef.current = nextPan;
-        return nextPan;
-      });
       setFitSize((current) => {
         if (
           current &&
@@ -126,7 +119,7 @@ export function useImageStageView({
     applyPanOffset({ x: 0, y: 0 });
     panRef.current = null;
     setPanning(false);
-  }, [applyPanOffset, pageId, viewResetKey]);
+  }, [applyPanOffset, viewResetKey]);
 
   React.useEffect(() => {
     if (!zoomToolActive || temporaryPanActive) {
