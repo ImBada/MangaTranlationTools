@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontSizePreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
 import {
   clampEditableBbox,
   clampRotationDeg,
@@ -47,12 +47,15 @@ type UseTranslationEditingOptions = {
 
 type UseTranslationEditingState = {
   canUndoTranslation: boolean;
+  activeFontSizePresetId: string | null;
   clearSelectedBlockFontPreset: () => void;
   clearTranslationUndoStack: () => void;
   copySelectedBlockToClipboard: () => Promise<void>;
   createEmptyBlock: () => void;
   createFontPresetFromSelectedBlock: () => void;
+  createFontSizePresetFromCurrentFontSize: () => void;
   deleteFontPreset: (presetId: string) => void;
+  deleteFontSizePreset: (presetId: string) => void;
   deleteSelectedBlock: () => void;
   duplicateBlock: (block: TranslationBlock) => void;
   duplicateSelectedBlock: () => void;
@@ -61,11 +64,13 @@ type UseTranslationEditingState = {
   fontFamilyOptions: ReturnType<typeof useFontPresetEditing>["fontFamilyOptions"];
   fontPresetName: string;
   fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
   pasteTranslationBlockFromClipboard: () => Promise<void>;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   renameFontPreset: (presetId: string, name: string) => void;
+  selectFontSizePreset: (presetId: string | null) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
@@ -167,17 +172,22 @@ export function useTranslationEditing({
   }, [recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
   const {
+    activeFontSizePresetId,
     clearSelectedBlockFontPreset,
     createFontPresetFromSelectedBlock,
+    createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
+    deleteFontSizePreset,
     editingFontPreset,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
     fontPresets,
+    fontSizePresets,
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
@@ -219,13 +229,16 @@ export function useTranslationEditing({
   });
 
   return {
+    activeFontSizePresetId,
     canUndoTranslation,
     clearSelectedBlockFontPreset,
     clearTranslationUndoStack,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
+    createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
+    deleteFontSizePreset,
     deleteSelectedBlock,
     duplicateBlock,
     duplicateSelectedBlock,
@@ -234,11 +247,13 @@ export function useTranslationEditing({
     fontFamilyOptions,
     fontPresetName,
     fontPresets,
+    fontSizePresets,
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,

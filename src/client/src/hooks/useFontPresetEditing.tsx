@@ -1,14 +1,17 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontSizePreset, MangaPage, SystemFont, TranslationBlock } from "../../../shared/types";
 import { buildFontFamilyOptions } from "../components/font/FontFamilyPicker";
 import { FontPresetLinkIcon } from "../components/font/FontPresetLinkIcon";
 import {
   applyFontPresetPatchToBlock,
+  buildNextFontSizePresetName,
   buildFontPresetLinkPatch,
   clearFontPresetLinkFields,
   createFontPreset,
+  createFontSizePreset,
   DEFAULT_FONT_PRESET,
   isBlockFontPresetValueLinked,
+  resolveFontPreset,
   type BlockFontPatch,
   type FontPresetPatch,
   type LinkableFontPresetKey
@@ -45,6 +48,12 @@ function isFontPresetNameTaken(fontPresets: FontPreset[], name: string, excludeP
   return fontPresets.some((preset) => preset.id !== excludePresetId && preset.name.trim() === normalizedName);
 }
 
+function resolveOptionalFontPreset(preset: FontPreset | null | undefined, fontSizePresets: FontSizePreset[]): FontPreset | null {
+  return preset ? resolveFontPreset(preset, fontSizePresets) : null;
+}
+
+type AssignedFontPresetPatch = FontPresetPatch & Partial<Pick<FontPreset, "fontSizePresetId">>;
+
 type UseFontPresetEditingOptions = {
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
@@ -62,15 +71,20 @@ type UseFontPresetEditingOptions = {
 type UseFontPresetEditingState = {
   clearSelectedBlockFontPreset: () => void;
   createFontPresetFromSelectedBlock: () => void;
+  createFontSizePresetFromCurrentFontSize: () => void;
   deleteFontPreset: (presetId: string) => void;
+  deleteFontSizePreset: (presetId: string) => void;
   editingFontPreset: FontPreset | null;
   fontControlValues: FontControlValues;
   fontFamilyOptions: ReturnType<typeof buildFontFamilyOptions>;
   fontPresetName: string;
   fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
+  activeFontSizePresetId: string | null;
   renameFontPreset: (presetId: string, name: string) => void;
+  selectFontSizePreset: (presetId: string | null) => void;
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
@@ -92,16 +106,24 @@ export function useFontPresetEditing({
 }: UseFontPresetEditingOptions): UseFontPresetEditingState {
   const [fontPresetName, setFontPresetName] = React.useState("");
   const fontPresets = currentChapter?.fontPresets ?? [];
+  const fontSizePresets = currentChapter?.fontSizePresets ?? [];
   const selectedFontPreset = selectedBlock?.fontPresetId
-    ? fontPresets.find((preset) => preset.id === selectedBlock.fontPresetId) ?? null
+    ? resolveOptionalFontPreset(fontPresets.find((preset) => preset.id === selectedBlock.fontPresetId), fontSizePresets)
     : null;
-  const editingFontPreset = editingFontPresetId
+  const rawEditingFontPreset = editingFontPresetId
     ? fontPresets.find((preset) => preset.id === editingFontPresetId) ?? null
     : null;
+  const editingFontPreset = resolveOptionalFontPreset(rawEditingFontPreset, fontSizePresets);
   const selectedBlockFontControls = selectedBlock && selectedFontPreset
     ? applyFontPresetPatchToBlock(selectedBlock, selectedFontPreset)
     : selectedBlock;
   const fontControlValues = selectedBlockFontControls ?? editingFontPreset;
+  const selectedBlockFontSizeLinked = selectedBlock ? isBlockFontPresetValueLinked(selectedBlock, "fontSizePx") : true;
+  const activeFontSizePresetId = selectedBlock
+    ? selectedBlockFontSizeLinked
+      ? selectedFontPreset?.fontSizePresetId ?? null
+      : null
+    : rawEditingFontPreset?.fontSizePresetId ?? null;
   const selectedBlockFontPresetLinks = selectedBlock
     ? {
         fontSizePx: isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"),
@@ -126,7 +148,7 @@ export function useFontPresetEditing({
     [fontControlValues?.fontFamily, systemFonts]
   );
 
-  const updateAssignedFontPreset = React.useCallback((presetId: string, patch: FontPresetPatch, options: { recordUndo?: boolean; undoLabel?: string } = {}) => {
+  const updateAssignedFontPreset = React.useCallback((presetId: string, patch: AssignedFontPresetPatch, options: { recordUndo?: boolean; undoLabel?: string } = {}) => {
     if (!currentChapter || selectedPageEditLocked) {
       return;
     }
@@ -135,15 +157,64 @@ export function useFontPresetEditing({
       recordTranslationUndoSnapshot(options.undoLabel ?? "폰트 설정 변경");
     }
 
-    updateCurrentChapter(undefined, (current) => ({
-      ...current,
-      fontPresets: (current.fontPresets ?? []).map((preset) => (preset.id === presetId ? { ...preset, ...patch } : preset)),
-      pages: current.pages.map((page) => ({
-        ...page,
-        updatedAt: page.blocks.some((block) => block.fontPresetId === presetId) ? new Date().toISOString() : page.updatedAt,
-        blocks: page.blocks.map((block) => (block.fontPresetId === presetId ? applyFontPresetPatchToBlock(block, patch) : block))
-      }))
-    }));
+    updateCurrentChapter(undefined, (current) => {
+      const nextFontSizePresets = current.fontSizePresets ?? [];
+      const nextFontPresets = (current.fontPresets ?? []).map((preset) => (preset.id === presetId ? { ...preset, ...patch } : preset));
+      const nextPreset = nextFontPresets.find((preset) => preset.id === presetId);
+      const blockPatch = nextPreset ? resolveFontPreset(nextPreset, nextFontSizePresets) : patch;
+      return {
+        ...current,
+        fontPresets: nextFontPresets,
+        pages: current.pages.map((page) => ({
+          ...page,
+          updatedAt: page.blocks.some((block) => block.fontPresetId === presetId) ? new Date().toISOString() : page.updatedAt,
+          blocks: page.blocks.map((block) => (block.fontPresetId === presetId ? applyFontPresetPatchToBlock(block, blockPatch) : block))
+        }))
+      };
+    });
+  }, [currentChapter, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
+
+  const updateFontSizePresetValue = React.useCallback((presetId: string, fontSizePx: number, options: { recordUndo?: boolean } = {}) => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+
+    if (options.recordUndo !== false) {
+      recordTranslationUndoSnapshot("폰트 크기 프리셋 변경");
+    }
+
+    updateCurrentChapter(undefined, (current) => {
+      const linkedFontPresetIds = new Set(
+        (current.fontPresets ?? [])
+          .filter((preset) => preset.fontSizePresetId === presetId)
+          .map((preset) => preset.id)
+      );
+
+      return {
+        ...current,
+        fontSizePresets: (current.fontSizePresets ?? []).map((preset) =>
+          preset.id === presetId ? { ...preset, fontSizePx } : preset
+        ),
+        fontPresets: (current.fontPresets ?? []).map((preset) =>
+          preset.fontSizePresetId === presetId ? { ...preset, fontSizePx } : preset
+        ),
+        pages: current.pages.map((page) => ({
+          ...page,
+          updatedAt: page.blocks.some((block) =>
+            block.fontPresetId &&
+            linkedFontPresetIds.has(block.fontPresetId) &&
+            isBlockFontPresetValueLinked(block, "fontSizePx")
+          )
+            ? new Date().toISOString()
+            : page.updatedAt,
+          blocks: page.blocks.map((block) =>
+            block.fontPresetId && linkedFontPresetIds.has(block.fontPresetId) && isBlockFontPresetValueLinked(block, "fontSizePx")
+              ? { ...block, fontSizePx }
+              : block
+          )
+        }))
+      };
+    });
   }, [currentChapter, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
 
   const updateSelectedBlockFontSetting = React.useCallback((patch: BlockFontPatch) => {
@@ -161,7 +232,7 @@ export function useFontPresetEditing({
       return;
     }
     if (selectedBlock?.fontPresetId) {
-      const presetPatch: FontPresetPatch = {};
+      const presetPatch: AssignedFontPresetPatch = {};
       const blockPatch: Partial<TranslationBlock> = {};
       for (const key of Object.keys(patch) as (keyof FontPresetPatch)[]) {
         const value = patch[key];
@@ -169,7 +240,14 @@ export function useFontPresetEditing({
           continue;
         }
         if (key === "fontFamily" || isBlockFontPresetValueLinked(selectedBlock, key)) {
+          if (key === "fontSizePx" && selectedFontPreset?.fontSizePresetId) {
+            updateFontSizePresetValue(selectedFontPreset.fontSizePresetId, value as number);
+            continue;
+          }
           Object.assign(presetPatch, { [key]: value });
+          if (key === "fontSizePx") {
+            presetPatch.fontSizePresetId = undefined;
+          }
         } else {
           Object.assign(blockPatch, { [key]: value });
         }
@@ -187,12 +265,20 @@ export function useFontPresetEditing({
       }
       return;
     }
-    if (!selectedBlock && editingFontPreset) {
-      updateAssignedFontPreset(editingFontPreset.id, patch);
+    if (!selectedBlock && rawEditingFontPreset) {
+      if ("fontSizePx" in patch && patch.fontSizePx !== undefined && rawEditingFontPreset.fontSizePresetId) {
+        updateFontSizePresetValue(rawEditingFontPreset.fontSizePresetId, patch.fontSizePx);
+        const { fontSizePx: _fontSizePx, ...restPatch } = patch;
+        if (Object.keys(restPatch).length > 0) {
+          updateAssignedFontPreset(rawEditingFontPreset.id, restPatch, { recordUndo: false });
+        }
+        return;
+      }
+      updateAssignedFontPreset(rawEditingFontPreset.id, "fontSizePx" in patch ? { ...patch, fontSizePresetId: undefined } : patch);
       return;
     }
     updateSelectedBlock(patch);
-  }, [editingFontPreset, recordTranslationUndoSnapshot, selectedBlock, updateAssignedFontPreset, updateSelectedBlock]);
+  }, [rawEditingFontPreset, recordTranslationUndoSnapshot, selectedBlock, selectedFontPreset?.fontSizePresetId, updateAssignedFontPreset, updateFontSizePresetValue, updateSelectedBlock]);
 
   const toggleSelectedBlockFontPresetLink = React.useCallback((key: LinkableFontPresetKey) => {
     if (!selectedBlock || !selectedFontPreset) {
@@ -249,7 +335,10 @@ export function useFontPresetEditing({
       pushStatus("이미 있는 프리셋 이름입니다.", "failed");
       return;
     }
-    const preset = createFontPreset(presetName, selectedBlock ?? DEFAULT_FONT_PRESET);
+    const preset = {
+      ...createFontPreset(presetName, fontControlValues ?? selectedBlock ?? DEFAULT_FONT_PRESET),
+      fontSizePresetId: activeFontSizePresetId ?? undefined
+    };
     recordTranslationUndoSnapshot("폰트 프리셋 생성");
     updateCurrentChapter(selectedPage?.id, (current) => ({
       ...current,
@@ -288,7 +377,29 @@ export function useFontPresetEditing({
     }));
     setEditingFontPresetId(preset.id);
     setFontPresetName("");
-  }, [currentChapter, fontPresetName, fontPresets, pushStatus, recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
+  }, [activeFontSizePresetId, currentChapter, fontControlValues, fontPresetName, fontPresets, pushStatus, recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
+
+  const createFontSizePresetFromCurrentFontSize = React.useCallback(() => {
+    if (!currentChapter || selectedPageEditLocked || !fontControlValues) {
+      return;
+    }
+
+    const presetName = buildNextFontSizePresetName(fontSizePresets);
+    const preset = createFontSizePreset(presetName, fontControlValues.fontSizePx);
+    const activePresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? rawEditingFontPreset?.id : undefined);
+    recordTranslationUndoSnapshot("폰트 크기 프리셋 생성");
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      fontSizePresets: [...(current.fontSizePresets ?? []), preset],
+      fontPresets: activePresetId
+        ? (current.fontPresets ?? []).map((fontPreset) =>
+            fontPreset.id === activePresetId
+              ? { ...fontPreset, fontSizePresetId: preset.id, fontSizePx: preset.fontSizePx }
+              : fontPreset
+          )
+        : current.fontPresets
+    }));
+  }, [currentChapter, fontControlValues, fontSizePresets, rawEditingFontPreset?.id, recordTranslationUndoSnapshot, selectedBlock, selectedPageEditLocked, updateCurrentChapter]);
 
   const selectFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
@@ -298,12 +409,13 @@ export function useFontPresetEditing({
     if (!preset) {
       return;
     }
+    const resolvedPreset = resolveFontPreset(preset, fontSizePresets);
     setEditingFontPresetId(presetId);
     if (!selectedPage || !selectedBlock) {
       return;
     }
     updateSelectedBlock({
-      ...applyFontPresetPatchToBlock(selectedBlock, preset, { forceLinkedValues: true }),
+      ...applyFontPresetPatchToBlock(selectedBlock, resolvedPreset, { forceLinkedValues: true }),
       fontPresetId: preset.id,
       fontSizeLinkedToPreset: true,
       lineHeightLinkedToPreset: true,
@@ -321,7 +433,7 @@ export function useFontPresetEditing({
       fontStyleLinkedToPreset: true,
       textDecorationLinkedToPreset: true
     });
-  }, [fontPresets, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateSelectedBlock]);
+  }, [fontPresets, fontSizePresets, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateSelectedBlock]);
 
   const clearSelectedBlockFontPreset = React.useCallback(() => {
     if (!selectedBlock) {
@@ -371,6 +483,56 @@ export function useFontPresetEditing({
     }));
   }, [currentChapter, fontPresets, pushStatus, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
 
+  const selectFontSizePreset = React.useCallback((presetId: string | null) => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+    if (selectedBlock && (!selectedBlock.fontPresetId || !isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"))) {
+      return;
+    }
+    const preset = presetId ? fontSizePresets.find((candidate) => candidate.id === presetId) ?? null : null;
+    if (presetId && !preset) {
+      return;
+    }
+    const nextFontSizePx = preset?.fontSizePx ?? fontControlValues?.fontSizePx;
+    if (nextFontSizePx === undefined) {
+      return;
+    }
+
+    if (selectedBlock?.fontPresetId) {
+      updateAssignedFontPreset(selectedBlock.fontPresetId, {
+        fontSizePresetId: preset?.id,
+        fontSizePx: nextFontSizePx
+      }, { undoLabel: preset ? "폰트 크기 프리셋 적용" : "폰트 크기 프리셋 해제" });
+      return;
+    }
+    if (!selectedBlock && rawEditingFontPreset) {
+      updateAssignedFontPreset(rawEditingFontPreset.id, {
+        fontSizePresetId: preset?.id,
+        fontSizePx: nextFontSizePx
+      }, { undoLabel: preset ? "폰트 크기 프리셋 적용" : "폰트 크기 프리셋 해제" });
+      return;
+    }
+    if (selectedBlock && preset) {
+      updateSelectedBlock({ fontSizePx: preset.fontSizePx }, { undoLabel: "폰트 크기 프리셋 적용" });
+    }
+  }, [currentChapter, fontControlValues?.fontSizePx, fontSizePresets, rawEditingFontPreset, selectedBlock, selectedPageEditLocked, updateAssignedFontPreset, updateSelectedBlock]);
+
+  const deleteFontSizePreset = React.useCallback((presetId: string) => {
+    if (!currentChapter || selectedPageEditLocked) {
+      return;
+    }
+
+    recordTranslationUndoSnapshot("폰트 크기 프리셋 삭제");
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      fontSizePresets: (current.fontSizePresets ?? []).filter((preset) => preset.id !== presetId),
+      fontPresets: (current.fontPresets ?? []).map((preset) =>
+        preset.fontSizePresetId === presetId ? { ...preset, fontSizePresetId: undefined } : preset
+      )
+    }));
+  }, [currentChapter, recordTranslationUndoSnapshot, selectedPageEditLocked, updateCurrentChapter]);
+
   const deleteFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
       return;
@@ -394,17 +556,22 @@ export function useFontPresetEditing({
   }, [recordTranslationUndoSnapshot, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
 
   return {
+    activeFontSizePresetId,
     clearSelectedBlockFontPreset,
     createFontPresetFromSelectedBlock,
+    createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
+    deleteFontSizePreset,
     editingFontPreset,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
     fontPresets,
+    fontSizePresets,
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,

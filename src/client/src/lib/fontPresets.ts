@@ -1,4 +1,4 @@
-import type { FontPreset, TranslationBlock } from "../../../shared/types";
+import type { FontPreset, FontSizePreset, TranslationBlock } from "../../../shared/types";
 import { DEFAULT_FONT_PRESET_VALUES } from "../../../shared/fontPresets";
 
 export type FontPresetPatch = Partial<
@@ -45,6 +45,39 @@ const PRESET_LINK_FIELD_BY_KEY = {
 
 export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = DEFAULT_FONT_PRESET_VALUES;
 
+export function buildAlphabeticPresetName(index: number): string {
+  let remaining = Math.max(0, Math.floor(index));
+  let name = "";
+
+  do {
+    name = String.fromCharCode(65 + (remaining % 26)) + name;
+    remaining = Math.floor(remaining / 26) - 1;
+  } while (remaining >= 0);
+
+  return name;
+}
+
+export function buildNextFontSizePresetName(fontSizePresets: FontSizePreset[]): string {
+  const usedNames = new Set(fontSizePresets.map((preset) => preset.name.trim()));
+  let index = 0;
+  let name = buildAlphabeticPresetName(index);
+
+  while (usedNames.has(name)) {
+    index += 1;
+    name = buildAlphabeticPresetName(index);
+  }
+
+  return name;
+}
+
+export function createFontSizePreset(name: string, fontSizePx: number): FontSizePreset {
+  return {
+    id: `font-size-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    name,
+    fontSizePx
+  };
+}
+
 export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT_FONT_PRESET): FontPreset {
   return {
     id: `font-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -66,6 +99,18 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     screentoneFillDensity: source.screentoneFillDensity ?? DEFAULT_FONT_PRESET.screentoneFillDensity,
     screentoneFillAntialias: source.screentoneFillAntialias ?? DEFAULT_FONT_PRESET.screentoneFillAntialias
   };
+}
+
+export function resolveFontPresetSize(preset: FontPreset, fontSizePresets: FontSizePreset[] = []): number {
+  if (!preset.fontSizePresetId) {
+    return preset.fontSizePx;
+  }
+  return fontSizePresets.find((candidate) => candidate.id === preset.fontSizePresetId)?.fontSizePx ?? preset.fontSizePx;
+}
+
+export function resolveFontPreset(preset: FontPreset, fontSizePresets: FontSizePreset[] = []): FontPreset {
+  const fontSizePx = resolveFontPresetSize(preset, fontSizePresets);
+  return fontSizePx === preset.fontSizePx ? preset : { ...preset, fontSizePx };
 }
 
 export function isBlockFontSizeLinkedToPreset(block: Pick<TranslationBlock, "fontSizeLinkedToPreset">): boolean {

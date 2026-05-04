@@ -292,13 +292,16 @@ export default function App(): React.JSX.Element {
   registerInpaintUndoClearer(clearInpaintUndoStacks);
   clearPendingInpaintSavesRef.current = clearPendingInpaintSaves;
   const {
+    activeFontSizePresetId,
     canUndoTranslation,
     clearSelectedBlockFontPreset,
     clearTranslationUndoStack,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
+    createFontSizePresetFromCurrentFontSize,
     deleteFontPreset,
+    deleteFontSizePreset,
     deleteSelectedBlock,
     duplicateBlock,
     duplicateSelectedBlock,
@@ -306,11 +309,13 @@ export default function App(): React.JSX.Element {
     fontFamilyOptions,
     fontPresetName,
     fontPresets,
+    fontSizePresets,
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
     renderFontPresetLinkGroupButton,
     renameFontPreset,
+    selectFontSizePreset,
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
@@ -507,10 +512,12 @@ export default function App(): React.JSX.Element {
       activeLayer={activeLayer}
       currentChapter={currentChapter}
       editingFontPresetId={editingFontPresetId}
+      activeFontSizePresetId={activeFontSizePresetId}
       fontControlValues={fontControlValues}
       fontFamilyOptions={fontFamilyOptions}
       fontPresetName={fontPresetName}
       fontPresets={fontPresets}
+      fontSizePresets={fontSizePresets}
       inpaintBrushSize={inpaintBrushSize}
       inpaintBusy={inpaintBusy}
       inpaintPsdBusy={inpaintPsdBusy}
@@ -535,7 +542,9 @@ export default function App(): React.JSX.Element {
       onClearInpaintResultData={() => updateSelectedPageInpaintResult(undefined)}
       onClearSelectedBlockFontPreset={clearSelectedBlockFontPreset}
       onCreateFontPreset={createFontPresetFromSelectedBlock}
+      onCreateFontSizePreset={createFontSizePresetFromCurrentFontSize}
       onDeleteFontPreset={deleteFontPreset}
+      onDeleteFontSizePreset={deleteFontSizePreset}
       onDownloadLastImportedInpaintPsd={downloadLastImportedInpaintPsd}
       onExportInpaintPsd={exportSelectedPageInpaintPsd}
       onFillSelectedInpaintSelection={fillSelectedInpaintSelection}
@@ -551,6 +560,7 @@ export default function App(): React.JSX.Element {
       onRerunInpaintForSelection={rerunInpaintForSelection}
       onRerunInpaintWithCurrentMask={rerunInpaintWithCurrentMask}
       onSelectFontPreset={selectFontPreset}
+      onSelectFontSizePreset={selectFontSizePreset}
       onSelectInpaintPsdFile={selectInpaintPsdFile}
       onSelectInpaintResultEditTool={selectInpaintResultEditTool}
       onSelectSharedInpaintTool={selectSharedInpaintTool}

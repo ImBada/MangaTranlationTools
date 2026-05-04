@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, TextPosition, TranslationBlock } from "../../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontSizePreset, TextPosition, TranslationBlock } from "../../../../shared/types";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
@@ -18,12 +18,14 @@ import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
 type FontToolSectionProps = {
+  activeFontSizePresetId: string | null;
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
   fontControlValues: LayerToolFontControlValues | null;
   fontFamilyOptions: FontFamilyOption[];
   fontPresetName: string;
   fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
@@ -31,11 +33,14 @@ type FontToolSectionProps = {
   onClearSelectedBlockFontPreset: () => void;
   onClearEditingFontPreset: () => void;
   onCreateFontPreset: () => void;
+  onCreateFontSizePreset: () => void;
   onDeleteFontPreset: (presetId: string) => void;
+  onDeleteFontSizePreset: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
   onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
   onSelectFontPreset: (presetId: string) => void;
+  onSelectFontSizePreset: (presetId: string | null) => void;
 };
 
 const PRESET_TAG_FONT_SIZE_PX = 12;
@@ -145,12 +150,14 @@ function buildPresetTagTextStyles(preset: FontPreset): {
 }
 
 export function FontToolSection({
+  activeFontSizePresetId,
   currentChapter,
   editingFontPresetId,
   fontControlValues,
   fontFamilyOptions,
   fontPresetName,
   fontPresets,
+  fontSizePresets,
   renderFontPresetLinkButton,
   renderFontPresetLinkGroupButton,
   selectedBlock,
@@ -158,11 +165,14 @@ export function FontToolSection({
   onClearSelectedBlockFontPreset,
   onClearEditingFontPreset,
   onCreateFontPreset,
+  onCreateFontSizePreset,
   onDeleteFontPreset,
+  onDeleteFontSizePreset,
   onFontPresetNameChange,
   onFontPresetRename,
   onFontSettingChange,
-  onSelectFontPreset
+  onSelectFontPreset,
+  onSelectFontSizePreset
 }: FontToolSectionProps): React.JSX.Element {
   const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
   const [renamingFontPresetId, setRenamingFontPresetId] = React.useState<string | null>(null);
@@ -172,6 +182,13 @@ export function FontToolSection({
   const selectedFontWeights = selectedFontFamilyOption?.weights ?? [];
   const currentFontWeight = fontControlValues?.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
   const selectedTextPosition = resolveTextPosition(selectedBlock?.textPosition);
+  const selectedFontSizePresetId = fontSizePresets.some((preset) => preset.id === activeFontSizePresetId)
+    ? activeFontSizePresetId
+    : null;
+  const fontSizePresetControlsDisabled =
+    selectedPageEditLocked ||
+    !fontControlValues ||
+    (selectedBlock !== null && (!selectedBlock.fontPresetId || selectedBlock.fontSizeLinkedToPreset === false));
   const fontWeightOptions = selectedFontWeights.length > 1
     ? selectedFontWeights.includes(currentFontWeight)
       ? selectedFontWeights
@@ -288,20 +305,49 @@ export function FontToolSection({
               </span>
             </div>
           </div>
+          <div className="compact-tool-field font-size-row-field">
+            <CompactNumberControl
+              ariaLabel="폰트 크기"
+              min={8}
+              step={1}
+              value={fontControlValues.fontSizePx}
+              suffix="px"
+              disabled={selectedPageEditLocked}
+              onChange={(fontSizePx) => onFontSettingChange({ fontSizePx })}
+            />
+            <span className="font-size-row-link">{renderFontPresetLinkButton("fontSizePx", "폰트 크기")}</span>
+            <select
+              className="font-size-preset-select"
+              value={selectedFontSizePresetId ?? ""}
+              disabled={fontSizePresetControlsDisabled}
+              aria-label="폰트 크기 프리셋"
+              onChange={(event) => onSelectFontSizePreset(event.target.value || null)}
+            >
+              <option value="">개별 지정</option>
+              {fontSizePresets.map((preset) => (
+                <option key={preset.id} value={preset.id}>
+                  {preset.name} · {preset.fontSizePx}px
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="font-size-preset-save"
+              disabled={fontSizePresetControlsDisabled || !currentChapter}
+              onClick={() => {
+                if (selectedFontSizePresetId) {
+                  onDeleteFontSizePreset(selectedFontSizePresetId);
+                  return;
+                }
+                onCreateFontSizePreset();
+              }}
+              aria-label={selectedFontSizePresetId ? "선택한 폰트 크기 프리셋 삭제" : "현재 폰트 크기를 크기 프리셋으로 저장"}
+              title={selectedFontSizePresetId ? "선택한 크기 프리셋 삭제" : "현재 크기 저장"}
+            >
+              {selectedFontSizePresetId ? "-" : "+"}
+            </button>
+          </div>
           <div className="font-metrics-row font-tool-grid">
-            <div className="compact-tool-field font-number-field">
-              <span>폰트 크기</span>
-              <CompactNumberControl
-                ariaLabel="폰트 크기"
-                min={8}
-                step={1}
-                value={fontControlValues.fontSizePx}
-                suffix="px"
-                disabled={selectedPageEditLocked}
-                onChange={(fontSizePx) => onFontSettingChange({ fontSizePx })}
-              />
-              {renderFontPresetLinkButton("fontSizePx", "폰트 크기")}
-            </div>
             <div className="compact-tool-field font-number-field">
               <span>줄 간격</span>
               <CompactNumberControl

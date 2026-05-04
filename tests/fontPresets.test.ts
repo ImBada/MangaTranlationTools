@@ -1,5 +1,12 @@
 import { describe, expect, it } from "vitest";
-import { applyFontPresetPatchToBlock, isBlockFontPresetValueLinked, isBlockFontSizeLinkedToPreset } from "../src/client/src/lib/fontPresets";
+import {
+  applyFontPresetPatchToBlock,
+  buildAlphabeticPresetName,
+  buildNextFontSizePresetName,
+  isBlockFontPresetValueLinked,
+  isBlockFontSizeLinkedToPreset,
+  resolveFontPreset
+} from "../src/client/src/lib/fontPresets";
 import type { FontPreset, TranslationBlock } from "../src/shared/types";
 
 describe("font preset block links", () => {
@@ -41,6 +48,32 @@ describe("font preset block links", () => {
     expect(isBlockFontPresetValueLinked(linkedBlock, "lineHeight")).toBe(true);
     expect(applyFontPresetPatchToBlock(linkedBlock, preset).fontSizePx).toBe(32);
     expect(applyFontPresetPatchToBlock(unlinkedBlock, preset, { forceLinkedValues: true }).fontSizePx).toBe(32);
+  });
+
+  it("resolves font preset sizes from document size presets", () => {
+    const preset = createPreset({ fontSizePx: 24, fontSizePresetId: "size-large" });
+
+    expect(resolveFontPreset(preset, [{ id: "size-large", name: "Large", fontSizePx: 36 }])).toMatchObject({
+      fontSizePresetId: "size-large",
+      fontSizePx: 36
+    });
+    expect(resolveFontPreset(preset, []).fontSizePx).toBe(24);
+  });
+});
+
+describe("font size preset names", () => {
+  it("builds alphabetic names for generated size presets", () => {
+    expect(buildAlphabeticPresetName(0)).toBe("A");
+    expect(buildAlphabeticPresetName(25)).toBe("Z");
+    expect(buildAlphabeticPresetName(26)).toBe("AA");
+    expect(buildAlphabeticPresetName(27)).toBe("AB");
+  });
+
+  it("uses the first unused alphabetic size preset name", () => {
+    expect(buildNextFontSizePresetName([
+      { id: "size-a", name: "A", fontSizePx: 24 },
+      { id: "size-c", name: "C", fontSizePx: 32 }
+    ])).toBe("B");
   });
 });
 

@@ -139,6 +139,7 @@ export function useTranslationUndoHistory({
         ...current,
         updatedAt,
         fontPresets: snapshot.fontPresets?.map((preset) => ({ ...preset })),
+        fontSizePresets: snapshot.fontSizePresets?.map((preset) => ({ ...preset })),
         pages: current.pages.map((page) => {
           const pageSnapshot = pageSnapshots.get(page.id);
           return pageSnapshot

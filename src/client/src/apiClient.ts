@@ -108,6 +108,7 @@ function buildChapterPatchBody(chapter: ChapterSnapshot, dirtyPageIds?: string[]
       title: chapter.title,
       status: chapter.status,
       fontPresets: chapter.fontPresets,
+      fontSizePresets: chapter.fontSizePresets,
       pageOrder: chapter.pageOrder,
       updatedAt: chapter.updatedAt
     },

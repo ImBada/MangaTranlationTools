@@ -149,6 +149,7 @@ export type TranslationBlock = {
 export type FontPreset = {
   id: string;
   name: string;
+  fontSizePresetId?: string;
   fontFamily?: string;
   fontWeight?: number;
   fontStyle?: TextFontStyle;
@@ -165,6 +166,12 @@ export type FontPreset = {
   screentoneFillIntensity?: number;
   screentoneFillDensity?: number;
   screentoneFillAntialias?: boolean;
+};
+
+export type FontSizePreset = {
+  id: string;
+  name: string;
+  fontSizePx: number;
 };
 
 export type SystemFont = {
@@ -208,6 +215,7 @@ export type LibraryChapter = {
   sourceKind: ImportSourceKind;
   status: ChapterStatus;
   fontPresets?: FontPreset[];
+  fontSizePresets?: FontSizePreset[];
   pageOrder: string[];
   pages: LibraryPageRecord[];
   createdAt: string;
@@ -229,7 +237,7 @@ export type ChapterPagePatch = Partial<LibraryPageRecord> & {
 
 export type SaveChapterPatchRequest = {
   chapter: Pick<ChapterSnapshot, "id" | "workId" | "updatedAt"> &
-    Partial<Pick<ChapterSnapshot, "fontPresets" | "status" | "title" | "pageOrder">>;
+    Partial<Pick<ChapterSnapshot, "fontPresets" | "fontSizePresets" | "status" | "title" | "pageOrder">>;
   pages?: ChapterPagePatch[];
 };
 

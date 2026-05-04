@@ -1,5 +1,5 @@
 import React from "react";
-import type { ChapterSnapshot, FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../../shared/types";
+import type { ChapterSnapshot, FontPreset, FontSizePreset, ImageRect, MangaPage, TranslationBlock } from "../../../../shared/types";
 import type { FontFamilyOption } from "../font/FontFamilyPicker";
 import type { InpaintTool } from "../InpaintLayerCanvas";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
@@ -15,12 +15,14 @@ export type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
 type LayerToolPanelProps = {
   activeLayer: ActiveLayer;
+  activeFontSizePresetId: string | null;
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
   fontControlValues: LayerToolFontControlValues | null;
   fontFamilyOptions: FontFamilyOption[];
   fontPresetName: string;
   fontPresets: FontPreset[];
+  fontSizePresets: FontSizePreset[];
   inpaintBrushSize: number;
   inpaintBusy: boolean;
   inpaintPsdBusy: boolean;
@@ -45,7 +47,9 @@ type LayerToolPanelProps = {
   onClearInpaintResult: () => void;
   onClearSelectedBlockFontPreset: () => void;
   onCreateFontPreset: () => void;
+  onCreateFontSizePreset: () => void;
   onDeleteFontPreset: (presetId: string) => void;
+  onDeleteFontSizePreset: (presetId: string) => void;
   onDownloadLastImportedInpaintPsd: () => void | Promise<void>;
   onExportInpaintPsd: () => void | Promise<void>;
   onFillSelectedInpaintSelection: () => void | Promise<void>;
@@ -61,6 +65,7 @@ type LayerToolPanelProps = {
   onRerunInpaintForSelection: () => void | Promise<void>;
   onRerunInpaintWithCurrentMask: () => void | Promise<void>;
   onSelectFontPreset: (presetId: string) => void;
+  onSelectFontSizePreset: (presetId: string | null) => void;
   onSelectInpaintPsdFile: () => void;
   onSelectInpaintResultEditTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectSharedInpaintTool: (tool: InpaintTool) => void;
@@ -68,12 +73,14 @@ type LayerToolPanelProps = {
 
 export function LayerToolPanel({
   activeLayer,
+  activeFontSizePresetId,
   currentChapter,
   editingFontPresetId,
   fontControlValues,
   fontFamilyOptions,
   fontPresetName,
   fontPresets,
+  fontSizePresets,
   inpaintBrushSize,
   inpaintBusy,
   inpaintPsdBusy,
@@ -98,7 +105,9 @@ export function LayerToolPanel({
   onClearInpaintResult,
   onClearSelectedBlockFontPreset,
   onCreateFontPreset,
+  onCreateFontSizePreset,
   onDeleteFontPreset,
+  onDeleteFontSizePreset,
   onDownloadLastImportedInpaintPsd,
   onExportInpaintPsd,
   onFillSelectedInpaintSelection,
@@ -114,6 +123,7 @@ export function LayerToolPanel({
   onRerunInpaintForSelection,
   onRerunInpaintWithCurrentMask,
   onSelectFontPreset,
+  onSelectFontSizePreset,
   onSelectInpaintPsdFile,
   onSelectInpaintResultEditTool,
   onSelectSharedInpaintTool
@@ -125,10 +135,12 @@ export function LayerToolPanel({
         <FontToolSection
           currentChapter={currentChapter}
           editingFontPresetId={editingFontPresetId}
+          activeFontSizePresetId={activeFontSizePresetId}
           fontControlValues={fontControlValues}
           fontFamilyOptions={fontFamilyOptions}
           fontPresetName={fontPresetName}
           fontPresets={fontPresets}
+          fontSizePresets={fontSizePresets}
           renderFontPresetLinkButton={renderFontPresetLinkButton}
           renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
           selectedBlock={selectedBlock}
@@ -136,11 +148,14 @@ export function LayerToolPanel({
           onClearEditingFontPreset={onClearEditingFontPreset}
           onClearSelectedBlockFontPreset={onClearSelectedBlockFontPreset}
           onCreateFontPreset={onCreateFontPreset}
+          onCreateFontSizePreset={onCreateFontSizePreset}
           onDeleteFontPreset={onDeleteFontPreset}
+          onDeleteFontSizePreset={onDeleteFontSizePreset}
           onFontPresetNameChange={onFontPresetNameChange}
           onFontPresetRename={onFontPresetRename}
           onFontSettingChange={onFontSettingChange}
           onSelectFontPreset={onSelectFontPreset}
+          onSelectFontSizePreset={onSelectFontSizePreset}
         />
       ) : activeLayer === "inpaintMask" ? (
         <InpaintMaskToolSection
