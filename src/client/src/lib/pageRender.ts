@@ -204,9 +204,9 @@ function drawHorizontalRenderedText(
   const lineHeightPx = fontSize * block.lineHeight;
   const totalHeight = lines.length * lineHeightPx;
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
-  const startY = top + Math.max(0, innerHeight - totalHeight) * textPositionFactors.y + Math.max(0, (lineHeightPx - fontSize) / 2);
+  const startY = top + (innerHeight - totalHeight) * textPositionFactors.y + Math.max(0, (lineHeightPx - fontSize) / 2);
   const maxLineWidth = lines.reduce((widest, line) => Math.max(widest, context.measureText(line).width), 0);
-  const textLeft = left + Math.max(0, innerWidth - maxLineWidth) * textPositionFactors.x;
+  const textLeft = left + (innerWidth - maxLineWidth) * textPositionFactors.x;
   const x =
     block.textAlign === "left"
       ? textLeft
@@ -237,8 +237,8 @@ function drawVerticalRenderedText(
   const lineHeightPx = fontSize * lineHeight;
   const totalHeight = chars.length * lineHeightPx;
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
-  const startY = top + Math.max(0, innerHeight - totalHeight) * textPositionFactors.y;
-  const x = left + Math.max(0, innerWidth - fontSize) * textPositionFactors.x + fontSize / 2;
+  const startY = top + (innerHeight - totalHeight) * textPositionFactors.y;
+  const x = left + (innerWidth - fontSize) * textPositionFactors.x + fontSize / 2;
   context.textAlign = "center";
   for (const [index, char] of chars.entries()) {
     const y = startY + index * lineHeightPx;
