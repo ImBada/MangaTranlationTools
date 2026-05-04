@@ -86,7 +86,12 @@ export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, 
   return resolveBlockTextLayout(block, text, pageSize, stageSize).fontSizePx;
 }
 
-export function resolveWrappedTextLines(block: TranslationBlock, text: string, fontSize: number, maxWidth: number): string[] {
+export function resolveWrappedTextLines(
+  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">,
+  text: string,
+  fontSize: number,
+  maxWidth: number
+): string[] {
   const context = getMeasureContext();
   context.font = buildFont(fontSize, block);
   return wrapTextToWidth(context, text, maxWidth);
@@ -271,6 +276,11 @@ function doesTextFit(block: TranslationBlock, text: string, fontSize: number, in
   return measured.totalHeight <= innerHeight && measured.maxLineWidth <= innerWidth;
 }
 
+type TextWrapSegment = {
+  text: string;
+  separator: "" | " ";
+};
+
 function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWidth: number): string[] {
   const paragraphs = text.replace(/\r/g, "").split("\n");
   const lines: string[] = [];
@@ -282,17 +292,17 @@ function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWid
       continue;
     }
 
-    const words = normalized.split(" ");
-    let current = words[0] ?? "";
-    for (const word of words.slice(1)) {
-      const candidate = `${current} ${word}`;
+    const segments = splitTextWrapSegments(normalized);
+    let current = segments[0]?.text ?? "";
+    for (const segment of segments.slice(1)) {
+      const candidate = `${current}${segment.separator}${segment.text}`;
       if (context.measureText(candidate).width <= maxWidth) {
         current = candidate;
         continue;
       }
 
       lines.push(current);
-      current = word;
+      current = segment.text;
     }
 
     if (current) {
@@ -301,6 +311,27 @@ function wrapTextToWidth(context: CanvasRenderingContext2D, text: string, maxWid
   }
 
   return lines.length > 0 ? lines : [text];
+}
+
+function splitTextWrapSegments(text: string): TextWrapSegment[] {
+  const segments: TextWrapSegment[] = [];
+
+  for (const word of text.split(" ")) {
+    const parts = splitWordAtEllipses(word);
+    for (const [index, part] of parts.entries()) {
+      segments.push({
+        text: part,
+        separator: segments.length > 0 && index === 0 ? " " : ""
+      });
+    }
+  }
+
+  return segments;
+}
+
+function splitWordAtEllipses(word: string): string[] {
+  const parts = word.split(/((?:[…⋯]+|\.{3,}))/u).filter(Boolean);
+  return parts.length > 0 ? parts : [word];
 }
 
 function measureWrappedText(

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBlockPaddingPx, resolveBlockTextLayout, resolveTextPositionFactors } from "../src/client/src/lib/overlayLayout";
+import { resolveBlockPaddingPx, resolveBlockTextLayout, resolveTextPositionFactors, resolveWrappedTextLines } from "../src/client/src/lib/overlayLayout";
 import type { TranslationBlock } from "../src/shared/types";
 
 const originalDocument = globalThis.document;
@@ -89,6 +89,20 @@ describe("render layout padding", () => {
 
     expect(layout.fontSizePx).toBeGreaterThan(256);
     expect(layout.overflow).toBe(false);
+  });
+
+  it("wraps attached ellipses without rendering an inserted space", () => {
+    installCanvasMeasureMock();
+
+    const block = {
+      fontFamily: "Arial",
+      fontWeight: 700,
+      fontStyle: "normal"
+    } as const;
+
+    expect(resolveWrappedTextLines(block, "장난이 심하면 곤란해……", 10, 40)).toEqual(["장난이", "심하면", "곤란해", "……"]);
+    expect(resolveWrappedTextLines(block, "곤란해……", 10, 120)).toEqual(["곤란해……"]);
+    expect(resolveWrappedTextLines(block, "곤란해...", 10, 40)).toEqual(["곤란해", "..."]);
   });
 });
 
