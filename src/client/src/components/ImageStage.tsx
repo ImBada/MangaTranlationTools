@@ -50,6 +50,8 @@ type ImageStageProps = {
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onBlockFontSizeChange: (fontSizePx: number) => void;
+  onBlockAutoFitDisable: () => void;
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
@@ -91,6 +93,8 @@ export function ImageStage({
   onStagePointerUp,
   onStagePointerDown,
   onBlockPointerDown,
+  onBlockFontSizeChange,
+  onBlockAutoFitDisable,
   onSelectedBlockRangeChange,
   onBlockTextUpdate,
   onBlockTextAlignChange,
@@ -238,6 +242,8 @@ export function ImageStage({
           stageSize={stageSize}
           temporaryPanActive={temporaryPanActive}
           onBlockPointerDown={onBlockPointerDown}
+          onBlockFontSizeChange={onBlockFontSizeChange}
+          onBlockAutoFitDisable={onBlockAutoFitDisable}
           onBlockTextUpdate={onBlockTextUpdate}
           onBlockTextAlignChange={onBlockTextAlignChange}
           onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}

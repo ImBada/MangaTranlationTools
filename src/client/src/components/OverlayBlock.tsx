@@ -30,6 +30,8 @@ type OverlayBlockProps = {
   onInlineEditCommit?: () => void;
   onStartInlineEdit?: (event: React.MouseEvent) => void;
   onFavoriteFontPresetSelect?: (presetId: string) => void;
+  onFontSizeChange?: (fontSizePx: number) => void;
+  onAutoFitDisable?: () => void;
   onTextAlignChange?: (textAlign: TranslationBlock["textAlign"]) => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onResizePointerDown: (event: React.PointerEvent) => void;
@@ -41,6 +43,9 @@ const TEXT_ALIGN_OPTIONS: readonly { value: TranslationBlock["textAlign"]; label
   { value: "center", label: "가운데 정렬", shortLabel: "중" },
   { value: "right", label: "우측 정렬", shortLabel: "우" }
 ];
+const OVERLAY_FONT_SIZE_MIN_PX = 8;
+const OVERLAY_FONT_SIZE_MAX_PX = 240;
+const OVERLAY_FONT_SIZE_STEP_PX = 1;
 
 function stopInlineEditorEvent(event: React.SyntheticEvent): void {
   event.stopPropagation();
@@ -60,6 +65,8 @@ export function OverlayBlock({
   onInlineEditCommit,
   onStartInlineEdit,
   onFavoriteFontPresetSelect,
+  onFontSizeChange,
+  onAutoFitDisable,
   onTextAlignChange,
   onPointerDown,
   onResizePointerDown,
@@ -86,6 +93,8 @@ export function OverlayBlock({
   const shadowEnabled = visualContentVisible && (block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0)) && shadowDistancePx > 0;
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
+  const autoFitTextEnabled = block.autoFitText ?? true;
+  const selectedControlsVisible = selected && editingEnabled;
   const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const textPositionJustifyContent = textPositionFactors.x === 0 ? "flex-start" : textPositionFactors.x === 1 ? "flex-end" : "center";
@@ -129,8 +138,8 @@ export function OverlayBlock({
     pointerEvents: editingEnabled ? undefined : "none",
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center center",
-    zIndex: inlineEditDraft !== undefined ? 70 : selected && editingEnabled ? 50 : undefined,
-    overflow: inlineEditDraft !== undefined || (selected && editingEnabled) ? "visible" : "hidden"
+    zIndex: inlineEditDraft !== undefined ? 70 : selectedControlsVisible ? 50 : undefined,
+    overflow: inlineEditDraft !== undefined || selectedControlsVisible ? "visible" : "hidden"
   };
   const textWrapStyle: React.CSSProperties = {
     boxSizing: "border-box",
@@ -205,12 +214,18 @@ export function OverlayBlock({
         : displayText}
     </span>
   );
+  const applyOverlayFontSize = (fontSizePx: number) => {
+    const nextFontSizePx = clampOverlayFontSize(fontSizePx);
+    if (nextFontSizePx !== block.fontSizePx) {
+      onFontSizeChange?.(nextFontSizePx);
+    }
+  };
 
   return (
     <div
       data-testid="translation-block"
       data-block-id={block.id}
-      className={`${selected && editingEnabled ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
+      className={`${selectedControlsVisible ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
       style={style}
       title={layout.overflow && editingEnabled ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
       onPointerDown={onPointerDown}
@@ -254,7 +269,7 @@ export function OverlayBlock({
           </span>
         </div>
       ) : null}
-      {selected && editingEnabled && onTextAlignChange ? (
+      {selectedControlsVisible && onTextAlignChange ? (
         <div
           className="overlay-align-controls"
           role="group"
@@ -280,7 +295,7 @@ export function OverlayBlock({
           ))}
         </div>
       ) : null}
-      {selected && editingEnabled && favoriteFontPresets.length > 0 ? (
+      {selectedControlsVisible && favoriteFontPresets.length > 0 ? (
         <div
           className="overlay-favorite-tags"
           role="group"
@@ -307,8 +322,82 @@ export function OverlayBlock({
           ))}
         </div>
       ) : null}
-      {selected && editingEnabled ? <button className="rotate-handle" onPointerDown={onRotatePointerDown} aria-label="Rotate" /> : null}
-      {selected && editingEnabled ? <button className="resize-handle" onPointerDown={onResizePointerDown} aria-label="Resize" /> : null}
+      {selectedControlsVisible && autoFitTextEnabled && onAutoFitDisable ? (
+        <button
+          type="button"
+          className="overlay-auto-fit-off-button"
+          aria-label="자동 맞춤 끄기"
+          title="자동 맞춤 끄기"
+          onPointerDown={stopInlineEditorEvent}
+          onClick={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            onAutoFitDisable();
+          }}
+          onDoubleClick={stopInlineEditorEvent}
+        >
+          <span>자동</span>
+          <span>맞춤</span>
+          <strong>OFF</strong>
+        </button>
+      ) : selectedControlsVisible && onFontSizeChange ? (
+        <div
+          className="overlay-font-size-controls"
+          role="group"
+          aria-label="개별 폰트 크기"
+          onPointerDown={stopInlineEditorEvent}
+          onClick={stopInlineEditorEvent}
+          onDoubleClick={stopInlineEditorEvent}
+        >
+          <button
+            type="button"
+            className="overlay-font-size-step"
+            aria-label="폰트 크기 증가"
+            disabled={block.fontSizePx >= OVERLAY_FONT_SIZE_MAX_PX}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              applyOverlayFontSize(block.fontSizePx + OVERLAY_FONT_SIZE_STEP_PX);
+            }}
+          >
+            +
+          </button>
+          <div className="overlay-font-size-value">
+            <input
+              type="number"
+              min={OVERLAY_FONT_SIZE_MIN_PX}
+              max={OVERLAY_FONT_SIZE_MAX_PX}
+              step={OVERLAY_FONT_SIZE_STEP_PX}
+              value={Math.round(block.fontSizePx)}
+              aria-label="개별 폰트 크기"
+              onChange={(event) => applyOverlayFontSize(Number(event.target.value))}
+            />
+            <span>px</span>
+          </div>
+          <button
+            type="button"
+            className="overlay-font-size-step"
+            aria-label="폰트 크기 감소"
+            disabled={block.fontSizePx <= OVERLAY_FONT_SIZE_MIN_PX}
+            onClick={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              applyOverlayFontSize(block.fontSizePx - OVERLAY_FONT_SIZE_STEP_PX);
+            }}
+          >
+            -
+          </button>
+        </div>
+      ) : null}
+      {selectedControlsVisible ? <button className="rotate-handle" onPointerDown={onRotatePointerDown} aria-label="Rotate" /> : null}
+      {selectedControlsVisible ? <button className="resize-handle" onPointerDown={onResizePointerDown} aria-label="Resize" /> : null}
     </div>
   );
+}
+
+function clampOverlayFontSize(value: number): number {
+  if (!Number.isFinite(value)) {
+    return OVERLAY_FONT_SIZE_MIN_PX;
+  }
+  return Math.min(OVERLAY_FONT_SIZE_MAX_PX, Math.max(OVERLAY_FONT_SIZE_MIN_PX, Math.round(value)));
 }

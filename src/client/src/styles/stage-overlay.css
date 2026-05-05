@@ -376,6 +376,146 @@
   outline-offset: 1px;
 }
 
+.overlay-font-size-controls,
+.overlay-auto-fit-off-button {
+  position: absolute;
+  right: calc(100% + 8px);
+  top: 50%;
+  z-index: 6;
+  width: 40px;
+  border-radius: 8px;
+  box-shadow:
+    0 10px 26px rgba(0, 0, 0, 0.34),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-style: normal;
+  text-decoration: none;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.overlay-font-size-controls {
+  display: grid;
+  grid-template-rows: 19px auto 19px;
+  justify-items: center;
+  gap: 3px;
+  padding: 3px;
+  border: 1px solid rgba(106, 169, 255, 0.48);
+  background:
+    linear-gradient(180deg, rgba(24, 31, 42, 0.96), rgba(10, 14, 20, 0.94));
+}
+
+.overlay-font-size-step {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 19px;
+  min-height: 19px;
+  padding: 0;
+  border: 1px solid rgba(106, 169, 255, 0.24);
+  border-radius: 6px;
+  background: rgba(106, 169, 255, 0.12);
+  color: #eaf3ff;
+  font-size: 13px;
+  font-weight: 900;
+  line-height: 1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06);
+  cursor: pointer;
+}
+
+.overlay-font-size-step:hover:not(:disabled) {
+  border-color: rgba(106, 169, 255, 0.55);
+  background: rgba(106, 169, 255, 0.2);
+}
+
+.overlay-font-size-step:disabled {
+  cursor: not-allowed;
+  opacity: 0.36;
+}
+
+.overlay-font-size-value {
+  display: grid;
+  justify-items: center;
+  width: 34px;
+  min-height: 34px;
+  padding: 3px 2px;
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  border-radius: 7px;
+  background: rgba(4, 8, 14, 0.56);
+}
+
+.overlay-font-size-value input {
+  width: 30px;
+  height: 19px;
+  min-height: 19px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #f4f0e8;
+  box-shadow: none;
+  font-size: 15px;
+  font-weight: 900;
+  line-height: 1;
+  text-align: center;
+  appearance: textfield;
+}
+
+.overlay-font-size-value input::-webkit-outer-spin-button,
+.overlay-font-size-value input::-webkit-inner-spin-button {
+  margin: 0;
+  appearance: none;
+}
+
+.overlay-font-size-value span {
+  color: #9fb9d7;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.overlay-font-size-step:focus-visible,
+.overlay-font-size-value input:focus-visible {
+  outline: 2px solid rgba(106, 169, 255, 0.72);
+  outline-offset: 1px;
+}
+
+.overlay-auto-fit-off-button {
+  display: grid;
+  justify-items: center;
+  gap: 1px;
+  min-height: 52px;
+  padding: 5px 3px;
+  border: 1px solid rgba(255, 184, 92, 0.48);
+  background:
+    linear-gradient(180deg, rgba(35, 29, 22, 0.96), rgba(12, 14, 18, 0.94));
+  color: #ffe7c4;
+  font-weight: 900;
+  line-height: 1.05;
+  cursor: pointer;
+}
+
+.overlay-auto-fit-off-button span {
+  font-size: 9px;
+}
+
+.overlay-auto-fit-off-button strong {
+  color: #fff7ed;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.overlay-auto-fit-off-button:hover {
+  border-color: rgba(255, 184, 92, 0.72);
+  background:
+    linear-gradient(180deg, rgba(51, 39, 25, 0.98), rgba(17, 18, 22, 0.96));
+}
+
+.overlay-auto-fit-off-button:focus-visible {
+  outline: 2px solid rgba(255, 184, 92, 0.72);
+  outline-offset: 1px;
+}
+
 .overlay-align-controls button {
   display: grid;
   place-items: center;

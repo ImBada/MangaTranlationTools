@@ -406,6 +406,18 @@ export default function App(): React.JSX.Element {
       )
     }));
   }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+  const updateSelectedBlockIndividualFontSize = useCallback((fontSizePx: number) => {
+    updateSelectedBlock(
+      { fontSizePx, fontSizeLinkedToPreset: false },
+      { undoLabel: "폰트 크기 개별 변경" }
+    );
+  }, [updateSelectedBlock]);
+  const disableSelectedBlockAutoFit = useCallback(() => {
+    updateSelectedBlock(
+      { autoFitText: false, autoFitTextLinkedToPreset: false },
+      { undoLabel: "자동 맞춤 개별 해제" }
+    );
+  }, [updateSelectedBlock]);
 
   const {
     findReplaceOpen,
@@ -708,6 +720,8 @@ export default function App(): React.JSX.Element {
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={onBlockPointerDown}
+          onBlockFontSizeChange={updateSelectedBlockIndividualFontSize}
+          onBlockAutoFitDisable={disableSelectedBlockAutoFit}
           onSelectedBlockRangeChange={onSelectedBlockRangeChange}
           onBlockTextUpdate={updateInlineBlockText}
           onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}

@@ -75,6 +75,8 @@ type WorkspacePanelProps = {
   workspacePanelRef: React.RefObject<HTMLElement | null>;
   zoomToolActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
+  onBlockFontSizeChange: (fontSizePx: number) => void;
+  onBlockAutoFitDisable: () => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
@@ -146,6 +148,8 @@ export function WorkspacePanel({
   workspacePanelRef,
   zoomToolActive,
   onBlockPointerDown,
+  onBlockFontSizeChange,
+  onBlockAutoFitDisable,
   onBlockTextUpdate,
   onFavoriteFontPresetSelect,
   onDownloadLamaModel,
@@ -307,6 +311,8 @@ export function WorkspacePanel({
               }
             }}
             onBlockPointerDown={onBlockPointerDown}
+            onBlockFontSizeChange={onBlockFontSizeChange}
+            onBlockAutoFitDisable={onBlockAutoFitDisable}
             onSelectedBlockRangeChange={onSelectedBlockRangeChange}
             onBlockTextUpdate={onBlockTextUpdate}
             onBlockTextAlignChange={onBlockTextAlignChange}
