@@ -20,10 +20,10 @@ describe("editor shortcuts", () => {
     expect(isBlockCopyShortcut(keyboardEvent({ code: "KeyC", key: "c" }))).toBe(false);
   });
 
-  it("recognizes block paste with Command, Control, or plain V", () => {
+  it("recognizes block paste with Command or Control", () => {
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", metaKey: true }))).toBe(true);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", ctrlKey: true }))).toBe(true);
-    expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v" }))).toBe(true);
+    expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v" }))).toBe(false);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", shiftKey: true }))).toBe(false);
   });
 

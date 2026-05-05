@@ -45,8 +45,7 @@ export function isBlockCopyShortcut(event: KeyboardEvent): boolean {
 
 export function isBlockPasteShortcut(event: KeyboardEvent): boolean {
   const hasPasteModifier = event.metaKey || event.ctrlKey;
-  const plainPasteKey = !event.shiftKey && !event.metaKey && !event.ctrlKey;
-  return !event.altKey && (hasPasteModifier || plainPasteKey) && (event.code === "KeyV" || event.key.toLowerCase() === "v");
+  return !event.altKey && hasPasteModifier && (event.code === "KeyV" || event.key.toLowerCase() === "v");
 }
 
 export function isBlockDuplicateModifier(event: ModifierKeyEvent, platform: string): boolean {
