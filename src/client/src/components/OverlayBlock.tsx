@@ -15,6 +15,8 @@ import {
   resolveWrappedTextLines,
   type ViewportSize
 } from "../lib/overlayLayout";
+import { isBlockFontPresetValueLinked } from "../lib/fontPresets";
+import { useRepeatingStepControl } from "./controls/useRepeatingStepControl";
 
 type OverlayBlockProps = {
   block: TranslationBlock;
@@ -46,6 +48,7 @@ const TEXT_ALIGN_OPTIONS: readonly { value: TranslationBlock["textAlign"]; label
 const OVERLAY_FONT_SIZE_MIN_PX = 8;
 const OVERLAY_FONT_SIZE_MAX_PX = 240;
 const OVERLAY_FONT_SIZE_STEP_PX = 1;
+const noopFontSizeChange = () => undefined;
 
 function stopInlineEditorEvent(event: React.SyntheticEvent): void {
   event.stopPropagation();
@@ -72,6 +75,18 @@ export function OverlayBlock({
   onResizePointerDown,
   onRotatePointerDown
 }: OverlayBlockProps): React.JSX.Element | null {
+  const autoFitTextEnabled = block.autoFitText ?? true;
+  const selectedControlsVisible = selected && editingEnabled;
+  const fontSizeLinkedToPreset = Boolean(block.fontPresetId) && isBlockFontPresetValueLinked(block, "fontSizePx");
+  const fontSizeStepControl = useRepeatingStepControl({
+    disabled: !selectedControlsVisible || autoFitTextEnabled || !onFontSizeChange,
+    max: OVERLAY_FONT_SIZE_MAX_PX,
+    min: OVERLAY_FONT_SIZE_MIN_PX,
+    onChange: onFontSizeChange ?? noopFontSizeChange,
+    step: OVERLAY_FONT_SIZE_STEP_PX,
+    value: block.fontSizePx
+  });
+
   if (block.renderDirection === "hidden") {
     return null;
   }
@@ -93,8 +108,6 @@ export function OverlayBlock({
   const shadowEnabled = visualContentVisible && (block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0)) && shadowDistancePx > 0;
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
-  const autoFitTextEnabled = block.autoFitText ?? true;
-  const selectedControlsVisible = selected && editingEnabled;
   const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const textPositionJustifyContent = textPositionFactors.x === 0 ? "flex-start" : textPositionFactors.x === 1 ? "flex-end" : "center";
@@ -214,13 +227,6 @@ export function OverlayBlock({
         : displayText}
     </span>
   );
-  const applyOverlayFontSize = (fontSizePx: number) => {
-    const nextFontSizePx = clampOverlayFontSize(fontSizePx);
-    if (nextFontSizePx !== block.fontSizePx) {
-      onFontSizeChange?.(nextFontSizePx);
-    }
-  };
-
   return (
     <div
       data-testid="translation-block"
@@ -342,7 +348,7 @@ export function OverlayBlock({
         </button>
       ) : selectedControlsVisible && onFontSizeChange ? (
         <div
-          className="overlay-font-size-controls"
+          className={`overlay-font-size-controls${fontSizeLinkedToPreset ? " linked" : ""}`}
           role="group"
           aria-label="개별 폰트 크기"
           onPointerDown={stopInlineEditorEvent}
@@ -351,14 +357,14 @@ export function OverlayBlock({
         >
           <button
             type="button"
-            className="overlay-font-size-step"
+            className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === 1 ? " pressed" : ""}`}
             aria-label="폰트 크기 증가"
             disabled={block.fontSizePx >= OVERLAY_FONT_SIZE_MAX_PX}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              applyOverlayFontSize(block.fontSizePx + OVERLAY_FONT_SIZE_STEP_PX);
-            }}
+            onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, 1)}
+            onPointerUp={fontSizeStepControl.stopRepeat}
+            onPointerCancel={fontSizeStepControl.handlePointerCancel}
+            onLostPointerCapture={fontSizeStepControl.stopRepeat}
+            onClick={() => fontSizeStepControl.handleClick(1)}
           >
             +
           </button>
@@ -370,20 +376,20 @@ export function OverlayBlock({
               step={OVERLAY_FONT_SIZE_STEP_PX}
               value={Math.round(block.fontSizePx)}
               aria-label="개별 폰트 크기"
-              onChange={(event) => applyOverlayFontSize(Number(event.target.value))}
+              onChange={(event) => fontSizeStepControl.setValue(Number(event.target.value))}
             />
             <span>px</span>
           </div>
           <button
             type="button"
-            className="overlay-font-size-step"
+            className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === -1 ? " pressed" : ""}`}
             aria-label="폰트 크기 감소"
             disabled={block.fontSizePx <= OVERLAY_FONT_SIZE_MIN_PX}
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              applyOverlayFontSize(block.fontSizePx - OVERLAY_FONT_SIZE_STEP_PX);
-            }}
+            onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, -1)}
+            onPointerUp={fontSizeStepControl.stopRepeat}
+            onPointerCancel={fontSizeStepControl.handlePointerCancel}
+            onLostPointerCapture={fontSizeStepControl.stopRepeat}
+            onClick={() => fontSizeStepControl.handleClick(-1)}
           >
             -
           </button>
@@ -393,11 +399,4 @@ export function OverlayBlock({
       {selectedControlsVisible ? <button className="resize-handle" onPointerDown={onResizePointerDown} aria-label="Resize" /> : null}
     </div>
   );
-}
-
-function clampOverlayFontSize(value: number): number {
-  if (!Number.isFinite(value)) {
-    return OVERLAY_FONT_SIZE_MIN_PX;
-  }
-  return Math.min(OVERLAY_FONT_SIZE_MAX_PX, Math.max(OVERLAY_FONT_SIZE_MIN_PX, Math.round(value)));
 }
