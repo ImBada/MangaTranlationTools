@@ -61,13 +61,17 @@ export function parseTranslationBlockFromClipboard(value: string): TranslationBl
   }
 }
 
-export function createInpaintMaskUndoSnapshot(page: MangaPage): InpaintMaskUndoSnapshot {
+export function createInpaintMaskUndoSnapshot(
+  page: MangaPage,
+  overrides: Partial<InpaintMaskUndoSnapshot> = {}
+): InpaintMaskUndoSnapshot {
   return {
     inpaintMaskPath: page.inpaintMaskPath,
     inpaintResultPath: page.inpaintResultPath,
     inpaintMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
     inpaintResultDataUrl: page.inpaintResultDataUrl,
-    inpaintStatus: page.inpaintStatus
+    inpaintStatus: page.inpaintStatus,
+    ...overrides
   };
 }
 

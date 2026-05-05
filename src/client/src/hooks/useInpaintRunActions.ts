@@ -1,6 +1,7 @@
 import React from "react";
 import type { ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
+import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { DEFAULT_INPAINT_SETTINGS } from "../lib/inpaintToolSettings";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
@@ -21,8 +22,8 @@ type UseInpaintRunActionsOptions = {
   selectedPageIdRef: React.RefObject<string | null>;
   signalSaveComplete: () => void;
   updatePageInpaintStatus: (pageId: string, status: MangaPage["inpaintStatus"]) => void;
-  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
-  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
+  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
 };
 
 type UseInpaintRunActionsState = {

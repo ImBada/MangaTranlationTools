@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
-import type { TranslationBlock } from "../src/shared/types";
+import type { MangaPage, TranslationBlock } from "../src/shared/types";
 import {
+  createInpaintMaskUndoSnapshot,
   parseTranslationBlockFromClipboard,
   serializeTranslationBlockForClipboard
 } from "../src/client/src/lib/editorUtils";
@@ -32,5 +33,27 @@ describe("editor utils", () => {
   it("rejects unrelated clipboard text", () => {
     expect(parseTranslationBlockFromClipboard("plain text")).toBeNull();
     expect(parseTranslationBlockFromClipboard(JSON.stringify({ kind: "other", block }))).toBeNull();
+  });
+
+  it("allows inpaint undo snapshots to override captured layer pixels", () => {
+    const page: MangaPage = {
+      id: "page-1",
+      name: "page.png",
+      imagePath: "/tmp/page.png",
+      dataUrl: "/api/source",
+      width: 100,
+      height: 200,
+      blocks: [],
+      analysisStatus: "completed",
+      createdAt: "2026-01-01T00:00:00.000Z",
+      updatedAt: "2026-01-01T00:00:00.000Z",
+      inpaintMaskPath: "/tmp/mask.png",
+      inpaintMaskDataUrl: "/api/mask"
+    };
+
+    expect(createInpaintMaskUndoSnapshot(page, { inpaintMaskDataUrl: "data:image/png;base64,old" })).toMatchObject({
+      inpaintMaskPath: "/tmp/mask.png",
+      inpaintMaskDataUrl: "data:image/png;base64,old"
+    });
   });
 });

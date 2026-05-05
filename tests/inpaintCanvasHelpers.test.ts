@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createCanvasImageSyncState,
+  isCanvasImageSyncStateCurrent
+} from "../src/client/src/hooks/useCanvasImageSync";
+import { resizeCanvasToSize } from "../src/client/src/lib/canvasImageDrawing";
+import {
   drawMaskSegment,
   isCanvasBlank as isMaskCanvasBlank,
   resolveCanvasPoint,
@@ -20,6 +25,23 @@ import {
 } from "../src/client/src/lib/inpaintResultCanvas";
 
 describe("inpaint layer canvas helpers", () => {
+  it("tracks the applied canvas image state by source and size", () => {
+    const state = createCanvasImageSyncState("data:image/png;base64,abc", { width: 320, height: 480 });
+
+    expect(isCanvasImageSyncStateCurrent(state, "data:image/png;base64,abc", { width: 320, height: 480 })).toBe(true);
+    expect(isCanvasImageSyncStateCurrent(state, "data:image/png;base64,other", { width: 320, height: 480 })).toBe(false);
+    expect(isCanvasImageSyncStateCurrent(state, "data:image/png;base64,abc", { width: 320, height: 481 })).toBe(false);
+    expect(isCanvasImageSyncStateCurrent(null, "data:image/png;base64,abc", { width: 320, height: 480 })).toBe(false);
+  });
+
+  it("resizes canvases before asynchronous image content is available", () => {
+    const canvas = { width: 300, height: 150 } as HTMLCanvasElement;
+
+    resizeCanvasToSize(canvas, { width: 640, height: 960 });
+
+    expect(canvas).toMatchObject({ width: 640, height: 960 });
+  });
+
   it("maps pointer coordinates into page pixel coordinates", () => {
     const point = resolveCanvasPoint(
       150,

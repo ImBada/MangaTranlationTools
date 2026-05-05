@@ -1,5 +1,6 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
+import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
 import {
   blendChannel,
   brushMaskAlpha,
@@ -14,6 +15,7 @@ import {
   sampleSharpen,
   type DrawPoint
 } from "../lib/inpaintResultCanvas";
+import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 
 export type InpaintResultTool = "select" | "brush" | "eraser" | "blur" | "sharpen" | "smudge";
 
@@ -32,7 +34,7 @@ type InpaintResultCanvasProps = {
   className?: string;
   style?: React.CSSProperties;
   selectionRect: ImageRect | null;
-  onChange: (dataUrl: string | undefined) => void;
+  onChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onSelectionChange: (rect: ImageRect | null) => void;
 };
 
@@ -56,37 +58,24 @@ export function InpaintResultCanvas({
   onChange,
   onSelectionChange
 }: InpaintResultCanvasProps): React.JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const drawingRef = useRef(false);
+  const {
+    canvasRef,
+    drawingRef,
+    markCanvasCommitted,
+    markCanvasEdited
+  } = useCanvasImageSync({
+    dataUrl,
+    loadErrorMessage: "인페인트 결과 레이어를 불러오지 못했습니다.",
+    pageSize,
+    willReadFrequently: true
+  });
   const changedRef = useRef(false);
   const lastPointRef = useRef<DrawPoint | null>(null);
   const smudgePatchRef = useRef<ImageData | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
+  const undoDataUrlRef = useRef<string | undefined>(undefined);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
   const [cursorPoint, setCursorPoint] = useState<DrawPoint | null>(null);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d", { willReadFrequently: true });
-    if (!canvas || !context) {
-      return;
-    }
-
-    canvas.width = pageSize.width;
-    canvas.height = pageSize.height;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-
-    if (!dataUrl) {
-      return;
-    }
-
-    const image = new Image();
-    image.onload = () => {
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
-    };
-    image.src = dataUrl;
-  }, [dataUrl, pageSize.height, pageSize.width]);
 
   const pointerEnabled = !disabled && tool !== "select";
   const selectionEnabled = !disabled && tool === "select";
@@ -253,8 +242,12 @@ export function InpaintResultCanvas({
       return;
     }
 
+    const previousDataUrl = undoDataUrlRef.current;
+    const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
+    undoDataUrlRef.current = undefined;
     changedRef.current = false;
-    onChange(isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png"));
+    markCanvasCommitted(nextDataUrl);
+    onChange(nextDataUrl, { previousDataUrl });
   };
 
   return (
@@ -282,6 +275,8 @@ export function InpaintResultCanvas({
           event.currentTarget.setPointerCapture(event.pointerId);
           const point = resolvePoint(event);
           setCursorPoint(point);
+          undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+          markCanvasEdited();
           drawingRef.current = true;
           lastPointRef.current = point;
           smudgePatchRef.current = tool === "smudge" ? captureSmudgePatch(point) : null;

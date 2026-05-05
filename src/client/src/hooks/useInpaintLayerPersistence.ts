@@ -2,6 +2,7 @@ import React from "react";
 import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
 import { createInpaintMaskUndoSnapshot, type InpaintMaskUndoSnapshot } from "../lib/editorUtils";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
+import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { useInpaintLayerSaveQueue } from "./useInpaintLayerSaveQueue";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
@@ -30,12 +31,12 @@ type UseInpaintLayerPersistenceState = {
   clearPendingInpaintSaves: () => void;
   flushInpaintMaskSave: () => Promise<void>;
   flushInpaintResultSave: () => Promise<void>;
-  recordInpaintMaskUndoSnapshot: (page: MangaPage) => void;
+  recordInpaintMaskUndoSnapshot: (page: MangaPage, overrides?: Partial<InpaintMaskUndoSnapshot>) => void;
   undoPageInpaint: (pageId: string) => void;
   undoPageInpaintResult: (pageId: string) => void;
   updatePageInpaintStatus: (pageId: string, status: MangaPage["inpaintStatus"]) => void;
-  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
-  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
+  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
 };
 
 export function useInpaintLayerPersistence({
@@ -80,12 +81,12 @@ export function useInpaintLayerPersistence({
     inpaintResultUndoStackRef.current.clear();
   }, []);
 
-  const recordInpaintMaskUndoSnapshot = React.useCallback((page: MangaPage) => {
+  const recordInpaintMaskUndoSnapshot = React.useCallback((page: MangaPage, overrides?: Partial<InpaintMaskUndoSnapshot>) => {
     if (!currentChapter) {
       return;
     }
     const stack = inpaintUndoStackRef.current.get(page.id) ?? [];
-    stack.push(createInpaintMaskUndoSnapshot(page));
+    stack.push(createInpaintMaskUndoSnapshot(page, overrides));
     inpaintUndoStackRef.current.set(page.id, stack.slice(-30));
     recordGlobalUndoEntry({ kind: "inpaint-mask", chapterId: currentChapter.id, pageId: page.id });
   }, [currentChapter, recordGlobalUndoEntry]);
@@ -110,14 +111,14 @@ export function useInpaintLayerPersistence({
     });
   }, [setCurrentChapter]);
 
-  const updateSelectedPageInpaintMask = React.useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
+  const updateSelectedPageInpaintMask = React.useCallback((dataUrl: string | undefined, options: InpaintLayerChangeOptions = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
       return;
     }
 
-    const previousDataUrl = selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
+    const previousDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
     if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
-      recordInpaintMaskUndoSnapshot(selectedPage);
+      recordInpaintMaskUndoSnapshot(selectedPage, { inpaintMaskDataUrl: previousDataUrl });
     }
 
     const updatedAt = new Date().toISOString();
@@ -153,12 +154,12 @@ export function useInpaintLayerPersistence({
     }
   }, [currentChapter, recordInpaintMaskUndoSnapshot, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked, setCurrentChapter]);
 
-  const updateSelectedPageInpaintResult = React.useCallback((dataUrl: string | undefined, options: { persist?: boolean; recordUndo?: boolean } = {}) => {
+  const updateSelectedPageInpaintResult = React.useCallback((dataUrl: string | undefined, options: InpaintLayerChangeOptions = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
       return;
     }
 
-    const previousDataUrl = selectedPage.inpaintResultDataUrl;
+    const previousDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintResultDataUrl;
     if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
       const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
       stack.push(previousDataUrl);

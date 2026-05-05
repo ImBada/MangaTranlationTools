@@ -1,6 +1,8 @@
 import React from "react";
 import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
+import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
+import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
@@ -50,8 +52,8 @@ type ImageStageLayersProps = {
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
-  onInpaintLayerChange: (dataUrl: string | undefined) => void;
-  onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
+  onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
 };
 
@@ -279,18 +281,14 @@ function SourceImageCanvas({
       return;
     }
 
-    canvas.width = pageSize.width;
-    canvas.height = pageSize.height;
-    context.clearRect(0, 0, canvas.width, canvas.height);
-
     let cancelled = false;
+    resizeCanvasToSize(canvas, pageSize);
     const drawImage = async () => {
       const image = await loadCanvasImage(dataUrl, "원본 이미지를 불러오지 못했습니다.");
       if (cancelled) {
         return;
       }
-      context.clearRect(0, 0, canvas.width, canvas.height);
-      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      drawImageToCanvas(canvas, context, image, pageSize);
     };
 
     void drawImage().catch((error) => {
@@ -304,13 +302,4 @@ function SourceImageCanvas({
   }, [canvasRef, dataUrl, pageSize.height, pageSize.width]);
 
   return <canvas ref={canvasRef} className={className} style={style} role="img" aria-label={label} />;
-}
-
-function loadCanvasImage(src: string, message: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const image = new Image();
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(message));
-    image.src = src;
-  });
 }

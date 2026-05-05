@@ -10,6 +10,7 @@ import type {
 import { INPAINT_TOOL_SHORTCUTS } from "../../lib/editorShortcuts";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
+import type { InpaintLayerChangeOptions } from "../../lib/inpaintLayerChange";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
 import { isMacLikePlatform } from "../../lib/globalUndo";
@@ -75,8 +76,8 @@ type WorkspacePanelProps = {
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
   onOpenFindReplace: () => void;
-  onInpaintLayerChange: (dataUrl: string | undefined) => void;
-  onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
+  onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onPrepareLama: () => void | Promise<unknown>;
   onRefreshLamaStatus: () => void | Promise<unknown>;

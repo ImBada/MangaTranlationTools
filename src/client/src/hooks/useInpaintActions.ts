@@ -3,6 +3,7 @@ import type { ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "..
 import type { InpaintTool } from "../components/InpaintLayerCanvas";
 import type { InpaintResultTool } from "../components/InpaintResultCanvas";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
+import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { ActiveLayer } from "../lib/layerState";
 import { useInpaintLayerPersistence } from "./useInpaintLayerPersistence";
 import { useInpaintPsdActions } from "./useInpaintPsdActions";
@@ -77,8 +78,8 @@ type UseInpaintActionsState = {
   setInpaintTool: React.Dispatch<React.SetStateAction<InpaintTool>>;
   undoPageInpaint: (pageId: string) => void;
   undoPageInpaintResult: (pageId: string) => void;
-  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
-  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: { persist?: boolean; recordUndo?: boolean }) => void;
+  updateSelectedPageInpaintMask: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  updateSelectedPageInpaintResult: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
 };
 
 export function useInpaintActions({
