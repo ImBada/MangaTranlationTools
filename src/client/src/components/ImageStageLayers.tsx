@@ -27,7 +27,7 @@ export type ImageStageLayerOpacity = {
 
 type ImageStageLayersProps = {
   activeLayer: ImageStageActiveLayer;
-  imageRef: React.RefObject<HTMLImageElement | null>;
+  imageRef: React.RefObject<HTMLCanvasElement | null>;
   inpaintBrushSize: number;
   inpaintDisabled: boolean;
   inpaintResultBrushColor: string;
@@ -136,12 +136,12 @@ export function ImageStageLayers({
 
   return (
     <>
-      <img
-        ref={imageRef}
+      <SourceImageCanvas
+        canvasRef={imageRef}
         className="page-image"
-        src={page.dataUrl}
-        alt={page.name}
-        draggable={false}
+        dataUrl={page.dataUrl}
+        pageSize={pageSize}
+        label={page.name}
         style={{
           visibility: layerVisibility.image ? "visible" : "hidden",
           opacity: layerOpacity.image
@@ -253,4 +253,64 @@ export function ImageStageLayers({
       ) : null}
     </>
   );
+}
+
+type SourceImageCanvasProps = {
+  canvasRef: React.RefObject<HTMLCanvasElement | null>;
+  className: string;
+  dataUrl: string;
+  label: string;
+  pageSize: ViewportSize;
+  style?: React.CSSProperties;
+};
+
+function SourceImageCanvas({
+  canvasRef,
+  className,
+  dataUrl,
+  label,
+  pageSize,
+  style
+}: SourceImageCanvasProps): React.JSX.Element {
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
+    }
+
+    canvas.width = pageSize.width;
+    canvas.height = pageSize.height;
+    context.clearRect(0, 0, canvas.width, canvas.height);
+
+    let cancelled = false;
+    const drawImage = async () => {
+      const image = await loadCanvasImage(dataUrl, "원본 이미지를 불러오지 못했습니다.");
+      if (cancelled) {
+        return;
+      }
+      context.clearRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
+
+    void drawImage().catch((error) => {
+      if (!cancelled) {
+        console.error(error);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [canvasRef, dataUrl, pageSize.height, pageSize.width]);
+
+  return <canvas ref={canvasRef} className={className} style={style} role="img" aria-label={label} />;
+}
+
+function loadCanvasImage(src: string, message: string): Promise<HTMLImageElement> {
+  return new Promise((resolve, reject) => {
+    const image = new Image();
+    image.onload = () => resolve(image);
+    image.onerror = () => reject(new Error(message));
+    image.src = src;
+  });
 }

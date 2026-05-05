@@ -32,7 +32,7 @@ type WorkspacePanelProps = {
   displayedLamaStatus: LamaRuntimeStatus | null;
   fitStageToWorkspace: () => void;
   handleZoomToolClick: (direction: "in" | "out") => void;
-  imageRef: React.RefObject<HTMLImageElement | null>;
+  imageRef: React.RefObject<HTMLCanvasElement | null>;
   inpaintBrushSize: number;
   inpaintBusy: boolean;
   inpaintResultBrushColor: string;

@@ -2,6 +2,7 @@ import React from "react";
 import type { InpaintTool } from "../components/InpaintLayerCanvas";
 import type { InpaintResultTool } from "../components/InpaintResultCanvas";
 import {
+  DEFAULT_LAYER_OPACITY,
   LAYER_FOCUS_OPACITY,
   type ActiveLayer,
   type LayerOpacity,
@@ -55,13 +56,7 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
     inpaintMask: true,
     overlay: true
   });
-  const [layerOpacity, setLayerOpacity] = React.useState<LayerOpacity>({
-    image: 1,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 0.75,
-    overlay: 1
-  });
+  const [layerOpacity, setLayerOpacity] = React.useState<LayerOpacity>(DEFAULT_LAYER_OPACITY);
   const [overlayOpacityEditMode, setOverlayOpacityEditMode] = React.useState(false);
   const [focusModeEnabled, setFocusModeEnabled] = React.useState(true);
   const [activeLayer, setActiveLayer] = React.useState<ActiveLayer>("output");
@@ -102,7 +97,7 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
 
   const stageLayerOpacity = React.useMemo(
     () => temporaryPanActive
-      ? { image: 1, inpaint: 1, inpaintResult: 1, inpaintMask: 0, overlay: 1 }
+      ? DEFAULT_LAYER_OPACITY
       : { ...layerOpacity, overlay: overlayOpacityEditMode ? 1 : layerOpacity.overlay },
     [layerOpacity, overlayOpacityEditMode, temporaryPanActive]
   );

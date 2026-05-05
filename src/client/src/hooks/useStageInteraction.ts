@@ -44,7 +44,7 @@ type UseStageInteractionOptions = {
 type UseStageInteractionState = {
   fitStageToWorkspace: () => void;
   handleZoomToolClick: (direction: StageZoomDirection) => void;
-  imageRef: React.RefObject<HTMLImageElement | null>;
+  imageRef: React.RefObject<HTMLCanvasElement | null>;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => void;
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
@@ -110,7 +110,7 @@ export function useStageInteraction({
   const [stageViewScale, setStageViewScale] = React.useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = React.useState(0);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
-  const imageRef = React.useRef<HTMLImageElement | null>(null);
+  const imageRef = React.useRef<HTMLCanvasElement | null>(null);
   const dragRef = React.useRef<DragState | null>(null);
   const selectedPageSize = React.useMemo(
     () => (selectedPage ? { width: selectedPage.width, height: selectedPage.height } : null),

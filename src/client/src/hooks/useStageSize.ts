@@ -2,7 +2,7 @@ import { useLayoutEffect, useState, type RefObject } from "react";
 import type { ViewportSize } from "../lib/overlayLayout";
 
 export function useStageSize(
-  imageRef: RefObject<HTMLImageElement | null>,
+  imageRef: RefObject<HTMLCanvasElement | null>,
   fallback: ViewportSize | null
 ): ViewportSize | null {
   const [stageSize, setStageSize] = useState<ViewportSize | null>(fallback);
@@ -60,7 +60,6 @@ export function useStageSize(
     if (image.parentElement) {
       observer.observe(image.parentElement);
     }
-    image.addEventListener("load", scheduleSync);
     window.addEventListener("resize", scheduleSync);
 
     return () => {
@@ -68,7 +67,6 @@ export function useStageSize(
         cancelAnimationFrame(frameId);
       }
       observer.disconnect();
-      image.removeEventListener("load", scheduleSync);
       window.removeEventListener("resize", scheduleSync);
     };
   }, [fallback?.height, fallback?.width, imageRef]);

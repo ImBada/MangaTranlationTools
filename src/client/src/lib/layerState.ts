@@ -16,14 +16,16 @@ export type LayerOpacity = {
 
 export type ActiveLayer = "output" | "image" | "inpaint" | "inpaintResult" | "inpaintMask" | "overlay";
 
+export const DEFAULT_LAYER_OPACITY: LayerOpacity = {
+  image: 1,
+  inpaint: 1,
+  inpaintResult: 1,
+  inpaintMask: 0,
+  overlay: 1
+};
+
 export const LAYER_FOCUS_OPACITY: Record<ActiveLayer, Partial<LayerOpacity>> = {
-  output: {
-    image: 1,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 0,
-    overlay: 1
-  },
+  output: DEFAULT_LAYER_OPACITY,
   image: {
     image: 1,
     inpaint: 0,

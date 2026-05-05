@@ -16,7 +16,7 @@ type RangeSelectionDragState = {
 
 type ImageStageProps = {
   page: MangaPage;
-  imageRef: React.RefObject<HTMLImageElement | null>;
+  imageRef: React.RefObject<HTMLCanvasElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   stageSize: ViewportSize | null;
   viewScale: number | null;
