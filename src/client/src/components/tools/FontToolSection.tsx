@@ -261,6 +261,31 @@ export function FontToolSection({
     setRenamingFontPresetName("");
   }, []);
 
+  const confirmDeleteFontPreset = React.useCallback(async (preset: FontPreset) => {
+    const confirmed = await window.mangaApi.confirm(
+      "폰트 프리셋 삭제",
+      `"${preset.name}" 프리셋을 삭제할까요?`,
+      "이 프리셋이 적용된 텍스트 블록에서는 프리셋 연결만 해제됩니다."
+    );
+    if (!confirmed) {
+      return;
+    }
+    onDeleteFontPreset(preset.id);
+  }, [onDeleteFontPreset]);
+
+  const confirmDeleteFontSizePreset = React.useCallback(async (presetId: string) => {
+    const preset = fontSizePresets.find((candidate) => candidate.id === presetId);
+    const confirmed = await window.mangaApi.confirm(
+      "폰트 크기 프리셋 삭제",
+      preset ? `"${preset.name}" 크기 프리셋을 삭제할까요?` : "선택한 크기 프리셋을 삭제할까요?",
+      "이 크기 프리셋을 참조하는 폰트 프리셋에서는 크기 프리셋 연결만 해제됩니다."
+    );
+    if (!confirmed) {
+      return;
+    }
+    onDeleteFontSizePreset(presetId);
+  }, [fontSizePresets, onDeleteFontSizePreset]);
+
   return (
     <>
       {fontControlValues ? (
@@ -361,7 +386,7 @@ export function FontToolSection({
               disabled={fontSizePresetControlsDisabled || !currentChapter}
               onClick={() => {
                 if (selectedFontSizePresetId) {
-                  onDeleteFontSizePreset(selectedFontSizePresetId);
+                  void confirmDeleteFontSizePreset(selectedFontSizePresetId);
                   return;
                 }
                 onCreateFontSizePreset();
@@ -717,7 +742,7 @@ export function FontToolSection({
                   type="button"
                   className="font-preset-tag-remove"
                   disabled={selectedPageEditLocked}
-                  onClick={() => onDeleteFontPreset(preset.id)}
+                  onClick={() => void confirmDeleteFontPreset(preset)}
                   aria-label={`${preset.name} 삭제`}
                 >
                   ×
