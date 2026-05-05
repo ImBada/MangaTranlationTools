@@ -25,6 +25,7 @@ import {
   type FontPresetPatch,
   type LinkableFontPresetKey
 } from "../lib/fontPresets";
+import type { UpdateCurrentChapter } from "./useChapterSession";
 
 export type FontControlValues = TranslationBlock | FontPreset | null;
 const MAX_FAVORITE_FONT_PRESETS = 5;
@@ -129,7 +130,7 @@ type UseFontPresetEditingOptions = {
   selectedPageEditLocked: boolean;
   setEditingFontPresetId: React.Dispatch<React.SetStateAction<string | null>>;
   systemFonts: SystemFont[];
-  updateCurrentChapter: (pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => void;
+  updateCurrentChapter: UpdateCurrentChapter;
   updateSelectedBlock: (patch: Partial<TranslationBlock>, options?: { recordUndo?: boolean; undoLabel?: string }) => void;
 };
 
@@ -538,12 +539,19 @@ export function useFontPresetEditing({
       ? favoriteFontPresetIds.filter((favoritePresetId) => favoritePresetId !== presetId)
       : [...favoriteFontPresetIds, presetId];
     const updatedAt = new Date().toISOString();
-
-    updateCurrentChapter(undefined, (current) => ({
-      ...current,
-      favoriteFontPresetIds: nextFavoriteFontPresetIds,
-      updatedAt
-    }));
+    updateCurrentChapter(
+      undefined,
+      (current) => ({
+        ...current,
+        favoriteFontPresetIds: nextFavoriteFontPresetIds,
+        updatedAt
+      }),
+      {
+        immediateMetadataSave: {
+          failureMessage: "즐겨찾기 태그 저장에 실패했습니다."
+        }
+      }
+    );
   }, [currentChapter, favoriteFontPresetIds, fontPresets, pushStatus, selectedPageEditLocked, updateCurrentChapter]);
 
   const selectFontPreset = React.useCallback((presetId: string) => {

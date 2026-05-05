@@ -7,10 +7,24 @@ import type { RecoverableFailureId } from "./useRecoverableFailures";
 type ChapterSessionOptions = {
   clearPendingChapterTimers?: () => void;
   clearUndoStacks: () => void;
-  pushStatus: (line: string) => void;
+  pushStatus: (line: string, tone?: "failed") => void;
   reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   signalSaveComplete: () => void;
 };
+
+type ImmediateMetadataSaveOptions = {
+  failureMessage: string;
+};
+
+type UpdateCurrentChapterOptions = {
+  immediateMetadataSave?: ImmediateMetadataSaveOptions;
+};
+
+export type UpdateCurrentChapter = (
+  pageId: string | undefined,
+  updater: (chapter: ChapterSnapshot) => ChapterSnapshot,
+  options?: UpdateCurrentChapterOptions
+) => void;
 
 type ChapterSessionState = {
   applyChapter: (chapter: ChapterSnapshot | undefined, fallbackStatus?: string) => void;
@@ -33,7 +47,7 @@ type ChapterSessionState = {
   setEditingFontPresetId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedBlockId: React.Dispatch<React.SetStateAction<string | null>>;
   setSelectedPageId: React.Dispatch<React.SetStateAction<string | null>>;
-  updateCurrentChapter: (pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => void;
+  updateCurrentChapter: UpdateCurrentChapter;
 };
 
 type LastOpenedPageTarget = {
@@ -45,6 +59,18 @@ type LastOpenedPageSaveState = {
   inFlight: boolean;
   pending: LastOpenedPageTarget | null;
   saved: LastOpenedPageTarget | null;
+};
+
+type ImmediateMetadataSaveRequest = {
+  chapter: ChapterSnapshot;
+  failureMessage: string;
+  version: number;
+};
+
+type ImmediateMetadataSaveState = {
+  inFlight: boolean;
+  inFlightVersion: number | null;
+  pending: ImmediateMetadataSaveRequest | null;
 };
 
 function resolveStateAction<T>(action: React.SetStateAction<T>, current: T): T {
@@ -70,6 +96,10 @@ function isSameLastOpenedPageTarget(left: LastOpenedPageTarget | null, right: La
   return Boolean(left && right && left.chapterId === right.chapterId && left.pageId === right.pageId);
 }
 
+function hasImmediateMetadataSaveForVersion(saveState: ImmediateMetadataSaveState, version: number): boolean {
+  return saveState.pending?.version === version || saveState.inFlightVersion === version;
+}
+
 export function useChapterSession({
   clearPendingChapterTimers,
   clearUndoStacks,
@@ -82,6 +112,8 @@ export function useChapterSession({
   const [selectedBlockId, setSelectedBlockIdState] = React.useState<string | null>(null);
   const [editingFontPresetId, setEditingFontPresetIdState] = React.useState<string | null>(null);
   const [dirty, setDirty] = React.useState(false);
+  const [immediateMetadataSaveFlushToken, setImmediateMetadataSaveFlushToken] = React.useState(0);
+  const [immediateMetadataSaveRetryToken, setImmediateMetadataSaveRetryToken] = React.useState(0);
   const saveTimerRef = React.useRef<number | null>(null);
   const dirtyVersionRef = React.useRef(0);
   const dirtyPageIdsRef = React.useRef<Set<string>>(new Set());
@@ -91,6 +123,11 @@ export function useChapterSession({
   const selectedPageIdRef = React.useRef<string | null>(null);
   const selectedBlockIdRef = React.useRef<string | null>(null);
   const editingFontPresetIdRef = React.useRef<string | null>(null);
+  const immediateMetadataSaveRef = React.useRef<ImmediateMetadataSaveState>({
+    inFlight: false,
+    inFlightVersion: null,
+    pending: null
+  });
   const lastOpenedPageSaveRef = React.useRef<LastOpenedPageSaveState>({
     inFlight: false,
     pending: null,
@@ -203,6 +240,56 @@ export function useChapterSession({
     setDirty(true);
   }, []);
 
+  const flushImmediateMetadataSave = React.useCallback(() => {
+    const saveState = immediateMetadataSaveRef.current;
+    if (saveState.inFlight) {
+      return;
+    }
+
+    const request = saveState.pending;
+    if (!request) {
+      return;
+    }
+
+    saveState.pending = null;
+    saveState.inFlight = true;
+    saveState.inFlightVersion = request.version;
+    let retryAutosave = false;
+    void window.mangaApi.saveChapter(request.chapter, [])
+      .then(() => {
+        if (currentChapterRef.current?.id !== request.chapter.id || dirtyVersionRef.current !== request.version) {
+          return;
+        }
+        dirtyChapterPresetsRef.current = false;
+        if (!dirtyAllPagesRef.current && dirtyPageIdsRef.current.size === 0) {
+          clearSaveTimer();
+          setDirty(false);
+          signalSaveComplete();
+        }
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+        if (currentChapterRef.current?.id === request.chapter.id && dirtyVersionRef.current === request.version) {
+          dirtyChapterPresetsRef.current = true;
+          setDirty(true);
+          pushStatus(request.failureMessage, "failed");
+          retryAutosave = true;
+        }
+      })
+      .finally(() => {
+        saveState.inFlight = false;
+        saveState.inFlightVersion = null;
+        if (retryAutosave) {
+          setImmediateMetadataSaveRetryToken((current) => current + 1);
+        }
+        flushImmediateMetadataSave();
+      });
+  }, [clearSaveTimer, pushStatus, signalSaveComplete]);
+
+  React.useEffect(() => {
+    flushImmediateMetadataSave();
+  }, [flushImmediateMetadataSave, immediateMetadataSaveFlushToken]);
+
   const mergeLiveChapter = React.useCallback((chapter: ChapterSnapshot) => {
     const current = currentChapterRef.current;
     if (current && current.id !== chapter.id) {
@@ -236,6 +323,15 @@ export function useChapterSession({
     }
 
     const version = dirtyVersionRef.current;
+    if (
+      dirtyChapterPresetsRef.current &&
+      !dirtyAllPagesRef.current &&
+      dirtyPageIdsRef.current.size === 0 &&
+      hasImmediateMetadataSaveForVersion(immediateMetadataSaveRef.current, version)
+    ) {
+      return;
+    }
+
     const saveAllPages = dirtyAllPagesRef.current;
     const dirtyPageIds = saveAllPages ? currentChapter.pages.map((page) => page.id) : [...dirtyPageIdsRef.current];
     saveTimerRef.current = window.setTimeout(async () => {
@@ -270,7 +366,16 @@ export function useChapterSession({
     }, 400);
 
     return clearSaveTimer;
-  }, [clearDirtyTracking, clearSaveTimer, currentChapter, dirty, pushStatus, reportRecoverableFailure, signalSaveComplete]);
+  }, [
+    clearDirtyTracking,
+    clearSaveTimer,
+    currentChapter,
+    dirty,
+    immediateMetadataSaveRetryToken,
+    pushStatus,
+    reportRecoverableFailure,
+    signalSaveComplete
+  ]);
 
   const saveNow = React.useCallback(async () => {
     if (!currentChapter) {
@@ -372,13 +477,18 @@ export function useChapterSession({
     persistLastOpenedPage(pageId);
   }, [persistLastOpenedPage]);
 
-  const updateCurrentChapter = React.useCallback((pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => {
+  const updateCurrentChapter = React.useCallback<UpdateCurrentChapter>((pageId, updater, options) => {
+    if (options?.immediateMetadataSave) {
+      clearSaveTimer();
+    }
+
     setCurrentChapter((current) => {
       if (!current) {
         return current;
       }
       const next = updater(current);
       dirtyVersionRef.current += 1;
+      const version = dirtyVersionRef.current;
       if (
         next.favoriteFontPresetIds !== current.favoriteFontPresetIds ||
         next.fontPresets !== current.fontPresets ||
@@ -390,10 +500,21 @@ export function useChapterSession({
       if (pageIds.length > 0) {
         dirtyPageIdsRef.current = new Set([...dirtyPageIdsRef.current, ...pageIds]);
       }
+      if (options?.immediateMetadataSave) {
+        immediateMetadataSaveRef.current.pending = {
+          chapter: next,
+          failureMessage: options.immediateMetadataSave.failureMessage,
+          version
+        };
+      }
       setDirty(true);
       return next;
     });
-  }, [setCurrentChapter]);
+
+    if (options?.immediateMetadataSave) {
+      setImmediateMetadataSaveFlushToken((current) => current + 1);
+    }
+  }, [clearSaveTimer, setCurrentChapter]);
 
   return {
     applyChapter,

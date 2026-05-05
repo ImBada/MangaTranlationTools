@@ -26,6 +26,7 @@ import {
 import type { ActiveLayer } from "../lib/layerState";
 import { useTranslationBlockActions } from "./useTranslationBlockActions";
 import { useFontPresetEditing, type FontControlValues } from "./useFontPresetEditing";
+import type { UpdateCurrentChapter } from "./useChapterSession";
 import { useTranslationUndoHistory } from "./useTranslationUndoHistory";
 
 type UseTranslationEditingOptions = {
@@ -51,7 +52,7 @@ type UseTranslationEditingOptions = {
   showOverlayLayer: () => void;
   systemFonts: SystemFont[];
   undoVersion: number;
-  updateCurrentChapter: (pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => void;
+  updateCurrentChapter: UpdateCurrentChapter;
 };
 
 type UseTranslationEditingState = {
