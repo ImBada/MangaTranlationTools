@@ -7,7 +7,7 @@ import {
   resolveEditableBlockBbox
 } from "../../../shared/geometry";
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
-import { angleBetweenPointsDeg, isEditableTarget } from "../lib/editorUtils";
+import { angleBetweenPointsDeg, bringTranslationBlockToFront, isEditableTarget } from "../lib/editorUtils";
 import type { ActiveLayer } from "../lib/layerState";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { clampStageViewScale } from "../lib/stageFit";
@@ -147,6 +147,33 @@ export function useStageInteraction({
     setStageViewScale(1);
   }, []);
 
+  const bringBlockToFront = React.useCallback((blockId: string): boolean => {
+    if (!selectedPage || bringTranslationBlockToFront(selectedPage.blocks, blockId) === selectedPage.blocks) {
+      return false;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const undoRecorded = recordTranslationUndoSnapshot("번역 블록 순서 변경");
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) => {
+        if (page.id !== selectedPage.id) {
+          return page;
+        }
+
+        const blocks = bringTranslationBlockToFront(page.blocks, blockId);
+        return blocks === page.blocks
+          ? page
+          : {
+              ...page,
+              updatedAt,
+              blocks
+            };
+      })
+    }));
+    return undoRecorded;
+  }, [recordTranslationUndoSnapshot, selectedPage, updateCurrentChapter]);
+
   const onBlockPointerDown = React.useCallback((event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => {
     if (!stageRef.current || selectedPageEditLocked || activeLayer !== "overlay") {
       return;
@@ -159,6 +186,7 @@ export function useStageInteraction({
       return;
     }
     setSelectedBlockId(block.id);
+    const orderUndoRecorded = bringBlockToFront(block.id);
     const target = resolveEditableBlockBbox(block);
     const stageRect = stageRef.current.getBoundingClientRect();
     const centerX = stageRect.left + ((target.bbox.x + target.bbox.w / 2) / 1000) * stageRect.width;
@@ -174,10 +202,10 @@ export function useStageInteraction({
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
       centerY,
-      undoRecorded: false
+      undoRecorded: orderUndoRecorded
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
-  }, [activeLayer, duplicateBlock, selectedPageEditLocked, setSelectedBlockId]);
+  }, [activeLayer, bringBlockToFront, duplicateBlock, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;

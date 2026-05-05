@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { MangaPage, TranslationBlock } from "../src/shared/types";
 import {
+  bringTranslationBlockToFront,
   createInpaintMaskUndoSnapshot,
   parseTranslationBlockFromClipboard,
   serializeTranslationBlockForClipboard
@@ -33,6 +34,25 @@ describe("editor utils", () => {
   it("rejects unrelated clipboard text", () => {
     expect(parseTranslationBlockFromClipboard("plain text")).toBeNull();
     expect(parseTranslationBlockFromClipboard(JSON.stringify({ kind: "other", block }))).toBeNull();
+  });
+
+  it("moves a translation block to the front render order", () => {
+    const blocks = [
+      { ...block, id: "back" },
+      { ...block, id: "middle" },
+      { ...block, id: "front" }
+    ];
+
+    expect(bringTranslationBlockToFront(blocks, "middle").map((candidate) => candidate.id)).toEqual(["back", "front", "middle"]);
+  });
+
+  it("keeps block order identity when the requested block is already front", () => {
+    const blocks = [
+      { ...block, id: "back" },
+      { ...block, id: "front" }
+    ];
+
+    expect(bringTranslationBlockToFront(blocks, "front")).toBe(blocks);
   });
 
   it("allows inpaint undo snapshots to override captured layer pixels", () => {

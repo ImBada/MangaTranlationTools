@@ -151,6 +151,18 @@ export function reorderByTarget(currentOrder: string[], sourceId: string, target
   return next;
 }
 
+export function bringTranslationBlockToFront(blocks: TranslationBlock[], blockId: string): TranslationBlock[] {
+  const blockIndex = blocks.findIndex((block) => block.id === blockId);
+  if (blockIndex < 0 || blockIndex === blocks.length - 1) {
+    return blocks;
+  }
+
+  const next = [...blocks];
+  const [block] = next.splice(blockIndex, 1);
+  next.push(block);
+  return next;
+}
+
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (typeof Element === "undefined" || !(target instanceof Element)) {
     return false;
