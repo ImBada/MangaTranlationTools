@@ -1,6 +1,6 @@
 {
   "name": "manga-translation-tools",
-  "version": "0.9.9",
+  "version": "0.9.10",
   "description": "Browser-based manga translation overlay editor powered by an OpenAI-compatible API endpoint.",
   "license": "GPL-3.0-or-later",
   "type": "commonjs",
