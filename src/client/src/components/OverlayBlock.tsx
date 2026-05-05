@@ -1,5 +1,5 @@
 import React from "react";
-import type { TranslationBlock } from "../../../shared/types";
+import type { FontPreset, TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
@@ -23,11 +23,13 @@ type OverlayBlockProps = {
   selected: boolean;
   editingEnabled: boolean;
   inlineEditDraft?: string;
+  favoriteFontPresets?: FontPreset[];
   visualContentVisible?: boolean;
   onInlineEditCancel?: () => void;
   onInlineEditChange?: (value: string) => void;
   onInlineEditCommit?: () => void;
   onStartInlineEdit?: (event: React.MouseEvent) => void;
+  onFavoriteFontPresetSelect?: (presetId: string) => void;
   onTextAlignChange?: (textAlign: TranslationBlock["textAlign"]) => void;
   onPointerDown: (event: React.PointerEvent) => void;
   onResizePointerDown: (event: React.PointerEvent) => void;
@@ -51,11 +53,13 @@ export function OverlayBlock({
   selected,
   editingEnabled,
   inlineEditDraft,
+  favoriteFontPresets = [],
   visualContentVisible = true,
   onInlineEditCancel,
   onInlineEditChange,
   onInlineEditCommit,
   onStartInlineEdit,
+  onFavoriteFontPresetSelect,
   onTextAlignChange,
   onPointerDown,
   onResizePointerDown,
@@ -272,6 +276,33 @@ export function OverlayBlock({
               }}
             >
               {option.shortLabel}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {selected && editingEnabled && favoriteFontPresets.length > 0 ? (
+        <div
+          className="overlay-favorite-tags"
+          role="group"
+          aria-label="즐겨찾기 폰트 프리셋"
+          onPointerDown={stopInlineEditorEvent}
+          onClick={stopInlineEditorEvent}
+          onDoubleClick={stopInlineEditorEvent}
+        >
+          {favoriteFontPresets.map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              className={block.fontPresetId === preset.id ? "overlay-favorite-tag active" : "overlay-favorite-tag"}
+              aria-pressed={block.fontPresetId === preset.id}
+              title={`${preset.name} 적용`}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onFavoriteFontPresetSelect?.(preset.id);
+              }}
+            >
+              {preset.name}
             </button>
           ))}
         </div>

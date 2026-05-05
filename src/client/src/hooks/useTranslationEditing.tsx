@@ -36,7 +36,7 @@ type UseTranslationEditingOptions = {
   editingFontPresetIdRef: React.RefObject<string | null>;
   inpaintBusy: boolean;
   markDirty: (pageId?: string) => void;
-  pushStatus: (line: string) => void;
+  pushStatus: (line: string, tone?: "failed") => void;
   recordGlobalUndoEntry: (entry: GlobalUndoHistoryEntry) => void;
   selectLayer: (nextLayer: ActiveLayer) => void;
   selectedBlock: TranslationBlock | null;
@@ -71,6 +71,8 @@ type UseTranslationEditingState = {
   duplicateBlock: (block: TranslationBlock) => void;
   duplicateSelectedBlock: () => void;
   editingFontPreset: FontPreset | null;
+  favoriteFontPresetIds: string[];
+  favoriteFontPresets: FontPreset[];
   fontControlValues: FontControlValues;
   fontFamilyOptions: ReturnType<typeof useFontPresetEditing>["fontFamilyOptions"];
   fontPresetName: string;
@@ -87,6 +89,7 @@ type UseTranslationEditingState = {
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
+  toggleFavoriteFontPreset: (presetId: string) => void;
   undoTranslationEdit: () => void;
   updateSelectedBlock: (patch: Partial<TranslationBlock>, options?: { recordUndo?: boolean; undoLabel?: string }) => void;
   updateSelectedBlockFontSetting: (patch: BlockFontPatch) => void;
@@ -194,6 +197,8 @@ export function useTranslationEditing({
     deleteFontPreset,
     deleteFontSizePreset,
     editingFontPreset,
+    favoriteFontPresetIds,
+    favoriteFontPresets,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
@@ -208,6 +213,7 @@ export function useTranslationEditing({
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
+    toggleFavoriteFontPreset,
     updateSelectedBlockFontSetting
   } = useFontPresetEditing({
     currentChapter,
@@ -262,6 +268,8 @@ export function useTranslationEditing({
     duplicateBlock,
     duplicateSelectedBlock,
     editingFontPreset,
+    favoriteFontPresetIds,
+    favoriteFontPresets,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
@@ -278,6 +286,7 @@ export function useTranslationEditing({
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
+    toggleFavoriteFontPreset,
     undoTranslationEdit,
     updateSelectedBlock,
     updateSelectedBlockFontSetting,

@@ -170,6 +170,7 @@ describe("chapter sync helpers", () => {
           lineHeight: 1.2
         }
       ],
+      favoriteFontPresetIds: ["font-preset-custom"],
       fontSizePresets: [{ id: "font-size-preset-a", name: "A", fontSizePx: 32 }]
     };
     const live = {
@@ -187,6 +188,7 @@ describe("chapter sync helpers", () => {
     const merged = mergeLiveChapterPreservingDirtyCompletedPages(live, local, [], { preserveLocalChapterPresets: true });
 
     expect(merged.preservedDirtyPageIds).toEqual([]);
+    expect(merged.chapter.favoriteFontPresetIds).toEqual(local.favoriteFontPresetIds);
     expect(merged.chapter.fontPresets).toEqual(local.fontPresets);
     expect(merged.chapter.fontSizePresets).toEqual(local.fontSizePresets);
   });

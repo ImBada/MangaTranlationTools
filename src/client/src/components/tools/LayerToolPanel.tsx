@@ -27,6 +27,7 @@ type LayerToolPanelProps = {
   activeFontSizePresetId: string | null;
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
+  favoriteFontPresetIds: string[];
   fontControlValues: LayerToolFontControlValues | null;
   fontFamilyOptions: FontFamilyOption[];
   fontPresetName: string;
@@ -64,6 +65,7 @@ type LayerToolPanelProps = {
   onDownloadLastImportedInpaintPsd: () => void | Promise<void>;
   onExportInpaintPsd: () => void | Promise<void>;
   onFillSelectedInpaintSelection: () => void | Promise<void>;
+  onFavoriteFontPresetToggle: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
   onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
@@ -89,6 +91,7 @@ export function LayerToolPanel({
   activeFontSizePresetId,
   currentChapter,
   editingFontPresetId,
+  favoriteFontPresetIds,
   fontControlValues,
   fontFamilyOptions,
   fontPresetName,
@@ -126,6 +129,7 @@ export function LayerToolPanel({
   onDownloadLastImportedInpaintPsd,
   onExportInpaintPsd,
   onFillSelectedInpaintSelection,
+  onFavoriteFontPresetToggle,
   onFontPresetNameChange,
   onFontPresetRename,
   onFontSettingChange,
@@ -153,6 +157,7 @@ export function LayerToolPanel({
           currentChapter={currentChapter}
           editingFontPresetId={editingFontPresetId}
           activeFontSizePresetId={activeFontSizePresetId}
+          favoriteFontPresetIds={favoriteFontPresetIds}
           fontControlValues={fontControlValues}
           fontFamilyOptions={fontFamilyOptions}
           fontPresetName={fontPresetName}
@@ -170,6 +175,7 @@ export function LayerToolPanel({
           onDeleteFontPresetBackup={onDeleteFontPresetBackup}
           onDeleteFontPreset={onDeleteFontPreset}
           onDeleteFontSizePreset={onDeleteFontSizePreset}
+          onFavoriteFontPresetToggle={onFavoriteFontPresetToggle}
           onFontPresetNameChange={onFontPresetNameChange}
           onFontPresetRename={onFontPresetRename}
           onFontSettingChange={onFontSettingChange}

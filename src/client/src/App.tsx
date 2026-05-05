@@ -309,6 +309,8 @@ export default function App(): React.JSX.Element {
     deleteSelectedBlock,
     duplicateBlock,
     duplicateSelectedBlock,
+    favoriteFontPresetIds,
+    favoriteFontPresets,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
@@ -325,6 +327,7 @@ export default function App(): React.JSX.Element {
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
+    toggleFavoriteFontPreset,
     undoTranslationEdit,
     updateSelectedBlock,
     updateSelectedBlockFontSetting,
@@ -544,6 +547,7 @@ export default function App(): React.JSX.Element {
       fontControlValues={fontControlValues}
       fontFamilyOptions={fontFamilyOptions}
       fontPresetName={fontPresetName}
+      favoriteFontPresetIds={favoriteFontPresetIds}
       fontPresets={fontPresets}
       fontSizePresets={fontSizePresets}
       inpaintBrushSize={inpaintBrushSize}
@@ -580,6 +584,7 @@ export default function App(): React.JSX.Element {
       onFillSelectedInpaintSelection={fillSelectedInpaintSelection}
       onFontPresetNameChange={setFontPresetName}
       onFontPresetRename={renameFontPreset}
+      onFavoriteFontPresetToggle={toggleFavoriteFontPreset}
       onFontSettingChange={updateSelectedBlockFontSetting}
       onInpaintBrushSizeChange={setInpaintBrushSize}
       onInpaintResultBrushColorChange={setInpaintResultBrushColor}
@@ -662,6 +667,7 @@ export default function App(): React.JSX.Element {
           activeLayer={activeLayer}
           displayedLamaStatus={displayedLamaStatus}
           fitStageToWorkspace={fitStageToWorkspace}
+          favoriteFontPresets={favoriteFontPresets}
           handleZoomToolClick={handleZoomToolClick}
           imageRef={imageRef}
           inpaintBrushSize={inpaintBrushSize}
@@ -705,6 +711,7 @@ export default function App(): React.JSX.Element {
           onSelectedBlockRangeChange={onSelectedBlockRangeChange}
           onBlockTextUpdate={updateInlineBlockText}
           onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}
+          onFavoriteFontPresetSelect={selectFontPreset}
           onOpenFindReplace={openFindReplace}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}
           onInpaintLayerChange={updateSelectedPageInpaintMask}

@@ -454,12 +454,22 @@
   color: #111111;
 }
 
+.font-preset-tag.favorite {
+  border-color: #f0bf5a;
+  background: #fff8dd;
+  color: #111111;
+}
+
 .font-preset-tag::before {
   background: #9aa6b2;
 }
 
 .font-preset-tag.active::before {
   background: #6aa9ff;
+}
+
+.font-preset-tag.favorite::before {
+  background: #e3a82f;
 }
 
 .font-preset-tag-remove {

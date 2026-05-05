@@ -30,6 +30,7 @@ type FontToolSectionProps = {
   activeFontSizePresetId: string | null;
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
+  favoriteFontPresetIds: string[];
   fontControlValues: LayerToolFontControlValues | null;
   fontFamilyOptions: FontFamilyOption[];
   fontPresetName: string;
@@ -47,6 +48,7 @@ type FontToolSectionProps = {
   onDeleteFontPresetBackup: (backupId: string) => Promise<FontPresetBackupSummary[]>;
   onDeleteFontPreset: (presetId: string) => void;
   onDeleteFontSizePreset: (presetId: string) => void;
+  onFavoriteFontPresetToggle: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
   onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
@@ -170,6 +172,7 @@ export function FontToolSection({
   activeFontSizePresetId,
   currentChapter,
   editingFontPresetId,
+  favoriteFontPresetIds,
   fontControlValues,
   fontFamilyOptions,
   fontPresetName,
@@ -187,6 +190,7 @@ export function FontToolSection({
   onDeleteFontPresetBackup,
   onDeleteFontPreset,
   onDeleteFontSizePreset,
+  onFavoriteFontPresetToggle,
   onFontPresetNameChange,
   onFontPresetRename,
   onFontSettingChange,
@@ -689,10 +693,24 @@ export function FontToolSection({
           {fontPresets.map((preset) => {
             const tagTextStyles = buildPresetTagTextStyles(preset);
             const active = activeFontPresetId === preset.id;
+            const favoriteIndex = favoriteFontPresetIds.indexOf(preset.id);
+            const favorite = favoriteIndex >= 0;
             const renaming = renamingFontPresetId === preset.id;
 
             return (
-              <span key={preset.id} className={`font-preset-tag ${active ? "active" : ""}`}>
+              <span
+                key={preset.id}
+                className={`font-preset-tag${active ? " active" : ""}${favorite ? " favorite" : ""}`}
+                onContextMenu={(event) => {
+                  if (renaming) {
+                    return;
+                  }
+                  event.preventDefault();
+                  if (!selectedPageEditLocked) {
+                    onFavoriteFontPresetToggle(preset.id);
+                  }
+                }}
+              >
                 {renaming ? (
                   <input
                     className="font-preset-tag-name-input"
@@ -738,6 +756,7 @@ export function FontToolSection({
                     </span>
                   </button>
                 )}
+                {favorite ? <span className="font-preset-favorite-badge">{favoriteIndex + 1}</span> : null}
                 <button
                   type="button"
                   className="font-preset-tag-remove"

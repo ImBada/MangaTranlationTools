@@ -321,6 +321,61 @@
   pointer-events: auto;
 }
 
+.overlay-favorite-tags {
+  position: absolute;
+  left: calc(100% + 8px);
+  top: 50%;
+  z-index: 6;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: max-content;
+  max-width: 96px;
+  padding: 4px;
+  border: 1px solid rgba(240, 191, 90, 0.58);
+  border-radius: 6px;
+  background: rgba(18, 22, 28, 0.94);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.28);
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.overlay-favorite-tag {
+  display: block;
+  width: 84px;
+  max-width: 84px;
+  height: 24px;
+  min-height: 24px;
+  min-width: 0;
+  padding: 0 8px;
+  overflow: hidden;
+  border: 1px solid rgba(240, 191, 90, 0.58);
+  border-radius: 4px;
+  background: rgba(255, 248, 221, 0.96);
+  color: #2a2417;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+  font-style: normal;
+  font-weight: 800;
+  line-height: 1;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.overlay-favorite-tag.active {
+  border-color: rgba(106, 169, 255, 0.9);
+  background: rgba(106, 169, 255, 0.24);
+  color: #f4f0e8;
+}
+
+.overlay-favorite-tag:focus-visible {
+  outline: 2px solid rgba(106, 169, 255, 0.72);
+  outline-offset: 1px;
+}
+
 .overlay-align-controls button {
   display: grid;
   place-items: center;

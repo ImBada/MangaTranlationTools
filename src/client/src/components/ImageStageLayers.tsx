@@ -1,5 +1,5 @@
 import React from "react";
-import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
+import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
 import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
@@ -41,6 +41,7 @@ type ImageStageLayersProps = {
   inpaintSelectionRect: ImageRect | null;
   rangeSelectionPreviewRect: ImageRect | null;
   inpaintTool: InpaintTool;
+  favoriteFontPresets: FontPreset[];
   layerOpacity: ImageStageLayerOpacity;
   layerVisibility: ImageStageLayerVisibility;
   page: MangaPage;
@@ -52,6 +53,7 @@ type ImageStageLayersProps = {
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
+  onFavoriteFontPresetSelect: (presetId: string) => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -71,6 +73,7 @@ export function ImageStageLayers({
   inpaintSelectionRect,
   rangeSelectionPreviewRect,
   inpaintTool,
+  favoriteFontPresets,
   layerOpacity,
   layerVisibility,
   page,
@@ -82,6 +85,7 @@ export function ImageStageLayers({
   onBlockPointerDown,
   onBlockTextUpdate,
   onBlockTextAlignChange,
+  onFavoriteFontPresetSelect,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
   onInpaintSelectionChange
@@ -223,6 +227,7 @@ export function ImageStageLayers({
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                   inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
                   visualContentVisible={false}
+                  favoriteFontPresets={favoriteFontPresets}
                   onPointerDown={(event) => onBlockPointerDown(event, block, "move")}
                   onStartInlineEdit={(event) => {
                     event.preventDefault();
@@ -233,6 +238,7 @@ export function ImageStageLayers({
                   onInlineEditCancel={() => setInlineEdit(null)}
                   onInlineEditCommit={commitInlineEdit}
                   onTextAlignChange={onBlockTextAlignChange}
+                  onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
                   onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}
                   onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
                 />

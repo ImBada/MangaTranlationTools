@@ -250,6 +250,7 @@ export type LibraryChapter = {
   status: ChapterStatus;
   fontPresets?: FontPreset[];
   fontSizePresets?: FontSizePreset[];
+  favoriteFontPresetIds?: string[];
   pageOrder: string[];
   pages: LibraryPageRecord[];
   createdAt: string;
@@ -271,7 +272,7 @@ export type ChapterPagePatch = Partial<LibraryPageRecord> & {
 
 export type SaveChapterPatchRequest = {
   chapter: Pick<ChapterSnapshot, "id" | "workId" | "updatedAt"> &
-    Partial<Pick<ChapterSnapshot, "fontPresets" | "fontSizePresets" | "status" | "title" | "pageOrder">>;
+    Partial<Pick<ChapterSnapshot, "favoriteFontPresetIds" | "fontPresets" | "fontSizePresets" | "status" | "title" | "pageOrder">>;
   pages?: ChapterPagePatch[];
 };
 

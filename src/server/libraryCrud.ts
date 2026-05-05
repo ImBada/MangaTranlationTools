@@ -134,6 +134,7 @@ export async function patchChapterSnapshot(chapterId: string, request: SaveChapt
     return {
       ...current,
       title: request.chapter.title ?? current.title,
+      favoriteFontPresetIds: request.chapter.favoriteFontPresetIds ?? current.favoriteFontPresetIds,
       fontPresets: request.chapter.fontPresets ?? current.fontPresets,
       fontSizePresets: request.chapter.fontSizePresets ?? current.fontSizePresets,
       pageOrder,

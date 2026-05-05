@@ -27,6 +27,7 @@ import {
 } from "../lib/fontPresets";
 
 export type FontControlValues = TranslationBlock | FontPreset | null;
+const MAX_FAVORITE_FONT_PRESETS = 5;
 
 function renderFontPresetLinkToggle(
   linked: boolean,
@@ -61,6 +62,23 @@ function resolveOptionalFontPreset(preset: FontPreset | null | undefined, fontSi
   return preset ? resolveFontPreset(preset, fontSizePresets) : null;
 }
 
+function resolveFavoriteFontPresetIds(favoriteFontPresetIds: readonly string[] | undefined, fontPresets: FontPreset[]): string[] {
+  const validPresetIds = new Set(fontPresets.map((preset) => preset.id));
+  const resolvedIds: string[] = [];
+
+  for (const presetId of favoriteFontPresetIds ?? []) {
+    if (!validPresetIds.has(presetId) || resolvedIds.includes(presetId)) {
+      continue;
+    }
+    resolvedIds.push(presetId);
+    if (resolvedIds.length === MAX_FAVORITE_FONT_PRESETS) {
+      break;
+    }
+  }
+
+  return resolvedIds;
+}
+
 function applyFontPresetListBackupToChapter(chapter: ChapterSnapshot, backup: FontPresetBackupSnapshot): ChapterSnapshot {
   const nextFontPresets = backup.fontPresets.map((preset) => ({ ...preset }));
   const nextFontSizePresets = backup.fontSizePresets.map((preset) => ({ ...preset }));
@@ -69,6 +87,7 @@ function applyFontPresetListBackupToChapter(chapter: ChapterSnapshot, backup: Fo
 
   return {
     ...chapter,
+    favoriteFontPresetIds: resolveFavoriteFontPresetIds(chapter.favoriteFontPresetIds, nextFontPresets),
     fontPresets: nextFontPresets,
     fontSizePresets: nextFontSizePresets,
     updatedAt: now,
@@ -123,6 +142,8 @@ type UseFontPresetEditingState = {
   deleteFontPreset: (presetId: string) => void;
   deleteFontSizePreset: (presetId: string) => void;
   editingFontPreset: FontPreset | null;
+  favoriteFontPresetIds: string[];
+  favoriteFontPresets: FontPreset[];
   fontControlValues: FontControlValues;
   fontFamilyOptions: ReturnType<typeof buildFontFamilyOptions>;
   fontPresetName: string;
@@ -138,6 +159,7 @@ type UseFontPresetEditingState = {
   selectFontPreset: (presetId: string) => void;
   selectedFontPreset: FontPreset | null;
   setFontPresetName: React.Dispatch<React.SetStateAction<string>>;
+  toggleFavoriteFontPreset: (presetId: string) => void;
   updateSelectedBlockFontSetting: (patch: BlockFontPatch) => void;
 };
 
@@ -157,6 +179,16 @@ export function useFontPresetEditing({
   const [fontPresetName, setFontPresetName] = React.useState("");
   const fontPresets = currentChapter?.fontPresets ?? [];
   const fontSizePresets = currentChapter?.fontSizePresets ?? [];
+  const favoriteFontPresetIds = React.useMemo(
+    () => resolveFavoriteFontPresetIds(currentChapter?.favoriteFontPresetIds, fontPresets),
+    [currentChapter?.favoriteFontPresetIds, fontPresets]
+  );
+  const favoriteFontPresets = React.useMemo(() => {
+    const presetById = new Map(fontPresets.map((preset) => [preset.id, preset]));
+    return favoriteFontPresetIds
+      .map((presetId) => presetById.get(presetId))
+      .filter((preset): preset is FontPreset => Boolean(preset));
+  }, [favoriteFontPresetIds, fontPresets]);
   const selectedFontPreset = selectedBlock?.fontPresetId
     ? resolveOptionalFontPreset(fontPresets.find((preset) => preset.id === selectedBlock.fontPresetId), fontSizePresets)
     : null;
@@ -492,6 +524,28 @@ export function useFontPresetEditing({
     pushStatus("폰트 프리셋 백업을 복원했습니다.");
   }, [currentChapter, pushStatus, recordTranslationUndoSnapshot, selectedPageEditLocked, setEditingFontPresetId, updateCurrentChapter]);
 
+  const toggleFavoriteFontPreset = React.useCallback((presetId: string) => {
+    if (!currentChapter || selectedPageEditLocked || !fontPresets.some((preset) => preset.id === presetId)) {
+      return;
+    }
+
+    if (!favoriteFontPresetIds.includes(presetId) && favoriteFontPresetIds.length >= MAX_FAVORITE_FONT_PRESETS) {
+      pushStatus("즐겨찾기 태그는 최대 5개까지 지정할 수 있습니다.", "failed");
+      return;
+    }
+
+    const nextFavoriteFontPresetIds = favoriteFontPresetIds.includes(presetId)
+      ? favoriteFontPresetIds.filter((favoritePresetId) => favoritePresetId !== presetId)
+      : [...favoriteFontPresetIds, presetId];
+    const updatedAt = new Date().toISOString();
+
+    updateCurrentChapter(undefined, (current) => ({
+      ...current,
+      favoriteFontPresetIds: nextFavoriteFontPresetIds,
+      updatedAt
+    }));
+  }, [currentChapter, favoriteFontPresetIds, fontPresets, pushStatus, selectedPageEditLocked, updateCurrentChapter]);
+
   const selectFontPreset = React.useCallback((presetId: string) => {
     if (selectedPageEditLocked) {
       return;
@@ -641,6 +695,10 @@ export function useFontPresetEditing({
     recordTranslationUndoSnapshot("폰트 프리셋 삭제");
     updateCurrentChapter(undefined, (current) => ({
       ...current,
+      favoriteFontPresetIds: resolveFavoriteFontPresetIds(
+        current.favoriteFontPresetIds?.filter((favoritePresetId) => favoritePresetId !== presetId),
+        (current.fontPresets ?? []).filter((preset) => preset.id !== presetId)
+      ),
       fontPresets: (current.fontPresets ?? []).filter((preset) => preset.id !== presetId),
       pages: current.pages.map((page) => ({
         ...page,
@@ -666,6 +724,8 @@ export function useFontPresetEditing({
     deleteFontPreset,
     deleteFontSizePreset,
     editingFontPreset,
+    favoriteFontPresetIds,
+    favoriteFontPresets,
     fontControlValues,
     fontFamilyOptions,
     fontPresetName,
@@ -680,6 +740,7 @@ export function useFontPresetEditing({
     selectFontPreset,
     selectedFontPreset,
     setFontPresetName,
+    toggleFavoriteFontPreset,
     updateSelectedBlockFontSetting
   };
 }

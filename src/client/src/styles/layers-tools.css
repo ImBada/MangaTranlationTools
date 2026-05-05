@@ -603,9 +603,22 @@
     0 0 0 1px rgba(106, 169, 255, 0.35);
 }
 
+.font-preset-tag.favorite {
+  border-color: #f0bf5a;
+  background: #fff8dd;
+  box-shadow:
+    inset 0 0 0 1px rgba(240, 191, 90, 0.42),
+    0 0 0 1px rgba(240, 191, 90, 0.26);
+}
+
 .font-preset-tag.active::before {
   width: 7px;
   background: #6aa9ff;
+}
+
+.font-preset-tag.favorite::before {
+  width: 7px;
+  background: #e3a82f;
 }
 
 .font-preset-tag-name,
@@ -676,6 +689,18 @@
   overflow: visible;
   white-space: nowrap;
   pointer-events: none;
+}
+
+.font-preset-favorite-badge {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  align-self: stretch;
+  background: rgba(227, 168, 47, 0.18);
+  color: #6b4b0e;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 1;
 }
 
 .font-preset-tag-remove {

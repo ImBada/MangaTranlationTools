@@ -24,6 +24,7 @@ export type TranslationUndoSnapshot = {
   selectedPageId: string | null;
   selectedBlockId: string | null;
   editingFontPresetId: string | null;
+  favoriteFontPresetIds: ChapterSnapshot["favoriteFontPresetIds"];
   fontPresets: ChapterSnapshot["fontPresets"];
   fontSizePresets: ChapterSnapshot["fontSizePresets"];
   pages: {
@@ -90,6 +91,7 @@ export function createTranslationUndoSnapshot(
     selectedPageId,
     selectedBlockId,
     editingFontPresetId,
+    favoriteFontPresetIds: chapter.favoriteFontPresetIds ? [...chapter.favoriteFontPresetIds] : undefined,
     fontPresets: chapter.fontPresets?.map((preset) => ({ ...preset })),
     fontSizePresets: chapter.fontSizePresets?.map((preset) => ({ ...preset })),
     pages: chapter.pages.map((page) => ({

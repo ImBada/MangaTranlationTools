@@ -59,6 +59,7 @@ export function mergeLiveChapterPreservingDirtyCompletedPages(
   return {
     chapter: {
       ...liveChapter,
+      favoriteFontPresetIds: preserveLocalChapterPresets ? localChapter.favoriteFontPresetIds : liveChapter.favoriteFontPresetIds,
       fontPresets: preserveLocalChapterPresets ? localChapter.fontPresets : liveChapter.fontPresets,
       fontSizePresets: preserveLocalChapterPresets ? localChapter.fontSizePresets : liveChapter.fontSizePresets,
       pages: liveChapter.pages.map((page) => {

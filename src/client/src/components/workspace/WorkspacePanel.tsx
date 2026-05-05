@@ -1,6 +1,7 @@
 import React from "react";
 import type {
   ImageRect,
+  FontPreset,
   ImportSourceKind,
   JobState,
   LamaRuntimeStatus,
@@ -32,6 +33,7 @@ type BlockDragMode = "move" | "resize" | "rotate";
 type WorkspacePanelProps = {
   activeLayer: ActiveLayer;
   displayedLamaStatus: LamaRuntimeStatus | null;
+  favoriteFontPresets: FontPreset[];
   fitStageToWorkspace: () => void;
   handleZoomToolClick: (direction: "in" | "out") => void;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
@@ -74,6 +76,7 @@ type WorkspacePanelProps = {
   zoomToolActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onFavoriteFontPresetSelect: (presetId: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
   onOpenFindReplace: () => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
@@ -101,6 +104,7 @@ type WorkspacePanelProps = {
 export function WorkspacePanel({
   activeLayer,
   displayedLamaStatus,
+  favoriteFontPresets,
   fitStageToWorkspace,
   handleZoomToolClick,
   imageRef,
@@ -143,6 +147,7 @@ export function WorkspacePanel({
   zoomToolActive,
   onBlockPointerDown,
   onBlockTextUpdate,
+  onFavoriteFontPresetSelect,
   onDownloadLamaModel,
   onOpenFindReplace,
   onInpaintLayerChange,
@@ -265,6 +270,7 @@ export function WorkspacePanel({
         <div className="workspace-pane w-full">
           <ImageStage
             page={selectedPage}
+            favoriteFontPresets={favoriteFontPresets}
             imageRef={imageRef}
             stageRef={stageRef}
             stageSize={stageSize}
@@ -304,6 +310,7 @@ export function WorkspacePanel({
             onSelectedBlockRangeChange={onSelectedBlockRangeChange}
             onBlockTextUpdate={onBlockTextUpdate}
             onBlockTextAlignChange={onBlockTextAlignChange}
+            onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           />
         </div>
       ) : (

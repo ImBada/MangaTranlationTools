@@ -288,7 +288,11 @@ export function useChapterSession({
       }
       const next = updater(current);
       dirtyVersionRef.current += 1;
-      if (next.fontPresets !== current.fontPresets || next.fontSizePresets !== current.fontSizePresets) {
+      if (
+        next.favoriteFontPresetIds !== current.favoriteFontPresetIds ||
+        next.fontPresets !== current.fontPresets ||
+        next.fontSizePresets !== current.fontSizePresets
+      ) {
         dirtyChapterPresetsRef.current = true;
       }
       const pageIds = pageId ? [pageId] : resolveChangedPageIds(current, next);

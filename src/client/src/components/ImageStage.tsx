@@ -1,5 +1,5 @@
 import React from "react";
-import type { ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
+import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { isEditableTarget } from "../lib/editorUtils";
@@ -17,6 +17,7 @@ type RangeSelectionDragState = {
 
 type ImageStageProps = {
   page: MangaPage;
+  favoriteFontPresets: FontPreset[];
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   stageSize: ViewportSize | null;
@@ -52,10 +53,12 @@ type ImageStageProps = {
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
+  onFavoriteFontPresetSelect: (presetId: string) => void;
 };
 
 export function ImageStage({
   page,
+  favoriteFontPresets,
   imageRef,
   stageRef,
   stageSize,
@@ -90,7 +93,8 @@ export function ImageStage({
   onBlockPointerDown,
   onSelectedBlockRangeChange,
   onBlockTextUpdate,
-  onBlockTextAlignChange
+  onBlockTextAlignChange,
+  onFavoriteFontPresetSelect
 }: ImageStageProps): React.JSX.Element {
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
   const {
@@ -224,6 +228,7 @@ export function ImageStage({
           inpaintSelectionRect={inpaintSelectionRect}
           rangeSelectionPreviewRect={rangeSelectionPreviewRect}
           inpaintTool={inpaintTool}
+          favoriteFontPresets={favoriteFontPresets}
           layerOpacity={layerOpacity}
           layerVisibility={layerVisibility}
           page={page}
@@ -235,6 +240,7 @@ export function ImageStage({
           onBlockPointerDown={onBlockPointerDown}
           onBlockTextUpdate={onBlockTextUpdate}
           onBlockTextAlignChange={onBlockTextAlignChange}
+          onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           onInpaintLayerChange={onInpaintLayerChange}
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}
