@@ -223,12 +223,12 @@ export function WorkspacePanel({
           onClick={onOpenFindReplace}
         >
           <svg className="stage-find-replace-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-            <circle cx="10" cy="10" r="5.5" />
-            <path d="M14.5 14.5 20 20" />
-            <path d="M6.8 9h6.4" />
-            <path d="M10.2 6.2 13.2 9l-3 2.8" />
-            <path d="M13.2 15h-6.4" />
-            <path d="M9.8 12.2 6.8 15l3 2.8" />
+            <circle cx="9.5" cy="9.5" r="4.8" />
+            <path d="M13 13l3.7 3.7" />
+            <path d="M16.2 5.8h2.3c1.1 0 2 .9 2 2v2.7" />
+            <path d="M18.1 3.9 16.2 5.8l1.9 1.9" />
+            <path d="M20.5 17.2h-2.3c-1.1 0-2-.9-2-2v-2.7" />
+            <path d="M18.6 19.1l1.9-1.9-1.9-1.9" />
           </svg>
           <span className="stage-tool-shortcut" aria-hidden="true">{findReplaceShortcutLabel}</span>
         </button>

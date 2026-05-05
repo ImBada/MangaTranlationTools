@@ -861,13 +861,19 @@
 }
 
 .stage-find-replace-icon {
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   fill: none;
   stroke: currentColor;
-  stroke-width: 2;
+  stroke-width: 1.8;
   stroke-linecap: round;
   stroke-linejoin: round;
+  transform: translate(-2px, -2px);
+}
+
+.stage-find-replace-button .stage-tool-shortcut {
+  right: 5px;
+  bottom: 5px;
 }
 
 .stage-zoom-overlay {
