@@ -134,6 +134,7 @@ export function mergeChapterSnapshotForSave(incoming: ChapterFile, current: Chap
   return {
     ...current,
     ...incoming,
+    lastOpenedPageId: current.lastOpenedPageId ?? incoming.lastOpenedPageId,
     status: resolveChapterStatus(mergedPages),
     updatedAt: maxIsoTimestamp(incoming.updatedAt, current.updatedAt, ...mergedPages.map((page) => page.updatedAt)),
     pageOrder: mergedPages.map((page) => page.id),

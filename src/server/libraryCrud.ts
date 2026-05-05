@@ -89,6 +89,33 @@ export async function openChapter(chapterId: string): Promise<ChapterSnapshot> {
   return hydrateChapter(chapter);
 }
 
+export async function saveChapterLastOpenedPage(chapterId: string, pageId: string): Promise<ChapterSnapshot> {
+  const saved = await enqueueChapterMutation(chapterId, async () => {
+    const locator = await findChapterLocation(chapterId);
+    if (!locator) {
+      throw new Error("화를 찾지 못했습니다.");
+    }
+    const chapter = await readChapterFile(locator.workId, locator.chapterId);
+    if (!chapter) {
+      throw new Error("화를 찾지 못했습니다.");
+    }
+    if (!chapter.pages.some((page) => page.id === pageId)) {
+      throw new Error("페이지를 찾지 못했습니다.");
+    }
+    if (chapter.lastOpenedPageId === pageId) {
+      return chapter;
+    }
+
+    const next = {
+      ...chapter,
+      lastOpenedPageId: pageId
+    };
+    await writeChapterFile(next);
+    return next;
+  });
+  return hydrateChapter(saved);
+}
+
 export async function saveChapterSnapshot(snapshot: ChapterSnapshot, options: SaveChapterSnapshotOptions = {}): Promise<ChapterSnapshot> {
   const saved = await enqueueChapterMutation(snapshot.id, async () => {
     const current = await readChapterFile(snapshot.workId, snapshot.id);
@@ -265,6 +292,7 @@ export async function deletePage(chapterId: string, pageId: string): Promise<Cha
 
   chapter.pageOrder = chapter.pageOrder.filter((id) => id !== pageId);
   chapter.pages = chapter.pages.filter((page) => page.id !== pageId);
+  chapter.lastOpenedPageId = chapter.lastOpenedPageId === pageId ? chapter.pageOrder[0] : chapter.lastOpenedPageId;
   chapter.updatedAt = new Date().toISOString();
   chapter.status = resolveChapterStatus(chapter.pages);
 

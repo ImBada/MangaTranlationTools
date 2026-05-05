@@ -30,6 +30,7 @@ export {
   reorderChapters,
   reorderPages,
   resolvePagesForRun,
+  saveChapterLastOpenedPage,
   saveChapterSnapshot,
   updatePageAfterAnalysis,
   updatePagesAfterAnalysis

@@ -144,6 +144,8 @@ export const mangaApi = {
   openChapter: (chapterId: string): Promise<ChapterSnapshot> => requestJson(`/api/library/chapters/${encodeURIComponent(chapterId)}`),
   saveChapter: (chapter: ChapterSnapshot, dirtyPageIds?: string[]): Promise<ChapterSnapshot> =>
     postJson(`/api/library/chapters/${encodeURIComponent(chapter.id)}/patch`, buildChapterPatchBody(chapter, dirtyPageIds)),
+  saveLastOpenedPage: (chapterId: string, pageId: string): Promise<ChapterSnapshot> =>
+    postJson(`/api/library/chapters/${encodeURIComponent(chapterId)}/last-opened-page`, { pageId }),
   resolveImageDataUrl,
   resolveOptionalImageDataUrl,
   pageImageUrl: (chapterId: string, pageId: string, layer: PageImageLayer): string =>

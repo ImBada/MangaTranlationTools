@@ -36,6 +36,17 @@ type ChapterSessionState = {
   updateCurrentChapter: (pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => void;
 };
 
+type LastOpenedPageTarget = {
+  chapterId: string;
+  pageId: string;
+};
+
+type LastOpenedPageSaveState = {
+  inFlight: boolean;
+  pending: LastOpenedPageTarget | null;
+  saved: LastOpenedPageTarget | null;
+};
+
 function resolveStateAction<T>(action: React.SetStateAction<T>, current: T): T {
   return typeof action === "function" ? (action as (current: T) => T)(current) : action;
 }
@@ -44,6 +55,19 @@ function resolveChangedPageIds(current: ChapterSnapshot, next: ChapterSnapshot):
   return next.pages
     .filter((page, index) => page !== current.pages[index] || page.id !== current.pages[index]?.id)
     .map((page) => page.id);
+}
+
+function chapterHasPage(chapter: ChapterSnapshot, pageId: string | null): pageId is string {
+  return Boolean(pageId && chapter.pages.some((page) => page.id === pageId));
+}
+
+function resolveInitialSelectedPageId(chapter: ChapterSnapshot): string | null {
+  const lastOpenedPageId = chapter.lastOpenedPageId ?? null;
+  return chapterHasPage(chapter, lastOpenedPageId) ? lastOpenedPageId : chapter.pages[0]?.id ?? null;
+}
+
+function isSameLastOpenedPageTarget(left: LastOpenedPageTarget | null, right: LastOpenedPageTarget | null): boolean {
+  return Boolean(left && right && left.chapterId === right.chapterId && left.pageId === right.pageId);
 }
 
 export function useChapterSession({
@@ -67,6 +91,63 @@ export function useChapterSession({
   const selectedPageIdRef = React.useRef<string | null>(null);
   const selectedBlockIdRef = React.useRef<string | null>(null);
   const editingFontPresetIdRef = React.useRef<string | null>(null);
+  const lastOpenedPageSaveRef = React.useRef<LastOpenedPageSaveState>({
+    inFlight: false,
+    pending: null,
+    saved: null
+  });
+
+  const flushLastOpenedPageSave = React.useCallback(() => {
+    const saveState = lastOpenedPageSaveRef.current;
+    if (saveState.inFlight) {
+      return;
+    }
+
+    const next = saveState.pending;
+    if (!next) {
+      return;
+    }
+    if (isSameLastOpenedPageTarget(saveState.saved, next)) {
+      saveState.pending = null;
+      return;
+    }
+
+    saveState.pending = null;
+    saveState.inFlight = true;
+    void window.mangaApi.saveLastOpenedPage(next.chapterId, next.pageId)
+      .then(() => {
+        lastOpenedPageSaveRef.current.saved = next;
+      })
+      .catch((error: unknown) => {
+        console.error(error);
+      })
+      .finally(() => {
+        lastOpenedPageSaveRef.current.inFlight = false;
+        flushLastOpenedPageSave();
+      });
+  }, []);
+
+  const persistLastOpenedPage = React.useCallback(
+    (pageId: string | null) => {
+      const chapter = currentChapterRef.current;
+      if (!chapter || !chapterHasPage(chapter, pageId)) {
+        return;
+      }
+
+      const target = {
+        chapterId: chapter.id,
+        pageId
+      };
+
+      const saveState = lastOpenedPageSaveRef.current;
+      if (isSameLastOpenedPageTarget(saveState.saved, target) && !saveState.inFlight) {
+        return;
+      }
+      saveState.pending = target;
+      flushLastOpenedPageSave();
+    },
+    [flushLastOpenedPageSave]
+  );
 
   const setCurrentChapter = React.useCallback<React.Dispatch<React.SetStateAction<ChapterSnapshot | null>>>((action) => {
     setCurrentChapterState((current) => {
@@ -77,12 +158,11 @@ export function useChapterSession({
   }, []);
 
   const setSelectedPageId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
-    setSelectedPageIdState((current) => {
-      const next = resolveStateAction(action, current);
-      selectedPageIdRef.current = next;
-      return next;
-    });
-  }, []);
+    const next = resolveStateAction(action, selectedPageIdRef.current);
+    selectedPageIdRef.current = next;
+    setSelectedPageIdState(next);
+    persistLastOpenedPage(next);
+  }, [persistLastOpenedPage]);
 
   const setSelectedBlockId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
     setSelectedBlockIdState((current) => {
@@ -240,12 +320,15 @@ export function useChapterSession({
       clearUndoStacks();
       currentChapterRef.current = chapter;
       setCurrentChapterState(chapter);
-      const pageId = chapter.pages[0]?.id ?? null;
+      const pageId = resolveInitialSelectedPageId(chapter);
       selectedPageIdRef.current = pageId;
       setSelectedPageIdState(pageId);
       selectedBlockIdRef.current = null;
       setSelectedBlockIdState(null);
       setDirty(false);
+      if (pageId && chapter.lastOpenedPageId === pageId) {
+        lastOpenedPageSaveRef.current.saved = { chapterId: chapter.id, pageId };
+      }
     },
     [clearDirtyTracking, clearUndoStacks, dirty, saveNow]
   );
@@ -259,8 +342,11 @@ export function useChapterSession({
     currentChapterRef.current = chapter;
     setCurrentChapterState(chapter);
     setSelectedPageIdState((current) => {
-      const next = chapter.pages.some((page) => page.id === current) ? current : chapter.pages[0]?.id ?? null;
+      const next = chapterHasPage(chapter, current) ? current : resolveInitialSelectedPageId(chapter);
       selectedPageIdRef.current = next;
+      if (next && chapter.lastOpenedPageId === next) {
+        lastOpenedPageSaveRef.current.saved = { chapterId: chapter.id, pageId: next };
+      }
       return next;
     });
     selectedBlockIdRef.current = null;
@@ -275,11 +361,16 @@ export function useChapterSession({
     if (!pageId) {
       return;
     }
+    const chapter = currentChapterRef.current;
+    if (chapter && !chapterHasPage(chapter, pageId)) {
+      return;
+    }
     selectedPageIdRef.current = pageId;
     selectedBlockIdRef.current = null;
     setSelectedPageIdState(pageId);
     setSelectedBlockIdState(null);
-  }, []);
+    persistLastOpenedPage(pageId);
+  }, [persistLastOpenedPage]);
 
   const updateCurrentChapter = React.useCallback((pageId: string | undefined, updater: (chapter: ChapterSnapshot) => ChapterSnapshot) => {
     setCurrentChapter((current) => {

@@ -248,6 +248,7 @@ export type LibraryChapter = {
   title: string;
   sourceKind: ImportSourceKind;
   status: ChapterStatus;
+  lastOpenedPageId?: string;
   fontPresets?: FontPreset[];
   fontSizePresets?: FontSizePreset[];
   favoriteFontPresetIds?: string[];

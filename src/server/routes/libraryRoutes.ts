@@ -11,6 +11,7 @@ import {
   renameWork,
   reorderChapters,
   reorderPages,
+  saveChapterLastOpenedPage,
   saveChapterSnapshot
 } from "../library";
 import { isPageImageLayer } from "../inpaintRequests";
@@ -45,6 +46,10 @@ export function createLibraryRoutes(): express.Router {
     const chapter = body?.chapter ?? body;
     const dirtyPageIds = Array.isArray(body?.dirtyPageIds) ? body.dirtyPageIds.filter((id: unknown) => typeof id === "string") : undefined;
     res.json(await saveChapterSnapshot(chapter, { dirtyPageIds }));
+  }));
+
+  router.post("/api/library/chapters/:chapterId/last-opened-page", asyncHandler(async (req, res) => {
+    res.json(await saveChapterLastOpenedPage(String(req.params.chapterId), String(req.body?.pageId ?? "")));
   }));
 
   router.post("/api/library/chapters/:chapterId/patch", asyncHandler(async (req, res) => {
