@@ -12,6 +12,7 @@ import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRe
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
+import { isMacLikePlatform } from "../../lib/globalUndo";
 import type { ViewportSize } from "../../lib/overlayLayout";
 import { ImageStage } from "../ImageStage";
 import type { InpaintTool } from "../InpaintLayerCanvas";
@@ -73,6 +74,7 @@ type WorkspacePanelProps = {
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
+  onOpenFindReplace: () => void;
   onInpaintLayerChange: (dataUrl: string | undefined) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -141,6 +143,7 @@ export function WorkspacePanel({
   onBlockPointerDown,
   onBlockTextUpdate,
   onDownloadLamaModel,
+  onOpenFindReplace,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
   onInpaintSelectionChange,
@@ -162,6 +165,9 @@ export function WorkspacePanel({
   onZoomInStage,
   onZoomOutStage
 }: WorkspacePanelProps): React.JSX.Element {
+  const findReplaceShortcutLabel = React.useMemo(() => (
+    isMacLikePlatform(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘F" : "CtrlF"
+  ), []);
   const inpaintDisabled =
     selectedPageEditLocked ||
     inpaintBusy ||
@@ -181,7 +187,7 @@ export function WorkspacePanel({
   return (
     <section
       ref={workspacePanelRef}
-      className="workspace relative grid place-items-center outline-none"
+      className={`workspace relative grid place-items-center outline-none${selectedPage ? " has-stage-find-replace" : ""}`}
       tabIndex={0}
       aria-label="읽기 영역"
       onMouseDown={() => workspacePanelRef.current?.focus()}
@@ -206,6 +212,26 @@ export function WorkspacePanel({
           onSelectRangeTool={onSelectRangeTool}
           onSelectZoomTool={onSelectZoomTool}
         />
+      ) : null}
+      {selectedPage ? (
+        <button
+          type="button"
+          className="stage-find-replace-button"
+          aria-label="찾아바꾸기"
+          aria-keyshortcuts="Control+F Meta+F"
+          title="찾아바꾸기 (Ctrl/Cmd+F)"
+          onClick={onOpenFindReplace}
+        >
+          <svg className="stage-find-replace-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <circle cx="10" cy="10" r="5.5" />
+            <path d="M14.5 14.5 20 20" />
+            <path d="M6.8 9h6.4" />
+            <path d="M10.2 6.2 13.2 9l-3 2.8" />
+            <path d="M13.2 15h-6.4" />
+            <path d="M9.8 12.2 6.8 15l3 2.8" />
+          </svg>
+          <span className="stage-tool-shortcut" aria-hidden="true">{findReplaceShortcutLabel}</span>
+        </button>
       ) : null}
       <NotificationDock
         inpaintNotice={selectedPageInpaintNotice}

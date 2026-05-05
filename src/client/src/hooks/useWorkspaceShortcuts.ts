@@ -5,6 +5,7 @@ import {
   isBlockCopyShortcut,
   isBlockPasteShortcut,
   isDeleteShortcut,
+  isFindReplaceShortcut,
   isPointerToolShortcut,
   isRangeToolShortcut,
   isZoomToolShortcut,
@@ -30,6 +31,7 @@ type WorkspaceShortcutOptions = {
   pasteTranslationBlockFromClipboard: () => void | Promise<void>;
   pushStatus: (line: string) => void;
   rangeToolActive: boolean;
+  openFindReplace: () => void;
   selectLayer: (layer: ActiveLayer) => void;
   selectPageForReading: (pageId: string | null) => void;
   selectPointerTool: () => void;
@@ -65,6 +67,7 @@ export function useWorkspaceShortcuts({
   pasteTranslationBlockFromClipboard,
   pushStatus,
   rangeToolActive,
+  openFindReplace,
   selectLayer,
   selectPageForReading,
   selectPointerTool,
@@ -144,6 +147,9 @@ export function useWorkspaceShortcuts({
       if (selectTargetShortcutOverride && selectTarget) {
         selectTarget.blur();
       }
+      if (event.key === "Escape" && modalOpen) {
+        return;
+      }
       if (event.key === "Escape" && libraryWidgetOpen) {
         setLibraryWidgetOpen(false);
         return;
@@ -154,6 +160,12 @@ export function useWorkspaceShortcuts({
       }
       if (event.key === "Escape" && rangeToolActive) {
         setRangeToolActive(false);
+        return;
+      }
+
+      if (!modalOpen && currentChapterRef.current && isFindReplaceShortcut(event)) {
+        event.preventDefault();
+        openFindReplace();
         return;
       }
 
@@ -335,6 +347,7 @@ export function useWorkspaceShortcuts({
     libraryWidgetOpen,
     modalOpen,
     oneHandMode,
+    openFindReplace,
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,

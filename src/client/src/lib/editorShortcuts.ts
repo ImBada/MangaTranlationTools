@@ -48,6 +48,11 @@ export function isBlockPasteShortcut(event: KeyboardEvent): boolean {
   return !event.altKey && hasPasteModifier && (event.code === "KeyV" || event.key.toLowerCase() === "v");
 }
 
+export function isFindReplaceShortcut(event: KeyboardEvent): boolean {
+  const hasFindModifier = event.metaKey || event.ctrlKey;
+  return !event.altKey && !event.shiftKey && hasFindModifier && (event.code === "KeyF" || event.key.toLowerCase() === "f");
+}
+
 export function isBlockDuplicateModifier(event: ModifierKeyEvent, platform: string): boolean {
   return isMacLikePlatform(platform) ? event.metaKey : event.ctrlKey;
 }

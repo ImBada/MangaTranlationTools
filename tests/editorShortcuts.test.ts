@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isBlockCopyShortcut, isBlockPasteShortcut, isDeleteShortcut } from "../src/client/src/lib/editorShortcuts";
+import { isBlockCopyShortcut, isBlockPasteShortcut, isDeleteShortcut, isFindReplaceShortcut } from "../src/client/src/lib/editorShortcuts";
 
 function keyboardEvent(patch: Partial<KeyboardEvent>): KeyboardEvent {
   return {
@@ -25,6 +25,13 @@ describe("editor shortcuts", () => {
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", ctrlKey: true }))).toBe(true);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v" }))).toBe(false);
     expect(isBlockPasteShortcut(keyboardEvent({ code: "KeyV", key: "v", shiftKey: true }))).toBe(false);
+  });
+
+  it("recognizes find replace with Command or Control F", () => {
+    expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f", metaKey: true }))).toBe(true);
+    expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f", ctrlKey: true }))).toBe(true);
+    expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f" }))).toBe(false);
+    expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f", ctrlKey: true, shiftKey: true }))).toBe(false);
   });
 
   it("recognizes Q as delete only in one-hand mode", () => {

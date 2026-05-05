@@ -29,6 +29,12 @@
   width: min(680px, 100%);
 }
 
+.find-replace-modal {
+  width: min(920px, 100%);
+  overflow: hidden;
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+}
+
 .modal-header {
   display: flex;
   align-items: center;
@@ -48,6 +54,134 @@
 
 .modal-note {
   margin: 0;
+}
+
+.find-replace-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+}
+
+.find-replace-actions,
+.find-replace-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.find-replace-actions button,
+.find-replace-row-actions button {
+  min-height: 34px;
+  padding: 7px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.find-replace-section {
+  display: grid;
+  min-height: 0;
+  gap: 10px;
+}
+
+.find-replace-summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9fabb8;
+  font-size: 12px;
+}
+
+.find-replace-summary strong {
+  color: #f1f5f9;
+}
+
+.find-replace-results {
+  display: grid;
+  max-height: min(54vh, 560px);
+  min-height: 0;
+  gap: 10px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.find-replace-result {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #2f343d;
+  border-radius: 10px;
+  background: #14171b;
+}
+
+.find-replace-result-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.find-replace-result-header strong {
+  min-width: 0;
+  overflow: hidden;
+  color: #f1f5f9;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.find-replace-result-header span {
+  flex: 0 0 auto;
+  color: #9fabb8;
+  font-size: 12px;
+}
+
+.find-replace-compare {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.find-replace-preview {
+  display: grid;
+  min-width: 0;
+  gap: 6px;
+  padding: 9px 10px;
+  border: 1px solid #2f343d;
+  border-radius: 8px;
+  background: #101215;
+}
+
+.find-replace-preview span {
+  color: #9fabb8;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.find-replace-preview p {
+  margin: 0;
+  max-height: 108px;
+  overflow: auto;
+  color: #e6ddcf;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.find-replace-preview mark {
+  border-radius: 4px;
+  background: rgba(251, 191, 36, 0.28);
+  color: #fff7d6;
+}
+
+@media (max-width: 720px) {
+  .find-replace-form,
+  .find-replace-compare {
+    grid-template-columns: 1fr;
+  }
 }
 
 .settings-toggle-row {

@@ -8,12 +8,14 @@ import { AppModalsSlot } from "./components/AppModalsSlot";
 import { AppPageListSlot } from "./components/AppPageListSlot";
 import { AppRightRail } from "./components/AppRightRail";
 import { AppWorkspaceSlot } from "./components/AppWorkspaceSlot";
+import { FindReplaceModal } from "./components/FindReplaceModal";
 import { useAnalysisJob } from "./hooks/useAnalysisJob";
 import { useAppActions } from "./hooks/useAppActions";
 import { useAppStatusState } from "./hooks/useAppStatusState";
 import { useAppWorkspaceState } from "./hooks/useAppWorkspaceState";
 import { useChapterSession } from "./hooks/useChapterSession";
 import { useGlobalUndoHistory } from "./hooks/useGlobalUndoHistory";
+import { useFindReplaceEditing } from "./hooks/useFindReplaceEditing";
 import { useInpaintActions } from "./hooks/useInpaintActions";
 import { useLibraryActions } from "./hooks/useLibraryActions";
 import { usePageRendering } from "./hooks/usePageRendering";
@@ -401,7 +403,27 @@ export default function App(): React.JSX.Element {
       )
     }));
   }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
-  const modalOpen = Boolean(importPreview || renameTarget || settingsOpen);
+
+  const {
+    findReplaceOpen,
+    focusFindReplaceMatch,
+    openFindReplace,
+    replaceAllMatches,
+    replaceSingleMatch,
+    setFindReplaceOpen
+  } = useFindReplaceEditing({
+    currentChapter,
+    jobActive,
+    pushStatus,
+    recordTranslationUndoSnapshot,
+    selectLayer,
+    setSelectedBlockId,
+    setSelectedPageId,
+    updateCurrentChapter
+  });
+
+  const modalOpen = Boolean(importPreview || renameTarget || settingsOpen || findReplaceOpen);
+  const closeFindReplace = useCallback(() => setFindReplaceOpen(false), [setFindReplaceOpen]);
   const undoShortcutPlatform = useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const {
     selectedPageInpaintNotice,
@@ -492,6 +514,7 @@ export default function App(): React.JSX.Element {
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,
+    openFindReplace,
     selectLayer,
     selectPageForReading,
     selectPointerTool,
@@ -682,6 +705,7 @@ export default function App(): React.JSX.Element {
           onSelectedBlockRangeChange={onSelectedBlockRangeChange}
           onBlockTextUpdate={updateInlineBlockText}
           onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}
+          onOpenFindReplace={openFindReplace}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}
           onInpaintLayerChange={updateSelectedPageInpaintMask}
           onInpaintResultLayerChange={updateSelectedPageInpaintResult}
@@ -732,25 +756,37 @@ export default function App(): React.JSX.Element {
         />
       }
       modals={
-        <AppModalsSlot
-          importBusy={importBusy}
-          importPreview={importPreview}
-          jobActive={jobActive}
-          library={library}
-          renameBusy={renameBusy}
-          renameTarget={renameTarget}
-          settings={settings}
-          settingsBusy={settingsBusy}
-          settingsOpen={settingsOpen}
-          onCloseImport={() => setImportPreview(null)}
-          onCloseRename={() => setRenameTarget(null)}
-          onCloseSettings={() => setSettingsOpen(false)}
-          onDeleteRenameTarget={deleteRenameTarget}
-          onResetSettings={resetSettings}
-          onSubmitImport={submitImport}
-          onSubmitRename={submitRename}
-          onSubmitSettings={submitSettings}
-        />
+        <>
+          <AppModalsSlot
+            importBusy={importBusy}
+            importPreview={importPreview}
+            jobActive={jobActive}
+            library={library}
+            renameBusy={renameBusy}
+            renameTarget={renameTarget}
+            settings={settings}
+            settingsBusy={settingsBusy}
+            settingsOpen={settingsOpen}
+            onCloseImport={() => setImportPreview(null)}
+            onCloseRename={() => setRenameTarget(null)}
+            onCloseSettings={() => setSettingsOpen(false)}
+            onDeleteRenameTarget={deleteRenameTarget}
+            onResetSettings={resetSettings}
+            onSubmitImport={submitImport}
+            onSubmitRename={submitRename}
+            onSubmitSettings={submitSettings}
+          />
+          {findReplaceOpen && currentChapter ? (
+            <FindReplaceModal
+              pages={currentChapter.pages}
+              replaceDisabled={jobActive}
+              onCancel={closeFindReplace}
+              onFocusMatch={focusFindReplaceMatch}
+              onReplaceAll={replaceAllMatches}
+              onReplaceOne={replaceSingleMatch}
+            />
+          ) : null}
+        </>
       }
     />
   );

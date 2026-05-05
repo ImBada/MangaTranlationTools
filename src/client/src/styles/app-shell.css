@@ -839,6 +839,37 @@
   pointer-events: none;
 }
 
+.workspace.has-stage-find-replace .notification-dock {
+  top: 58px;
+}
+
+.stage-find-replace-button {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  z-index: 72;
+  display: grid;
+  width: 38px;
+  height: 38px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid #343941;
+  border-radius: 8px;
+  background: rgba(20, 23, 27, 0.92);
+  color: #f1f5f9;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+}
+
+.stage-find-replace-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
 .stage-zoom-overlay {
   position: absolute;
   top: 12px;
@@ -1129,4 +1160,3 @@
 .muted p {
   color: #b8b1a6;
 }
-
