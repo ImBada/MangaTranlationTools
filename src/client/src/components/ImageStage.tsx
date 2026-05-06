@@ -1,6 +1,6 @@
 import React from "react";
 import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
-import type { ViewportSize } from "../lib/overlayLayout";
+import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { isEditableTarget } from "../lib/editorUtils";
 import { useImageStageView } from "../hooks/useImageStageView";
@@ -18,6 +18,7 @@ type RangeSelectionDragState = {
 type ImageStageProps = {
   page: MangaPage;
   favoriteFontPresets: FontPreset[];
+  fontWeightAvailability: readonly FontWeightAvailability[];
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   stageRef: React.RefObject<HTMLDivElement | null>;
   stageSize: ViewportSize | null;
@@ -68,6 +69,7 @@ type ImageStageProps = {
 export function ImageStage({
   page,
   favoriteFontPresets,
+  fontWeightAvailability,
   imageRef,
   stageRef,
   stageSize,
@@ -242,6 +244,7 @@ export function ImageStage({
           rangeSelectionPreviewRect={rangeSelectionPreviewRect}
           inpaintTool={inpaintTool}
           favoriteFontPresets={favoriteFontPresets}
+          fontWeightAvailability={fontWeightAvailability}
           layerOpacity={layerOpacity}
           layerVisibility={layerVisibility}
           page={page}

@@ -15,7 +15,7 @@ import type { InpaintLayerChangeOptions } from "../../lib/inpaintLayerChange";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
 import { isMacLikePlatform } from "../../lib/globalUndo";
-import type { ViewportSize } from "../../lib/overlayLayout";
+import type { FontWeightAvailability, ViewportSize } from "../../lib/overlayLayout";
 import { ImageStage } from "../ImageStage";
 import type { InpaintTool } from "../InpaintLayerCanvas";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
@@ -34,6 +34,7 @@ type WorkspacePanelProps = {
   activeLayer: ActiveLayer;
   displayedLamaStatus: LamaRuntimeStatus | null;
   favoriteFontPresets: FontPreset[];
+  fontWeightAvailability: readonly FontWeightAvailability[];
   fitStageToWorkspace: () => void;
   handleZoomToolClick: (direction: "in" | "out") => void;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
@@ -114,6 +115,7 @@ export function WorkspacePanel({
   activeLayer,
   displayedLamaStatus,
   favoriteFontPresets,
+  fontWeightAvailability,
   fitStageToWorkspace,
   handleZoomToolClick,
   imageRef,
@@ -284,6 +286,7 @@ export function WorkspacePanel({
           <ImageStage
             page={selectedPage}
             favoriteFontPresets={favoriteFontPresets}
+            fontWeightAvailability={fontWeightAvailability}
             imageRef={imageRef}
             stageRef={stageRef}
             stageSize={stageSize}

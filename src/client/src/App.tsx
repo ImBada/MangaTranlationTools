@@ -181,6 +181,7 @@ export default function App(): React.JSX.Element {
   } = usePageRendering({
     currentChapterRef,
     dirty,
+    fontWeightAvailability: systemFonts,
     pushStatus,
     saveNow,
     selectedPageIdRef,
@@ -684,6 +685,7 @@ export default function App(): React.JSX.Element {
           displayedLamaStatus={displayedLamaStatus}
           fitStageToWorkspace={fitStageToWorkspace}
           favoriteFontPresets={favoriteFontPresets}
+          fontWeightAvailability={systemFonts}
           handleZoomToolClick={handleZoomToolClick}
           imageRef={imageRef}
           inpaintBrushSize={inpaintBrushSize}

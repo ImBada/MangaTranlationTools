@@ -20,6 +20,12 @@ const MIN_INNER_SIZE_PX = 1;
 const BLOCK_BORDER_PX = 1;
 const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
+const SYNTHETIC_BOLD_MIN_WEIGHT = 600;
+const SYNTHETIC_BOLD_MIN_STROKE_WIDTH_PX = 0.35;
+const SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX = 8;
+const SYNTHETIC_BOLD_MIN_RATIO = 0.018;
+const SYNTHETIC_BOLD_MAX_RATIO = 0.05;
+const SYNTHETIC_ITALIC_SKEW_DEG = -12;
 export const DEFAULT_SCREENTONE_FILL_INTENSITY = 0.55;
 export const DEFAULT_SCREENTONE_FILL_DENSITY = 0.55;
 export const DEFAULT_OVERLAY_TEXT_POSITION: TextPosition = "center";
@@ -52,6 +58,11 @@ export type BlockTextLayout = {
 export type TextPositionFactors = {
   x: number;
   y: number;
+};
+
+export type FontWeightAvailability = {
+  cssFamily: string;
+  weights?: number[];
 };
 
 export function resolveTextPosition(position: TextPosition | undefined): TextPosition {
@@ -100,6 +111,49 @@ export function resolveWrappedTextLines(
 export function resolveTextLetterSpacingPx(block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>, fontSize: number): number {
   const sourceFontSizePx = Math.max(1, block.fontSizePx ?? fontSize);
   return (block.letterSpacingPx ?? 0) * (fontSize / sourceFontSizePx);
+}
+
+export function resolveSyntheticBoldStrokeWidthPx(
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight">>,
+  fontSize: number,
+  fontWeightAvailability: readonly FontWeightAvailability[] = []
+): number {
+  const fontWeight = block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
+  if (fontWeight < SYNTHETIC_BOLD_MIN_WEIGHT || hasNativeBoldFontWeight(block, fontWeightAvailability)) {
+    return 0;
+  }
+
+  const normalizedWeight = clamp(fontWeight, SYNTHETIC_BOLD_MIN_WEIGHT, 900);
+  const weightRatio = (normalizedWeight - SYNTHETIC_BOLD_MIN_WEIGHT) / (900 - SYNTHETIC_BOLD_MIN_WEIGHT);
+  const strokeRatio = SYNTHETIC_BOLD_MIN_RATIO + (SYNTHETIC_BOLD_MAX_RATIO - SYNTHETIC_BOLD_MIN_RATIO) * weightRatio;
+  return clamp(fontSize * strokeRatio, SYNTHETIC_BOLD_MIN_STROKE_WIDTH_PX, SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX);
+}
+
+export function hasNativeBoldFontWeight(
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight">>,
+  fontWeightAvailability: readonly FontWeightAvailability[]
+): boolean {
+  const fontWeight = block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
+  if (fontWeight < SYNTHETIC_BOLD_MIN_WEIGHT) {
+    return false;
+  }
+
+  const blockPrimaryFamily = getPrimaryCssFontFamily(block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY);
+  if (!blockPrimaryFamily) {
+    return false;
+  }
+
+  return fontWeightAvailability.some((font) => (
+    getPrimaryCssFontFamily(font.cssFamily) === blockPrimaryFamily &&
+    (font.weights ?? []).some((weight) => weight >= SYNTHETIC_BOLD_MIN_WEIGHT)
+  ));
+}
+
+export function resolveSyntheticItalicSkewX(block: Partial<Pick<TranslationBlock, "fontStyle">>): number {
+  if ((block.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE) !== "italic") {
+    return 0;
+  }
+  return Math.tan((SYNTHETIC_ITALIC_SKEW_DEG * Math.PI) / 180);
 }
 
 export function measureTextWidthWithLetterSpacing(
@@ -427,5 +481,49 @@ export function buildOverlayCanvasFont(
 }
 
 function buildFont(fontSize: number, block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">): string {
-  return `${block.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE} ${block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT} ${fontSize}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
+  return `${resolveCanvasFontStyle(block)} ${block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT} ${fontSize}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
+}
+
+function resolveCanvasFontStyle(block: Partial<Pick<TranslationBlock, "fontStyle">>): string {
+  const fontStyle = block.fontStyle ?? DEFAULT_OVERLAY_FONT_STYLE;
+  return fontStyle === "italic" ? DEFAULT_OVERLAY_FONT_STYLE : fontStyle;
+}
+
+function getPrimaryCssFontFamily(cssFamily: string): string {
+  return normalizeCssFontFamily(splitCssFontFamilies(cssFamily)[0] ?? "");
+}
+
+function splitCssFontFamilies(cssFamily: string): string[] {
+  const families: string[] = [];
+  let current = "";
+  let quote: '"' | "'" | null = null;
+
+  for (const char of cssFamily) {
+    if ((char === "\"" || char === "'") && quote === null) {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (quote === char) {
+      quote = null;
+      current += char;
+      continue;
+    }
+    if (char === "," && quote === null) {
+      families.push(current);
+      current = "";
+      continue;
+    }
+    current += char;
+  }
+
+  families.push(current);
+  return families;
+}
+
+function normalizeCssFontFamily(value: string): string {
+  const trimmed = value.trim();
+  const quote = trimmed[0];
+  const unquoted = (quote === "\"" || quote === "'") && trimmed.endsWith(quote) ? trimmed.slice(1, -1) : trimmed;
+  return unquoted.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
 }

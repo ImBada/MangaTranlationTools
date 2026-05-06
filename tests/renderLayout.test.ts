@@ -1,5 +1,14 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveBlockPaddingPx, resolveBlockTextLayout, resolveTextPositionFactors, resolveWrappedTextLines } from "../src/client/src/lib/overlayLayout";
+import {
+  buildOverlayCanvasFont,
+  hasNativeBoldFontWeight,
+  resolveBlockPaddingPx,
+  resolveBlockTextLayout,
+  resolveSyntheticBoldStrokeWidthPx,
+  resolveSyntheticItalicSkewX,
+  resolveTextPositionFactors,
+  resolveWrappedTextLines
+} from "../src/client/src/lib/overlayLayout";
 import type { TranslationBlock } from "../src/shared/types";
 
 const originalDocument = globalThis.document;
@@ -118,6 +127,35 @@ describe("render layout padding", () => {
     expect(resolveWrappedTextLines(block, "곤란해ー!!", 10, 40)).toEqual(["곤란해", "ー!!"]);
     expect(resolveWrappedTextLines(block, "곤란해ー.", 10, 40)).toEqual(["곤란해", "ー."]);
     expect(resolveWrappedTextLines(block, "곤란해ーー", 10, 120)).toEqual(["곤란해ーー"]);
+  });
+
+  it("adds synthetic bold stroke only for bold font weights", () => {
+    expect(resolveSyntheticBoldStrokeWidthPx({ fontWeight: 400 }, 24)).toBe(0);
+
+    const semiBoldStrokeWidth = resolveSyntheticBoldStrokeWidthPx({ fontWeight: 600 }, 24);
+    const boldStrokeWidth = resolveSyntheticBoldStrokeWidthPx({ fontWeight: 700 }, 24);
+    const blackStrokeWidth = resolveSyntheticBoldStrokeWidthPx({ fontWeight: 900 }, 240);
+
+    expect(semiBoldStrokeWidth).toBeGreaterThan(0);
+    expect(boldStrokeWidth).toBeGreaterThan(semiBoldStrokeWidth);
+    expect(blackStrokeWidth).toBeLessThanOrEqual(8);
+  });
+
+  it("skips synthetic bold when the selected font family has a native bold face", () => {
+    const fontWeightAvailability = [
+      { cssFamily: "\"Regular Only\", sans-serif", weights: [400] },
+      { cssFamily: "\"Native Bold\", sans-serif", weights: [400, 700] }
+    ];
+
+    expect(hasNativeBoldFontWeight({ fontFamily: "\"Native Bold\", serif", fontWeight: 700 }, fontWeightAvailability)).toBe(true);
+    expect(resolveSyntheticBoldStrokeWidthPx({ fontFamily: "\"Native Bold\", serif", fontWeight: 700 }, 24, fontWeightAvailability)).toBe(0);
+    expect(resolveSyntheticBoldStrokeWidthPx({ fontFamily: "\"Regular Only\", serif", fontWeight: 700 }, 24, fontWeightAvailability)).toBeGreaterThan(0);
+  });
+
+  it("uses synthetic italic skew instead of relying on a native italic face", () => {
+    expect(resolveSyntheticItalicSkewX({ fontStyle: "normal" })).toBe(0);
+    expect(resolveSyntheticItalicSkewX({ fontStyle: "italic" })).toBeLessThan(0);
+    expect(buildOverlayCanvasFont(24, { fontFamily: "Arial", fontWeight: 400, fontStyle: "italic" })).toBe("normal 400 24px Arial");
   });
 });
 

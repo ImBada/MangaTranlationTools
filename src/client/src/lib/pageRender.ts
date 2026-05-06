@@ -8,9 +8,12 @@ import {
   resolveScreentoneTileSizePx,
   resolveBlockTextLayout,
   measureTextWidthWithLetterSpacing,
+  resolveSyntheticBoldStrokeWidthPx,
+  resolveSyntheticItalicSkewX,
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
-  resolveWrappedTextLines
+  resolveWrappedTextLines,
+  type FontWeightAvailability
 } from "./overlayLayout";
 
 export type RenderLayerVisibility = {
@@ -33,6 +36,7 @@ export type RenderPageOptions = {
   layerVisibility: RenderLayerVisibility;
   layerOpacity: RenderLayerOpacity;
   activeLayer: "output" | "image" | "inpaint" | "inpaintResult" | "inpaintMask" | "overlay";
+  fontWeightAvailability?: readonly FontWeightAvailability[];
 };
 
 export type OverlayRenderOptions = {
@@ -41,12 +45,19 @@ export type OverlayRenderOptions = {
     height: number;
   };
   editingEnabled: boolean;
+  fontWeightAvailability?: readonly FontWeightAvailability[];
 };
 
 const CANVAS_TEXT_RENDER_FONT_SIZE_RATIO = 0.985;
 const OVERLAY_BLOCK_BORDER_PX = 1;
 const CANVAS_TEXT_RENDER_Y_OFFSET_RATIO = 0.04;
 const DEFAULT_TEXT_OUTLINE_COLOR = "#000000";
+type CanvasPaint = CanvasRenderingContext2D["strokeStyle"];
+
+type TextRenderStyle = {
+  syntheticBoldWidthPx: number;
+  syntheticItalicSkewX: number;
+};
 
 export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPageOptions): Promise<string> {
   const pageSize = { width: page.width, height: page.height };
@@ -92,7 +103,8 @@ export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPag
     context.globalAlpha = Math.max(0, Math.min(1, options.layerOpacity.overlay));
     drawOverlayBlocks(context, page, {
       renderSize: pageSize,
-      editingEnabled: options.activeLayer === "overlay"
+      editingEnabled: options.activeLayer === "overlay",
+      fontWeightAvailability: options.fontWeightAvailability
     });
     context.restore();
   }
@@ -181,14 +193,22 @@ function drawRenderedBlock(
   context.lineJoin = "round";
   context.font = buildOverlayCanvasFont(renderFontSizePx, block);
   context.textBaseline = "top";
+  const textRenderStyle = resolveTextRenderStyle(block, renderFontSizePx, options);
 
   if (block.renderDirection === "vertical") {
-    drawVerticalRenderedText(context, block, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight);
+    drawVerticalRenderedText(context, block, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight, textRenderStyle);
   } else {
-    drawHorizontalRenderedText(context, block, text, left, top, layout.innerWidth, layout.innerHeight, layout.fitInnerWidth, renderFontSizePx);
+    drawHorizontalRenderedText(context, block, text, left, top, layout.innerWidth, layout.innerHeight, layout.fitInnerWidth, renderFontSizePx, textRenderStyle);
   }
 
   context.restore();
+}
+
+function resolveTextRenderStyle(block: TranslationBlock, fontSize: number, options: OverlayRenderOptions): TextRenderStyle {
+  return {
+    syntheticBoldWidthPx: resolveSyntheticBoldStrokeWidthPx(block, fontSize, options.fontWeightAvailability),
+    syntheticItalicSkewX: resolveSyntheticItalicSkewX(block)
+  };
 }
 
 function drawHorizontalRenderedText(
@@ -200,7 +220,8 @@ function drawHorizontalRenderedText(
   innerWidth: number,
   innerHeight: number,
   fitInnerWidth: number,
-  fontSize: number
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
 ): void {
   const lines = resolveWrappedTextLines(block, text, fontSize, fitInnerWidth);
   const lineHeightPx = fontSize * block.lineHeight;
@@ -219,7 +240,7 @@ function drawHorizontalRenderedText(
   context.textAlign = block.textAlign;
   for (const [index, line] of lines.entries()) {
     const y = startY + index * lineHeightPx;
-    drawFilledText(context, block, line, x, y, fontSize);
+    drawFilledText(context, block, line, x, y, fontSize, textRenderStyle);
     drawTextDecoration(context, block, line, x, y, fontSize);
   }
 }
@@ -233,7 +254,8 @@ function drawVerticalRenderedText(
   innerWidth: number,
   innerHeight: number,
   fontSize: number,
-  lineHeight: number
+  lineHeight: number,
+  textRenderStyle: TextRenderStyle
 ): void {
   const chars = [...text.replace(/\s+/g, "")];
   const lineHeightPx = fontSize * lineHeight;
@@ -246,7 +268,7 @@ function drawVerticalRenderedText(
   context.textAlign = "center";
   for (const [index, char] of chars.entries()) {
     const y = startY + index * charAdvancePx;
-    drawFilledText(context, block, char, x, y, fontSize);
+    drawFilledText(context, block, char, x, y, fontSize, textRenderStyle);
     drawTextDecoration(context, block, char, x, y, fontSize);
   }
 }
@@ -269,45 +291,70 @@ function drawTextDecoration(context: CanvasRenderingContext2D, block: Translatio
   context.restore();
 }
 
-function strokeTextOutlines(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+function strokeTextOutlines(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): void {
   const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
   const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
 
   if (secondaryOutlineWidthPx > 0) {
     context.save();
     context.strokeStyle = block.secondaryOutlineColor ?? "#ffffff";
-    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2;
-    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2 + textRenderStyle.syntheticBoldWidthPx;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
     context.restore();
   }
 
   if (outlineWidthPx > 0) {
     context.save();
     context.strokeStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
-    context.lineWidth = outlineWidthPx;
-    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.lineWidth = outlineWidthPx + textRenderStyle.syntheticBoldWidthPx;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
     context.restore();
   }
 }
 
-function drawOutlinedText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
-  drawTextShadow(context, block, text, x, y, fontSize);
-  strokeTextOutlines(context, block, text, x, y, fontSize);
-  drawTextRun(context, block, text, x, y, fontSize, "fill");
+function drawOutlinedText(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): void {
+  drawTextShadow(context, block, text, x, y, fontSize, textRenderStyle);
+  strokeTextOutlines(context, block, text, x, y, fontSize, textRenderStyle);
+  strokeSyntheticBoldText(context, block, text, x, y, fontSize, context.fillStyle, textRenderStyle);
+  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
 }
 
-function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+function drawFilledText(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): void {
   if (!(block.screentoneFillEnabled ?? false)) {
-    drawOutlinedText(context, block, text, x, y, fontSize);
+    drawOutlinedText(context, block, text, x, y, fontSize, textRenderStyle);
     return;
   }
 
-  drawTextShadow(context, block, text, x, y, fontSize);
-  strokeTextOutlines(context, block, text, x, y, fontSize);
+  drawTextShadow(context, block, text, x, y, fontSize, textRenderStyle);
+  strokeTextOutlines(context, block, text, x, y, fontSize, textRenderStyle);
 
   context.save();
   context.fillStyle = "#ffffff";
-  drawTextRun(context, block, text, x, y, fontSize, "fill");
+  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
   const pattern = createScreentonePattern(
     context,
     block.textColor,
@@ -317,11 +364,20 @@ function drawFilledText(context: CanvasRenderingContext2D, block: TranslationBlo
     fontSize
   );
   context.fillStyle = pattern ?? block.textColor;
-  drawTextRun(context, block, text, x, y, fontSize, "fill");
+  strokeSyntheticBoldText(context, block, text, x, y, fontSize, context.fillStyle, textRenderStyle);
+  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
   context.restore();
 }
 
-function drawTextShadow(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+function drawTextShadow(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): void {
   if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0))) {
     return;
   }
@@ -344,25 +400,71 @@ function drawTextShadow(context: CanvasRenderingContext2D, block: TranslationBlo
   if (secondaryOutlineWidthPx > 0) {
     context.save();
     context.strokeStyle = shadowColor;
-    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2;
-    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.lineWidth = outlineWidthPx + secondaryOutlineWidthPx * 2 + textRenderStyle.syntheticBoldWidthPx;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
     context.restore();
   }
 
   if (outlineWidthPx > 0) {
     context.save();
     context.strokeStyle = shadowColor;
-    context.lineWidth = outlineWidthPx;
-    drawTextRun(context, block, text, x, y, fontSize, "stroke");
+    context.lineWidth = outlineWidthPx + textRenderStyle.syntheticBoldWidthPx;
+    drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
     context.restore();
   }
 
   context.fillStyle = shadowColor;
-  drawTextRun(context, block, text, x, y, fontSize, "fill");
+  strokeSyntheticBoldText(context, block, text, x, y, fontSize, shadowColor, textRenderStyle);
+  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
+  context.restore();
+}
+
+function strokeSyntheticBoldText(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  paint: CanvasPaint,
+  textRenderStyle: TextRenderStyle
+): void {
+  if (textRenderStyle.syntheticBoldWidthPx <= 0) {
+    return;
+  }
+
+  context.save();
+  context.strokeStyle = paint;
+  context.lineWidth = textRenderStyle.syntheticBoldWidthPx;
+  drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
   context.restore();
 }
 
 function drawTextRun(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  mode: "fill" | "stroke",
+  textRenderStyle: TextRenderStyle
+): void {
+  if (textRenderStyle.syntheticItalicSkewX !== 0) {
+    context.save();
+    const pivotY = y + fontSize / 2;
+    context.translate(x, pivotY);
+    context.transform(1, 0, textRenderStyle.syntheticItalicSkewX, 1, 0, 0);
+    context.translate(-x, -pivotY);
+    drawTextRunGlyphs(context, block, text, x, y, fontSize, mode);
+    context.restore();
+    return;
+  }
+
+  drawTextRunGlyphs(context, block, text, x, y, fontSize, mode);
+}
+
+function drawTextRunGlyphs(
   context: CanvasRenderingContext2D,
   block: TranslationBlock,
   text: string,

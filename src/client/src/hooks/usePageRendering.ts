@@ -1,5 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
+import type { FontWeightAvailability } from "../lib/overlayLayout";
 import { renderPageToPngDataUrl, type RenderPageOptions } from "../lib/pageRender";
 
 type RenderProgress = {
@@ -11,6 +12,7 @@ type RenderProgress = {
 type UsePageRenderingOptions = {
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   dirty: boolean;
+  fontWeightAvailability: readonly FontWeightAvailability[];
   pushStatus: (line: string) => void;
   saveNow: () => Promise<void>;
   selectedPageIdRef: React.RefObject<string | null>;
@@ -42,8 +44,11 @@ const OUTPUT_RENDER_OPTIONS: RenderPageOptions = {
   activeLayer: "output"
 };
 
-async function renderPageOutput(chapterId: string, page: MangaPage): Promise<string> {
-  const dataUrl = await renderPageToPngDataUrl(page, OUTPUT_RENDER_OPTIONS);
+async function renderPageOutput(chapterId: string, page: MangaPage, fontWeightAvailability: readonly FontWeightAvailability[]): Promise<string> {
+  const dataUrl = await renderPageToPngDataUrl(page, {
+    ...OUTPUT_RENDER_OPTIONS,
+    fontWeightAvailability
+  });
   const result = await window.mangaApi.renderPage({
     chapterId,
     pageId: page.id,
@@ -55,6 +60,7 @@ async function renderPageOutput(chapterId: string, page: MangaPage): Promise<str
 export function usePageRendering({
   currentChapterRef,
   dirty,
+  fontWeightAvailability,
   pushStatus,
   saveNow,
   selectedPageIdRef,
@@ -80,7 +86,7 @@ export function usePageRendering({
       if (!page) {
         return;
       }
-      const outputPath = await renderPageOutput(currentChapterRef.current!.id, page);
+      const outputPath = await renderPageOutput(currentChapterRef.current!.id, page, fontWeightAvailability);
       signalSaveComplete();
       pushStatus(`페이지 렌더 저장: ${outputPath}`);
     } catch (error) {
@@ -90,7 +96,7 @@ export function usePageRendering({
       setRenderProgress(null);
       setRenderBusy(false);
     }
-  }, [currentChapterRef, dirty, pushStatus, renderBusy, saveNow, selectedPageIdRef, signalSaveComplete]);
+  }, [currentChapterRef, dirty, fontWeightAvailability, pushStatus, renderBusy, saveNow, selectedPageIdRef, signalSaveComplete]);
 
   const renderAllPages = React.useCallback(async () => {
     const initialChapter = currentChapterRef.current;
@@ -114,7 +120,7 @@ export function usePageRendering({
       for (const [index, page] of pages.entries()) {
         setRenderProgress({ mode: "all", current: index + 1, total: pages.length });
         try {
-          await renderPageOutput(chapter.id, page);
+          await renderPageOutput(chapter.id, page, fontWeightAvailability);
         } catch (error) {
           const message = error instanceof Error ? error.message : "페이지 렌더에 실패했습니다.";
           throw new Error(`${page.name} 출력 실패: ${message}`, { cause: error });
@@ -130,7 +136,7 @@ export function usePageRendering({
       setRenderProgress(null);
       setRenderBusy(false);
     }
-  }, [currentChapterRef, dirty, pushStatus, renderBusy, saveNow, signalSaveComplete]);
+  }, [currentChapterRef, dirty, fontWeightAvailability, pushStatus, renderBusy, saveNow, signalSaveComplete]);
 
   return {
     renderAllPages,

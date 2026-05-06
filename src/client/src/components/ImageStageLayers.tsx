@@ -3,7 +3,7 @@ import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../.
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
 import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
-import type { ViewportSize } from "../lib/overlayLayout";
+import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
 import { OverlayBlock } from "./OverlayBlock";
@@ -42,6 +42,7 @@ type ImageStageLayersProps = {
   rangeSelectionPreviewRect: ImageRect | null;
   inpaintTool: InpaintTool;
   favoriteFontPresets: FontPreset[];
+  fontWeightAvailability: readonly FontWeightAvailability[];
   layerOpacity: ImageStageLayerOpacity;
   layerVisibility: ImageStageLayerVisibility;
   page: MangaPage;
@@ -84,6 +85,7 @@ export function ImageStageLayers({
   rangeSelectionPreviewRect,
   inpaintTool,
   favoriteFontPresets,
+  fontWeightAvailability,
   layerOpacity,
   layerVisibility,
   page,
@@ -285,6 +287,7 @@ export function ImageStageLayers({
                 page={page}
                 stageSize={resolvedStageSize}
                 editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
+                fontWeightAvailability={fontWeightAvailability}
               />
               {page.blocks.map((block) => (
                 <OverlayBlock

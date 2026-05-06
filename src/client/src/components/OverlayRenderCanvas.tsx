@@ -1,15 +1,16 @@
 import React, { useEffect, useRef } from "react";
 import type { MangaPage } from "../../../shared/types";
 import { drawOverlayBlocks } from "../lib/pageRender";
-import type { ViewportSize } from "../lib/overlayLayout";
+import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 
 type OverlayRenderCanvasProps = {
   page: MangaPage;
   stageSize: ViewportSize;
   editingEnabled: boolean;
+  fontWeightAvailability: readonly FontWeightAvailability[];
 };
 
-export function OverlayRenderCanvas({ page, stageSize, editingEnabled }: OverlayRenderCanvasProps): React.JSX.Element {
+export function OverlayRenderCanvas({ page, stageSize, editingEnabled, fontWeightAvailability }: OverlayRenderCanvasProps): React.JSX.Element {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -30,9 +31,10 @@ export function OverlayRenderCanvas({ page, stageSize, editingEnabled }: Overlay
     context.clearRect(0, 0, width, height);
     drawOverlayBlocks(context, page, {
       renderSize: { width: page.width, height: page.height },
-      editingEnabled
+      editingEnabled,
+      fontWeightAvailability
     });
-  }, [editingEnabled, page, stageSize.height, stageSize.width]);
+  }, [editingEnabled, fontWeightAvailability, page, stageSize.height, stageSize.width]);
 
   return <canvas ref={canvasRef} className="overlay-render-canvas" aria-hidden="true" />;
 }
