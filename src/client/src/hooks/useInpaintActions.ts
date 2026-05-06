@@ -30,6 +30,7 @@ type UseInpaintActionsOptions = {
   reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   selectedBlock: TranslationBlock | null;
+  selectedBlocks: TranslationBlock[];
   selectedPage: MangaPage | null;
   selectedPageCurrentId: string | null;
   selectedPageEditLocked: boolean;
@@ -102,6 +103,7 @@ export function useInpaintActions({
   reportRecoverableFailure,
   saveNow,
   selectedBlock,
+  selectedBlocks,
   selectedPage,
   selectedPageCurrentId,
   selectedPageEditLocked,
@@ -202,6 +204,7 @@ export function useInpaintActions({
     refreshLibrary,
     saveNow,
     selectedBlock,
+    selectedBlocks,
     selectedPage,
     selectedPageEditLocked,
     selectedPageIdRef,

@@ -26,6 +26,7 @@ import { useStatusFeedback } from "./hooks/useStatusFeedback";
 import { useTranslationEditing } from "./hooks/useTranslationEditing";
 import { useWorkspaceShortcuts } from "./hooks/useWorkspaceShortcuts";
 import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
+import { resolveSelectedTranslationBlocks } from "./lib/blockSelection";
 import type { ActiveLayer } from "./lib/layerState";
 import "./styles.css";
 
@@ -123,6 +124,16 @@ export default function App(): React.JSX.Element {
     reportRecoverableFailure,
     signalSaveComplete
   });
+  const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const setSingleSelectedBlockId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
+    setSelectedBlockIds([]);
+    setSelectedBlockId(action);
+  }, [setSelectedBlockId]);
+  const setSelectedBlockGroupIds = useCallback((blockIds: string[]) => {
+    const uniqueBlockIds = Array.from(new Set(blockIds));
+    setSelectedBlockIds(uniqueBlockIds.length > 1 ? uniqueBlockIds : []);
+    setSelectedBlockId(uniqueBlockIds[0] ?? null);
+  }, [setSelectedBlockId]);
   const lastOverlaySelectedBlockIdRef = useRef<string | null>(selectedBlockId);
 
   useEffect(() => {
@@ -146,6 +157,7 @@ export default function App(): React.JSX.Element {
       selectLayer(nextLayer);
       restoreOverlaySelectionFrameRef.current = window.requestAnimationFrame(() => {
         restoreOverlaySelectionFrameRef.current = null;
+        setSelectedBlockIds([]);
         setSelectedBlockId(
           restoredBlockId && currentPage?.blocks.some((block) => block.id === restoredBlockId)
             ? restoredBlockId
@@ -159,6 +171,7 @@ export default function App(): React.JSX.Element {
       lastOverlaySelectedBlockIdRef.current = selectedBlockIdRef.current;
     }
     selectLayer(nextLayer);
+    setSelectedBlockIds([]);
     setSelectedBlockId(null);
   }, [activeLayer, currentChapterRef, selectLayer, selectedBlockIdRef, selectedPageIdRef, setSelectedBlockId]);
 
@@ -269,6 +282,31 @@ export default function App(): React.JSX.Element {
     selectedBlockId,
     selectedPageId
   });
+  const selectedBlocks = useMemo(
+    () => resolveSelectedTranslationBlocks(selectedPage, selectedBlockIds),
+    [selectedBlockIds, selectedPage]
+  );
+  const multiSelectedBlockCount = selectedBlocks.length > 1 ? selectedBlocks.length : 0;
+
+  useEffect(() => {
+    if (selectedBlockIds.length === 0) {
+      return;
+    }
+    if (!selectedBlockId || !selectedPage) {
+      setSelectedBlockIds([]);
+      return;
+    }
+
+    const validBlockIds = new Set(selectedPage.blocks.map((block) => block.id));
+    const nextBlockIds = selectedBlockIds.filter((blockId) => validBlockIds.has(blockId));
+    if (nextBlockIds.length < 2 || !nextBlockIds.includes(selectedBlockId)) {
+      setSelectedBlockIds([]);
+      return;
+    }
+    if (nextBlockIds.length !== selectedBlockIds.length) {
+      setSelectedBlockIds(nextBlockIds);
+    }
+  }, [selectedBlockId, selectedBlockIds, selectedPage]);
   const {
     applyInpaintAllBlocks,
     applyInpaintAllPages,
@@ -330,6 +368,7 @@ export default function App(): React.JSX.Element {
     reportRecoverableFailure,
     saveNow,
     selectedBlock,
+    selectedBlocks,
     selectedPage,
     selectedPageCurrentId,
     selectedPageEditLocked,
@@ -395,13 +434,14 @@ export default function App(): React.JSX.Element {
     recordGlobalUndoEntry,
     selectLayer,
     selectedBlock,
+    selectedBlockIds,
     selectedBlockIdRef,
     selectedPage,
     selectedPageEditLocked,
     selectedPageIdRef,
     setCurrentChapter,
     setEditingFontPresetId,
-    setSelectedBlockId,
+    setSelectedBlockId: setSingleSelectedBlockId,
     setSelectedPageId,
     showOverlayLayer,
     systemFonts,
@@ -432,7 +472,7 @@ export default function App(): React.JSX.Element {
     recordTranslationUndoSnapshot,
     selectedPage,
     selectedPageEditLocked,
-    setSelectedBlockId,
+    setSelectedBlockId: setSingleSelectedBlockId,
     updateCurrentChapter
   });
   const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
@@ -441,7 +481,7 @@ export default function App(): React.JSX.Element {
     }
 
     recordTranslationUndoSnapshot("번역 텍스트 변경");
-    setSelectedBlockId(block.id);
+    setSingleSelectedBlockId(block.id);
     updateCurrentChapter(selectedPage.id, (chapter) => ({
       ...chapter,
       pages: chapter.pages.map((page) =>
@@ -456,7 +496,7 @@ export default function App(): React.JSX.Element {
             }
       )
     }));
-  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSingleSelectedBlockId, updateCurrentChapter]);
   const updateSelectedBlockIndividualFontSize = useCallback((fontSizePx: number) => {
     updateSelectedBlock(
       { fontSizePx, fontSizeLinkedToPreset: false },
@@ -483,7 +523,7 @@ export default function App(): React.JSX.Element {
     pushStatus,
     recordTranslationUndoSnapshot,
     selectLayer,
-    setSelectedBlockId,
+    setSelectedBlockId: setSingleSelectedBlockId,
     setSelectedPageId,
     updateCurrentChapter
   });
@@ -589,6 +629,7 @@ export default function App(): React.JSX.Element {
     selectSharedInpaintTool,
     selectZoomTool,
     selectedBlockIdRef,
+    selectedBlockCount: multiSelectedBlockCount,
     selectedPageEditLocked,
     selectedPageIdRef,
     setLibraryWidgetOpen,
@@ -609,7 +650,7 @@ export default function App(): React.JSX.Element {
       currentChapter={currentChapter}
       editingFontPresetId={editingFontPresetId}
       activeFontSizePresetId={activeFontSizePresetId}
-      fontControlValues={fontControlValues}
+      fontControlValues={multiSelectedBlockCount > 1 ? null : fontControlValues}
       fontFamilyOptions={fontFamilyOptions}
       fontPresetName={fontPresetName}
       favoriteFontPresetIds={favoriteFontPresetIds}
@@ -631,7 +672,7 @@ export default function App(): React.JSX.Element {
       rangeToolActive={rangeToolActive}
       renderFontPresetLinkButton={renderFontPresetLinkButton}
       renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
-      selectedBlock={selectedBlock}
+      selectedBlock={multiSelectedBlockCount > 1 ? null : selectedBlock}
       selectedPage={selectedPage}
       selectedPageEditLocked={selectedPageEditLocked}
       onClearEditingFontPreset={() => setEditingFontPresetId(null)}
@@ -753,6 +794,7 @@ export default function App(): React.JSX.Element {
           rangeToolActive={rangeToolActive}
           recoverableFailures={recoverableFailures}
           selectedBlockId={selectedBlockId}
+          selectedBlockIds={selectedBlockIds}
           selectedPage={selectedPage}
           selectedPageEditLocked={selectedPageEditLocked}
           selectedPageInpaintNotice={selectedPageInpaintNotice}
@@ -773,7 +815,10 @@ export default function App(): React.JSX.Element {
           temporaryPanActive={temporaryPanActive}
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
-          onBlockPointerDown={onBlockPointerDown}
+          onBlockPointerDown={(event, block, mode) => {
+            setSelectedBlockIds([]);
+            onBlockPointerDown(event, block, mode);
+          }}
           onBlockFontStyleCopy={copySelectedBlockFontStyleToClipboard}
           onBlockFontSizeChange={updateSelectedBlockIndividualFontSize}
           onBlockAutoFitDisable={disableSelectedBlockAutoFit}
@@ -791,7 +836,8 @@ export default function App(): React.JSX.Element {
           onRefreshLamaStatus={refreshLamaStatus}
           onDismissRecoverableFailure={clearRecoverableFailure}
           onRetryRecoverableFailure={retryRecoverableFailure}
-          onSelectBlock={setSelectedBlockId}
+          onSelectBlock={setSingleSelectedBlockId}
+          onBlockSelectionChange={setSelectedBlockGroupIds}
           onSelectImportFiles={selectImportFiles}
           onSelectPointerTool={selectPointerTool}
           onSelectRangeTool={selectRangeTool}
@@ -819,8 +865,9 @@ export default function App(): React.JSX.Element {
           onOverlayBlockOpacityChange={updateSelectedPageBlockOpacity}
           onOverlayOpacityEditModeChange={setOverlayOpacityEditMode}
           onSelectLayer={selectLayerWithBlockSelection}
-          block={selectedBlock}
-          fontPresetName={selectedFontPreset?.name}
+          block={multiSelectedBlockCount > 1 ? null : selectedBlock}
+          selectedBlockCount={multiSelectedBlockCount}
+          fontPresetName={multiSelectedBlockCount > 1 ? undefined : selectedFontPreset?.name}
           inpaintBusy={inpaintBusy}
           selectedPage={selectedPage}
           selectedPageEditLocked={selectedPageEditLocked}

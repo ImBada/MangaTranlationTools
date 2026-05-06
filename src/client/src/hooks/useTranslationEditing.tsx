@@ -41,6 +41,7 @@ type UseTranslationEditingOptions = {
   recordGlobalUndoEntry: (entry: GlobalUndoHistoryEntry) => void;
   selectLayer: (nextLayer: ActiveLayer) => void;
   selectedBlock: TranslationBlock | null;
+  selectedBlockIds: string[];
   selectedBlockIdRef: React.RefObject<string | null>;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -112,6 +113,7 @@ export function useTranslationEditing({
   recordGlobalUndoEntry,
   selectLayer,
   selectedBlock,
+  selectedBlockIds,
   selectedBlockIdRef,
   selectedPage,
   selectedPageEditLocked,
@@ -251,6 +253,7 @@ export function useTranslationEditing({
     recordTranslationUndoSnapshot,
     selectLayer,
     selectedBlock,
+    selectedBlockIds,
     selectedPage,
     selectedPageEditLocked,
     setSelectedBlockId,

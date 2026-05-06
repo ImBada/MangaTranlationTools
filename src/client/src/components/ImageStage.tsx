@@ -1,6 +1,7 @@
 import React from "react";
 import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
+import { resolveTranslationBlockIdsInSelection } from "../lib/blockSelection";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { isEditableTarget } from "../lib/editorUtils";
 import { useImageStageView } from "../hooks/useImageStageView";
@@ -12,7 +13,7 @@ import type { InpaintResultTool } from "./InpaintResultCanvas";
 type RangeSelectionDragState = {
   pointerId: number;
   start: DrawPoint;
-  target: "inpaint" | "block";
+  target: "inpaint" | "block" | "blocks";
 };
 
 type ImageStageProps = {
@@ -27,6 +28,7 @@ type ImageStageProps = {
   zoomToolActive: boolean;
   rangeToolActive: boolean;
   selectedBlockId: string | null;
+  selectedBlockIds: string[];
   layerVisibility: ImageStageLayerVisibility;
   layerOpacity: ImageStageLayerOpacity;
   activeLayer: ImageStageActiveLayer;
@@ -50,6 +52,7 @@ type ImageStageProps = {
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
+  onBlockSelectionChange: (blockIds: string[]) => void;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
   onBlockFontStyleCopy: () => void | Promise<void>;
   onBlockFontSizeChange: (fontSizePx: number) => void;
@@ -79,6 +82,7 @@ export function ImageStage({
   zoomToolActive,
   rangeToolActive,
   selectedBlockId,
+  selectedBlockIds,
   layerVisibility,
   layerOpacity,
   activeLayer,
@@ -102,6 +106,7 @@ export function ImageStage({
   onStagePointerMove,
   onStagePointerUp,
   onStagePointerDown,
+  onBlockSelectionChange,
   onBlockPointerDown,
   onBlockFontStyleCopy,
   onBlockFontSizeChange,
@@ -143,7 +148,13 @@ export function ImageStage({
     () => page.blocks.find((block) => block.id === selectedBlockId) ?? null,
     [page.blocks, selectedBlockId]
   );
-  const inpaintRangeSelectionActive = rangeToolActive && !rangeSelectionDisabled && !temporaryPanActive;
+  const inpaintRangeSelectionActive = activeLayer !== "overlay" && rangeToolActive && !rangeSelectionDisabled && !temporaryPanActive;
+  const blockMultiSelectionActive =
+    activeLayer === "overlay" &&
+    rangeToolActive &&
+    !blockRangeSelectionDisabled &&
+    !temporaryPanActive &&
+    layerVisibility.overlay;
   const blockRangeSelectionActive =
     activeLayer === "overlay" &&
     !zoomToolActive &&
@@ -153,7 +164,7 @@ export function ImageStage({
     layerVisibility.overlay &&
     Boolean(selectedBlock) &&
     (blockRangeSelectionModeActive || blockRangeSelectionDragActive);
-  const rangeSelectionActive = inpaintRangeSelectionActive || blockRangeSelectionActive;
+  const rangeSelectionActive = inpaintRangeSelectionActive || blockMultiSelectionActive || blockRangeSelectionActive;
 
   React.useEffect(() => {
     if (rangeSelectionActive) {
@@ -206,7 +217,13 @@ export function ImageStage({
     if (rect.width < 2 || rect.height < 2) {
       if (drag.target === "inpaint") {
         onInpaintSelectionChange(null);
+      } else if (drag.target === "blocks") {
+        onBlockSelectionChange([]);
       }
+      return;
+    }
+    if (drag.target === "blocks") {
+      onBlockSelectionChange(resolveTranslationBlockIdsInSelection(page, rect));
       return;
     }
     if (drag.target === "block" && selectedBlockId) {
@@ -214,7 +231,7 @@ export function ImageStage({
       return;
     }
     onInpaintSelectionChange(rect);
-  }, [onInpaintSelectionChange, onSelectedBlockRangeChange, pageSize, selectedBlockId]);
+  }, [onBlockSelectionChange, onInpaintSelectionChange, onSelectedBlockRangeChange, page, pageSize, selectedBlockId]);
 
   return (
     <div
@@ -254,6 +271,7 @@ export function ImageStage({
           rangeToolActive={rangeToolActive}
           blockRangeSelectionActive={blockRangeSelectionActive}
           selectedBlockId={selectedBlockId}
+          selectedBlockIds={selectedBlockIds}
           stageSize={stageSize}
           temporaryPanActive={temporaryPanActive}
           onBlockPointerDown={onBlockPointerDown}
@@ -285,7 +303,7 @@ export function ImageStage({
             event.preventDefault();
             event.stopPropagation();
             event.currentTarget.setPointerCapture(event.pointerId);
-            const target = blockRangeSelectionActive ? "block" : "inpaint";
+            const target = blockMultiSelectionActive ? "blocks" : blockRangeSelectionActive ? "block" : "inpaint";
             rangeSelectionDragRef.current = { pointerId: event.pointerId, start: point, target };
             setBlockRangeSelectionDragActive(target === "block");
             updateRangeSelectionPreview(point, point);

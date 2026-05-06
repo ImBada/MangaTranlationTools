@@ -41,6 +41,7 @@ type WorkspaceShortcutOptions = {
   selectSharedInpaintTool: (tool: InpaintTool) => void;
   selectZoomTool: () => void;
   selectedBlockIdRef: React.MutableRefObject<string | null>;
+  selectedBlockCount: number;
   selectedPageEditLocked: boolean;
   selectedPageIdRef: React.MutableRefObject<string | null>;
   setLibraryWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
@@ -79,6 +80,7 @@ export function useWorkspaceShortcuts({
   selectSharedInpaintTool,
   selectZoomTool,
   selectedBlockIdRef,
+  selectedBlockCount,
   selectedPageEditLocked,
   selectedPageIdRef,
   setLibraryWidgetOpen,
@@ -184,7 +186,7 @@ export function useWorkspaceShortcuts({
       }
 
       const blockCopyShortcut =
-        !modalOpen && !editableTarget && Boolean(selectedBlockIdRef.current) && isBlockCopyShortcut(event);
+        !modalOpen && !editableTarget && selectedBlockCount <= 1 && Boolean(selectedBlockIdRef.current) && isBlockCopyShortcut(event);
       if (blockCopyShortcut) {
         event.preventDefault();
         void copySelectedBlockToClipboard();
@@ -192,7 +194,7 @@ export function useWorkspaceShortcuts({
       }
 
       const blockPasteShortcut =
-        !modalOpen && !editableTarget && isBlockPasteShortcut(event);
+        !modalOpen && !editableTarget && selectedBlockCount <= 1 && isBlockPasteShortcut(event);
       if (blockPasteShortcut && !selectedPageEditLocked) {
         event.preventDefault();
         if (selectedBlockIdRef.current) {
@@ -386,6 +388,7 @@ export function useWorkspaceShortcuts({
     selectSharedInpaintTool,
     selectZoomTool,
     selectedBlockIdRef,
+    selectedBlockCount,
     selectedPageEditLocked,
     selectedPageIdRef,
     setLibraryWidgetOpen,

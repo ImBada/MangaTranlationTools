@@ -6,6 +6,7 @@ import { CompactNumberControl } from "./controls/CompactNumberControl";
 
 type EditorPanelProps = {
   block: TranslationBlock | null;
+  selectedBlockCount?: number;
   fontPresetName?: string;
   disabled: boolean;
   onUpdate: (patch: Partial<TranslationBlock>) => void;
@@ -19,6 +20,7 @@ type EditorPanelProps = {
 
 export function EditorPanel({
   block,
+  selectedBlockCount = 0,
   fontPresetName,
   disabled,
   onUpdate,
@@ -29,6 +31,19 @@ export function EditorPanel({
   onApplyBatchInpaint,
   batchInpaintDisabled
 }: EditorPanelProps): React.JSX.Element {
+  if (selectedBlockCount > 1) {
+    return (
+      <section className="editor-panel grid content-start gap-2.5">
+        <h2>블록</h2>
+        <p className="multi-block-selection-summary">{selectedBlockCount}개 블록 선택됨</p>
+        <div className="block-actions multi-block-actions">
+          <button className="primary block-action" onClick={onApplyInpaint} disabled={disabled}>선택된 블록 인페인트 실행</button>
+          <button className="danger block-action" onClick={onDelete} disabled={disabled}>삭제</button>
+        </div>
+      </section>
+    );
+  }
+
   if (!block) {
     return (
       <section className="editor-panel muted grid content-start gap-2.5">

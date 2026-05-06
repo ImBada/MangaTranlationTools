@@ -55,6 +55,7 @@ type WorkspacePanelProps = {
   rangeToolActive: boolean;
   recoverableFailures: RecoverableFailure[];
   selectedBlockId: string | null;
+  selectedBlockIds: string[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   selectedPageInpaintNotice: PageInpaintNotice | null;
@@ -105,6 +106,7 @@ type WorkspacePanelProps = {
   onSetStatusWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
+  onBlockSelectionChange: (blockIds: string[]) => void;
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onZoomInStage: () => void;
@@ -136,6 +138,7 @@ export function WorkspacePanel({
   rangeToolActive,
   recoverableFailures,
   selectedBlockId,
+  selectedBlockIds,
   selectedPage,
   selectedPageEditLocked,
   selectedPageInpaintNotice,
@@ -181,6 +184,7 @@ export function WorkspacePanel({
   onSetStatusWidgetOpen,
   onStagePointerMove,
   onStagePointerUp,
+  onBlockSelectionChange,
   onSelectedBlockRangeChange,
   onBlockTextAlignChange,
   onZoomInStage,
@@ -206,10 +210,12 @@ export function WorkspacePanel({
     inpaintResultTool === "select";
   const rangeSelectionDisabled = selectedPageEditLocked || inpaintBusy || !layerVisibility.inpaint;
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+  const multiBlockSelectionActive = selectedBlockIds.length > 1;
   const blockInlineEditShortcutVisible =
     activeLayer === "overlay" &&
     !temporaryPanActive &&
     layerVisibility.overlay &&
+    !multiBlockSelectionActive &&
     Boolean(selectedBlock && selectedBlock.renderDirection !== "hidden");
 
   return (
@@ -305,6 +311,7 @@ export function WorkspacePanel({
             zoomToolActive={zoomToolActive}
             rangeToolActive={rangeToolActive}
             selectedBlockId={selectedBlockId}
+            selectedBlockIds={selectedBlockIds}
             layerVisibility={stageLayerVisibility}
             layerOpacity={stageLayerOpacity}
             activeLayer={activeLayer}
@@ -332,6 +339,7 @@ export function WorkspacePanel({
                 onSelectBlock(null);
               }
             }}
+            onBlockSelectionChange={onBlockSelectionChange}
             onBlockPointerDown={onBlockPointerDown}
             onBlockFontStyleCopy={onBlockFontStyleCopy}
             onBlockFontSizeChange={onBlockFontSizeChange}

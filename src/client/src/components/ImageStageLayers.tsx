@@ -51,6 +51,7 @@ type ImageStageLayersProps = {
   rangeToolActive: boolean;
   blockRangeSelectionActive: boolean;
   selectedBlockId: string | null;
+  selectedBlockIds: string[];
   stageSize: ViewportSize | null;
   temporaryPanActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
@@ -95,6 +96,7 @@ export function ImageStageLayers({
   rangeToolActive,
   blockRangeSelectionActive,
   selectedBlockId,
+  selectedBlockIds,
   stageSize,
   temporaryPanActive,
   onBlockPointerDown,
@@ -117,6 +119,12 @@ export function ImageStageLayers({
   const suppressInlineCommitBlockIdRef = React.useRef<string | null>(null);
   const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
+  const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
+  const multiBlockSelectionActive = selectedBlockIds.length > 1;
+  const visibleRangeSelectionRect =
+    activeLayer === "overlay" ? rangeSelectionPreviewRect : rangeSelectionPreviewRect ?? inpaintSelectionRect;
+  const rangeSelectionLayerVisible =
+    rangeToolActive || Boolean(rangeSelectionPreviewRect) || (activeLayer !== "overlay" && Boolean(inpaintSelectionRect));
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
@@ -146,6 +154,12 @@ export function ImageStageLayers({
       suppressInlineCommitBlockIdRef.current = null;
     }
   }, [inlineEdit]);
+
+  React.useEffect(() => {
+    if (multiBlockSelectionActive && inlineEdit) {
+      commitInlineEdit();
+    }
+  }, [commitInlineEdit, inlineEdit, multiBlockSelectionActive]);
 
   React.useEffect(() => {
     onBlockInlineEditActiveChange(Boolean(inlineEdit));
@@ -213,6 +227,7 @@ export function ImageStageLayers({
         activeLayer !== "overlay" ||
         temporaryPanActive ||
         !layerVisibility.overlay ||
+        multiBlockSelectionActive ||
         inlineEdit ||
         isEditableTarget(event.target) ||
         !isBlockInlineEditShortcut(event)
@@ -233,7 +248,7 @@ export function ImageStageLayers({
     return () => {
       window.removeEventListener("keydown", onKeyDown);
     };
-  }, [activeLayer, inlineEdit, layerVisibility.overlay, page.blocks, selectedBlockId, startInlineEdit, temporaryPanActive]);
+  }, [activeLayer, inlineEdit, layerVisibility.overlay, multiBlockSelectionActive, page.blocks, selectedBlockId, startInlineEdit, temporaryPanActive]);
 
   React.useEffect(() => {
     const updateFromKeyboardEvent = (event: KeyboardEvent) => {
@@ -335,19 +350,23 @@ export function ImageStageLayers({
                   block={block}
                   pageSize={pageSize}
                   stageSize={resolvedStageSize}
-                  selected={block.id === selectedBlockId}
+                  selected={selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId)}
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
-                  widgetsVisible={!blockRangeSelectionActive}
+                  widgetsVisible={!blockRangeSelectionActive && !multiBlockSelectionActive}
                   inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
                   inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}
                   visualContentVisible={false}
                   favoriteFontPresets={favoriteFontPresets}
                   onPointerDown={(event) => handleMovePointerDown(event, block)}
-                  onStartInlineEdit={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    startInlineEdit(block);
-                  }}
+                  onStartInlineEdit={
+                    multiBlockSelectionActive
+                      ? undefined
+                      : (event) => {
+                          event.preventDefault();
+                          event.stopPropagation();
+                          startInlineEdit(block);
+                        }
+                  }
                   onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
                   onInlineEditCancel={() => setInlineEdit(null)}
                   onInlineEditCommit={commitInlineEdit}
@@ -363,14 +382,14 @@ export function ImageStageLayers({
             </div>
           )
         : null}
-      {rangeToolActive || rangeSelectionPreviewRect || inpaintSelectionRect ? (
+      {rangeSelectionLayerVisible ? (
         <div className="stage-range-selection-layer">
           <InpaintLayerCanvas
             pageSize={pageSize}
             tool="select"
             brushSize={1}
             disabled={true}
-            selectionRect={rangeSelectionPreviewRect ?? inpaintSelectionRect}
+            selectionRect={visibleRangeSelectionRect}
             onChange={() => undefined}
             onSelectionChange={onInpaintSelectionChange}
           />

@@ -10,6 +10,7 @@ type AppRightRailProps = LayerPanelProps & {
   block: TranslationBlock | null;
   fontPresetName?: string;
   inpaintBusy: boolean;
+  selectedBlockCount?: number;
   onApplyBatchInpaint: () => void | Promise<void>;
   onApplyInpaint: () => void | Promise<void>;
   onCreate: EditorPanelProps["onCreate"];
@@ -24,6 +25,7 @@ export function AppRightRail({
   block,
   fontPresetName,
   inpaintBusy,
+  selectedBlockCount = 0,
   onApplyBatchInpaint,
   onApplyInpaint,
   onCreate,
@@ -42,6 +44,7 @@ export function AppRightRail({
       <LayerPanel {...layerPanelProps} />
       <EditorPanel
         block={block}
+        selectedBlockCount={selectedBlockCount}
         fontPresetName={fontPresetName}
         disabled={editorDisabled}
         onUpdate={onUpdate}

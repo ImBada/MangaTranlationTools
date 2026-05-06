@@ -17,6 +17,7 @@ type UseInpaintRunActionsOptions = {
   reportRecoverableFailure?: (failure: { id: RecoverableFailureId; message: string; title: string }) => void;
   saveNow: () => Promise<void>;
   selectedBlock: TranslationBlock | null;
+  selectedBlocks: TranslationBlock[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   selectedPageIdRef: React.RefObject<string | null>;
@@ -59,6 +60,7 @@ export function useInpaintRunActions({
   reportRecoverableFailure,
   saveNow,
   selectedBlock,
+  selectedBlocks,
   selectedPage,
   selectedPageEditLocked,
   selectedPageIdRef,
@@ -213,20 +215,29 @@ export function useInpaintRunActions({
   ]);
 
   const applyInpaintSelectedBlock = React.useCallback(async () => {
-    if (!currentChapter || !selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
+    const requestedBlockIds = selectedBlocks.length > 1
+      ? selectedBlocks.map((block) => block.id)
+      : selectedBlock
+        ? [selectedBlock.id]
+        : [];
+    if (!currentChapter || !selectedPage || requestedBlockIds.length === 0 || selectedPageEditLocked || inpaintBusy) {
       return;
     }
 
     const page = currentChapterRef.current?.pages.find((candidate) => candidate.id === selectedPage.id) ?? selectedPage;
-    const block = page.blocks.find((candidate) => candidate.id === selectedBlock.id) ?? selectedBlock;
+    const requestedBlockIdSet = new Set(requestedBlockIds);
+    const blocks = page.blocks.filter((candidate) => requestedBlockIdSet.has(candidate.id));
+    if (blocks.length === 0) {
+      return;
+    }
     await runPartialInpaintForPage({
       page,
-      createPatchMaskDataUrl: () => drawBlocksOnInpaintMask(page, [block], { includeExistingMask: false }),
+      createPatchMaskDataUrl: () => drawBlocksOnInpaintMask(page, blocks, { includeExistingMask: false }),
       baseMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
-      statusMessage: "선택 블록만 인페인트했습니다.",
-      localFillStatusMessage: "선택 블록 로컬 인페인트 결과를 저장했습니다.",
-      errorFallbackMessage: "선택 블록 인페인트 실행에 실패했습니다.",
-      failureTitle: "선택 블록 인페인트 실패",
+      statusMessage: blocks.length > 1 ? "선택된 블록만 인페인트했습니다." : "선택 블록만 인페인트했습니다.",
+      localFillStatusMessage: blocks.length > 1 ? "선택된 블록 로컬 인페인트 결과를 저장했습니다." : "선택 블록 로컬 인페인트 결과를 저장했습니다.",
+      errorFallbackMessage: blocks.length > 1 ? "선택된 블록 인페인트 실행에 실패했습니다." : "선택 블록 인페인트 실행에 실패했습니다.",
+      failureTitle: blocks.length > 1 ? "선택된 블록 인페인트 실패" : "선택 블록 인페인트 실패",
       failureRecoveryMessage: "기존 결과 레이어와 마스크는 유지됩니다. 다시 실행하세요."
     });
   }, [
@@ -235,6 +246,7 @@ export function useInpaintRunActions({
     inpaintBusy,
     runPartialInpaintForPage,
     selectedBlock,
+    selectedBlocks,
     selectedPage,
     selectedPageEditLocked
   ]);

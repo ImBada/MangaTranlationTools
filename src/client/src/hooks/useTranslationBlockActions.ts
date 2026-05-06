@@ -22,6 +22,7 @@ type UseTranslationBlockActionsOptions = {
   recordTranslationUndoSnapshot: (label: string) => boolean;
   selectLayer: (nextLayer: ActiveLayer) => void;
   selectedBlock: TranslationBlock | null;
+  selectedBlockIds: string[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   setSelectedBlockId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -49,6 +50,7 @@ export function useTranslationBlockActions({
   recordTranslationUndoSnapshot,
   selectLayer,
   selectedBlock,
+  selectedBlockIds,
   selectedPage,
   selectedPageEditLocked,
   setSelectedBlockId,
@@ -59,10 +61,16 @@ export function useTranslationBlockActions({
   const translationBlockFontStyleClipboardRef = React.useRef<TranslationBlockFontStylePatch | null>(null);
 
   const deleteSelectedBlock = React.useCallback(() => {
-    if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
+    const selectedIds = selectedBlockIds.length > 1
+      ? selectedBlockIds
+      : selectedBlock
+        ? [selectedBlock.id]
+        : [];
+    if (!selectedPage || selectedIds.length === 0 || selectedPageEditLocked) {
       return;
     }
-    recordTranslationUndoSnapshot("번역 블록 삭제");
+    const selectedIdSet = new Set(selectedIds);
+    recordTranslationUndoSnapshot(selectedIds.length > 1 ? "번역 블록 여러 개 삭제" : "번역 블록 삭제");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
       pages: current.pages.map((page) =>
@@ -70,13 +78,13 @@ export function useTranslationBlockActions({
           ? {
               ...page,
               updatedAt: new Date().toISOString(),
-              blocks: page.blocks.filter((block) => block.id !== selectedBlock.id)
+              blocks: page.blocks.filter((block) => !selectedIdSet.has(block.id))
             }
           : page
       )
     }));
     setSelectedBlockId(null);
-  }, [recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+  }, [recordTranslationUndoSnapshot, selectedBlock, selectedBlockIds, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
 
   const updateSelectedPageBlockOpacity = React.useCallback((opacity: number) => {
     if (!selectedPage || selectedPageEditLocked) {
