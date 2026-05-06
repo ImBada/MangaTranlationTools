@@ -463,17 +463,17 @@
 }
 
 .font-picker-popover {
-  position: absolute;
-  top: calc(100% + 6px);
-  right: 0;
-  left: 0;
+  position: fixed;
   display: grid;
+  grid-template-rows: auto auto minmax(0, 1fr);
   gap: 8px;
+  min-height: 0;
   padding: 8px;
   border: 1px solid #46505b;
   border-radius: 8px;
   background: #111318;
   box-shadow: 0 14px 32px rgba(0, 0, 0, 0.42);
+  overflow: hidden;
   z-index: 40;
 }
 
@@ -491,7 +491,8 @@
 .font-picker-list {
   display: grid;
   gap: 3px;
-  max-height: 310px;
+  min-height: 0;
+  max-height: none;
   overflow-y: auto;
   padding-right: 2px;
 }

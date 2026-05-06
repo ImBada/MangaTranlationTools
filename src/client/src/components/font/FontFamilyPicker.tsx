@@ -25,6 +25,10 @@ const FONT_FAMILY_OPTIONS: FontFamilyOption[] = [
 
 const RECENT_FONT_FAMILY_STORAGE_KEY = "manga-translation-tools.recent-font-families";
 const RECENT_FONT_FAMILY_LIMIT = 5;
+const FONT_PICKER_POPOVER_GAP_PX = 6;
+const FONT_PICKER_POPOVER_MIN_HEIGHT_PX = 220;
+const FONT_PICKER_POPOVER_MIN_WIDTH_PX = 280;
+const FONT_PICKER_POPOVER_VIEWPORT_MARGIN_PX = 12;
 const FONT_LANGUAGE_GROUP_LABELS: Record<FontLanguageGroup, string> = {
   ko: "한국어",
   en: "영어",
@@ -44,6 +48,13 @@ type FontFamilyPickerProps = {
   value: string;
   disabled: boolean;
   onChange: (value: string) => void;
+};
+
+type FontPickerPopoverStyle = {
+  left: number;
+  top: number;
+  width: number;
+  height: number;
 };
 
 export function buildFontFamilyOptions(systemFonts: SystemFont[], selectedFontFamily?: string): FontFamilyOption[] {
@@ -69,6 +80,7 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
   const [open, setOpen] = React.useState(false);
   const [query, setQuery] = React.useState("");
   const [recentFontFamilies, setRecentFontFamilies] = React.useState<FontFamilyOption[]>(readRecentFontFamilies);
+  const [popoverStyle, setPopoverStyle] = React.useState<FontPickerPopoverStyle | null>(null);
   const rootRef = React.useRef<HTMLDivElement | null>(null);
   const inputRef = React.useRef<HTMLInputElement | null>(null);
   const selectedOption = options.find((option) => option.value === value) ?? { label: value, value };
@@ -86,6 +98,24 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
   const listedOptions = [...filteredRecentOptions, ...filteredOptions];
   const filteredOptionGroups = React.useMemo(() => groupFontFamilyOptions(filteredOptions), [filteredOptions]);
 
+  const updatePopoverBounds = React.useCallback(() => {
+    const anchorRect = rootRef.current?.getBoundingClientRect();
+    if (!anchorRect) {
+      return;
+    }
+
+    const nextStyle = resolveFontPickerPopoverStyle(anchorRect);
+    setPopoverStyle((currentStyle) =>
+      currentStyle &&
+      currentStyle.left === nextStyle.left &&
+      currentStyle.top === nextStyle.top &&
+      currentStyle.width === nextStyle.width &&
+      currentStyle.height === nextStyle.height
+        ? currentStyle
+        : nextStyle
+    );
+  }, []);
+
   const selectFontFamily = React.useCallback((option: FontFamilyOption) => {
     const nextRecentFontFamilies = [
       option,
@@ -97,6 +127,7 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
     onChange(option.value);
     setOpen(false);
     setQuery("");
+    setPopoverStyle(null);
   }, [onChange, recentFontFamilies]);
 
   React.useEffect(() => {
@@ -113,6 +144,27 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
     window.setTimeout(() => inputRef.current?.focus(), 0);
     return () => window.removeEventListener("pointerdown", handlePointerDown);
   }, [open]);
+
+  React.useLayoutEffect(() => {
+    if (!open) {
+      return;
+    }
+
+    updatePopoverBounds();
+    window.addEventListener("resize", updatePopoverBounds);
+    window.addEventListener("scroll", updatePopoverBounds, true);
+
+    const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(updatePopoverBounds);
+    if (rootRef.current) {
+      resizeObserver?.observe(rootRef.current);
+    }
+
+    return () => {
+      window.removeEventListener("resize", updatePopoverBounds);
+      window.removeEventListener("scroll", updatePopoverBounds, true);
+      resizeObserver?.disconnect();
+    };
+  }, [open, updatePopoverBounds]);
 
   const renderFontOption = React.useCallback((option: FontFamilyOption, keyPrefix: string) => (
     <button
@@ -146,7 +198,7 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
         </span>
       </button>
       {open ? (
-        <div className="font-picker-popover">
+        <div className="font-picker-popover" style={popoverStyle ?? undefined}>
           <input
             ref={inputRef}
             className="font-picker-search"
@@ -210,6 +262,38 @@ function compareFontFamilyOptions(a: FontFamilyOption, b: FontFamilyOption): num
 
 function getFontLanguageRank(option: FontFamilyOption): number {
   return FONT_LANGUAGE_GROUP_RANK[detectFontLanguageGroup(option)];
+}
+
+function resolveFontPickerPopoverStyle(anchorRect: DOMRect): FontPickerPopoverStyle {
+  const viewportMargin = FONT_PICKER_POPOVER_VIEWPORT_MARGIN_PX;
+  const maxWidth = Math.max(0, window.innerWidth - viewportMargin * 2);
+  const width = Math.min(Math.max(anchorRect.width, FONT_PICKER_POPOVER_MIN_WIDTH_PX), maxWidth);
+  const maxLeft = Math.max(viewportMargin, window.innerWidth - viewportMargin - width);
+  const left = clampNumber(anchorRect.left, viewportMargin, maxLeft);
+  const belowTop = anchorRect.bottom + FONT_PICKER_POPOVER_GAP_PX;
+  const belowHeight = window.innerHeight - belowTop - viewportMargin;
+  const aboveHeight = anchorRect.top - FONT_PICKER_POPOVER_GAP_PX - viewportMargin;
+
+  if (belowHeight >= FONT_PICKER_POPOVER_MIN_HEIGHT_PX || belowHeight >= aboveHeight) {
+    return {
+      left,
+      top: Math.max(viewportMargin, belowTop),
+      width,
+      height: Math.max(120, belowHeight)
+    };
+  }
+
+  const height = Math.max(120, aboveHeight);
+  return {
+    left,
+    top: Math.max(viewportMargin, anchorRect.top - FONT_PICKER_POPOVER_GAP_PX - height),
+    width,
+    height
+  };
+}
+
+function clampNumber(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 function detectFontLanguageGroup(option: FontFamilyOption): FontLanguageGroup {
