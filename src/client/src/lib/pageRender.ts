@@ -51,6 +51,7 @@ export type OverlayRenderOptions = {
 const CANVAS_TEXT_RENDER_FONT_SIZE_RATIO = 0.985;
 const OVERLAY_BLOCK_BORDER_PX = 1;
 const CANVAS_TEXT_RENDER_Y_OFFSET_RATIO = 0.04;
+const CENTERED_ELLIPSIS = "…";
 const DEFAULT_TEXT_OUTLINE_COLOR = "#000000";
 type CanvasPaint = CanvasRenderingContext2D["strokeStyle"];
 
@@ -475,12 +476,9 @@ function drawTextRunGlyphs(
 ): void {
   const chars = [...text];
   const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
-  if (letterSpacingPx === 0) {
-    if (mode === "stroke") {
-      context.strokeText(text, x, y);
-    } else {
-      context.fillText(text, x, y);
-    }
+  const hasCenteredEllipsis = text.includes(CENTERED_ELLIPSIS);
+  if (letterSpacingPx === 0 && !hasCenteredEllipsis) {
+    drawTextGlyph(context, text, x, y, fontSize, mode);
     return;
   }
   const runWidth = measureTextWidthWithLetterSpacing(context, block, text, fontSize);
@@ -488,15 +486,77 @@ function drawTextRunGlyphs(
 
   context.save();
   context.textAlign = "left";
-  for (const char of chars) {
-    if (mode === "stroke") {
-      context.strokeText(char, cursorX, y);
-    } else {
-      context.fillText(char, cursorX, y);
+  if (letterSpacingPx === 0) {
+    for (const segment of splitTextRunByCenteredEllipsis(chars)) {
+      drawTextGlyph(context, segment, cursorX, y, fontSize, mode);
+      cursorX += context.measureText(segment).width;
     }
-    cursorX += context.measureText(char).width + letterSpacingPx;
+  } else {
+    for (const char of chars) {
+      drawTextGlyph(context, char, cursorX, y, fontSize, mode);
+      cursorX += context.measureText(char).width + letterSpacingPx;
+    }
   }
   context.restore();
+}
+
+function splitTextRunByCenteredEllipsis(chars: readonly string[]): string[] {
+  const segments: string[] = [];
+  let run = "";
+
+  for (const char of chars) {
+    if (char !== CENTERED_ELLIPSIS) {
+      run += char;
+      continue;
+    }
+    if (run) {
+      segments.push(run);
+      run = "";
+    }
+    segments.push(char);
+  }
+
+  if (run) {
+    segments.push(run);
+  }
+  return segments;
+}
+
+function drawTextGlyph(
+  context: CanvasRenderingContext2D,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  mode: "fill" | "stroke"
+): void {
+  const glyphY = y + resolveCenteredEllipsisYOffset(context, text, fontSize);
+  if (mode === "stroke") {
+    context.strokeText(text, x, glyphY);
+  } else {
+    context.fillText(text, x, glyphY);
+  }
+}
+
+export function resolveCenteredEllipsisYOffset(
+  context: Pick<CanvasRenderingContext2D, "measureText">,
+  text: string,
+  fontSize: number
+): number {
+  if (text !== CENTERED_ELLIPSIS) {
+    return 0;
+  }
+
+  const metrics = context.measureText(text);
+  const inkHeight = metrics.actualBoundingBoxAscent + metrics.actualBoundingBoxDescent;
+  if (!Number.isFinite(inkHeight) || inkHeight <= 0) {
+    return 0;
+  }
+  const inkCenterFromY = (metrics.actualBoundingBoxDescent - metrics.actualBoundingBoxAscent) / 2;
+  if (!Number.isFinite(inkCenterFromY)) {
+    return 0;
+  }
+  return fontSize / 2 - inkCenterFromY;
 }
 
 function createScreentonePattern(
