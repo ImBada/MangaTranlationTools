@@ -17,18 +17,26 @@ type TextMaskComponent = {
   touchesEdge: boolean;
 };
 
-export async function drawBlocksOnInpaintMask(page: MangaPage, blocks: TranslationBlock[]): Promise<string> {
+type DrawBlocksOnInpaintMaskOptions = {
+  includeExistingMask?: boolean;
+};
+
+export async function drawBlocksOnInpaintMask(
+  page: MangaPage,
+  blocks: TranslationBlock[],
+  options: DrawBlocksOnInpaintMaskOptions = {}
+): Promise<string> {
   const canvas = document.createElement("canvas");
   canvas.width = page.width;
   canvas.height = page.height;
 
   const context = canvas.getContext("2d");
   if (!context) {
-    return page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl ?? "";
+    return options.includeExistingMask === false ? "" : page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl ?? "";
   }
 
   const existingMask = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
-  if (existingMask) {
+  if (existingMask && options.includeExistingMask !== false) {
     const existingImage = await loadImage(existingMask);
     context.drawImage(existingImage, 0, 0, page.width, page.height);
   }
@@ -203,6 +211,17 @@ export async function mergeInpaintMaskDataUrls(
   mergeInpaintMaskPixels(mergedPixels.data, patchPixels.data);
   context.putImageData(mergedPixels, 0, 0);
   return canvas.toDataURL("image/png");
+}
+
+export async function mergePartialInpaintMask(
+  previousMaskDataUrl: string | undefined,
+  patchMaskDataUrl: string,
+  width: number,
+  height: number
+): Promise<string> {
+  return previousMaskDataUrl
+    ? mergeInpaintMaskDataUrls(previousMaskDataUrl, patchMaskDataUrl, width, height)
+    : patchMaskDataUrl;
 }
 
 export function mergeInpaintMaskPixels(basePixels: Uint8ClampedArray, patchPixels: Uint8ClampedArray): void {

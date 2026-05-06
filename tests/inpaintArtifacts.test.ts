@@ -126,6 +126,33 @@ describe("inpaint artifacts", () => {
     expect([...resultPixels.subarray(0, 8)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255]);
   });
 
+  it("preserves the supplied mask when saving partial inpaint layers", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-partial-layers-request-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot } = await import("../src/server/library");
+    const { saveInpaintLayersRequest } = await import("../src/server/inpaintRequests");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+    await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+
+    const saved = await saveInpaintLayersRequest({
+      chapterId: "chapter-1",
+      pageId: "page-1",
+      maskDataUrl: await rgbaDataUrl(3, 1, [[0, 0, 0, 0], [255, 255, 255, 255], [0, 0, 0, 0]]),
+      resultDataUrl: await rgbaDataUrl(3, 1, [[250, 250, 250, 128], [9, 8, 7, 255], [1, 2, 3, 0]]),
+      preserveMaskDataUrl: true
+    });
+
+    const maskPixels = await decodePng(saved.chapter.pages[0]?.inpaintMaskPath ?? "");
+    const resultPixels = await decodePng(saved.chapter.pages[0]?.inpaintResultPath ?? "");
+    expect([...maskPixels.subarray(0, 12)]).toEqual([0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0]);
+    expect([...resultPixels.subarray(0, 12)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255, 1, 2, 3, 0]);
+  });
+
   it("does not create inpaint files when saving layers for a missing page", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-missing-page-"));
     tempDirs.push(dataDir);

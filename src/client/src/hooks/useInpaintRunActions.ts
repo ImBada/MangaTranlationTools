@@ -1,6 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
-import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergeInpaintMaskDataUrls, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
+import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergePartialInpaintMask, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { DEFAULT_INPAINT_SETTINGS } from "../lib/inpaintToolSettings";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
@@ -33,6 +33,18 @@ type UseInpaintRunActionsState = {
   inpaintBusy: boolean;
   rerunInpaintForSelection: () => Promise<void>;
   rerunInpaintWithCurrentMask: () => Promise<void>;
+};
+
+type PartialInpaintRunOptions = {
+  page: MangaPage;
+  createPatchMaskDataUrl: () => Promise<string | null>;
+  baseMaskDataUrl?: string;
+  emptyPatchStatusMessage?: string;
+  statusMessage: string;
+  localFillStatusMessage: string;
+  errorFallbackMessage: string;
+  failureTitle: string;
+  failureRecoveryMessage: string;
 };
 
 export function useInpaintRunActions({
@@ -109,15 +121,123 @@ export function useInpaintRunActions({
     updatePageInpaintStatus
   ]);
 
-  const applyInpaintSelectedBlock = React.useCallback(async () => {
-    if (!selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
+  const runPartialInpaintForPage = React.useCallback(async ({
+    page,
+    createPatchMaskDataUrl,
+    baseMaskDataUrl,
+    emptyPatchStatusMessage,
+    statusMessage,
+    localFillStatusMessage,
+    errorFallbackMessage,
+    failureTitle,
+    failureRecoveryMessage
+  }: PartialInpaintRunOptions) => {
+    if (!currentChapter || inpaintBusy) {
       return;
     }
 
-    const maskDataUrl = await drawBlocksOnInpaintMask(selectedPage, [selectedBlock]);
-    updateSelectedPageInpaintMask(maskDataUrl, { persist: false });
-    await runInpaintForPage({ ...selectedPage, inpaintMaskDataUrl: maskDataUrl }, maskDataUrl, "선택 블록 인페인트 결과를 저장했습니다.");
-  }, [inpaintBusy, runInpaintForPage, selectedBlock, selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+    setInpaintBusy(true);
+    try {
+      if (dirty) {
+        await saveNow();
+      }
+
+      const patchMaskDataUrl = await createPatchMaskDataUrl();
+      if (!patchMaskDataUrl) {
+        if (emptyPatchStatusMessage) {
+          pushStatus(emptyPatchStatusMessage);
+        }
+        return;
+      }
+
+      updatePageInpaintStatus(page.id, "running");
+      const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(page.dataUrl);
+      const resolvedMaskDataUrl = await window.mangaApi.resolveImageDataUrl(patchMaskDataUrl);
+      const result = await window.mangaApi.inpaintPage({
+        chapterId: currentChapter.id,
+        pageId: page.id,
+        sourceDataUrl,
+        maskDataUrl: resolvedMaskDataUrl,
+        settings: DEFAULT_INPAINT_SETTINGS,
+        persistResult: false
+      });
+      const mergedResultDataUrl = await mergePartialInpaintResult(
+        page.inpaintResultDataUrl,
+        result.resultDataUrl,
+        result.maskDataUrl,
+        page.width,
+        page.height
+      );
+      const mergedMaskDataUrl = await mergePartialInpaintMask(baseMaskDataUrl, patchMaskDataUrl, page.width, page.height);
+      updateSelectedPageInpaintMask(mergedMaskDataUrl, { persist: false, recordUndo: false });
+      updateSelectedPageInpaintResult(mergedResultDataUrl, { persist: false });
+      const saved = await window.mangaApi.saveInpaintLayers({
+        chapterId: currentChapter.id,
+        pageId: page.id,
+        maskDataUrl: mergedMaskDataUrl,
+        resultDataUrl: mergedResultDataUrl,
+        preserveMaskDataUrl: true
+      });
+      applyChapter(saved.chapter);
+      signalSaveComplete();
+      clearRecoverableFailure?.("inpaint-run");
+      void refreshLibrary();
+      pushStatus(result.engine === "local-fill-fallback" ? localFillStatusMessage : statusMessage);
+    } catch (error) {
+      console.error(error);
+      updatePageInpaintStatus(page.id, "failed");
+      const message = error instanceof Error ? error.message : errorFallbackMessage;
+      pushStatus(message);
+      reportRecoverableFailure?.({
+        id: "inpaint-run",
+        title: failureTitle,
+        message: failureRecoveryMessage
+      });
+    } finally {
+      setInpaintBusy(false);
+    }
+  }, [
+    applyChapter,
+    clearRecoverableFailure,
+    currentChapter,
+    dirty,
+    inpaintBusy,
+    pushStatus,
+    refreshLibrary,
+    reportRecoverableFailure,
+    saveNow,
+    signalSaveComplete,
+    updatePageInpaintStatus,
+    updateSelectedPageInpaintMask,
+    updateSelectedPageInpaintResult
+  ]);
+
+  const applyInpaintSelectedBlock = React.useCallback(async () => {
+    if (!currentChapter || !selectedPage || !selectedBlock || selectedPageEditLocked || inpaintBusy) {
+      return;
+    }
+
+    const page = currentChapterRef.current?.pages.find((candidate) => candidate.id === selectedPage.id) ?? selectedPage;
+    const block = page.blocks.find((candidate) => candidate.id === selectedBlock.id) ?? selectedBlock;
+    await runPartialInpaintForPage({
+      page,
+      createPatchMaskDataUrl: () => drawBlocksOnInpaintMask(page, [block], { includeExistingMask: false }),
+      baseMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
+      statusMessage: "선택 블록만 인페인트했습니다.",
+      localFillStatusMessage: "선택 블록 로컬 인페인트 결과를 저장했습니다.",
+      errorFallbackMessage: "선택 블록 인페인트 실행에 실패했습니다.",
+      failureTitle: "선택 블록 인페인트 실패",
+      failureRecoveryMessage: "기존 결과 레이어와 마스크는 유지됩니다. 다시 실행하세요."
+    });
+  }, [
+    currentChapter,
+    currentChapterRef,
+    inpaintBusy,
+    runPartialInpaintForPage,
+    selectedBlock,
+    selectedPage,
+    selectedPageEditLocked
+  ]);
 
   const applyInpaintAllBlocks = React.useCallback(async () => {
     if (!selectedPage || selectedPage.blocks.length === 0 || selectedPageEditLocked || inpaintBusy) {
@@ -248,79 +368,26 @@ export function useInpaintRunActions({
       return;
     }
 
-    setInpaintBusy(true);
-    try {
-      if (dirty) {
-        await saveNow();
-      }
-      const selectionMaskDataUrl = await maskDataUrlForSelection(maskDataUrl, page.width, page.height, inpaintSelectionRect);
-      if (!selectionMaskDataUrl) {
-        pushStatus("선택 범위 안에 마스크 픽셀이 없습니다.");
-        return;
-      }
-
-      updatePageInpaintStatus(page.id, "running");
-      const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(page.dataUrl);
-      const result = await window.mangaApi.inpaintPage({
-        chapterId: currentChapter.id,
-        pageId: page.id,
-        sourceDataUrl,
-        maskDataUrl: selectionMaskDataUrl,
-        settings: DEFAULT_INPAINT_SETTINGS,
-        persistResult: false
-      });
-      const mergedResultDataUrl = await mergePartialInpaintResult(
-        page.inpaintResultDataUrl,
-        result.resultDataUrl,
-        result.maskDataUrl,
-        page.width,
-        page.height
-      );
-      const mergedMaskDataUrl = await mergeInpaintMaskDataUrls(maskDataUrl, result.maskDataUrl, page.width, page.height);
-      updateSelectedPageInpaintMask(mergedMaskDataUrl, { persist: false, recordUndo: false });
-      updateSelectedPageInpaintResult(mergedResultDataUrl, { persist: false });
-      const saved = await window.mangaApi.saveInpaintLayers({
-        chapterId: currentChapter.id,
-        pageId: page.id,
-        maskDataUrl: mergedMaskDataUrl,
-        resultDataUrl: mergedResultDataUrl
-      });
-      applyChapter(saved.chapter);
-      signalSaveComplete();
-      clearRecoverableFailure?.("inpaint-run");
-      void refreshLibrary();
-      pushStatus(result.engine === "local-fill-fallback" ? "선택 범위 로컬 인페인트 결과를 저장했습니다." : "선택 범위만 다시 인페인트했습니다.");
-    } catch (error) {
-      console.error(error);
-      updatePageInpaintStatus(page.id, "failed");
-      const message = error instanceof Error ? error.message : "부분 인페인트 실행에 실패했습니다.";
-      pushStatus(message);
-      reportRecoverableFailure?.({
-        id: "inpaint-run",
-        title: "부분 인페인트 실패",
-        message: "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요."
-      });
-    } finally {
-      setInpaintBusy(false);
-    }
+    await runPartialInpaintForPage({
+      page,
+      createPatchMaskDataUrl: () => maskDataUrlForSelection(maskDataUrl, page.width, page.height, inpaintSelectionRect),
+      baseMaskDataUrl: maskDataUrl,
+      emptyPatchStatusMessage: "선택 범위 안에 마스크 픽셀이 없습니다.",
+      statusMessage: "선택 범위만 다시 인페인트했습니다.",
+      localFillStatusMessage: "선택 범위 로컬 인페인트 결과를 저장했습니다.",
+      errorFallbackMessage: "부분 인페인트 실행에 실패했습니다.",
+      failureTitle: "부분 인페인트 실패",
+      failureRecoveryMessage: "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요."
+    });
   }, [
-    applyChapter,
-    clearRecoverableFailure,
     currentChapter,
     currentChapterRef,
-    dirty,
     inpaintBusy,
     inpaintSelectionRect,
     pushStatus,
-    refreshLibrary,
-    reportRecoverableFailure,
-    saveNow,
+    runPartialInpaintForPage,
     selectedPageEditLocked,
-    selectedPageIdRef,
-    signalSaveComplete,
-    updatePageInpaintStatus,
-    updateSelectedPageInpaintMask,
-    updateSelectedPageInpaintResult
+    selectedPageIdRef
   ]);
 
   return {

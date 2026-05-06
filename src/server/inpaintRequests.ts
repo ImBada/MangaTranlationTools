@@ -3,7 +3,7 @@ import { readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
 import { exportInpaintPsd, importInpaintPsd } from "./inpaintPsd";
-import { normalizeInpaintLayerDataUrls } from "./libraryImageData";
+import { clipOpaqueInpaintResultToMask, normalizeInpaintLayerDataUrls } from "./libraryImageData";
 import {
   getInpaintPsdImportPath,
   openChapter,
@@ -104,7 +104,12 @@ export async function saveInpaintLayersRequest(request: SaveInpaintLayersRequest
   assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
   assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
 
-  const layers = await normalizeInpaintLayerDataUrls(request.maskDataUrl, request.resultDataUrl);
+  const layers = request.preserveMaskDataUrl
+    ? {
+        maskDataUrl: request.maskDataUrl,
+        resultDataUrl: await clipOpaqueInpaintResultToMask(request.resultDataUrl, request.maskDataUrl)
+      }
+    : await normalizeInpaintLayerDataUrls(request.maskDataUrl, request.resultDataUrl);
   return {
     chapter: await saveNormalizedInpaintLayers(request.chapterId, request.pageId, layers.maskDataUrl, layers.resultDataUrl)
   };

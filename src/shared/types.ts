@@ -409,6 +409,7 @@ export type SaveInpaintLayersRequest = {
   pageId: string;
   maskDataUrl: string;
   resultDataUrl: string;
+  preserveMaskDataUrl?: boolean;
 };
 
 export type SaveInpaintLayersResult = {
