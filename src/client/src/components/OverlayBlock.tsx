@@ -32,6 +32,7 @@ type OverlayBlockProps = {
   onInlineEditCommit?: () => void;
   onStartInlineEdit?: (event: React.MouseEvent) => void;
   onFavoriteFontPresetSelect?: (presetId: string) => void;
+  onFontStyleCopy?: () => void | Promise<void>;
   onFontSizeChange?: (fontSizePx: number) => void;
   onAutoFitDisable?: () => void;
   onTextAlignChange?: (textAlign: TranslationBlock["textAlign"]) => void;
@@ -68,6 +69,7 @@ export function OverlayBlock({
   onInlineEditCommit,
   onStartInlineEdit,
   onFavoriteFontPresetSelect,
+  onFontStyleCopy,
   onFontSizeChange,
   onAutoFitDisable,
   onTextAlignChange,
@@ -328,71 +330,88 @@ export function OverlayBlock({
           ))}
         </div>
       ) : null}
-      {selectedControlsVisible && autoFitTextEnabled && onAutoFitDisable ? (
-        <button
-          type="button"
-          className="overlay-auto-fit-off-button"
-          aria-label="자동 맞춤 끄기"
-          title="자동 맞춤 끄기"
-          onPointerDown={stopInlineEditorEvent}
-          onClick={(event) => {
-            event.preventDefault();
-            event.stopPropagation();
-            onAutoFitDisable();
-          }}
-          onDoubleClick={stopInlineEditorEvent}
-        >
-          <span>자동</span>
-          <span>맞춤</span>
-          <strong>OFF</strong>
-        </button>
-      ) : selectedControlsVisible && onFontSizeChange ? (
+      {selectedControlsVisible && (onAutoFitDisable || onFontSizeChange || onFontStyleCopy) ? (
         <div
-          className={`overlay-font-size-controls${fontSizeLinkedToPreset ? " linked" : ""}`}
+          className="overlay-left-controls"
           role="group"
-          aria-label="개별 폰트 크기"
+          aria-label="블록 빠른 폰트 설정"
           onPointerDown={stopInlineEditorEvent}
           onClick={stopInlineEditorEvent}
           onDoubleClick={stopInlineEditorEvent}
         >
-          <button
-            type="button"
-            className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === 1 ? " pressed" : ""}`}
-            aria-label="폰트 크기 증가"
-            disabled={block.fontSizePx >= OVERLAY_FONT_SIZE_MAX_PX}
-            onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, 1)}
-            onPointerUp={fontSizeStepControl.stopRepeat}
-            onPointerCancel={fontSizeStepControl.handlePointerCancel}
-            onLostPointerCapture={fontSizeStepControl.stopRepeat}
-            onClick={() => fontSizeStepControl.handleClick(1)}
-          >
-            +
-          </button>
-          <div className="overlay-font-size-value">
-            <input
-              type="number"
-              min={OVERLAY_FONT_SIZE_MIN_PX}
-              max={OVERLAY_FONT_SIZE_MAX_PX}
-              step={OVERLAY_FONT_SIZE_STEP_PX}
-              value={Math.round(block.fontSizePx)}
-              aria-label="개별 폰트 크기"
-              onChange={(event) => fontSizeStepControl.setValue(Number(event.target.value))}
-            />
-            <span>px</span>
-          </div>
-          <button
-            type="button"
-            className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === -1 ? " pressed" : ""}`}
-            aria-label="폰트 크기 감소"
-            disabled={block.fontSizePx <= OVERLAY_FONT_SIZE_MIN_PX}
-            onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, -1)}
-            onPointerUp={fontSizeStepControl.stopRepeat}
-            onPointerCancel={fontSizeStepControl.handlePointerCancel}
-            onLostPointerCapture={fontSizeStepControl.stopRepeat}
-            onClick={() => fontSizeStepControl.handleClick(-1)}
-          >
-            -
-          </button>
+          {autoFitTextEnabled && onAutoFitDisable ? (
+            <button
+              type="button"
+              className="overlay-auto-fit-off-button"
+              aria-label="자동 맞춤 끄기"
+              title="자동 맞춤 끄기"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onAutoFitDisable();
+              }}
+            >
+              <span>자동</span>
+              <span>맞춤</span>
+              <strong>OFF</strong>
+            </button>
+          ) : onFontSizeChange ? (
+            <div className={`overlay-font-size-controls${fontSizeLinkedToPreset ? " linked" : ""}`} role="group" aria-label="개별 폰트 크기">
+              <button
+                type="button"
+                className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === 1 ? " pressed" : ""}`}
+                aria-label="폰트 크기 증가"
+                disabled={block.fontSizePx >= OVERLAY_FONT_SIZE_MAX_PX}
+                onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, 1)}
+                onPointerUp={fontSizeStepControl.stopRepeat}
+                onPointerCancel={fontSizeStepControl.handlePointerCancel}
+                onLostPointerCapture={fontSizeStepControl.stopRepeat}
+                onClick={() => fontSizeStepControl.handleClick(1)}
+              >
+                +
+              </button>
+              <div className="overlay-font-size-value">
+                <input
+                  type="number"
+                  min={OVERLAY_FONT_SIZE_MIN_PX}
+                  max={OVERLAY_FONT_SIZE_MAX_PX}
+                  step={OVERLAY_FONT_SIZE_STEP_PX}
+                  value={Math.round(block.fontSizePx)}
+                  aria-label="개별 폰트 크기"
+                  onChange={(event) => fontSizeStepControl.setValue(Number(event.target.value))}
+                />
+                <span>px</span>
+              </div>
+              <button
+                type="button"
+                className={`overlay-font-size-step${fontSizeStepControl.pressedDirection === -1 ? " pressed" : ""}`}
+                aria-label="폰트 크기 감소"
+                disabled={block.fontSizePx <= OVERLAY_FONT_SIZE_MIN_PX}
+                onPointerDown={(event) => fontSizeStepControl.handlePointerDown(event, -1)}
+                onPointerUp={fontSizeStepControl.stopRepeat}
+                onPointerCancel={fontSizeStepControl.handlePointerCancel}
+                onLostPointerCapture={fontSizeStepControl.stopRepeat}
+                onClick={() => fontSizeStepControl.handleClick(-1)}
+              >
+                -
+              </button>
+            </div>
+          ) : null}
+          {onFontStyleCopy ? (
+            <button
+              type="button"
+              className="overlay-font-style-copy-button"
+              aria-label="현재 폰트 설정 복사"
+              title="현재 폰트 설정 복사"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                void onFontStyleCopy();
+              }}
+            >
+              COPY
+            </button>
+          ) : null}
         </div>
       ) : null}
       {selectedControlsVisible ? <button className="rotate-handle" onPointerDown={onRotatePointerDown} aria-label="Rotate" /> : null}

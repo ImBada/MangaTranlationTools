@@ -298,6 +298,7 @@ export default function App(): React.JSX.Element {
     canUndoTranslation,
     clearSelectedBlockFontPreset,
     clearTranslationUndoStack,
+    copySelectedBlockFontStyleToClipboard,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
@@ -317,6 +318,7 @@ export default function App(): React.JSX.Element {
     fontPresets,
     fontSizePresets,
     listFontPresetBackups,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     renderFontPresetLinkButton,
@@ -526,6 +528,7 @@ export default function App(): React.JSX.Element {
     libraryWidgetOpen,
     modalOpen,
     oneHandMode: settings?.oneHandMode ?? false,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,
@@ -720,6 +723,7 @@ export default function App(): React.JSX.Element {
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={onBlockPointerDown}
+          onBlockFontStyleCopy={copySelectedBlockFontStyleToClipboard}
           onBlockFontSizeChange={updateSelectedBlockIndividualFontSize}
           onBlockAutoFitDisable={disableSelectedBlockAutoFit}
           onSelectedBlockRangeChange={onSelectedBlockRangeChange}

@@ -60,6 +60,7 @@ type UseTranslationEditingState = {
   activeFontSizePresetId: string | null;
   clearSelectedBlockFontPreset: () => void;
   clearTranslationUndoStack: () => void;
+  copySelectedBlockFontStyleToClipboard: () => Promise<void>;
   copySelectedBlockToClipboard: () => Promise<void>;
   createEmptyBlock: () => void;
   createFontPresetFromSelectedBlock: () => void;
@@ -79,6 +80,7 @@ type UseTranslationEditingState = {
   fontPresetName: string;
   fontPresets: FontPreset[];
   fontSizePresets: FontSizePreset[];
+  pasteSelectedBlockFontStyleFromClipboard: () => Promise<boolean>;
   pasteTranslationBlockFromClipboard: () => Promise<void>;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   listFontPresetBackups: () => Promise<FontPresetBackupSummary[]>;
@@ -231,11 +233,13 @@ export function useTranslationEditing({
   });
 
   const {
+    copySelectedBlockFontStyleToClipboard,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     deleteSelectedBlock,
     duplicateBlock,
     duplicateSelectedBlock,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     updateSelectedPageBlockOpacity
   } = useTranslationBlockActions({
@@ -257,6 +261,7 @@ export function useTranslationEditing({
     canUndoTranslation,
     clearSelectedBlockFontPreset,
     clearTranslationUndoStack,
+    copySelectedBlockFontStyleToClipboard,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     createFontPresetFromSelectedBlock,
@@ -276,6 +281,7 @@ export function useTranslationEditing({
     fontPresetName,
     fontPresets,
     fontSizePresets,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     recordTranslationUndoSnapshot,
     listFontPresetBackups,

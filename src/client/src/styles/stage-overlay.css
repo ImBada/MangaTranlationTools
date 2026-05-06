@@ -376,21 +376,32 @@
   outline-offset: 1px;
 }
 
-.overlay-font-size-controls,
-.overlay-auto-fit-off-button {
+.overlay-left-controls {
   position: absolute;
   right: calc(100% + 8px);
   top: 50%;
   z-index: 6;
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-style: normal;
+  text-decoration: none;
+  transform: translateY(-50%);
+  pointer-events: auto;
+}
+
+.overlay-font-size-controls,
+.overlay-auto-fit-off-button,
+.overlay-font-style-copy-button {
   width: 40px;
   border-radius: 8px;
   box-shadow:
     0 10px 26px rgba(0, 0, 0, 0.34),
     inset 0 1px 0 rgba(255, 255, 255, 0.08);
-  font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: inherit;
   font-style: normal;
   text-decoration: none;
-  transform: translateY(-50%);
   pointer-events: auto;
 }
 
@@ -545,6 +556,33 @@
 
 .overlay-auto-fit-off-button:focus-visible {
   outline: 2px solid rgba(255, 184, 92, 0.72);
+  outline-offset: 1px;
+}
+
+.overlay-font-style-copy-button {
+  display: grid;
+  place-items: center;
+  height: 24px;
+  min-height: 24px;
+  padding: 0;
+  border: 1px solid rgba(52, 211, 153, 0.48);
+  background:
+    linear-gradient(180deg, rgba(22, 101, 52, 0.96), rgba(10, 14, 20, 0.94));
+  color: #e9fff5;
+  font-size: 9px;
+  font-weight: 900;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.overlay-font-style-copy-button:hover {
+  border-color: rgba(52, 211, 153, 0.72);
+  background:
+    linear-gradient(180deg, rgba(21, 128, 61, 0.98), rgba(13, 18, 22, 0.96));
+}
+
+.overlay-font-style-copy-button:focus-visible {
+  outline: 2px solid rgba(52, 211, 153, 0.72);
   outline-offset: 1px;
 }
 

@@ -1,13 +1,53 @@
 import type { ChapterSnapshot, MangaPage, TranslationBlock } from "../../../shared/types";
+import { clearFontPresetLinkFields } from "./fontPresets";
 import { normalizeKoreanText } from "./textNormalization";
 
 const TRANSLATION_BLOCK_CLIPBOARD_KIND = "manga-translation-tools/translation-block";
+const TRANSLATION_BLOCK_FONT_STYLE_CLIPBOARD_KIND = "manga-translation-tools/translation-block-font-style";
+
+const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
+  "fontFamily",
+  "fontWeight",
+  "fontStyle",
+  "textDecoration",
+  "fontSizePx",
+  "lineHeight",
+  "letterSpacingPx",
+  "outlineColor",
+  "outlineWidthPx",
+  "secondaryOutlineColor",
+  "secondaryOutlineWidthPx",
+  "shadowEnabled",
+  "shadowColor",
+  "shadowAngleDeg",
+  "shadowDistancePx",
+  "autoFitText",
+  "textAlign",
+  "textPosition",
+  "textColor",
+  "screentoneFillEnabled",
+  "screentoneFillIntensity",
+  "screentoneFillDensity",
+  "screentoneFillAntialias"
+] satisfies readonly (keyof TranslationBlock)[];
+
+type TranslationBlockFontStyleKey = typeof TRANSLATION_BLOCK_FONT_STYLE_KEYS[number];
+const TRANSLATION_BLOCK_FONT_STYLE_KEY_SET = new Set<string>(TRANSLATION_BLOCK_FONT_STYLE_KEYS);
 
 type TranslationBlockClipboardPayload = {
   kind: typeof TRANSLATION_BLOCK_CLIPBOARD_KIND;
   version: 1;
   block: TranslationBlock;
 };
+
+type TranslationBlockFontStyleClipboardPayload = {
+  kind: typeof TRANSLATION_BLOCK_FONT_STYLE_CLIPBOARD_KIND;
+  version: 1;
+  values: Partial<Record<TranslationBlockFontStyleKey, unknown>>;
+  unset: TranslationBlockFontStyleKey[];
+};
+
+export type TranslationBlockFontStylePatch = Partial<Pick<TranslationBlock, TranslationBlockFontStyleKey>>;
 
 export type InpaintMaskUndoSnapshot = {
   inpaintMaskPath?: string;
@@ -57,6 +97,76 @@ export function parseTranslationBlockFromClipboard(value: string): TranslationBl
       return null;
     }
     return cloneTranslationBlock(parsed.block);
+  } catch {
+    return null;
+  }
+}
+
+export function extractTranslationBlockFontStyle(block: TranslationBlock): TranslationBlockFontStylePatch {
+  const style: TranslationBlockFontStylePatch = {};
+  for (const key of TRANSLATION_BLOCK_FONT_STYLE_KEYS) {
+    Object.assign(style, { [key]: block[key] });
+  }
+  return style;
+}
+
+export function applyTranslationBlockFontStyle(
+  block: TranslationBlock,
+  style: TranslationBlockFontStylePatch
+): TranslationBlock {
+  const { fontPresetId: _fontPresetId, ...blockWithoutFontPreset } = block;
+
+  return {
+    ...clearFontPresetLinkFields(blockWithoutFontPreset),
+    ...style
+  };
+}
+
+export function serializeTranslationBlockFontStyleForClipboard(style: TranslationBlockFontStylePatch): string {
+  const values: Partial<Record<TranslationBlockFontStyleKey, unknown>> = {};
+  const unset: TranslationBlockFontStyleKey[] = [];
+
+  for (const key of TRANSLATION_BLOCK_FONT_STYLE_KEYS) {
+    const value = style[key];
+    if (value === undefined) {
+      unset.push(key);
+    } else {
+      values[key] = value;
+    }
+  }
+
+  return JSON.stringify({
+    kind: TRANSLATION_BLOCK_FONT_STYLE_CLIPBOARD_KIND,
+    version: 1,
+    values,
+    unset
+  } satisfies TranslationBlockFontStyleClipboardPayload);
+}
+
+export function parseTranslationBlockFontStyleFromClipboard(value: string): TranslationBlockFontStylePatch | null {
+  try {
+    const parsed = JSON.parse(value) as Partial<TranslationBlockFontStyleClipboardPayload>;
+    if (
+      parsed.kind !== TRANSLATION_BLOCK_FONT_STYLE_CLIPBOARD_KIND ||
+      parsed.version !== 1 ||
+      !isRecord(parsed.values) ||
+      !Array.isArray(parsed.unset)
+    ) {
+      return null;
+    }
+
+    const unset = new Set(parsed.unset.filter(isTranslationBlockFontStyleKey));
+    const style: TranslationBlockFontStylePatch = {};
+    for (const key of TRANSLATION_BLOCK_FONT_STYLE_KEYS) {
+      if (unset.has(key)) {
+        Object.assign(style, { [key]: undefined });
+        continue;
+      }
+      if (Object.prototype.hasOwnProperty.call(parsed.values, key)) {
+        Object.assign(style, { [key]: parsed.values[key] });
+      }
+    }
+    return style;
   } catch {
     return null;
   }
@@ -179,4 +289,12 @@ export function isEditableTarget(target: EventTarget | null): boolean {
 
 export function angleBetweenPointsDeg(centerX: number, centerY: number, x: number, y: number): number {
   return (Math.atan2(y - centerY, x - centerX) * 180) / Math.PI;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isTranslationBlockFontStyleKey(value: unknown): value is TranslationBlockFontStyleKey {
+  return typeof value === "string" && TRANSLATION_BLOCK_FONT_STYLE_KEY_SET.has(value);
 }

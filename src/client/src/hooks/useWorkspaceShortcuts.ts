@@ -28,6 +28,7 @@ type WorkspaceShortcutOptions = {
   libraryWidgetOpen: boolean;
   modalOpen: boolean;
   oneHandMode: boolean;
+  pasteSelectedBlockFontStyleFromClipboard: () => Promise<boolean>;
   pasteTranslationBlockFromClipboard: () => void | Promise<void>;
   pushStatus: (line: string) => void;
   rangeToolActive: boolean;
@@ -64,6 +65,7 @@ export function useWorkspaceShortcuts({
   libraryWidgetOpen,
   modalOpen,
   oneHandMode,
+  pasteSelectedBlockFontStyleFromClipboard,
   pasteTranslationBlockFromClipboard,
   pushStatus,
   rangeToolActive,
@@ -190,7 +192,15 @@ export function useWorkspaceShortcuts({
         !modalOpen && !editableTarget && isBlockPasteShortcut(event);
       if (blockPasteShortcut && !selectedPageEditLocked) {
         event.preventDefault();
-        void pasteTranslationBlockFromClipboard();
+        if (selectedBlockIdRef.current) {
+          void pasteSelectedBlockFontStyleFromClipboard().then((handled) => {
+            if (!handled) {
+              void pasteTranslationBlockFromClipboard();
+            }
+          });
+        } else {
+          void pasteTranslationBlockFromClipboard();
+        }
         return;
       }
 
@@ -348,6 +358,7 @@ export function useWorkspaceShortcuts({
     modalOpen,
     oneHandMode,
     openFindReplace,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     pushStatus,
     rangeToolActive,

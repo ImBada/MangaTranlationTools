@@ -51,6 +51,7 @@ type ImageStageLayersProps = {
   stageSize: ViewportSize | null;
   temporaryPanActive: boolean;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onBlockFontStyleCopy: () => void | Promise<void>;
   onBlockFontSizeChange: (fontSizePx: number) => void;
   onBlockAutoFitDisable: () => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
@@ -85,6 +86,7 @@ export function ImageStageLayers({
   stageSize,
   temporaryPanActive,
   onBlockPointerDown,
+  onBlockFontStyleCopy,
   onBlockFontSizeChange,
   onBlockAutoFitDisable,
   onBlockTextUpdate,
@@ -241,6 +243,7 @@ export function ImageStageLayers({
                   onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
                   onInlineEditCancel={() => setInlineEdit(null)}
                   onInlineEditCommit={commitInlineEdit}
+                  onFontStyleCopy={onBlockFontStyleCopy}
                   onFontSizeChange={onBlockFontSizeChange}
                   onAutoFitDisable={onBlockAutoFitDisable}
                   onTextAlignChange={onBlockTextAlignChange}

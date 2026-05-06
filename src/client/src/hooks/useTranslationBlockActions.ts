@@ -3,10 +3,15 @@ import type { ChapterSnapshot, FontPreset, MangaPage, TranslationBlock } from ".
 import { offsetBlockBboxes } from "../../../shared/geometry";
 import { DEFAULT_FONT_PRESET } from "../lib/fontPresets";
 import {
+  applyTranslationBlockFontStyle,
   cloneTranslationBlock,
+  extractTranslationBlockFontStyle,
+  parseTranslationBlockFontStyleFromClipboard,
   parseTranslationBlockFromClipboard,
+  serializeTranslationBlockFontStyleForClipboard,
   serializeTranslationBlockForClipboard
 } from "../lib/editorUtils";
+import type { TranslationBlockFontStylePatch } from "../lib/editorUtils";
 import type { ActiveLayer } from "../lib/layerState";
 
 type UseTranslationBlockActionsOptions = {
@@ -24,11 +29,13 @@ type UseTranslationBlockActionsOptions = {
 };
 
 type UseTranslationBlockActionsState = {
+  copySelectedBlockFontStyleToClipboard: () => Promise<void>;
   copySelectedBlockToClipboard: () => Promise<void>;
   createEmptyBlock: () => void;
   deleteSelectedBlock: () => void;
   duplicateBlock: (block: TranslationBlock) => void;
   duplicateSelectedBlock: () => void;
+  pasteSelectedBlockFontStyleFromClipboard: () => Promise<boolean>;
   pasteTranslationBlockFromClipboard: () => Promise<void>;
   updateSelectedPageBlockOpacity: (opacity: number) => void;
 };
@@ -47,6 +54,7 @@ export function useTranslationBlockActions({
   updateCurrentChapter
 }: UseTranslationBlockActionsOptions): UseTranslationBlockActionsState {
   const translationBlockClipboardRef = React.useRef<TranslationBlock | null>(null);
+  const translationBlockFontStyleClipboardRef = React.useRef<TranslationBlockFontStylePatch | null>(null);
 
   const deleteSelectedBlock = React.useCallback(() => {
     if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
@@ -95,6 +103,7 @@ export function useTranslationBlockActions({
 
     const blockCopy = cloneTranslationBlock(selectedBlock);
     translationBlockClipboardRef.current = blockCopy;
+    translationBlockFontStyleClipboardRef.current = null;
     try {
       await navigator.clipboard?.writeText(serializeTranslationBlockForClipboard(blockCopy));
       pushStatus("선택한 텍스트 블록을 복사했습니다.");
@@ -102,6 +111,65 @@ export function useTranslationBlockActions({
       pushStatus("선택한 텍스트 블록을 복사했습니다. 시스템 클립보드 접근은 차단되어 앱 안에서만 붙여넣을 수 있습니다.");
     }
   }, [pushStatus, selectedBlock]);
+
+  const copySelectedBlockFontStyleToClipboard = React.useCallback(async () => {
+    if (!selectedBlock) {
+      return;
+    }
+
+    const fontStyle = extractTranslationBlockFontStyle(selectedBlock);
+    translationBlockClipboardRef.current = null;
+    translationBlockFontStyleClipboardRef.current = { ...fontStyle };
+    try {
+      await navigator.clipboard?.writeText(serializeTranslationBlockFontStyleForClipboard(fontStyle));
+      pushStatus("선택한 블록의 폰트 설정을 복사했습니다.");
+    } catch {
+      pushStatus("선택한 블록의 폰트 설정을 복사했습니다. 시스템 클립보드 접근은 차단되어 앱 안에서만 붙여넣을 수 있습니다.");
+    }
+  }, [pushStatus, selectedBlock]);
+
+  const pasteSelectedBlockFontStyleFromClipboard = React.useCallback(async () => {
+    if (!selectedPage || !selectedBlock || selectedPageEditLocked) {
+      return false;
+    }
+
+    let fontStyle = translationBlockFontStyleClipboardRef.current
+      ? { ...translationBlockFontStyleClipboardRef.current }
+      : null;
+    try {
+      const clipboardText = await navigator.clipboard?.readText();
+      const clipboardFontStyle = clipboardText ? parseTranslationBlockFontStyleFromClipboard(clipboardText) : null;
+      if (clipboardFontStyle) {
+        fontStyle = clipboardFontStyle;
+      }
+    } catch {
+      // Keep the in-memory style copy path working when clipboard read permission is unavailable.
+    }
+
+    if (!fontStyle) {
+      return false;
+    }
+
+    const appliedFontStyle = fontStyle;
+    translationBlockFontStyleClipboardRef.current = { ...appliedFontStyle };
+    recordTranslationUndoSnapshot("폰트 설정 붙여넣기");
+    updateCurrentChapter(selectedPage.id, (current) => ({
+      ...current,
+      pages: current.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: page.blocks.map((block) =>
+                block.id === selectedBlock.id ? applyTranslationBlockFontStyle(block, appliedFontStyle) : block
+              )
+            }
+          : page
+      )
+    }));
+    pushStatus("복사한 폰트 설정을 선택한 블록에 적용했습니다.");
+    return true;
+  }, [pushStatus, recordTranslationUndoSnapshot, selectedBlock, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
   const pasteTranslationBlockFromClipboard = React.useCallback(async () => {
     if (!selectedPage || selectedPageEditLocked) {
@@ -260,11 +328,13 @@ export function useTranslationBlockActions({
   }, [editingFontPreset, inpaintBusy, recordTranslationUndoSnapshot, selectLayer, selectedPage, selectedPageEditLocked, setSelectedBlockId, showOverlayLayer, updateCurrentChapter]);
 
   return {
+    copySelectedBlockFontStyleToClipboard,
     copySelectedBlockToClipboard,
     createEmptyBlock,
     deleteSelectedBlock,
     duplicateBlock,
     duplicateSelectedBlock,
+    pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
     updateSelectedPageBlockOpacity
   };

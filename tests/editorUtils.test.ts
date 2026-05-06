@@ -1,9 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { MangaPage, TranslationBlock } from "../src/shared/types";
 import {
+  applyTranslationBlockFontStyle,
   bringTranslationBlockToFront,
   createInpaintMaskUndoSnapshot,
+  extractTranslationBlockFontStyle,
+  parseTranslationBlockFontStyleFromClipboard,
   parseTranslationBlockFromClipboard,
+  serializeTranslationBlockFontStyleForClipboard,
   serializeTranslationBlockForClipboard
 } from "../src/client/src/lib/editorUtils";
 
@@ -34,6 +38,90 @@ describe("editor utils", () => {
   it("rejects unrelated clipboard text", () => {
     expect(parseTranslationBlockFromClipboard("plain text")).toBeNull();
     expect(parseTranslationBlockFromClipboard(JSON.stringify({ kind: "other", block }))).toBeNull();
+  });
+
+  it("round-trips font style clipboard values including cleared optional fields", () => {
+    const styledBlock: TranslationBlock = {
+      ...block,
+      fontPresetId: "preset-1",
+      fontFamily: "Arial",
+      fontWeight: 800,
+      fontStyle: "italic",
+      textDecoration: "underline",
+      fontSizePx: 36,
+      lineHeight: 1.35,
+      letterSpacingPx: undefined,
+      outlineColor: "#ffffff",
+      outlineWidthPx: 2,
+      secondaryOutlineColor: "#223344",
+      secondaryOutlineWidthPx: 3,
+      shadowEnabled: true,
+      shadowColor: "#112233",
+      shadowAngleDeg: 120,
+      shadowDistancePx: 6,
+      textAlign: "right",
+      textPosition: "bottom-right",
+      textColor: "#fefefe",
+      screentoneFillEnabled: true,
+      screentoneFillIntensity: 0.8,
+      screentoneFillDensity: 0.35,
+      screentoneFillAntialias: false
+    };
+
+    const parsed = parseTranslationBlockFontStyleFromClipboard(
+      serializeTranslationBlockFontStyleForClipboard(extractTranslationBlockFontStyle(styledBlock))
+    );
+
+    expect(parsed).toMatchObject({
+      fontFamily: "Arial",
+      fontWeight: 800,
+      fontStyle: "italic",
+      textDecoration: "underline",
+      fontSizePx: 36,
+      lineHeight: 1.35,
+      outlineWidthPx: 2,
+      shadowEnabled: true,
+      textAlign: "right",
+      textPosition: "bottom-right",
+      screentoneFillAntialias: false
+    });
+    expect(parsed).not.toBeNull();
+    expect(Object.prototype.hasOwnProperty.call(parsed, "letterSpacingPx")).toBe(true);
+    expect(parsed?.letterSpacingPx).toBeUndefined();
+  });
+
+  it("applies copied font style without replacing block content or geometry", () => {
+    const target: TranslationBlock = {
+      ...block,
+      id: "target",
+      translatedText: "keep me",
+      fontPresetId: "old-preset",
+      fontSizeLinkedToPreset: true,
+      fontSizePx: 12,
+      lineHeight: 1,
+      textAlign: "left"
+    };
+    const style = extractTranslationBlockFontStyle({
+      ...block,
+      fontSizePx: 42,
+      lineHeight: 1.4,
+      textAlign: "right",
+      textColor: "#ffffff"
+    });
+
+    const applied = applyTranslationBlockFontStyle(target, style);
+
+    expect(applied).toMatchObject({
+      id: "target",
+      bbox: target.bbox,
+      translatedText: "keep me",
+      fontSizePx: 42,
+      lineHeight: 1.4,
+      textAlign: "right",
+      textColor: "#ffffff"
+    });
+    expect(applied.fontPresetId).toBeUndefined();
+    expect(applied.fontSizeLinkedToPreset).toBeUndefined();
   });
 
   it("moves a translation block to the front render order", () => {
