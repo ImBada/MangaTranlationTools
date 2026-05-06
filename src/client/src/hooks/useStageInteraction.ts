@@ -217,12 +217,13 @@ export function useStageInteraction({
     const rect = stage.getBoundingClientRect();
     const dx = ((event.clientX - drag.startX) / Math.max(1, rect.width)) * 1000;
     const dy = ((event.clientY - drag.startY) / Math.max(1, rect.height)) * 1000;
+    const moveDy = event.shiftKey ? 0 : dy;
     const next =
       drag.mode === "move"
         ? {
             ...drag.startBbox,
             x: drag.startBbox.x + dx,
-            y: drag.startBbox.y + dy
+            y: drag.startBbox.y + moveDy
           }
         : drag.mode === "resize"
           ? {
