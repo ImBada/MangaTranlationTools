@@ -79,6 +79,12 @@ type WorkspacePanelProps = {
   onBlockFontSizeChange: (fontSizePx: number) => void;
   onBlockAutoFitDisable: () => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onBlockTextSelectionSplitDuplicate: (
+    block: TranslationBlock,
+    translatedText: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => boolean;
   onFavoriteFontPresetSelect: (presetId: string) => void;
   onDownloadLamaModel: () => void | Promise<unknown>;
   onOpenFindReplace: () => void;
@@ -153,6 +159,7 @@ export function WorkspacePanel({
   onBlockFontSizeChange,
   onBlockAutoFitDisable,
   onBlockTextUpdate,
+  onBlockTextSelectionSplitDuplicate,
   onFavoriteFontPresetSelect,
   onDownloadLamaModel,
   onOpenFindReplace,
@@ -318,6 +325,7 @@ export function WorkspacePanel({
             onBlockAutoFitDisable={onBlockAutoFitDisable}
             onSelectedBlockRangeChange={onSelectedBlockRangeChange}
             onBlockTextUpdate={onBlockTextUpdate}
+            onBlockTextSelectionSplitDuplicate={onBlockTextSelectionSplitDuplicate}
             onBlockTextAlignChange={onBlockTextAlignChange}
             onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           />

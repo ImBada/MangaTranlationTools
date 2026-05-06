@@ -309,6 +309,7 @@ export default function App(): React.JSX.Element {
     deleteFontSizePreset,
     deleteSelectedBlock,
     duplicateBlock,
+    duplicateBlockTextSelection,
     duplicateSelectedBlock,
     favoriteFontPresetIds,
     favoriteFontPresets,
@@ -728,6 +729,7 @@ export default function App(): React.JSX.Element {
           onBlockAutoFitDisable={disableSelectedBlockAutoFit}
           onSelectedBlockRangeChange={onSelectedBlockRangeChange}
           onBlockTextUpdate={updateInlineBlockText}
+          onBlockTextSelectionSplitDuplicate={duplicateBlockTextSelection}
           onBlockTextAlignChange={(textAlign) => updateSelectedBlockFontSetting({ textAlign })}
           onFavoriteFontPresetSelect={selectFontPreset}
           onOpenFindReplace={openFindReplace}

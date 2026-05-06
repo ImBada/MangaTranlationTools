@@ -31,6 +31,7 @@ type OverlayBlockProps = {
   onInlineEditCancel?: () => void;
   onInlineEditChange?: (value: string) => void;
   onInlineEditCommit?: () => void;
+  inlineEditorRef?: React.Ref<HTMLTextAreaElement>;
   onStartInlineEdit?: (event: React.MouseEvent) => void;
   onFavoriteFontPresetSelect?: (presetId: string) => void;
   onFontStyleCopy?: () => void | Promise<void>;
@@ -69,6 +70,7 @@ export function OverlayBlock({
   onInlineEditCancel,
   onInlineEditChange,
   onInlineEditCommit,
+  inlineEditorRef,
   onStartInlineEdit,
   onFavoriteFontPresetSelect,
   onFontStyleCopy,
@@ -244,6 +246,7 @@ export function OverlayBlock({
     >
       {inlineEditDraft !== undefined ? (
         <textarea
+          ref={inlineEditorRef}
           className="overlay-inline-editor"
           value={inlineEditDraft}
           aria-label="블록 번역문 바로 편집"

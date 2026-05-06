@@ -51,6 +51,11 @@ type TranslationBlockFontStyleClipboardPayload = {
 
 export type TranslationBlockFontStylePatch = Partial<Pick<TranslationBlock, TranslationBlockFontStyleKey>>;
 
+type TextSelectionSplit = {
+  selectedText: string;
+  remainingText: string;
+};
+
 export type InpaintMaskUndoSnapshot = {
   inpaintMaskPath?: string;
   inpaintResultPath?: string;
@@ -81,6 +86,23 @@ export function cloneTranslationBlock(block: TranslationBlock): TranslationBlock
     ...block,
     bbox: { ...block.bbox },
     renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined
+  };
+}
+
+export function splitTextBySelection(text: string, selectionStart: number, selectionEnd: number): TextSelectionSplit | null {
+  if (!Number.isFinite(selectionStart) || !Number.isFinite(selectionEnd)) {
+    return null;
+  }
+
+  const start = Math.max(0, Math.min(text.length, Math.floor(Math.min(selectionStart, selectionEnd))));
+  const end = Math.max(0, Math.min(text.length, Math.floor(Math.max(selectionStart, selectionEnd))));
+  if (start === end) {
+    return null;
+  }
+
+  return {
+    selectedText: text.slice(start, end),
+    remainingText: `${text.slice(0, start)}${text.slice(end)}`
   };
 }
 

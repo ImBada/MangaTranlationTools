@@ -56,6 +56,12 @@ type ImageStageLayersProps = {
   onBlockFontSizeChange: (fontSizePx: number) => void;
   onBlockAutoFitDisable: () => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onBlockTextSelectionSplitDuplicate: (
+    block: TranslationBlock,
+    translatedText: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => boolean;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
@@ -92,6 +98,7 @@ export function ImageStageLayers({
   onBlockFontSizeChange,
   onBlockAutoFitDisable,
   onBlockTextUpdate,
+  onBlockTextSelectionSplitDuplicate,
   onBlockTextAlignChange,
   onFavoriteFontPresetSelect,
   onInpaintLayerChange,
@@ -101,6 +108,8 @@ export function ImageStageLayers({
   const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
   const resolvedStageSize = stageSize ?? pageSize;
   const [inlineEdit, setInlineEdit] = React.useState<{ blockId: string; draft: string } | null>(null);
+  const inlineEditorRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const suppressInlineCommitBlockIdRef = React.useRef<string | null>(null);
   const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
 
@@ -112,12 +121,64 @@ export function ImageStageLayers({
     if (!inlineEdit) {
       return;
     }
+    if (suppressInlineCommitBlockIdRef.current === inlineEdit.blockId) {
+      suppressInlineCommitBlockIdRef.current = null;
+      setInlineEdit(null);
+      return;
+    }
     const block = page.blocks.find((candidate) => candidate.id === inlineEdit.blockId);
     if (block && inlineEdit.draft !== block.translatedText) {
       onBlockTextUpdate(block, inlineEdit.draft);
     }
     setInlineEdit(null);
   }, [inlineEdit, onBlockTextUpdate, page.blocks]);
+
+  React.useEffect(() => {
+    if (!inlineEdit) {
+      suppressInlineCommitBlockIdRef.current = null;
+    }
+  }, [inlineEdit]);
+
+  const readInlineEditSelection = React.useCallback((blockId: string) => {
+    const editor = inlineEditorRef.current;
+    if (!inlineEdit || inlineEdit.blockId !== blockId || !editor) {
+      return null;
+    }
+    const selectionStart = editor.selectionStart;
+    const selectionEnd = editor.selectionEnd;
+    if (selectionStart === selectionEnd) {
+      return null;
+    }
+    return {
+      translatedText: editor.value,
+      selectionStart,
+      selectionEnd
+    };
+  }, [inlineEdit]);
+
+  const handleMovePointerDown = React.useCallback((event: React.PointerEvent, block: TranslationBlock) => {
+    if (resolveDuplicateModifierState(event)) {
+      const selection = readInlineEditSelection(block.id);
+      if (selection) {
+        event.preventDefault();
+        event.stopPropagation();
+        suppressInlineCommitBlockIdRef.current = block.id;
+        const splitApplied = onBlockTextSelectionSplitDuplicate(
+          block,
+          selection.translatedText,
+          selection.selectionStart,
+          selection.selectionEnd
+        );
+        if (splitApplied) {
+          setInlineEdit(null);
+          return;
+        }
+        suppressInlineCommitBlockIdRef.current = null;
+      }
+    }
+
+    onBlockPointerDown(event, block, "move");
+  }, [onBlockPointerDown, onBlockTextSelectionSplitDuplicate, readInlineEditSelection, resolveDuplicateModifierState]);
 
   React.useEffect(() => {
     if (!inlineEdit) {
@@ -235,9 +296,10 @@ export function ImageStageLayers({
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
                   widgetsVisible={!blockRangeSelectionActive}
                   inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
+                  inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}
                   visualContentVisible={false}
                   favoriteFontPresets={favoriteFontPresets}
-                  onPointerDown={(event) => onBlockPointerDown(event, block, "move")}
+                  onPointerDown={(event) => handleMovePointerDown(event, block)}
                   onStartInlineEdit={(event) => {
                     event.preventDefault();
                     event.stopPropagation();

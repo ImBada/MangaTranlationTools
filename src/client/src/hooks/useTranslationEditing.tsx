@@ -71,6 +71,7 @@ type UseTranslationEditingState = {
   deleteFontSizePreset: (presetId: string) => void;
   deleteSelectedBlock: () => void;
   duplicateBlock: (block: TranslationBlock) => void;
+  duplicateBlockTextSelection: (block: TranslationBlock, translatedText: string, selectionStart: number, selectionEnd: number) => boolean;
   duplicateSelectedBlock: () => void;
   editingFontPreset: FontPreset | null;
   favoriteFontPresetIds: string[];
@@ -238,6 +239,7 @@ export function useTranslationEditing({
     createEmptyBlock,
     deleteSelectedBlock,
     duplicateBlock,
+    duplicateBlockTextSelection,
     duplicateSelectedBlock,
     pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,
@@ -272,6 +274,7 @@ export function useTranslationEditing({
     deleteFontSizePreset,
     deleteSelectedBlock,
     duplicateBlock,
+    duplicateBlockTextSelection,
     duplicateSelectedBlock,
     editingFontPreset,
     favoriteFontPresetIds,

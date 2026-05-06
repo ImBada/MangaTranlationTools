@@ -9,7 +9,8 @@ import {
   parseTranslationBlockFontStyleFromClipboard,
   parseTranslationBlockFromClipboard,
   serializeTranslationBlockFontStyleForClipboard,
-  serializeTranslationBlockForClipboard
+  serializeTranslationBlockForClipboard,
+  splitTextBySelection
 } from "../lib/editorUtils";
 import type { TranslationBlockFontStylePatch } from "../lib/editorUtils";
 import type { ActiveLayer } from "../lib/layerState";
@@ -34,6 +35,7 @@ type UseTranslationBlockActionsState = {
   createEmptyBlock: () => void;
   deleteSelectedBlock: () => void;
   duplicateBlock: (block: TranslationBlock) => void;
+  duplicateBlockTextSelection: (block: TranslationBlock, translatedText: string, selectionStart: number, selectionEnd: number) => boolean;
   duplicateSelectedBlock: () => void;
   pasteSelectedBlockFontStyleFromClipboard: () => Promise<boolean>;
   pasteTranslationBlockFromClipboard: () => Promise<void>;
@@ -238,6 +240,51 @@ export function useTranslationBlockActions({
     setSelectedBlockId(copy.id);
   }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
 
+  const duplicateBlockTextSelection = React.useCallback((
+    block: TranslationBlock,
+    translatedText: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => {
+    if (!selectedPage || selectedPageEditLocked || !selectedPage.blocks.some((candidate) => candidate.id === block.id)) {
+      return false;
+    }
+
+    const split = splitTextBySelection(translatedText, selectionStart, selectionEnd);
+    if (!split) {
+      return false;
+    }
+
+    const copyId = `${block.id}-split-${Date.now()}`;
+    recordTranslationUndoSnapshot("번역 블록 나누기");
+    updateCurrentChapter(selectedPage.id, (current) => ({
+      ...current,
+      pages: current.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt: new Date().toISOString(),
+              blocks: page.blocks.flatMap((candidate) => {
+                if (candidate.id !== block.id) {
+                  return [candidate];
+                }
+
+                const remainingBlock = { ...candidate, translatedText: split.remainingText };
+                const selectedTextBlock = {
+                  ...offsetBlockBboxes(candidate, 16, 16),
+                  id: copyId,
+                  translatedText: split.selectedText
+                };
+                return [remainingBlock, selectedTextBlock];
+              })
+            }
+          : page
+      )
+    }));
+    setSelectedBlockId(copyId);
+    return true;
+  }, [recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
+
   const duplicateSelectedBlock = React.useCallback(() => {
     if (!selectedBlock) {
       return;
@@ -333,6 +380,7 @@ export function useTranslationBlockActions({
     createEmptyBlock,
     deleteSelectedBlock,
     duplicateBlock,
+    duplicateBlockTextSelection,
     duplicateSelectedBlock,
     pasteSelectedBlockFontStyleFromClipboard,
     pasteTranslationBlockFromClipboard,

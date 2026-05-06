@@ -55,6 +55,12 @@ type ImageStageProps = {
   onBlockAutoFitDisable: () => void;
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
   onBlockTextUpdate: (block: TranslationBlock, translatedText: string) => void;
+  onBlockTextSelectionSplitDuplicate: (
+    block: TranslationBlock,
+    translatedText: string,
+    selectionStart: number,
+    selectionEnd: number
+  ) => boolean;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
 };
@@ -99,6 +105,7 @@ export function ImageStage({
   onBlockAutoFitDisable,
   onSelectedBlockRangeChange,
   onBlockTextUpdate,
+  onBlockTextSelectionSplitDuplicate,
   onBlockTextAlignChange,
   onFavoriteFontPresetSelect
 }: ImageStageProps): React.JSX.Element {
@@ -249,6 +256,7 @@ export function ImageStage({
           onBlockFontSizeChange={onBlockFontSizeChange}
           onBlockAutoFitDisable={onBlockAutoFitDisable}
           onBlockTextUpdate={onBlockTextUpdate}
+          onBlockTextSelectionSplitDuplicate={onBlockTextSelectionSplitDuplicate}
           onBlockTextAlignChange={onBlockTextAlignChange}
           onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           onInpaintLayerChange={onInpaintLayerChange}

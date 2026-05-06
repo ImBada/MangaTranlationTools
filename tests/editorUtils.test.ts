@@ -8,7 +8,8 @@ import {
   parseTranslationBlockFontStyleFromClipboard,
   parseTranslationBlockFromClipboard,
   serializeTranslationBlockFontStyleForClipboard,
-  serializeTranslationBlockForClipboard
+  serializeTranslationBlockForClipboard,
+  splitTextBySelection
 } from "../src/client/src/lib/editorUtils";
 
 const block: TranslationBlock = {
@@ -38,6 +39,21 @@ describe("editor utils", () => {
   it("rejects unrelated clipboard text", () => {
     expect(parseTranslationBlockFromClipboard("plain text")).toBeNull();
     expect(parseTranslationBlockFromClipboard(JSON.stringify({ kind: "other", block }))).toBeNull();
+  });
+
+  it("splits selected text into remaining and selected parts", () => {
+    expect(splitTextBySelection("첫 줄\n둘째 줄\n셋째 줄", 4, 8)).toEqual({
+      selectedText: "둘째 줄",
+      remainingText: "첫 줄\n\n셋째 줄"
+    });
+  });
+
+  it("normalizes reversed and out-of-range text selections", () => {
+    expect(splitTextBySelection("abcdef", 99, 2)).toEqual({
+      selectedText: "cdef",
+      remainingText: "ab"
+    });
+    expect(splitTextBySelection("abcdef", 3, 3)).toBeNull();
   });
 
   it("round-trips font style clipboard values including cleared optional fields", () => {
