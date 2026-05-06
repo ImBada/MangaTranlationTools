@@ -11,6 +11,7 @@ initializeCanvas(
 
 const EXPORT_BACKGROUND_LAYER_NAME = "배경 (이름변경금지)";
 const EXPORT_RESULT_LAYER_NAME = "Inpaint Result";
+const EXPORT_TRANSLATION_BLOCKS_LAYER_NAME = "번역 블록";
 
 type DecodedRgba = {
   data: Buffer;
@@ -30,33 +31,49 @@ export async function exportInpaintPsd(request: ExportInpaintPsdRequest): Promis
   const source = await decodeDataUrlToRgba(request.sourceDataUrl, width, height);
   const result = request.resultDataUrl ? await decodeDataUrlToRgba(request.resultDataUrl, width, height) : null;
   const mask = request.maskDataUrl ? await decodeDataUrlToRgba(request.maskDataUrl, width, height) : null;
+  const translationBlocks = request.translationBlocksDataUrl ? await decodeDataUrlToRgba(request.translationBlocksDataUrl, width, height) : null;
   const resultLayer = result ? applyMaskToResultLayer(result.data, mask?.data ?? null) : Buffer.alloc(width * height * 4);
   const composite = blendLayerOverOpaqueBackground(source.data, resultLayer);
+
+  const children: Layer[] = [
+    {
+      name: EXPORT_BACKGROUND_LAYER_NAME,
+      top: 0,
+      left: 0,
+      bottom: height,
+      right: width,
+      opacity: 1,
+      imageData: toImageData(makeOpaque(source.data), width, height)
+    },
+    {
+      name: EXPORT_RESULT_LAYER_NAME,
+      top: 0,
+      left: 0,
+      bottom: height,
+      right: width,
+      opacity: 1,
+      imageData: toImageData(resultLayer, width, height)
+    }
+  ];
+
+  if (translationBlocks) {
+    children.push({
+      name: EXPORT_TRANSLATION_BLOCKS_LAYER_NAME,
+      top: 0,
+      left: 0,
+      bottom: height,
+      right: width,
+      opacity: 1,
+      hidden: true,
+      imageData: toImageData(translationBlocks.data, width, height)
+    });
+  }
 
   const psd: Psd = {
     width,
     height,
     imageData: toImageData(composite, width, height),
-    children: [
-      {
-        name: EXPORT_BACKGROUND_LAYER_NAME,
-        top: 0,
-        left: 0,
-        bottom: height,
-        right: width,
-        opacity: 1,
-        imageData: toImageData(makeOpaque(source.data), width, height)
-      },
-      {
-        name: EXPORT_RESULT_LAYER_NAME,
-        top: 0,
-        left: 0,
-        bottom: height,
-        right: width,
-        opacity: 1,
-        imageData: toImageData(resultLayer, width, height)
-      }
-    ]
+    children
   };
 
   return writePsdBuffer(psd);

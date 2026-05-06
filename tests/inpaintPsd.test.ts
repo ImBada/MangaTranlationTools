@@ -67,6 +67,31 @@ describe("inpaint PSD import/export", () => {
     expect([...importedMask.slice(8, 16)]).toEqual([0, 0, 0, 0, 255, 255, 255, 255]);
   });
 
+  it("exports translation blocks as a hidden top layer", async () => {
+    const source = Buffer.from([10, 20, 30, 255]);
+    const result = Buffer.from([200, 0, 0, 255]);
+    const translationBlocks = Buffer.from([0, 0, 0, 96]);
+
+    const psd = await exportInpaintPsd({
+      chapterId: "chapter",
+      pageId: "page",
+      pageName: "page.png",
+      width: 1,
+      height: 1,
+      sourceDataUrl: await rgbaToDataUrl(source, 1, 1),
+      resultDataUrl: await rgbaToDataUrl(result, 1, 1),
+      translationBlocksDataUrl: await rgbaToDataUrl(translationBlocks, 1, 1)
+    });
+    const exported = readPsd(psd, { useImageData: true, skipThumbnail: true });
+
+    expect(exported.children?.map((layer) => layer.name)).toEqual(["배경 (이름변경금지)", "Inpaint Result", "번역 블록"]);
+    expect(exported.children?.[2]?.hidden).toBe(true);
+    expect([...(exported.children?.[2]?.imageData?.data ?? [])]).toEqual([0, 0, 0, 96]);
+
+    const imported = await importInpaintPsd(psd, 1, 1);
+    expect([...(await dataUrlToRgba(imported.resultDataUrl))]).toEqual([200, 0, 0, 255]);
+  });
+
   it("preserves visible layer order when importing layers inside groups", async () => {
     const psd: Psd = {
       width: 1,

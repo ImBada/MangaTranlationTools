@@ -121,6 +121,9 @@ export async function exportInpaintPsdRequest(request: ExportInpaintPsdRequest):
   if (request.resultDataUrl) {
     assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
   }
+  if (request.translationBlocksDataUrl) {
+    assertImageDataUrl(request.translationBlocksDataUrl, "번역 블록 레이어");
+  }
   return exportInpaintPsd(request);
 }
 

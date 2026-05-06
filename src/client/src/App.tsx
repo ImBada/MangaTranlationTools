@@ -321,6 +321,7 @@ export default function App(): React.JSX.Element {
     currentChapterId,
     currentChapterRef,
     dirty,
+    fontWeightAvailability: systemFonts,
     mergeLiveChapter,
     pushStatus,
     rangeToolActive,

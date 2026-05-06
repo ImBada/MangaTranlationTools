@@ -1,5 +1,7 @@
 import React from "react";
 import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
+import type { FontWeightAvailability } from "../lib/overlayLayout";
+import { renderPageToPngDataUrl } from "../lib/pageRender";
 
 type UseInpaintPsdActionsOptions = {
   clearPendingInpaintSaves: () => void;
@@ -8,6 +10,7 @@ type UseInpaintPsdActionsOptions = {
   dirty: boolean;
   flushInpaintMaskSave: () => Promise<void>;
   flushInpaintResultSave: () => Promise<void>;
+  fontWeightAvailability: readonly FontWeightAvailability[];
   mergeLiveChapter: (chapter: ChapterSnapshot) => void;
   pushStatus: (line: string) => void;
   recordInpaintMaskUndoSnapshot: (page: MangaPage) => void;
@@ -43,6 +46,7 @@ export function useInpaintPsdActions({
   dirty,
   flushInpaintMaskSave,
   flushInpaintResultSave,
+  fontWeightAvailability,
   mergeLiveChapter,
   pushStatus,
   recordInpaintMaskUndoSnapshot,
@@ -88,6 +92,24 @@ export function useInpaintPsdActions({
       const sourceDataUrl = await window.mangaApi.resolveImageDataUrl(selectedPage.dataUrl);
       const maskDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl);
       const resultDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(selectedPage.inpaintResultDataUrl);
+      const translationBlocksDataUrl = await renderPageToPngDataUrl(selectedPage, {
+        layerVisibility: {
+          image: false,
+          inpaint: false,
+          inpaintResult: false,
+          inpaintMask: false,
+          overlay: true
+        },
+        layerOpacity: {
+          image: 1,
+          inpaint: 1,
+          inpaintResult: 1,
+          inpaintMask: 1,
+          overlay: 1
+        },
+        activeLayer: "output",
+        fontWeightAvailability
+      });
       const blob = await window.mangaApi.exportInpaintPsd({
         chapterId: currentChapter.id,
         pageId: selectedPage.id,
@@ -96,7 +118,8 @@ export function useInpaintPsdActions({
         height: selectedPage.height,
         sourceDataUrl,
         maskDataUrl,
-        resultDataUrl
+        resultDataUrl,
+        translationBlocksDataUrl
       });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement("a");
@@ -113,7 +136,7 @@ export function useInpaintPsdActions({
     } finally {
       setInpaintPsdBusy(false);
     }
-  }, [currentChapter, inpaintPsdBusy, pushStatus, selectedPage, selectedPageEditLocked]);
+  }, [currentChapter, fontWeightAvailability, inpaintPsdBusy, pushStatus, selectedPage, selectedPageEditLocked]);
 
   const selectInpaintPsdFile = React.useCallback(() => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy) {

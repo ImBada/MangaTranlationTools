@@ -5,6 +5,7 @@ import type { InpaintResultTool } from "../components/InpaintResultCanvas";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { ActiveLayer } from "../lib/layerState";
+import type { FontWeightAvailability } from "../lib/overlayLayout";
 import { useInpaintLayerPersistence } from "./useInpaintLayerPersistence";
 import { useInpaintPsdActions } from "./useInpaintPsdActions";
 import { useInpaintRunActions } from "./useInpaintRunActions";
@@ -20,6 +21,7 @@ type UseInpaintActionsOptions = {
   currentChapterId: string | null;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   dirty: boolean;
+  fontWeightAvailability: readonly FontWeightAvailability[];
   mergeLiveChapter: (chapter: ChapterSnapshot) => void;
   pushStatus: (line: string) => void;
   rangeToolActive: boolean;
@@ -91,6 +93,7 @@ export function useInpaintActions({
   currentChapterId,
   currentChapterRef,
   dirty,
+  fontWeightAvailability,
   mergeLiveChapter,
   pushStatus,
   rangeToolActive,
@@ -167,6 +170,7 @@ export function useInpaintActions({
     dirty,
     flushInpaintMaskSave,
     flushInpaintResultSave,
+    fontWeightAvailability,
     mergeLiveChapter,
     pushStatus,
     recordInpaintMaskUndoSnapshot,

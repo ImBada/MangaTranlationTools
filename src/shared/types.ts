@@ -352,6 +352,7 @@ export type ExportInpaintPsdRequest = {
   sourceDataUrl: string;
   maskDataUrl?: string;
   resultDataUrl?: string;
+  translationBlocksDataUrl?: string;
 };
 
 export type ImportInpaintPsdResult = {
