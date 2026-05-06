@@ -78,10 +78,10 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
     return recentFontFamilies.map((recent) => optionByValue.get(recent.value) ?? recent);
   }, [options, recentFontFamilies]);
   const filteredRecentOptions = normalizedQuery
-    ? recentOptions.filter((option) => normalizeFontSearchText(option.label).includes(normalizedQuery))
+    ? recentOptions.filter((option) => getFontOptionSearchText(option).includes(normalizedQuery))
     : recentOptions;
   const filteredOptions = normalizedQuery
-    ? options.filter((option) => normalizeFontSearchText(option.label).includes(normalizedQuery))
+    ? options.filter((option) => getFontOptionSearchText(option).includes(normalizedQuery))
     : options;
   const listedOptions = [...filteredRecentOptions, ...filteredOptions];
   const filteredOptionGroups = React.useMemo(() => groupFontFamilyOptions(filteredOptions), [filteredOptions]);
@@ -187,6 +187,10 @@ export function FontFamilyPicker({ options, value, disabled, onChange }: FontFam
 
 function normalizeFontSearchText(value: string): string {
   return value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, "");
+}
+
+function getFontOptionSearchText(option: FontFamilyOption): string {
+  return normalizeFontSearchText(`${option.label} ${option.value}`);
 }
 
 function groupFontFamilyOptions(options: FontFamilyOption[]): FontFamilyOptionGroup[] {

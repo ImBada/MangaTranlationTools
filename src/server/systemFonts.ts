@@ -11,10 +11,22 @@ let cachedFonts: SystemFont[] | null = null;
 
 type FontNameRecord = {
   family?: string;
+  familyAliases?: string[];
   fullName?: string;
   postScriptName?: string;
   subfamily?: string;
   weights?: number[];
+};
+
+type FontNameField = "family" | "fullName" | "postScriptName" | "subfamily";
+
+type FontNameCandidate = {
+  score: number;
+  value: string;
+};
+
+type SystemFontEntry = SystemFont & {
+  aliases?: string[];
 };
 
 export async function listSystemFonts(): Promise<SystemFont[]> {
@@ -23,7 +35,7 @@ export async function listSystemFonts(): Promise<SystemFont[]> {
   }
 
   const fontPaths = await collectFontPaths(resolveFontDirectories());
-  const fonts = new Map<string, SystemFont>();
+  const fonts = new Map<string, SystemFontEntry>();
 
   for (const fontPath of fontPaths) {
     try {
@@ -33,18 +45,28 @@ export async function listSystemFonts(): Promise<SystemFont[]> {
         if (!family) {
           continue;
         }
-        const key = family.toLocaleLowerCase();
+        const familyAliases = normalizeFontFamilyAliases(record, family);
+        const key = getFontFamilyMapKey(familyAliases);
         const weights = record.weights?.length ? record.weights : [inferFontWeight(record)].filter((weight): weight is number => Boolean(weight));
         const existing = fonts.get(key);
         if (existing) {
           existing.weights = mergeFontWeights(existing.weights, weights);
+          const mergedAliases = mergeFontFamilyAliases([existing.family, ...(existing.aliases ?? [])], familyAliases);
+          const displayFamily = choosePreferredDisplayFontName(existing.family, family) ?? existing.family;
+          const orderedAliases = orderFontFamilyAliases(displayFamily, mergedAliases);
+          existing.family = displayFamily;
+          existing.aliases = orderedAliases.length > 1 ? orderedAliases.slice(1) : undefined;
+          existing.cssFamily = buildCssFontFamily(orderedAliases);
+          existing.fullName = choosePreferredDisplayFontName(existing.fullName, cleanFontName(record.fullName));
+          existing.postScriptName ??= cleanFontName(record.postScriptName);
         } else {
           fonts.set(key, {
             family,
+            aliases: familyAliases.length > 1 ? familyAliases.slice(1) : undefined,
             fullName: cleanFontName(record.fullName),
             postScriptName: cleanFontName(record.postScriptName),
             weights: weights.length > 0 ? weights : undefined,
-            cssFamily: `${quoteCssFontFamily(family)}, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif`
+            cssFamily: buildCssFontFamily(familyAliases)
           });
         }
       }
@@ -53,8 +75,20 @@ export async function listSystemFonts(): Promise<SystemFont[]> {
     }
   }
 
-  cachedFonts = [...fonts.values()].sort((a, b) => a.family.localeCompare(b.family, undefined, { sensitivity: "base" }));
+  cachedFonts = [...fonts.values()]
+    .map(toSystemFont)
+    .sort((a, b) => a.family.localeCompare(b.family, undefined, { sensitivity: "base" }));
   return cachedFonts;
+}
+
+function toSystemFont(font: SystemFontEntry): SystemFont {
+  return {
+    family: font.family,
+    fullName: font.fullName,
+    postScriptName: font.postScriptName,
+    weights: font.weights,
+    cssFamily: font.cssFamily
+  };
 }
 
 function resolveFontDirectories(): string[] {
@@ -174,11 +208,11 @@ function parseSfntNameRecords(buffer: Buffer, sfntOffset: number): FontNameRecor
   const variableWeights = parseFvarWeights(buffer, fvarTableOffset, fvarTableLength);
   const count = buffer.readUInt16BE(nameTableOffset + 2);
   const stringStorageOffset = nameTableOffset + buffer.readUInt16BE(nameTableOffset + 4);
-  const best: Record<"family" | "fullName" | "postScriptName" | "subfamily", { score: number; value: string } | undefined> = {
-    family: undefined,
-    fullName: undefined,
-    postScriptName: undefined,
-    subfamily: undefined
+  const candidates: Record<FontNameField, FontNameCandidate[]> = {
+    family: [],
+    fullName: [],
+    postScriptName: [],
+    subfamily: []
   };
 
   for (let index = 0; index < count; index += 1) {
@@ -197,7 +231,7 @@ function parseSfntNameRecords(buffer: Buffer, sfntOffset: number): FontNameRecor
       continue;
     }
 
-    const field =
+    const field: FontNameField | null =
       nameId === 16 || nameId === 1
         ? "family"
         : nameId === 4
@@ -216,19 +250,25 @@ function parseSfntNameRecords(buffer: Buffer, sfntOffset: number): FontNameRecor
       continue;
     }
 
-    const score = scoreNameRecord(platformId, languageId, nameId);
-    if (!best[field] || score > best[field].score) {
-      best[field] = { score, value };
-    }
+    candidates[field].push({
+      score: scoreNameRecord(platformId, languageId, nameId, value),
+      value
+    });
   }
 
-  return [{
-    family: best.family?.value,
-    fullName: best.fullName?.value,
-    postScriptName: best.postScriptName?.value,
-    subfamily: best.subfamily?.value,
+  const family = pickBestNameCandidate(candidates.family)?.value;
+  const familyAliases = collectNameAliases(candidates.family, family);
+  const record: FontNameRecord = {
+    family,
+    fullName: pickBestNameCandidate(candidates.fullName)?.value,
+    postScriptName: pickBestNameCandidate(candidates.postScriptName)?.value,
+    subfamily: pickBestNameCandidate(candidates.subfamily)?.value,
     weights: variableWeights.length > 0 ? variableWeights : staticWeight ? [staticWeight] : undefined
-  }];
+  };
+  if (familyAliases.length > 0) {
+    record.familyAliases = familyAliases;
+  }
+  return [record];
 }
 
 function decodeNameString(bytes: Buffer, platformId: number, encodingId: number): string {
@@ -267,18 +307,71 @@ function resolveMacEncoding(encodingId: number): string | null {
   return null;
 }
 
-function scoreNameRecord(platformId: number, languageId: number, nameId: number): number {
+function pickBestNameCandidate(candidates: FontNameCandidate[]): FontNameCandidate | undefined {
+  return candidates.reduce<FontNameCandidate | undefined>((best, candidate) => {
+    if (!best || candidate.score > best.score) {
+      return candidate;
+    }
+    return best;
+  }, undefined);
+}
+
+function collectNameAliases(candidates: FontNameCandidate[], selectedValue: string | undefined): string[] {
+  const aliases: string[] = [];
+  const selectedKey = selectedValue ? normalizeFontAliasKey(selectedValue) : "";
+  for (const candidate of [...candidates].sort((a, b) => b.score - a.score)) {
+    const key = normalizeFontAliasKey(candidate.value);
+    if (!key || key === selectedKey || aliases.some((alias) => normalizeFontAliasKey(alias) === key)) {
+      continue;
+    }
+    aliases.push(candidate.value);
+  }
+  return aliases;
+}
+
+function scoreNameRecord(platformId: number, languageId: number, nameId: number, value: string): number {
   let score = 0;
-  if (nameId === 16) {
+  if (nameId === 16 || nameId === 17) {
     score += 20;
   }
   if (platformId === 3) {
     score += 10;
+  } else if (platformId === 0) {
+    score += 8;
+  } else if (platformId === 1) {
+    score += 6;
   }
-  if (languageId === 0x0412 || languageId === 0x0409 || languageId === 0) {
+  if (containsHangul(value)) {
+    score += 50;
+  }
+  if (isKoreanNameLanguage(platformId, languageId)) {
+    score += 30;
+  } else if (isEnglishNameLanguage(platformId, languageId)) {
+    score += 10;
+  } else if (languageId === 0) {
     score += 5;
   }
   return score;
+}
+
+function isKoreanNameLanguage(platformId: number, languageId: number): boolean {
+  if (platformId === 3) {
+    return (languageId & 0x03ff) === 0x0012;
+  }
+  if (platformId === 1) {
+    return languageId === 23;
+  }
+  return false;
+}
+
+function isEnglishNameLanguage(platformId: number, languageId: number): boolean {
+  if (platformId === 3) {
+    return (languageId & 0x03ff) === 0x0009;
+  }
+  if (platformId === 1) {
+    return languageId === 0;
+  }
+  return false;
 }
 
 function cleanFontName(value: string | undefined): string | undefined {
@@ -306,6 +399,60 @@ function normalizeFontFamilyName(record: FontNameRecord): string | undefined {
     return family;
   }
   return stripMatchingFontWeightSuffix(family, inferredWeight) ?? family;
+}
+
+function normalizeFontFamilyAliases(record: FontNameRecord, primaryFamily: string): string[] {
+  return mergeFontFamilyAliases([primaryFamily], record.familyAliases?.map((alias) => normalizeFontFamilyName({ ...record, family: alias })).filter((alias): alias is string => Boolean(alias)) ?? []);
+}
+
+function mergeFontFamilyAliases(...aliasGroups: string[][]): string[] {
+  const aliases: string[] = [];
+  for (const alias of aliasGroups.flat()) {
+    const cleaned = cleanFontName(alias);
+    const key = cleaned ? normalizeFontAliasKey(cleaned) : "";
+    if (!cleaned || aliases.some((existing) => normalizeFontAliasKey(existing) === key)) {
+      continue;
+    }
+    aliases.push(cleaned);
+  }
+  return aliases;
+}
+
+function orderFontFamilyAliases(primaryFamily: string, aliases: string[]): string[] {
+  const primaryKey = normalizeFontAliasKey(primaryFamily);
+  return [primaryFamily, ...aliases.filter((alias) => normalizeFontAliasKey(alias) !== primaryKey)];
+}
+
+function getFontFamilyMapKey(aliases: string[]): string {
+  const asciiAlias = aliases.find(isAsciiFontName);
+  return normalizeFontAliasKey(asciiAlias ?? aliases[0] ?? "");
+}
+
+function normalizeFontAliasKey(value: string): string {
+  return value.normalize("NFKC").toLocaleLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function choosePreferredDisplayFontName(current: string | undefined, next: string | undefined): string | undefined {
+  if (!current) {
+    return next;
+  }
+  if (next && !containsHangul(current) && containsHangul(next)) {
+    return next;
+  }
+  return current;
+}
+
+function containsHangul(value: string): boolean {
+  return /[\u1100-\u11ff\u3130-\u318f\uac00-\ud7af]/.test(value);
+}
+
+function buildCssFontFamily(families: string[]): string {
+  const cssFamilies = families.some(isAsciiFontName) ? families.filter(isAsciiFontName) : families;
+  return `${cssFamilies.map(quoteCssFontFamily).join(", ")}, "Malgun Gothic", "Apple SD Gothic Neo", sans-serif`;
+}
+
+function isAsciiFontName(family: string): boolean {
+  return /^[\u0000-\u007f]+$/.test(family);
 }
 
 function inferFontWeight(record: FontNameRecord): number | undefined {
@@ -457,6 +604,7 @@ function quoteCssFontFamily(family: string): string {
 }
 
 export const systemFontsTestHooks = {
+  buildCssFontFamily,
   mergeFontWeights,
   normalizeFontFamilyName,
   parseFontNameRecords

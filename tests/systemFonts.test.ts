@@ -4,6 +4,9 @@ import { systemFontsTestHooks } from "../src/server/systemFonts";
 type NameRecordFixture = {
   nameId: number;
   value: string;
+  languageId?: number;
+  platformId?: number;
+  encodingId?: number;
 };
 
 type TableFixture = {
@@ -11,7 +14,7 @@ type TableFixture = {
   data: Buffer;
 };
 
-const { mergeFontWeights, normalizeFontFamilyName, parseFontNameRecords } = systemFontsTestHooks;
+const { buildCssFontFamily, mergeFontWeights, normalizeFontFamilyName, parseFontNameRecords } = systemFontsTestHooks;
 
 describe("system font OpenType parsing", () => {
   it("reads static font weight from the OS/2 table", () => {
@@ -50,6 +53,35 @@ describe("system font OpenType parsing", () => {
     ]));
 
     expect(records[0]?.weights).toEqual([100, 400, 700, 900]);
+  });
+
+  it("prefers Korean localized family names when they exist", () => {
+    const records = parseFontNameRecords(buildSfnt([
+      buildNameTable([
+        { nameId: 16, value: "Pretendard", languageId: 0x0409 },
+        { nameId: 16, value: "프리텐다드", languageId: 0x0412 },
+        { nameId: 17, value: "Regular", languageId: 0x0409 },
+        { nameId: 17, value: "보통", languageId: 0x0412 },
+        { nameId: 4, value: "Pretendard Regular", languageId: 0x0409 },
+        { nameId: 4, value: "프리텐다드 보통", languageId: 0x0412 },
+        { nameId: 6, value: "Pretendard-Regular", languageId: 0x0409 }
+      ]),
+      buildOs2Table(400)
+    ]));
+
+    expect(records).toEqual([{
+      family: "프리텐다드",
+      familyAliases: ["Pretendard"],
+      fullName: "프리텐다드 보통",
+      postScriptName: "Pretendard-Regular",
+      subfamily: "보통",
+      weights: [400]
+    }]);
+  });
+
+  it("keeps ascii font aliases first in CSS family values", () => {
+    expect(buildCssFontFamily(["프리텐다드", "Pretendard"])).toBe("\"Pretendard\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif");
+    expect(buildCssFontFamily(["한글폰트"])).toBe("\"한글폰트\", \"Malgun Gothic\", \"Apple SD Gothic Neo\", sans-serif");
   });
 
   it("falls back to 100-step variable weights when fvar has no named instances", () => {
@@ -121,9 +153,9 @@ function buildNameTable(records: NameRecordFixture[]): TableFixture {
   records.forEach((record, index) => {
     const entryOffset = index * 12;
     const stringBuffer = stringBuffers[index]!;
-    recordBytes.writeUInt16BE(3, entryOffset);
-    recordBytes.writeUInt16BE(1, entryOffset + 2);
-    recordBytes.writeUInt16BE(0x0409, entryOffset + 4);
+    recordBytes.writeUInt16BE(record.platformId ?? 3, entryOffset);
+    recordBytes.writeUInt16BE(record.encodingId ?? 1, entryOffset + 2);
+    recordBytes.writeUInt16BE(record.languageId ?? 0x0409, entryOffset + 4);
     recordBytes.writeUInt16BE(record.nameId, entryOffset + 6);
     recordBytes.writeUInt16BE(stringBuffer.length, entryOffset + 8);
     recordBytes.writeUInt16BE(nextStringOffset, entryOffset + 10);
