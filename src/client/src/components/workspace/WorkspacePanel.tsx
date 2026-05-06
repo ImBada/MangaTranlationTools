@@ -8,7 +8,7 @@ import type {
   MangaPage,
   TranslationBlock
 } from "../../../../shared/types";
-import { INPAINT_TOOL_SHORTCUTS } from "../../lib/editorShortcuts";
+import { BLOCK_INLINE_EDIT_SHORTCUT, INPAINT_TOOL_SHORTCUTS } from "../../lib/editorShortcuts";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { InpaintLayerChangeOptions } from "../../lib/inpaintLayerChange";
@@ -186,6 +186,7 @@ export function WorkspacePanel({
   onZoomInStage,
   onZoomOutStage
 }: WorkspacePanelProps): React.JSX.Element {
+  const [blockInlineEditActive, setBlockInlineEditActive] = React.useState(false);
   const findReplaceShortcutLabel = React.useMemo(() => (
     isMacLikePlatform(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘F" : "CtrlF"
   ), []);
@@ -204,6 +205,12 @@ export function WorkspacePanel({
     !layerVisibility.inpaintResult ||
     inpaintResultTool === "select";
   const rangeSelectionDisabled = selectedPageEditLocked || inpaintBusy || !layerVisibility.inpaint;
+  const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
+  const blockInlineEditShortcutVisible =
+    activeLayer === "overlay" &&
+    !temporaryPanActive &&
+    layerVisibility.overlay &&
+    Boolean(selectedBlock && selectedBlock.renderDirection !== "hidden");
 
   return (
     <section
@@ -225,6 +232,9 @@ export function WorkspacePanel({
       {selectedPage ? (
         <StageToolOverlay
           activeLayer={activeLayer}
+          blockInlineEditShortcut={BLOCK_INLINE_EDIT_SHORTCUT}
+          blockInlineEditShortcutActive={blockInlineEditActive && blockInlineEditShortcutVisible}
+          blockInlineEditShortcutVisible={blockInlineEditShortcutVisible}
           rangeShortcut={INPAINT_TOOL_SHORTCUTS.select ?? "T"}
           rangeToolActive={rangeToolActive}
           selectedPageEditLocked={selectedPageEditLocked}
@@ -330,6 +340,7 @@ export function WorkspacePanel({
             onBlockTextUpdate={onBlockTextUpdate}
             onBlockTextSelectionSplitDuplicate={onBlockTextSelectionSplitDuplicate}
             onBlockTextAlignChange={onBlockTextAlignChange}
+            onBlockInlineEditActiveChange={setBlockInlineEditActive}
             onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           />
         </div>

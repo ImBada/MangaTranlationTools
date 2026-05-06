@@ -39,6 +39,9 @@ type StageZoomOverlayProps = {
 
 type StageToolOverlayProps = {
   activeLayer: ActiveLayer;
+  blockInlineEditShortcutActive: boolean;
+  blockInlineEditShortcut: string;
+  blockInlineEditShortcutVisible: boolean;
   rangeShortcut: string;
   rangeToolActive: boolean;
   selectedPageEditLocked: boolean;
@@ -158,6 +161,9 @@ export function StageZoomOverlay({
 
 export function StageToolOverlay({
   activeLayer,
+  blockInlineEditShortcutActive,
+  blockInlineEditShortcut,
+  blockInlineEditShortcutVisible,
   rangeShortcut,
   rangeToolActive,
   selectedPageEditLocked,
@@ -219,6 +225,21 @@ export function StageToolOverlay({
           </svg>
           <span className="stage-tool-shortcut" aria-hidden="true">Z</span>
         </button>
+        {blockInlineEditShortcutVisible ? (
+          <div
+            className={`stage-tool-shortcut-guide${blockInlineEditShortcutActive ? " active" : ""}`}
+            aria-label={`선택 블록 텍스트 수정 (${blockInlineEditShortcut})`}
+            aria-keyshortcuts={blockInlineEditShortcut}
+            title={`선택 블록 텍스트 수정 (${blockInlineEditShortcut})`}
+          >
+            <svg className="stage-tool-icon stage-tool-text-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M5 5h14" />
+              <path d="M12 5v14" />
+              <path d="M8.5 19h7" />
+            </svg>
+            <span className="stage-tool-shortcut" aria-hidden="true">{blockInlineEditShortcut}</span>
+          </div>
+        ) : null}
       </div>
       {showPointerToolHints ? (
         <div className="stage-tool-hints" aria-label="선택 도구 보조키 안내">

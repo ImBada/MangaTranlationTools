@@ -1,7 +1,8 @@
 import React from "react";
 import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
-import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
+import { isBlockDuplicateModifier, isBlockInlineEditShortcut } from "../lib/editorShortcuts";
 import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
+import { isEditableTarget } from "../lib/editorUtils";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
@@ -64,6 +65,7 @@ type ImageStageLayersProps = {
     selectionEnd: number
   ) => boolean;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
+  onBlockInlineEditActiveChange: (active: boolean) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
@@ -102,6 +104,7 @@ export function ImageStageLayers({
   onBlockTextUpdate,
   onBlockTextSelectionSplitDuplicate,
   onBlockTextAlignChange,
+  onBlockInlineEditActiveChange,
   onFavoriteFontPresetSelect,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
@@ -118,6 +121,9 @@ export function ImageStageLayers({
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
   ), [duplicateModifierPlatform]);
+  const startInlineEdit = React.useCallback((block: TranslationBlock) => {
+    setInlineEdit({ blockId: block.id, draft: block.translatedText });
+  }, []);
 
   const commitInlineEdit = React.useCallback(() => {
     if (!inlineEdit) {
@@ -140,6 +146,12 @@ export function ImageStageLayers({
       suppressInlineCommitBlockIdRef.current = null;
     }
   }, [inlineEdit]);
+
+  React.useEffect(() => {
+    onBlockInlineEditActiveChange(Boolean(inlineEdit));
+  }, [inlineEdit, onBlockInlineEditActiveChange]);
+
+  React.useEffect(() => () => onBlockInlineEditActiveChange(false), [onBlockInlineEditActiveChange]);
 
   const readInlineEditSelection = React.useCallback((blockId: string) => {
     const editor = inlineEditorRef.current;
@@ -194,6 +206,34 @@ export function ImageStageLayers({
       commitInlineEdit();
     }
   }, [commitInlineEdit, inlineEdit, page.blocks, selectedBlockId]);
+
+  React.useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (
+        activeLayer !== "overlay" ||
+        temporaryPanActive ||
+        !layerVisibility.overlay ||
+        inlineEdit ||
+        isEditableTarget(event.target) ||
+        !isBlockInlineEditShortcut(event)
+      ) {
+        return;
+      }
+
+      const block = page.blocks.find((candidate) => candidate.id === selectedBlockId);
+      if (!block || block.renderDirection === "hidden") {
+        return;
+      }
+
+      event.preventDefault();
+      startInlineEdit(block);
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [activeLayer, inlineEdit, layerVisibility.overlay, page.blocks, selectedBlockId, startInlineEdit, temporaryPanActive]);
 
   React.useEffect(() => {
     const updateFromKeyboardEvent = (event: KeyboardEvent) => {
@@ -306,7 +346,7 @@ export function ImageStageLayers({
                   onStartInlineEdit={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    setInlineEdit({ blockId: block.id, draft: block.translatedText });
+                    startInlineEdit(block);
                   }}
                   onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
                   onInlineEditCancel={() => setInlineEdit(null)}

@@ -63,6 +63,7 @@ type ImageStageProps = {
     selectionEnd: number
   ) => boolean;
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
+  onBlockInlineEditActiveChange: (active: boolean) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
 };
 
@@ -109,6 +110,7 @@ export function ImageStage({
   onBlockTextUpdate,
   onBlockTextSelectionSplitDuplicate,
   onBlockTextAlignChange,
+  onBlockInlineEditActiveChange,
   onFavoriteFontPresetSelect
 }: ImageStageProps): React.JSX.Element {
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
@@ -261,6 +263,7 @@ export function ImageStage({
           onBlockTextUpdate={onBlockTextUpdate}
           onBlockTextSelectionSplitDuplicate={onBlockTextSelectionSplitDuplicate}
           onBlockTextAlignChange={onBlockTextAlignChange}
+          onBlockInlineEditActiveChange={onBlockInlineEditActiveChange}
           onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           onInpaintLayerChange={onInpaintLayerChange}
           onInpaintResultLayerChange={onInpaintResultLayerChange}

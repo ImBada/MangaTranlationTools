@@ -8,6 +8,7 @@ export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
   brush: "B",
   eraser: "E"
 };
+export const BLOCK_INLINE_EDIT_SHORTCUT = "E";
 
 export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey | null {
   switch (event.code) {
@@ -37,6 +38,10 @@ export function isPointerToolShortcut(event: KeyboardEvent): boolean {
 
 export function isRangeToolShortcut(event: KeyboardEvent): boolean {
   return event.code === "KeyT" || event.key.toLowerCase() === "t";
+}
+
+export function isBlockInlineEditShortcut(event: KeyboardEvent): boolean {
+  return !event.altKey && !event.ctrlKey && !event.metaKey && (event.code === "KeyE" || event.key.toLowerCase() === "e");
 }
 
 export function isBlockCopyShortcut(event: KeyboardEvent): boolean {

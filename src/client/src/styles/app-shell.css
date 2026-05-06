@@ -923,7 +923,8 @@
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
 }
 
-.stage-tool-overlay button {
+.stage-tool-overlay button,
+.stage-tool-shortcut-guide {
   position: relative;
   display: grid;
   width: 32px;
@@ -931,6 +932,19 @@
   place-items: center;
   padding: 0;
   border-radius: 6px;
+}
+
+.stage-tool-shortcut-guide {
+  border: 1px solid rgba(245, 193, 87, 0.86);
+  background: rgba(245, 193, 87, 0.18);
+  color: #ffe3a3;
+  user-select: none;
+}
+
+.stage-tool-shortcut-guide.active {
+  border-color: #77b7ff;
+  background: rgba(77, 144, 230, 0.28);
+  color: #ffffff;
 }
 
 .stage-tool-overlay button.active {
@@ -953,6 +967,10 @@
   fill: currentColor;
 }
 
+.stage-tool-text-icon path:first-child {
+  fill: none;
+}
+
 .stage-tool-shortcut,
 .page-nav-shortcut {
   position: absolute;
@@ -968,6 +986,14 @@
 }
 
 .stage-tool-overlay button.active .stage-tool-shortcut {
+  color: #ffffff;
+}
+
+.stage-tool-shortcut-guide .stage-tool-shortcut {
+  color: #ffe3a3;
+}
+
+.stage-tool-shortcut-guide.active .stage-tool-shortcut {
   color: #ffffff;
 }
 
