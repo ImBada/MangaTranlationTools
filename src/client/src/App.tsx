@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { TranslationBlock } from "../../shared/types";
 import { AppContextBarSlot } from "./components/AppContextBarSlot";
 import { AppFileInputs } from "./components/AppFileInputs";
@@ -26,6 +26,7 @@ import { useStatusFeedback } from "./hooks/useStatusFeedback";
 import { useTranslationEditing } from "./hooks/useTranslationEditing";
 import { useWorkspaceShortcuts } from "./hooks/useWorkspaceShortcuts";
 import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
+import type { ActiveLayer } from "./lib/layerState";
 import "./styles.css";
 
 export default function App(): React.JSX.Element {
@@ -33,6 +34,7 @@ export default function App(): React.JSX.Element {
   const workspacePanelRef = useRef<HTMLElement | null>(null);
   const libraryAnchorRef = useRef<HTMLDivElement | null>(null);
   const clearPendingInpaintSavesRef = useRef<() => void>(() => undefined);
+  const restoreOverlaySelectionFrameRef = useRef<number | null>(null);
   const {
     activeLayer,
     focusModeEnabled,
@@ -121,6 +123,50 @@ export default function App(): React.JSX.Element {
     reportRecoverableFailure,
     signalSaveComplete
   });
+  const lastOverlaySelectedBlockIdRef = useRef<string | null>(selectedBlockId);
+
+  useEffect(() => {
+    if (activeLayer === "overlay") {
+      lastOverlaySelectedBlockIdRef.current = selectedBlockId;
+    }
+  }, [activeLayer, selectedBlockId]);
+
+  const selectLayerWithBlockSelection = useCallback((nextLayer: ActiveLayer) => {
+    if (restoreOverlaySelectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreOverlaySelectionFrameRef.current);
+      restoreOverlaySelectionFrameRef.current = null;
+    }
+
+    if (nextLayer === "overlay") {
+      const restoredBlockId = lastOverlaySelectedBlockIdRef.current;
+      const currentPage =
+        currentChapterRef.current?.pages.find((page) => page.id === selectedPageIdRef.current) ??
+        currentChapterRef.current?.pages[0] ??
+        null;
+      selectLayer(nextLayer);
+      restoreOverlaySelectionFrameRef.current = window.requestAnimationFrame(() => {
+        restoreOverlaySelectionFrameRef.current = null;
+        setSelectedBlockId(
+          restoredBlockId && currentPage?.blocks.some((block) => block.id === restoredBlockId)
+            ? restoredBlockId
+            : null
+        );
+      });
+      return;
+    }
+
+    if (activeLayer === "overlay") {
+      lastOverlaySelectedBlockIdRef.current = selectedBlockIdRef.current;
+    }
+    selectLayer(nextLayer);
+    setSelectedBlockId(null);
+  }, [activeLayer, currentChapterRef, selectLayer, selectedBlockIdRef, selectedPageIdRef, setSelectedBlockId]);
+
+  useEffect(() => () => {
+    if (restoreOverlaySelectionFrameRef.current !== null) {
+      window.cancelAnimationFrame(restoreOverlaySelectionFrameRef.current);
+    }
+  }, []);
   const {
     displayedLamaStatus,
     downloadLamaModelFromEmptyState,
@@ -535,7 +581,7 @@ export default function App(): React.JSX.Element {
     pushStatus,
     rangeToolActive,
     openFindReplace,
-    selectLayer,
+    selectLayer: selectLayerWithBlockSelection,
     selectPageForReading,
     selectPointerTool,
     selectRangeTool,
@@ -771,7 +817,7 @@ export default function App(): React.JSX.Element {
           onLayerVisibilityChange={setLayerVisibility}
           onOverlayBlockOpacityChange={updateSelectedPageBlockOpacity}
           onOverlayOpacityEditModeChange={setOverlayOpacityEditMode}
-          onSelectLayer={selectLayer}
+          onSelectLayer={selectLayerWithBlockSelection}
           block={selectedBlock}
           fontPresetName={selectedFontPreset?.name}
           inpaintBusy={inpaintBusy}
