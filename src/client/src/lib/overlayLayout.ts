@@ -21,6 +21,7 @@ const BLOCK_BORDER_PX = 1;
 const TEXT_FIT_SAFETY_PX = 6;
 const TEXT_MEASURE_GUARD_PX = TEXT_FIT_SAFETY_PX + 4;
 const SYNTHETIC_BOLD_MIN_WEIGHT = 600;
+const SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT = 400;
 const SYNTHETIC_BOLD_MIN_STROKE_WIDTH_PX = 0.35;
 const SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX = 8;
 const SYNTHETIC_BOLD_MIN_RATIO = 0.018;
@@ -101,10 +102,11 @@ export function resolveWrappedTextLines(
   block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle"> & Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
   text: string,
   fontSize: number,
-  maxWidth: number
+  maxWidth: number,
+  fontWeightAvailability?: readonly FontWeightAvailability[]
 ): string[] {
   const context = getMeasureContext();
-  context.font = buildFont(fontSize, block);
+  context.font = fontWeightAvailability ? buildOverlayCanvasFont(fontSize, block, fontWeightAvailability) : buildFont(fontSize, block);
   return wrapTextToWidth(context, block, text, fontSize, maxWidth);
 }
 
@@ -147,6 +149,31 @@ export function hasNativeBoldFontWeight(
     getPrimaryCssFontFamily(font.cssFamily) === blockPrimaryFamily &&
     (font.weights ?? []).some((weight) => weight >= SYNTHETIC_BOLD_MIN_WEIGHT)
   ));
+}
+
+export function resolveOverlayCanvasFontWeight(
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight">>,
+  fontWeightAvailability: readonly FontWeightAvailability[] = []
+): number {
+  const fontWeight = block.fontWeight ?? DEFAULT_OVERLAY_FONT_WEIGHT;
+  if (fontWeight < SYNTHETIC_BOLD_MIN_WEIGHT || hasNativeBoldFontWeight(block, fontWeightAvailability)) {
+    return fontWeight;
+  }
+
+  return resolveSyntheticBoldBaseFontWeight(block, fontWeightAvailability);
+}
+
+function resolveSyntheticBoldBaseFontWeight(
+  block: Partial<Pick<TranslationBlock, "fontFamily">>,
+  fontWeightAvailability: readonly FontWeightAvailability[]
+): number {
+  const blockPrimaryFamily = getPrimaryCssFontFamily(block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY);
+  const matchingFont = fontWeightAvailability.find((font) => getPrimaryCssFontFamily(font.cssFamily) === blockPrimaryFamily);
+  const regularWeights = (matchingFont?.weights ?? []).filter((weight) => weight > 0 && weight < SYNTHETIC_BOLD_MIN_WEIGHT);
+  if (regularWeights.length === 0) {
+    return SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT;
+  }
+  return Math.max(...regularWeights);
 }
 
 export function resolveSyntheticItalicSkewX(block: Partial<Pick<TranslationBlock, "fontStyle">>): number {
@@ -475,9 +502,10 @@ function getMeasureContext(): CanvasRenderingContext2D {
 
 export function buildOverlayCanvasFont(
   fontSize: number,
-  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">
+  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">,
+  fontWeightAvailability: readonly FontWeightAvailability[] = []
 ): string {
-  return buildFont(fontSize, block);
+  return `${resolveCanvasFontStyle(block)} ${resolveOverlayCanvasFontWeight(block, fontWeightAvailability)} ${fontSize}px ${block.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}`;
 }
 
 function buildFont(fontSize: number, block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle">): string {

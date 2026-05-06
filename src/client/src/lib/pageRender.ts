@@ -192,14 +192,27 @@ function drawRenderedBlock(
 
   context.fillStyle = block.textColor;
   context.lineJoin = "round";
-  context.font = buildOverlayCanvasFont(renderFontSizePx, block);
+  const fontWeightAvailability = options.fontWeightAvailability ?? [];
+  context.font = buildOverlayCanvasFont(renderFontSizePx, block, fontWeightAvailability);
   context.textBaseline = "top";
   const textRenderStyle = resolveTextRenderStyle(block, renderFontSizePx, options);
 
   if (block.renderDirection === "vertical") {
     drawVerticalRenderedText(context, block, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight, textRenderStyle);
   } else {
-    drawHorizontalRenderedText(context, block, text, left, top, layout.innerWidth, layout.innerHeight, layout.fitInnerWidth, renderFontSizePx, textRenderStyle);
+    drawHorizontalRenderedText(
+      context,
+      block,
+      text,
+      left,
+      top,
+      layout.innerWidth,
+      layout.innerHeight,
+      layout.fitInnerWidth,
+      renderFontSizePx,
+      textRenderStyle,
+      fontWeightAvailability
+    );
   }
 
   context.restore();
@@ -222,9 +235,10 @@ function drawHorizontalRenderedText(
   innerHeight: number,
   fitInnerWidth: number,
   fontSize: number,
-  textRenderStyle: TextRenderStyle
+  textRenderStyle: TextRenderStyle,
+  fontWeightAvailability: readonly FontWeightAvailability[] = []
 ): void {
-  const lines = resolveWrappedTextLines(block, text, fontSize, fitInnerWidth);
+  const lines = resolveWrappedTextLines(block, text, fontSize, fitInnerWidth, fontWeightAvailability);
   const lineHeightPx = fontSize * block.lineHeight;
   const totalHeight = lines.length * lineHeightPx;
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);

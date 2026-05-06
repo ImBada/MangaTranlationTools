@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOverlayCanvasFont,
   hasNativeBoldFontWeight,
+  resolveOverlayCanvasFontWeight,
   resolveBlockPaddingPx,
   resolveBlockTextLayout,
   resolveSyntheticBoldStrokeWidthPx,
@@ -150,6 +151,25 @@ describe("render layout padding", () => {
     expect(hasNativeBoldFontWeight({ fontFamily: "\"Native Bold\", serif", fontWeight: 700 }, fontWeightAvailability)).toBe(true);
     expect(resolveSyntheticBoldStrokeWidthPx({ fontFamily: "\"Native Bold\", serif", fontWeight: 700 }, 24, fontWeightAvailability)).toBe(0);
     expect(resolveSyntheticBoldStrokeWidthPx({ fontFamily: "\"Regular Only\", serif", fontWeight: 700 }, 24, fontWeightAvailability)).toBeGreaterThan(0);
+  });
+
+  it("uses a regular canvas font weight when manual synthetic bold is applied", () => {
+    const fontWeightAvailability = [
+      { cssFamily: "\"Regular Only\", sans-serif", weights: [400] },
+      { cssFamily: "\"Medium Only\", sans-serif", weights: [300, 500] },
+      { cssFamily: "\"Native Bold\", sans-serif", weights: [400, 700] }
+    ];
+
+    expect(resolveOverlayCanvasFontWeight({ fontFamily: "\"Regular Only\", serif", fontWeight: 700 }, fontWeightAvailability)).toBe(400);
+    expect(resolveOverlayCanvasFontWeight({ fontFamily: "\"Medium Only\", serif", fontWeight: 700 }, fontWeightAvailability)).toBe(500);
+    expect(resolveOverlayCanvasFontWeight({ fontFamily: "\"Native Bold\", serif", fontWeight: 700 }, fontWeightAvailability)).toBe(700);
+    expect(
+      buildOverlayCanvasFont(
+        24,
+        { fontFamily: "\"Regular Only\", serif", fontWeight: 700, fontStyle: "normal" },
+        fontWeightAvailability
+      )
+    ).toBe("normal 400 24px \"Regular Only\", serif");
   });
 
   it("uses synthetic italic skew instead of relying on a native italic face", () => {
