@@ -53,6 +53,8 @@ const PRESET_LINK_FIELD_BY_KEY = {
   textDecoration: "textDecorationLinkedToPreset"
 } satisfies Record<LinkableFontPresetKey, keyof TranslationBlock>;
 
+export const FONT_PRESET_LINK_FIELDS = Object.values(PRESET_LINK_FIELD_BY_KEY) as (typeof PRESET_LINK_FIELD_BY_KEY)[LinkableFontPresetKey][];
+
 export const DEFAULT_FONT_PRESET: Omit<FontPreset, "id" | "name"> = DEFAULT_FONT_PRESET_VALUES;
 
 export function buildAlphabeticPresetName(index: number): string {
@@ -141,30 +143,11 @@ export function buildFontPresetLinkPatch(key: LinkableFontPresetKey, linked: boo
 }
 
 export function clearFontPresetLinkFields(block: TranslationBlock): TranslationBlock {
-  const {
-    fontSizeLinkedToPreset: _fontSizeLinkedToPreset,
-    lineHeightLinkedToPreset: _lineHeightLinkedToPreset,
-    letterSpacingLinkedToPreset: _letterSpacingLinkedToPreset,
-    outlineColorLinkedToPreset: _outlineColorLinkedToPreset,
-    outlineWidthLinkedToPreset: _outlineWidthLinkedToPreset,
-    secondaryOutlineColorLinkedToPreset: _secondaryOutlineColorLinkedToPreset,
-    secondaryOutlineWidthLinkedToPreset: _secondaryOutlineWidthLinkedToPreset,
-    shadowEnabledLinkedToPreset: _shadowEnabledLinkedToPreset,
-    shadowColorLinkedToPreset: _shadowColorLinkedToPreset,
-    shadowAngleDegLinkedToPreset: _shadowAngleDegLinkedToPreset,
-    shadowDistancePxLinkedToPreset: _shadowDistancePxLinkedToPreset,
-    autoFitTextLinkedToPreset: _autoFitTextLinkedToPreset,
-    textColorLinkedToPreset: _textColorLinkedToPreset,
-    screentoneFillEnabledLinkedToPreset: _screentoneFillEnabledLinkedToPreset,
-    screentoneFillIntensityLinkedToPreset: _screentoneFillIntensityLinkedToPreset,
-    screentoneFillDensityLinkedToPreset: _screentoneFillDensityLinkedToPreset,
-    screentoneFillAntialiasLinkedToPreset: _screentoneFillAntialiasLinkedToPreset,
-    fontWeightLinkedToPreset: _fontWeightLinkedToPreset,
-    fontStyleLinkedToPreset: _fontStyleLinkedToPreset,
-    textDecorationLinkedToPreset: _textDecorationLinkedToPreset,
-    ...rest
-  } = block;
-  return rest;
+  const nextBlock = { ...block };
+  for (const field of FONT_PRESET_LINK_FIELDS) {
+    delete nextBlock[field];
+  }
+  return nextBlock;
 }
 
 export function applyFontPresetPatchToBlock(

@@ -1,11 +1,13 @@
 import type { ChapterSnapshot, MangaPage, TranslationBlock } from "../../../shared/types";
-import { clearFontPresetLinkFields } from "./fontPresets";
+import { FONT_PRESET_LINK_FIELDS } from "./fontPresets";
 import { normalizeKoreanText } from "./textNormalization";
 
 const TRANSLATION_BLOCK_CLIPBOARD_KIND = "manga-translation-tools/translation-block";
 const TRANSLATION_BLOCK_FONT_STYLE_CLIPBOARD_KIND = "manga-translation-tools/translation-block-font-style";
 
 const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
+  "fontPresetId",
+  ...FONT_PRESET_LINK_FIELDS,
   "fontFamily",
   "fontWeight",
   "fontStyle",
@@ -114,10 +116,8 @@ export function applyTranslationBlockFontStyle(
   block: TranslationBlock,
   style: TranslationBlockFontStylePatch
 ): TranslationBlock {
-  const { fontPresetId: _fontPresetId, ...blockWithoutFontPreset } = block;
-
   return {
-    ...clearFontPresetLinkFields(blockWithoutFontPreset),
+    ...block,
     ...style
   };
 }

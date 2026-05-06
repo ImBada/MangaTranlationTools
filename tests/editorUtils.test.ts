@@ -44,6 +44,9 @@ describe("editor utils", () => {
     const styledBlock: TranslationBlock = {
       ...block,
       fontPresetId: "preset-1",
+      fontSizeLinkedToPreset: false,
+      fontWeightLinkedToPreset: true,
+      lineHeightLinkedToPreset: undefined,
       fontFamily: "Arial",
       fontWeight: 800,
       fontStyle: "italic",
@@ -73,6 +76,9 @@ describe("editor utils", () => {
     );
 
     expect(parsed).toMatchObject({
+      fontPresetId: "preset-1",
+      fontSizeLinkedToPreset: false,
+      fontWeightLinkedToPreset: true,
       fontFamily: "Arial",
       fontWeight: 800,
       fontStyle: "italic",
@@ -88,6 +94,8 @@ describe("editor utils", () => {
     expect(parsed).not.toBeNull();
     expect(Object.prototype.hasOwnProperty.call(parsed, "letterSpacingPx")).toBe(true);
     expect(parsed?.letterSpacingPx).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty.call(parsed, "lineHeightLinkedToPreset")).toBe(true);
+    expect(parsed?.lineHeightLinkedToPreset).toBeUndefined();
   });
 
   it("applies copied font style without replacing block content or geometry", () => {
@@ -122,6 +130,38 @@ describe("editor utils", () => {
     });
     expect(applied.fontPresetId).toBeUndefined();
     expect(applied.fontSizeLinkedToPreset).toBeUndefined();
+  });
+
+  it("copies font preset links with font style", () => {
+    const target: TranslationBlock = {
+      ...block,
+      id: "target",
+      fontPresetId: "old-preset",
+      fontSizeLinkedToPreset: false,
+      fontWeightLinkedToPreset: false,
+      fontSizePx: 12,
+      fontWeight: 400
+    };
+    const style = extractTranslationBlockFontStyle({
+      ...block,
+      fontPresetId: "source-preset",
+      fontSizeLinkedToPreset: true,
+      fontWeightLinkedToPreset: undefined,
+      fontSizePx: 40,
+      fontWeight: 900
+    });
+
+    const applied = applyTranslationBlockFontStyle(target, style);
+
+    expect(applied).toMatchObject({
+      id: "target",
+      fontPresetId: "source-preset",
+      fontSizeLinkedToPreset: true,
+      fontSizePx: 40,
+      fontWeight: 900
+    });
+    expect(Object.prototype.hasOwnProperty.call(applied, "fontWeightLinkedToPreset")).toBe(true);
+    expect(applied.fontWeightLinkedToPreset).toBeUndefined();
   });
 
   it("moves a translation block to the front render order", () => {
