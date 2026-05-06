@@ -240,6 +240,7 @@ export function ImageStage({
           page={page}
           pageSize={pageSize}
           rangeToolActive={rangeToolActive}
+          blockRangeSelectionActive={blockRangeSelectionActive}
           selectedBlockId={selectedBlockId}
           stageSize={stageSize}
           temporaryPanActive={temporaryPanActive}

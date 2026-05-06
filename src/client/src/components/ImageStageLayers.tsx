@@ -47,6 +47,7 @@ type ImageStageLayersProps = {
   page: MangaPage;
   pageSize: ViewportSize;
   rangeToolActive: boolean;
+  blockRangeSelectionActive: boolean;
   selectedBlockId: string | null;
   stageSize: ViewportSize | null;
   temporaryPanActive: boolean;
@@ -82,6 +83,7 @@ export function ImageStageLayers({
   page,
   pageSize,
   rangeToolActive,
+  blockRangeSelectionActive,
   selectedBlockId,
   stageSize,
   temporaryPanActive,
@@ -231,6 +233,7 @@ export function ImageStageLayers({
                   stageSize={resolvedStageSize}
                   selected={block.id === selectedBlockId}
                   editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
+                  widgetsVisible={!blockRangeSelectionActive}
                   inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
                   visualContentVisible={false}
                   favoriteFontPresets={favoriteFontPresets}

@@ -24,6 +24,7 @@ type OverlayBlockProps = {
   stageSize: ViewportSize;
   selected: boolean;
   editingEnabled: boolean;
+  widgetsVisible?: boolean;
   inlineEditDraft?: string;
   favoriteFontPresets?: FontPreset[];
   visualContentVisible?: boolean;
@@ -61,6 +62,7 @@ export function OverlayBlock({
   stageSize,
   selected,
   editingEnabled,
+  widgetsVisible = true,
   inlineEditDraft,
   favoriteFontPresets = [],
   visualContentVisible = true,
@@ -78,7 +80,8 @@ export function OverlayBlock({
   onRotatePointerDown
 }: OverlayBlockProps): React.JSX.Element | null {
   const autoFitTextEnabled = block.autoFitText ?? true;
-  const selectedControlsVisible = selected && editingEnabled;
+  const selectedHighlightVisible = selected && editingEnabled;
+  const selectedControlsVisible = selectedHighlightVisible && widgetsVisible;
   const fontSizeLinkedToPreset = Boolean(block.fontPresetId) && isBlockFontPresetValueLinked(block, "fontSizePx");
   const fontSizeStepControl = useRepeatingStepControl({
     disabled: !selectedControlsVisible || autoFitTextEnabled || !onFontSizeChange,
@@ -153,7 +156,7 @@ export function OverlayBlock({
     pointerEvents: editingEnabled ? undefined : "none",
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center center",
-    zIndex: inlineEditDraft !== undefined ? 70 : selectedControlsVisible ? 50 : undefined,
+    zIndex: inlineEditDraft !== undefined ? 70 : selectedHighlightVisible ? 50 : undefined,
     overflow: inlineEditDraft !== undefined || selectedControlsVisible ? "visible" : "hidden"
   };
   const textWrapStyle: React.CSSProperties = {
@@ -233,7 +236,7 @@ export function OverlayBlock({
     <div
       data-testid="translation-block"
       data-block-id={block.id}
-      className={`${selectedControlsVisible ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
+      className={`${selectedHighlightVisible ? "overlay-block selected" : "overlay-block"}${layout.overflow && editingEnabled ? " overflowing" : ""}`}
       style={style}
       title={layout.overflow && editingEnabled ? "현재 render box보다 번역문이 길어서 넘칩니다." : undefined}
       onPointerDown={onPointerDown}
