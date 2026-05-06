@@ -282,7 +282,9 @@ export function ImageStageLayers({
               onSelectionChange={onInpaintSelectionChange}
               style={{
                 zIndex: activeLayer === "inpaintResult" ? 3 : 1,
-                opacity: layerOpacity.inpaintResult
+                opacity: layerOpacity.inpaintResult,
+                maskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
+                WebkitMaskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
               }}
             />
           ) : null}

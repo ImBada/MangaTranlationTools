@@ -79,7 +79,19 @@ export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPag
     const inpaintMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
     if (options.layerVisibility.inpaintResult && page.inpaintResultDataUrl) {
       const inpaintResultLayer = await loadImage(page.inpaintResultDataUrl);
-      drawImageLayer(context, inpaintResultLayer, page.width, page.height, options.layerOpacity.inpaint * options.layerOpacity.inpaintResult);
+      if (options.activeLayer === "inpaintResult") {
+        drawImageLayer(context, inpaintResultLayer, page.width, page.height, options.layerOpacity.inpaint * options.layerOpacity.inpaintResult);
+      } else {
+        const inpaintMaskLayer = inpaintMaskDataUrl ? await loadImage(inpaintMaskDataUrl) : null;
+        drawImageLayerMasked(
+          context,
+          inpaintResultLayer,
+          inpaintMaskLayer,
+          page.width,
+          page.height,
+          options.layerOpacity.inpaint * options.layerOpacity.inpaintResult
+        );
+      }
     }
     if (options.layerVisibility.inpaintMask && inpaintMaskDataUrl) {
       const inpaintMaskLayer = await loadImage(inpaintMaskDataUrl);
@@ -121,6 +133,33 @@ function drawImageLayer(
   context.globalAlpha = Math.max(0, Math.min(1, opacity));
   context.drawImage(image, 0, 0, width, height);
   context.restore();
+}
+
+function drawImageLayerMasked(
+  context: CanvasRenderingContext2D,
+  image: HTMLImageElement,
+  mask: HTMLImageElement | null,
+  width: number,
+  height: number,
+  opacity: number
+): void {
+  if (!mask) {
+    drawImageLayer(context, image, width, height, opacity);
+    return;
+  }
+
+  const layer = document.createElement("canvas");
+  layer.width = width;
+  layer.height = height;
+  const layerContext = layer.getContext("2d");
+  if (!layerContext) {
+    return;
+  }
+
+  layerContext.drawImage(image, 0, 0, width, height);
+  layerContext.globalCompositeOperation = "destination-in";
+  layerContext.drawImage(mask, 0, 0, width, height);
+  drawImageLayer(context, layer, width, height, opacity);
 }
 
 function drawRenderedBlock(
