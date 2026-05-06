@@ -6,6 +6,7 @@ import {
 import { resizeCanvasToSize } from "../src/client/src/lib/canvasImageDrawing";
 import {
   drawMaskSegment,
+  eraseTouchedMaskIslands,
   isCanvasBlank as isMaskCanvasBlank,
   resolveCanvasPoint,
   resolveSelectionRect as resolveMaskSelectionRect
@@ -94,6 +95,56 @@ describe("inpaint layer canvas helpers", () => {
   it("detects blank and nonblank mask canvases by alpha channel", () => {
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 0]))).toBe(true);
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 1]))).toBe(false);
+  });
+
+  it("erases only the connected mask island under the pointer", () => {
+    const canvas = createEditableCanvasMock(4, 3, [
+      255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255,
+      255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
+      0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255
+    ]);
+
+    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 })).toBe(true);
+    expect(canvas.data).toEqual(new Uint8ClampedArray([
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
+      0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255
+    ]));
+  });
+
+  it("does not erase a mask island when clicking transparent pixels", () => {
+    const canvas = createEditableCanvasMock(2, 1, [
+      0, 0, 0, 0, 255, 255, 255, 255
+    ]);
+
+    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 })).toBe(false);
+    expect(canvas.data).toEqual(new Uint8ClampedArray([
+      0, 0, 0, 0, 255, 255, 255, 255
+    ]));
+  });
+
+  it("uses brush size to choose a nearby connected mask island", () => {
+    const canvas = createEditableCanvasMock(5, 1, [
+      0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0
+    ]);
+
+    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 }, 5)).toBe(true);
+    expect(canvas.data).toEqual(new Uint8ClampedArray([
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
+    ]));
+  });
+
+  it("erases every connected mask island touched by the brush", () => {
+    const canvas = createEditableCanvasMock(8, 1, [
+      255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0,
+      255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255
+    ]);
+
+    expect(eraseTouchedMaskIslands(canvas, { x: 3, y: 0 }, 7)).toBe(true);
+    expect(canvas.data).toEqual(new Uint8ClampedArray([
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+      0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255
+    ]));
   });
 
   it("merges mask pixels as opaque coverage", () => {
@@ -208,6 +259,21 @@ function createCanvasMock(alphaPixels: number[]): HTMLCanvasElement {
       getImageData: () => ({ data: new Uint8ClampedArray(alphaPixels) })
     })
   } as unknown as HTMLCanvasElement;
+}
+
+function createEditableCanvasMock(width: number, height: number, pixels: number[]): HTMLCanvasElement & { data: Uint8ClampedArray } {
+  const canvas = {
+    width,
+    height,
+    data: new Uint8ClampedArray(pixels),
+    getContext: () => ({
+      getImageData: () => ({ data: new Uint8ClampedArray(canvas.data) }),
+      putImageData: (imageData: ImageData) => {
+        canvas.data = new Uint8ClampedArray(imageData.data);
+      }
+    })
+  };
+  return canvas as unknown as HTMLCanvasElement & { data: Uint8ClampedArray };
 }
 
 function rgbImage(width: number, height: number, pixels: [number, number, number][]): Uint8ClampedArray {

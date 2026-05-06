@@ -1,17 +1,20 @@
 import React from "react";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
+import type { InpaintTool } from "../InpaintLayerCanvas";
+
+type InpaintToolIconName = InpaintResultTool | Extract<InpaintTool, "autoEraser">;
 
 type InpaintToolButtonProps = {
   active: boolean;
   disabled: boolean;
-  icon: InpaintResultTool;
+  icon: InpaintToolIconName;
   label: string;
   onClick: () => void;
   shortcut?: string;
   text?: string;
 };
 
-function InpaintToolIcon({ name }: { name: InpaintResultTool }): React.JSX.Element {
+function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Element {
   switch (name) {
     case "select":
       return (
@@ -34,6 +37,16 @@ function InpaintToolIcon({ name }: { name: InpaintResultTool }): React.JSX.Eleme
           <path d="M6 15l8.5-8.5a2.1 2.1 0 0 1 3 0l2 2a2.1 2.1 0 0 1 0 3L12 19H7l-3-3 2-1z" />
           <path d="M10 11l5 5" />
           <path d="M12 19h8" />
+        </svg>
+      );
+    case "autoEraser":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <path d="M6 15l8.5-8.5a2.1 2.1 0 0 1 3 0l2 2a2.1 2.1 0 0 1 0 3L12 19H7l-3-3 2-1z" />
+          <path d="M10 11l5 5" />
+          <path d="M12 19h8" />
+          <path d="M18.5 3.5v4" />
+          <path d="M16.5 5.5h4" />
         </svg>
       );
     case "blur":
@@ -80,7 +93,10 @@ export function InpaintToolButton({ active, disabled, icon, label, onClick, shor
       disabled={disabled}
     >
       <InpaintToolIcon name={icon} />
-      <span className="tool-option-label">{shortcut ? `${displayLabel} (${shortcut})` : displayLabel}</span>
+      <span className="tool-option-label">
+        <span>{displayLabel}</span>
+        {shortcut ? <span className="tool-option-shortcut">({shortcut})</span> : null}
+      </span>
     </button>
   );
 }

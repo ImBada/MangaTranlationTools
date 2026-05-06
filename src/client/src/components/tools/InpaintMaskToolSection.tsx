@@ -66,6 +66,14 @@ export function InpaintMaskToolSection({
           onClick={() => onSelectSharedInpaintTool("eraser")}
           disabled={maskToolsDisabled}
         />
+        <InpaintToolButton
+          active={inpaintTool === "autoEraser"}
+          icon="autoEraser"
+          label="자동 지우개"
+          shortcut={INPAINT_TOOL_SHORTCUTS.autoEraser}
+          onClick={() => onSelectSharedInpaintTool("autoEraser")}
+          disabled={maskToolsDisabled}
+        />
       </div>
       <div className="result-tool-settings mask-tool-settings">
         <label className="compact-tool-field result-size-field">

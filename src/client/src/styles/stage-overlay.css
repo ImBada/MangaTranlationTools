@@ -75,7 +75,8 @@
   transform: translate(-50%, -50%);
 }
 
-.inpaint-brush-cursor.eraser {
+.inpaint-brush-cursor.eraser,
+.inpaint-brush-cursor.autoEraser {
   border-color: rgba(255, 120, 88, 0.95);
 }
 

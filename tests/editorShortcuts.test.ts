@@ -5,7 +5,8 @@ import {
   isBlockPasteShortcut,
   isDeleteShortcut,
   isFindReplaceShortcut,
-  isPageProgressToggleShortcut
+  isPageProgressToggleShortcut,
+  resolveInpaintToolShortcut
 } from "../src/client/src/lib/editorShortcuts";
 
 function keyboardEvent(patch: Partial<KeyboardEvent>): KeyboardEvent {
@@ -53,9 +54,17 @@ describe("editor shortcuts", () => {
   it("recognizes E as selected block inline edit without command modifiers", () => {
     expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyE", key: "e" }))).toBe(true);
     expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyE", key: "E", shiftKey: true }))).toBe(true);
+    expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyE", key: "e", altKey: true }))).toBe(false);
     expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyE", key: "e", metaKey: true }))).toBe(false);
     expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyE", key: "e", ctrlKey: true }))).toBe(false);
     expect(isBlockInlineEditShortcut(keyboardEvent({ code: "KeyB", key: "b" }))).toBe(false);
+  });
+
+  it("recognizes Alt E as the inpaint auto eraser shortcut", () => {
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyE", key: "e", altKey: true }))).toBe("autoEraser");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyE", key: "e" }))).toBe("eraser");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyE", key: "e", altKey: true, shiftKey: true }))).toBe(null);
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyE", key: "e", altKey: true, metaKey: true }))).toBe(null);
   });
 
   it("recognizes Q as delete only in one-hand mode", () => {

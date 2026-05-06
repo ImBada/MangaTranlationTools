@@ -3,6 +3,7 @@ import type { ImageRect } from "../../../shared/types";
 import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
 import {
   drawMaskSegment,
+  eraseTouchedMaskIslands,
   isCanvasBlank,
   resolveCanvasPoint,
   resolveSelectionRect,
@@ -11,7 +12,7 @@ import {
 } from "../lib/inpaintLayerCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 
-export type InpaintTool = "select" | "brush" | "eraser";
+export type InpaintTool = "select" | "brush" | "eraser" | "autoEraser";
 
 type InpaintLayerCanvasProps = {
   dataUrl?: string;
@@ -55,6 +56,7 @@ export function InpaintLayerCanvas({
   const [cursorPoint, setCursorPoint] = useState<DrawPoint | null>(null);
 
   const pointerEnabled = !disabled && tool !== "select";
+  const autoEraseEnabled = !disabled && tool === "autoEraser";
   const selectionEnabled = !disabled && tool === "select";
   const activeSelectionRect = previewSelectionRect ?? selectionRect;
   const cursorSize = Math.max(1, brushSize);
@@ -109,9 +111,21 @@ export function InpaintLayerCanvas({
           }
           event.preventDefault();
           event.stopPropagation();
-          event.currentTarget.setPointerCapture(event.pointerId);
           const point = resolvePoint(event);
           setCursorPoint(point);
+          if (autoEraseEnabled) {
+            const previousDataUrl = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+            if (!eraseTouchedMaskIslands(event.currentTarget, point, brushSize)) {
+              return;
+            }
+            const nextDataUrl = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+            markCanvasEdited();
+            markCanvasCommitted(nextDataUrl);
+            onChange(nextDataUrl, { previousDataUrl });
+            return;
+          }
+
+          event.currentTarget.setPointerCapture(event.pointerId);
           undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
           markCanvasEdited();
           drawingRef.current = true;

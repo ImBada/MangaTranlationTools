@@ -266,13 +266,13 @@ export function useWorkspaceShortcuts({
         return;
       }
 
-      const inpaintToolShortcut = !modalOpen && !editableTarget && !event.altKey && !event.ctrlKey && !event.metaKey
+      const inpaintToolShortcut = !modalOpen && !editableTarget && !event.ctrlKey && !event.metaKey
         ? resolveInpaintToolShortcut(event)
         : null;
       const inpaintToolShortcutEnabled =
         !selectedPageEditLocked &&
         ((activeLayer === "inpaintMask" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
-          (activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
+          (inpaintToolShortcut !== "autoEraser" && activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
       if (inpaintToolShortcut && inpaintToolShortcutEnabled) {
         event.preventDefault();
         selectSharedInpaintTool(inpaintToolShortcut);

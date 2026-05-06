@@ -113,7 +113,9 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
     setZoomToolActive(false);
     setRangeToolActive(tool === "select");
     inpaintToolSettersRef.current?.setInpaintTool(tool);
-    inpaintToolSettersRef.current?.setInpaintResultTool(tool);
+    if (tool !== "autoEraser") {
+      inpaintToolSettersRef.current?.setInpaintResultTool(tool);
+    }
   }, []);
 
   const selectPointerTool = React.useCallback(() => {
