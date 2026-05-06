@@ -2,12 +2,17 @@ import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
 import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
 import {
+  createMaskIslandSelection,
   drawMaskSegment,
-  eraseTouchedMaskIslands,
+  eraseSelectedMaskIslands,
   isCanvasBlank,
+  renderMaskIslandSelectionPreview,
   resolveCanvasPoint,
   resolveSelectionRect,
+  restoreMaskIslandSelection,
+  selectTouchedMaskIslands,
   type DrawPoint,
+  type MaskIslandSelection,
   type SelectionDragState
 } from "../lib/inpaintLayerCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
@@ -50,6 +55,7 @@ export function InpaintLayerCanvas({
   });
   const changedRef = useRef(false);
   const lastPointRef = useRef<DrawPoint | null>(null);
+  const autoEraseSelectionRef = useRef<MaskIslandSelection | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
@@ -90,6 +96,67 @@ export function InpaintLayerCanvas({
     onChange(nextDataUrl, { previousDataUrl });
   };
 
+  const updateAutoEraseSelection = (canvas: HTMLCanvasElement, from: DrawPoint, to: DrawPoint = from) => {
+    const selection = autoEraseSelectionRef.current;
+    if (!selection) {
+      return;
+    }
+
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    const steps = Math.max(1, Math.ceil(distance / Math.max(1, brushSize / 3)));
+    let changed = false;
+    for (let step = 0; step <= steps; step += 1) {
+      const ratio = step / steps;
+      changed = selectTouchedMaskIslands(selection, {
+        x: from.x + (to.x - from.x) * ratio,
+        y: from.y + (to.y - from.y) * ratio
+      }, brushSize) || changed;
+    }
+
+    if (changed) {
+      renderMaskIslandSelectionPreview(canvas, selection);
+    }
+  };
+
+  const cancelAutoEraseSelection = (canvas: HTMLCanvasElement) => {
+    const selection = autoEraseSelectionRef.current;
+    autoEraseSelectionRef.current = null;
+    const previousDataUrl = undoDataUrlRef.current;
+    if (selection) {
+      restoreMaskIslandSelection(canvas, selection);
+    }
+    undoDataUrlRef.current = undefined;
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    markCanvasCommitted(previousDataUrl);
+  };
+
+  const commitAutoEraseSelection = (canvas: HTMLCanvasElement) => {
+    const selection = autoEraseSelectionRef.current;
+    if (!selection) {
+      return;
+    }
+
+    autoEraseSelectionRef.current = null;
+    if (!eraseSelectedMaskIslands(canvas, selection)) {
+      const previousDataUrl = undoDataUrlRef.current;
+      restoreMaskIslandSelection(canvas, selection);
+      undoDataUrlRef.current = undefined;
+      drawingRef.current = false;
+      lastPointRef.current = null;
+      markCanvasCommitted(previousDataUrl);
+      return;
+    }
+
+    const previousDataUrl = undoDataUrlRef.current;
+    const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
+    undoDataUrlRef.current = undefined;
+    drawingRef.current = false;
+    lastPointRef.current = null;
+    markCanvasCommitted(nextDataUrl);
+    onChange(nextDataUrl, { previousDataUrl });
+  };
+
   return (
     <>
       <canvas
@@ -114,14 +181,17 @@ export function InpaintLayerCanvas({
           const point = resolvePoint(event);
           setCursorPoint(point);
           if (autoEraseEnabled) {
-            const previousDataUrl = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
-            if (!eraseTouchedMaskIslands(event.currentTarget, point, brushSize)) {
+            const selection = createMaskIslandSelection(event.currentTarget);
+            if (!selection) {
               return;
             }
-            const nextDataUrl = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+            event.currentTarget.setPointerCapture(event.pointerId);
+            undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+            autoEraseSelectionRef.current = selection;
             markCanvasEdited();
-            markCanvasCommitted(nextDataUrl);
-            onChange(nextDataUrl, { previousDataUrl });
+            drawingRef.current = true;
+            lastPointRef.current = point;
+            updateAutoEraseSelection(event.currentTarget, point);
             return;
           }
 
@@ -161,6 +231,11 @@ export function InpaintLayerCanvas({
           if (!drawingRef.current || !lastPointRef.current) {
             return;
           }
+          if (autoEraseEnabled) {
+            updateAutoEraseSelection(event.currentTarget, lastPointRef.current, point);
+            lastPointRef.current = point;
+            return;
+          }
           drawSegment(lastPointRef.current, point);
           lastPointRef.current = point;
         }}
@@ -189,6 +264,11 @@ export function InpaintLayerCanvas({
           const point = resolvePoint(event);
           setCursorPoint(point);
           event.currentTarget.releasePointerCapture(event.pointerId);
+          if (autoEraseEnabled) {
+            updateAutoEraseSelection(event.currentTarget, lastPointRef.current ?? point, point);
+            commitAutoEraseSelection(event.currentTarget);
+            return;
+          }
           drawingRef.current = false;
           lastPointRef.current = null;
           commitChange();
@@ -204,6 +284,10 @@ export function InpaintLayerCanvas({
             return;
           }
           event.currentTarget.releasePointerCapture(event.pointerId);
+          if (autoEraseEnabled) {
+            cancelAutoEraseSelection(event.currentTarget);
+            return;
+          }
           drawingRef.current = false;
           lastPointRef.current = null;
           setCursorPoint(null);

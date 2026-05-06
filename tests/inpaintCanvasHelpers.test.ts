@@ -5,11 +5,14 @@ import {
 } from "../src/client/src/hooks/useCanvasImageSync";
 import { resizeCanvasToSize } from "../src/client/src/lib/canvasImageDrawing";
 import {
+  createMaskIslandSelection,
   drawMaskSegment,
-  eraseTouchedMaskIslands,
+  eraseSelectedMaskIslands,
   isCanvasBlank as isMaskCanvasBlank,
+  renderMaskIslandSelectionPreview,
   resolveCanvasPoint,
-  resolveSelectionRect as resolveMaskSelectionRect
+  resolveSelectionRect as resolveMaskSelectionRect,
+  selectTouchedMaskIslands
 } from "../src/client/src/lib/inpaintLayerCanvas";
 import {
   blendChannel,
@@ -97,14 +100,17 @@ describe("inpaint layer canvas helpers", () => {
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 1]))).toBe(false);
   });
 
-  it("erases only the connected mask island under the pointer", () => {
+  it("erases only the selected connected mask island", () => {
     const canvas = createEditableCanvasMock(4, 3, [
       255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255,
       255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
       0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 255, 255, 255, 255
     ]);
+    const selection = createMaskIslandSelection(canvas);
 
-    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 })).toBe(true);
+    expect(selection).not.toBeNull();
+    expect(selectTouchedMaskIslands(selection!, { x: 0, y: 0 })).toBe(true);
+    expect(eraseSelectedMaskIslands(canvas, selection!)).toBe(true);
     expect(canvas.data).toEqual(new Uint8ClampedArray([
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255,
@@ -112,38 +118,62 @@ describe("inpaint layer canvas helpers", () => {
     ]));
   });
 
-  it("does not erase a mask island when clicking transparent pixels", () => {
+  it("does not select a mask island when touching transparent pixels", () => {
     const canvas = createEditableCanvasMock(2, 1, [
       0, 0, 0, 0, 255, 255, 255, 255
     ]);
+    const selection = createMaskIslandSelection(canvas);
 
-    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 })).toBe(false);
+    expect(selection).not.toBeNull();
+    expect(selectTouchedMaskIslands(selection!, { x: 0, y: 0 })).toBe(false);
+    expect(eraseSelectedMaskIslands(canvas, selection!)).toBe(false);
     expect(canvas.data).toEqual(new Uint8ClampedArray([
       0, 0, 0, 0, 255, 255, 255, 255
     ]));
   });
 
-  it("uses brush size to choose a nearby connected mask island", () => {
+  it("uses brush size to select a nearby connected mask island", () => {
     const canvas = createEditableCanvasMock(5, 1, [
       0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0
     ]);
+    const selection = createMaskIslandSelection(canvas);
 
-    expect(eraseTouchedMaskIslands(canvas, { x: 0, y: 0 }, 5)).toBe(true);
+    expect(selection).not.toBeNull();
+    expect(selectTouchedMaskIslands(selection!, { x: 0, y: 0 }, 5)).toBe(true);
+    expect(eraseSelectedMaskIslands(canvas, selection!)).toBe(true);
     expect(canvas.data).toEqual(new Uint8ClampedArray([
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0
     ]));
   });
 
-  it("erases every connected mask island touched by the brush", () => {
+  it("selects every connected mask island touched by the brush", () => {
     const canvas = createEditableCanvasMock(8, 1, [
       255, 255, 255, 255, 0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0,
       255, 255, 255, 255, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255
     ]);
+    const selection = createMaskIslandSelection(canvas);
 
-    expect(eraseTouchedMaskIslands(canvas, { x: 3, y: 0 }, 7)).toBe(true);
+    expect(selection).not.toBeNull();
+    expect(selectTouchedMaskIslands(selection!, { x: 3, y: 0 }, 7)).toBe(true);
+    expect(eraseSelectedMaskIslands(canvas, selection!)).toBe(true);
     expect(canvas.data).toEqual(new Uint8ClampedArray([
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
       0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 255, 255, 255, 255
+    ]));
+  });
+
+  it("previews selected mask islands with a tint before erasing", () => {
+    const canvas = createEditableCanvasMock(2, 1, [
+      255, 255, 255, 255, 255, 255, 255, 255
+    ]);
+    const selection = createMaskIslandSelection(canvas);
+
+    expect(selection).not.toBeNull();
+    expect(selectTouchedMaskIslands(selection!, { x: 0, y: 0 })).toBe(true);
+    renderMaskIslandSelectionPreview(canvas, selection!);
+
+    expect(canvas.data).toEqual(new Uint8ClampedArray([
+      255, 120, 88, 255, 255, 120, 88, 255
     ]));
   });
 
@@ -267,6 +297,11 @@ function createEditableCanvasMock(width: number, height: number, pixels: number[
     height,
     data: new Uint8ClampedArray(pixels),
     getContext: () => ({
+      createImageData: (imageWidth: number, imageHeight: number) => ({
+        data: new Uint8ClampedArray(imageWidth * imageHeight * 4),
+        width: imageWidth,
+        height: imageHeight
+      }),
       getImageData: () => ({ data: new Uint8ClampedArray(canvas.data) }),
       putImageData: (imageData: ImageData) => {
         canvas.data = new Uint8ClampedArray(imageData.data);

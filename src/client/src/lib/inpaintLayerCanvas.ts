@@ -10,6 +10,14 @@ export type SelectionDragState = {
   current: DrawPoint;
 };
 
+export type MaskIslandSelection = {
+  originalData: Uint8ClampedArray;
+  selected: Uint8Array;
+  selectedCount: number;
+  width: number;
+  height: number;
+};
+
 export function resolveCanvasPoint(
   clientX: number,
   clientY: number,
@@ -59,58 +67,83 @@ export function drawMaskSegment(
   context.restore();
 }
 
-export function eraseTouchedMaskIslands(canvas: HTMLCanvasElement, point: DrawPoint, brushSize = 1): boolean {
+export function createMaskIslandSelection(canvas: HTMLCanvasElement): MaskIslandSelection | null {
   const context = canvas.getContext("2d");
   if (!context || canvas.width <= 0 || canvas.height <= 0) {
-    return false;
-  }
-
-  const startX = Math.floor(point.x);
-  const startY = Math.floor(point.y);
-  if (startX < 0 || startY < 0 || startX >= canvas.width || startY >= canvas.height) {
-    return false;
+    return null;
   }
 
   const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-  const { data } = imageData;
-  const startIndexes = resolveMaskIslandStartIndexes(data, canvas.width, canvas.height, point, brushSize);
+  return {
+    originalData: new Uint8ClampedArray(imageData.data),
+    selected: new Uint8Array(canvas.width * canvas.height),
+    selectedCount: 0,
+    width: canvas.width,
+    height: canvas.height
+  };
+}
+
+export function selectTouchedMaskIslands(selection: MaskIslandSelection, point: DrawPoint, brushSize = 1): boolean {
+  const startX = Math.floor(point.x);
+  const startY = Math.floor(point.y);
+  if (startX < 0 || startY < 0 || startX >= selection.width || startY >= selection.height) {
+    return false;
+  }
+
+  const startIndexes = resolveMaskIslandStartIndexes(selection, point, brushSize);
   if (startIndexes.length === 0) {
     return false;
   }
 
-  const queue = new Int32Array(canvas.width * canvas.height);
+  const queue = new Int32Array(selection.width * selection.height);
   let head = 0;
   let tail = 0;
   for (const startIndex of startIndexes) {
-    if (!isMaskPixelActive(data, startIndex)) {
+    if (!isSelectableMaskPixel(selection, startIndex)) {
       continue;
     }
     queue[tail] = startIndex;
     tail += 1;
-    clearMaskPixel(data, startIndex);
+    markMaskPixelSelected(selection, startIndex);
   }
 
   while (head < tail) {
     const index = queue[head];
     head += 1;
-    const x = index % canvas.width;
-    const y = Math.floor(index / canvas.width);
+    const x = index % selection.width;
+    const y = Math.floor(index / selection.width);
 
     if (x > 0) {
-      tail = enqueueActiveMaskPixel(data, queue, tail, index - 1);
+      tail = enqueueSelectableMaskPixel(selection, queue, tail, index - 1);
     }
-    if (x + 1 < canvas.width) {
-      tail = enqueueActiveMaskPixel(data, queue, tail, index + 1);
+    if (x + 1 < selection.width) {
+      tail = enqueueSelectableMaskPixel(selection, queue, tail, index + 1);
     }
     if (y > 0) {
-      tail = enqueueActiveMaskPixel(data, queue, tail, index - canvas.width);
+      tail = enqueueSelectableMaskPixel(selection, queue, tail, index - selection.width);
     }
-    if (y + 1 < canvas.height) {
-      tail = enqueueActiveMaskPixel(data, queue, tail, index + canvas.width);
+    if (y + 1 < selection.height) {
+      tail = enqueueSelectableMaskPixel(selection, queue, tail, index + selection.width);
     }
   }
 
-  context.putImageData(imageData, 0, 0);
+  return true;
+}
+
+export function renderMaskIslandSelectionPreview(canvas: HTMLCanvasElement, selection: MaskIslandSelection): void {
+  writeMaskSelectionData(canvas, selection, true);
+}
+
+export function restoreMaskIslandSelection(canvas: HTMLCanvasElement, selection: MaskIslandSelection): void {
+  writeMaskSelectionData(canvas, selection, false);
+}
+
+export function eraseSelectedMaskIslands(canvas: HTMLCanvasElement, selection: MaskIslandSelection): boolean {
+  if (selection.selectedCount <= 0) {
+    return false;
+  }
+
+  writeMaskSelectionData(canvas, selection, false, true);
   return true;
 }
 
@@ -129,28 +162,22 @@ export function isCanvasBlank(canvas: HTMLCanvasElement): boolean {
   return true;
 }
 
-function enqueueActiveMaskPixel(data: Uint8ClampedArray, queue: Int32Array, tail: number, index: number): number {
-  if (!isMaskPixelActive(data, index)) {
+function enqueueSelectableMaskPixel(selection: MaskIslandSelection, queue: Int32Array, tail: number, index: number): number {
+  if (!isSelectableMaskPixel(selection, index)) {
     return tail;
   }
-  clearMaskPixel(data, index);
+  markMaskPixelSelected(selection, index);
   queue[tail] = index;
   return tail + 1;
 }
 
-function resolveMaskIslandStartIndexes(
-  data: Uint8ClampedArray,
-  width: number,
-  height: number,
-  point: DrawPoint,
-  brushSize: number
-): number[] {
+function resolveMaskIslandStartIndexes(selection: MaskIslandSelection, point: DrawPoint, brushSize: number): number[] {
   const radius = Math.max(0.5, brushSize / 2);
   const radiusSquared = radius * radius;
   const minX = Math.max(0, Math.floor(point.x - radius));
   const minY = Math.max(0, Math.floor(point.y - radius));
-  const maxX = Math.min(width - 1, Math.ceil(point.x + radius));
-  const maxY = Math.min(height - 1, Math.ceil(point.y + radius));
+  const maxX = Math.min(selection.width - 1, Math.ceil(point.x + radius));
+  const maxY = Math.min(selection.height - 1, Math.ceil(point.y + radius));
   const indexes: number[] = [];
 
   for (let y = minY; y <= maxY; y += 1) {
@@ -162,8 +189,8 @@ function resolveMaskIslandStartIndexes(
         continue;
       }
 
-      const index = y * width + x;
-      if (isMaskPixelActive(data, index)) {
+      const index = y * selection.width + x;
+      if (isSelectableMaskPixel(selection, index)) {
         indexes.push(index);
       }
     }
@@ -172,8 +199,13 @@ function resolveMaskIslandStartIndexes(
   return indexes;
 }
 
-function isMaskPixelActive(data: Uint8ClampedArray, index: number): boolean {
-  return data[index * 4 + 3] > 0;
+function isSelectableMaskPixel(selection: MaskIslandSelection, index: number): boolean {
+  return selection.selected[index] === 0 && selection.originalData[index * 4 + 3] > 0;
+}
+
+function markMaskPixelSelected(selection: MaskIslandSelection, index: number): void {
+  selection.selected[index] = 1;
+  selection.selectedCount += 1;
 }
 
 function clearMaskPixel(data: Uint8ClampedArray, index: number): void {
@@ -182,4 +214,39 @@ function clearMaskPixel(data: Uint8ClampedArray, index: number): void {
   data[offset + 1] = 0;
   data[offset + 2] = 0;
   data[offset + 3] = 0;
+}
+
+function writeMaskSelectionData(
+  canvas: HTMLCanvasElement,
+  selection: MaskIslandSelection,
+  previewSelected: boolean,
+  clearSelected = false
+): void {
+  const context = canvas.getContext("2d");
+  if (!context) {
+    return;
+  }
+
+  const imageData = context.createImageData(selection.width, selection.height);
+  imageData.data.set(selection.originalData);
+  for (let index = 0; index < selection.selected.length; index += 1) {
+    if (selection.selected[index] === 0) {
+      continue;
+    }
+
+    if (clearSelected) {
+      clearMaskPixel(imageData.data, index);
+    } else if (previewSelected) {
+      tintSelectedMaskPixel(imageData.data, index);
+    }
+  }
+  context.putImageData(imageData, 0, 0);
+}
+
+function tintSelectedMaskPixel(data: Uint8ClampedArray, index: number): void {
+  const offset = index * 4;
+  data[offset] = 255;
+  data[offset + 1] = 120;
+  data[offset + 2] = 88;
+  data[offset + 3] = Math.max(data[offset + 3], 180);
 }
