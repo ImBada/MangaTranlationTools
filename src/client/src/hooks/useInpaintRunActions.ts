@@ -1,6 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
-import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
+import { drawBlocksOnInpaintMask, maskDataUrlForSelection, mergeInpaintMaskDataUrls, mergePartialInpaintResult } from "../lib/inpaintMaskImages";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { DEFAULT_INPAINT_SETTINGS } from "../lib/inpaintToolSettings";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
@@ -272,14 +272,17 @@ export function useInpaintRunActions({
       const mergedResultDataUrl = await mergePartialInpaintResult(
         page.inpaintResultDataUrl,
         result.resultDataUrl,
-        selectionMaskDataUrl,
+        result.maskDataUrl,
         page.width,
         page.height
       );
+      const mergedMaskDataUrl = await mergeInpaintMaskDataUrls(maskDataUrl, result.maskDataUrl, page.width, page.height);
+      updateSelectedPageInpaintMask(mergedMaskDataUrl, { persist: false, recordUndo: false });
       updateSelectedPageInpaintResult(mergedResultDataUrl, { persist: false });
-      const saved = await window.mangaApi.saveInpaintResultLayer({
+      const saved = await window.mangaApi.saveInpaintLayers({
         chapterId: currentChapter.id,
         pageId: page.id,
+        maskDataUrl: mergedMaskDataUrl,
         resultDataUrl: mergedResultDataUrl
       });
       applyChapter(saved.chapter);
@@ -316,6 +319,7 @@ export function useInpaintRunActions({
     selectedPageIdRef,
     signalSaveComplete,
     updatePageInpaintStatus,
+    updateSelectedPageInpaintMask,
     updateSelectedPageInpaintResult
   ]);
 

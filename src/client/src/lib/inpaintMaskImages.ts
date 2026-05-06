@@ -151,7 +151,7 @@ export async function mergePartialInpaintResult(
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const context = canvas.getContext("2d");
+  const context = canvas.getContext("2d", { willReadFrequently: true });
   if (!context) {
     return patchDataUrl;
   }
@@ -160,16 +160,83 @@ export async function mergePartialInpaintResult(
     const previousImage = await loadImage(previousDataUrl);
     context.drawImage(previousImage, 0, 0, width, height);
   }
+  const mergedPixels = context.getImageData(0, 0, width, height);
 
-  const maskImage = await loadImage(patchMaskDataUrl);
-  context.save();
-  context.globalCompositeOperation = "destination-out";
-  context.drawImage(maskImage, 0, 0, width, height);
-  context.restore();
-
+  context.clearRect(0, 0, width, height);
   const patchImage = await loadImage(patchDataUrl);
   context.drawImage(patchImage, 0, 0, width, height);
+  const patchPixels = context.getImageData(0, 0, width, height);
+
+  context.clearRect(0, 0, width, height);
+  const maskImage = await loadImage(patchMaskDataUrl);
+  context.drawImage(maskImage, 0, 0, width, height);
+  const maskPixels = context.getImageData(0, 0, width, height);
+
+  replacePixelsInsideMask(mergedPixels.data, patchPixels.data, maskPixels.data);
+  context.putImageData(mergedPixels, 0, 0);
   return canvas.toDataURL("image/png");
+}
+
+export async function mergeInpaintMaskDataUrls(
+  baseMaskDataUrl: string,
+  patchMaskDataUrl: string,
+  width: number,
+  height: number
+): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return baseMaskDataUrl;
+  }
+
+  const baseImage = await loadImage(baseMaskDataUrl);
+  context.drawImage(baseImage, 0, 0, width, height);
+  const mergedPixels = context.getImageData(0, 0, width, height);
+  context.clearRect(0, 0, width, height);
+
+  const patchImage = await loadImage(patchMaskDataUrl);
+  context.drawImage(patchImage, 0, 0, width, height);
+  const patchPixels = context.getImageData(0, 0, width, height);
+
+  mergeInpaintMaskPixels(mergedPixels.data, patchPixels.data);
+  context.putImageData(mergedPixels, 0, 0);
+  return canvas.toDataURL("image/png");
+}
+
+export function mergeInpaintMaskPixels(basePixels: Uint8ClampedArray, patchPixels: Uint8ClampedArray): void {
+  const length = Math.min(basePixels.length, patchPixels.length);
+  for (let offset = 0; offset + 3 < length; offset += 4) {
+    const covered = maskPixelCovered(basePixels, offset) || maskPixelCovered(patchPixels, offset);
+    basePixels[offset] = covered ? 255 : basePixels[offset];
+    basePixels[offset + 1] = covered ? 255 : basePixels[offset + 1];
+    basePixels[offset + 2] = covered ? 255 : basePixels[offset + 2];
+    basePixels[offset + 3] = covered ? 255 : 0;
+  }
+}
+
+function replacePixelsInsideMask(
+  targetPixels: Uint8ClampedArray,
+  patchPixels: Uint8ClampedArray,
+  maskPixels: Uint8ClampedArray
+): void {
+  const length = Math.min(targetPixels.length, patchPixels.length, maskPixels.length);
+  for (let offset = 0; offset + 3 < length; offset += 4) {
+    if (!maskPixelCovered(maskPixels, offset) && patchPixels[offset + 3] === 0) {
+      continue;
+    }
+    targetPixels[offset] = patchPixels[offset];
+    targetPixels[offset + 1] = patchPixels[offset + 1];
+    targetPixels[offset + 2] = patchPixels[offset + 2];
+    targetPixels[offset + 3] = patchPixels[offset + 3];
+  }
+}
+
+function maskPixelCovered(pixels: Uint8ClampedArray, offset: number): boolean {
+  const alpha = pixels[offset + 3] / 255;
+  const luma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
+  return alpha * luma > 0;
 }
 
 function clampImageRect(rect: ImageRect, width: number, height: number): ImageRect {

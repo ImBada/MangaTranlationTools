@@ -19,6 +19,8 @@ import type {
   PageImageLayer,
   RenderPageRequest,
   RenderPageResult,
+  SaveInpaintLayersRequest,
+  SaveInpaintLayersResult,
   SaveInpaintResultLayerRequest,
   SaveInpaintResultLayerResult,
   SaveInpaintMaskRequest,
@@ -155,6 +157,7 @@ export const mangaApi = {
   saveInpaintMask: (request: SaveInpaintMaskRequest): Promise<SaveInpaintMaskResult> => postJson("/api/inpaint/mask", request),
   saveInpaintResultLayer: (request: SaveInpaintResultLayerRequest): Promise<SaveInpaintResultLayerResult> =>
     postJson("/api/inpaint/result-layer", request),
+  saveInpaintLayers: (request: SaveInpaintLayersRequest): Promise<SaveInpaintLayersResult> => postJson("/api/inpaint/layers", request),
   exportInpaintPsd: (request: ExportInpaintPsdRequest): Promise<Blob> =>
     requestBlob("/api/inpaint/psd/export", { method: "POST", body: JSON.stringify(request) }),
   downloadLastImportedInpaintPsd: (chapterId: string, pageId: string): Promise<Blob> =>

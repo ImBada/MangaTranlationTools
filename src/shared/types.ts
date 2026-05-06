@@ -317,6 +317,7 @@ export type InpaintSettings = {
   paddingPx: number;
   featherPx: number;
   tileSize: number;
+  artifactCleanupPx?: number;
 };
 
 export type ImageRect = {
@@ -338,6 +339,7 @@ export type InpaintPageRequest = {
 export type InpaintPageResult = {
   chapter: ChapterSnapshot;
   resultDataUrl: string;
+  maskDataUrl: string;
   engine: InpaintEngine;
 };
 
@@ -398,6 +400,17 @@ export type SaveInpaintResultLayerRequest = {
 };
 
 export type SaveInpaintResultLayerResult = {
+  chapter: ChapterSnapshot;
+};
+
+export type SaveInpaintLayersRequest = {
+  chapterId: string;
+  pageId: string;
+  maskDataUrl: string;
+  resultDataUrl: string;
+};
+
+export type SaveInpaintLayersResult = {
   chapter: ChapterSnapshot;
 };
 

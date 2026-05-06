@@ -4,7 +4,8 @@ export const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
   engine: "lama",
   paddingPx: 0,
   featherPx: 0,
-  tileSize: 1024
+  tileSize: 1024,
+  artifactCleanupPx: 8
 };
 
 export const INPAINT_RESULT_BRUSH_SIZE_MIN = 2;

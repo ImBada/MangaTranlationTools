@@ -1,13 +1,15 @@
 import type express from "express";
 import { readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { extname } from "node:path";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
 import { exportInpaintPsd, importInpaintPsd } from "./inpaintPsd";
+import { normalizeInpaintLayerDataUrls } from "./libraryImageData";
 import {
   getInpaintPsdImportPath,
   openChapter,
   saveImportedInpaintLayers,
   saveInpaintMask,
-  saveInpaintResult,
+  saveNormalizedInpaintLayers,
   saveInpaintResultLayer
 } from "./library";
 import { getActiveJob } from "./jobState";
@@ -15,9 +17,13 @@ import type {
   ExportInpaintPsdRequest,
   ImportInpaintPsdResult,
   InpaintEngine,
+  InpaintSettings,
+  MangaPage,
   InpaintPageRequest,
   InpaintPageResult,
   PageImageLayer,
+  SaveInpaintLayersRequest,
+  SaveInpaintLayersResult,
   SaveInpaintMaskRequest,
   SaveInpaintMaskResult,
   SaveInpaintResultLayerRequest,
@@ -35,26 +41,32 @@ export async function inpaintPage(request: InpaintPageRequest): Promise<InpaintP
   assertImageDataUrl(request.sourceDataUrl, "원본 이미지");
   assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
 
+  const currentChapter = await openChapter(request.chapterId);
+  const currentPage = currentChapter.pages.find((candidate) => candidate.id === request.pageId);
+  if (!currentPage) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+
   const engine = resolveAvailableInpaintEngine(request.settings.engine);
-  const settings = {
-    ...request.settings,
-    engine
-  };
+  const settings = resolvePageInpaintSettings(request.settings, engine, currentPage);
   const resultDataUrl = await runInpaintEngine(request.sourceDataUrl, request.maskDataUrl, engine, {
     ...resolveLamaCommandFromEnv(process.env),
     settings
   });
+  const layers = await normalizeInpaintLayerDataUrls(request.maskDataUrl, resultDataUrl);
   if (request.persistResult === false) {
     return {
-      chapter: await openChapter(request.chapterId),
-      resultDataUrl,
+      chapter: currentChapter,
+      resultDataUrl: layers.resultDataUrl,
+      maskDataUrl: layers.maskDataUrl,
       engine
     };
   }
-  const chapter = await saveInpaintResult(request.chapterId, request.pageId, request.maskDataUrl, resultDataUrl, settings);
+  const chapter = await saveNormalizedInpaintLayers(request.chapterId, request.pageId, layers.maskDataUrl, layers.resultDataUrl, settings);
   return {
     chapter,
-    resultDataUrl,
+    resultDataUrl: layers.resultDataUrl,
+    maskDataUrl: layers.maskDataUrl,
     engine
   };
 }
@@ -82,6 +94,19 @@ export async function saveInpaintResultLayerRequest(request: SaveInpaintResultLa
 
   return {
     chapter: await saveInpaintResultLayer(request.chapterId, request.pageId, request.resultDataUrl)
+  };
+}
+
+export async function saveInpaintLayersRequest(request: SaveInpaintLayersRequest): Promise<SaveInpaintLayersResult> {
+  if (!request.chapterId || !request.pageId) {
+    throw new Error("저장할 인페인트 레이어 페이지 정보가 없습니다.");
+  }
+  assertImageDataUrl(request.maskDataUrl, "인페인트 마스크");
+  assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
+
+  const layers = await normalizeInpaintLayerDataUrls(request.maskDataUrl, request.resultDataUrl);
+  return {
+    chapter: await saveNormalizedInpaintLayers(request.chapterId, request.pageId, layers.maskDataUrl, layers.resultDataUrl)
   };
 }
 
@@ -159,6 +184,19 @@ function resolveAvailableInpaintEngine(requested: InpaintEngine): InpaintEngine 
     return "lama";
   }
   return "local-fill-fallback";
+}
+
+function resolvePageInpaintSettings(settings: InpaintSettings, engine: InpaintEngine, page: MangaPage): InpaintSettings {
+  return {
+    ...settings,
+    engine,
+    artifactCleanupPx: isJpegSourcePage(page) ? settings.artifactCleanupPx : 0
+  };
+}
+
+function isJpegSourcePage(page: MangaPage): boolean {
+  const extension = extname(page.imagePath || page.name).toLowerCase();
+  return extension === ".jpg" || extension === ".jpeg";
 }
 
 function assertImageDataUrl(value: string, label: string): void {

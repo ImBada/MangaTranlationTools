@@ -23,6 +23,7 @@ import {
   sampleBlur,
   sampleSharpen
 } from "../src/client/src/lib/inpaintResultCanvas";
+import { mergeInpaintMaskPixels } from "../src/client/src/lib/inpaintMaskImages";
 
 describe("inpaint layer canvas helpers", () => {
   it("tracks the applied canvas image state by source and size", () => {
@@ -93,6 +94,27 @@ describe("inpaint layer canvas helpers", () => {
   it("detects blank and nonblank mask canvases by alpha channel", () => {
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 0]))).toBe(true);
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 1]))).toBe(false);
+  });
+
+  it("merges mask pixels as opaque coverage", () => {
+    const base = new Uint8ClampedArray([
+      0, 0, 0, 0,
+      255, 255, 255, 128,
+      255, 255, 255, 128
+    ]);
+    const patch = new Uint8ClampedArray([
+      255, 255, 255, 96,
+      255, 255, 255, 64,
+      0, 0, 0, 0
+    ]);
+
+    mergeInpaintMaskPixels(base, patch);
+
+    expect([...base]).toEqual([
+      255, 255, 255, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 255
+    ]);
   });
 });
 

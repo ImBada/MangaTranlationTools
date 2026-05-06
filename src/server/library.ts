@@ -11,6 +11,7 @@ export {
   saveInpaintMask,
   saveInpaintResult,
   saveInpaintResultLayer,
+  saveNormalizedInpaintLayers,
   saveRenderedPage
 } from "./libraryAssets";
 

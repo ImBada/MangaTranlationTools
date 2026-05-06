@@ -87,6 +87,57 @@ describe("inpaint engine", () => {
     }
   });
 
+  it("adds near-white artifact cleanup around an external LaMa result", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "inpaint-engine-cleanup-test-"));
+    const scriptPath = join(dir, "copy-source.cjs");
+    await writeFile(
+      scriptPath,
+      [
+        "const fs = require('node:fs');",
+        "const sourceIndex = process.argv.indexOf('--source');",
+        "const outputIndex = process.argv.indexOf('--output');",
+        "fs.copyFileSync(process.argv[sourceIndex + 1], process.argv[outputIndex + 1]);"
+      ].join("\n"),
+      "utf8"
+    );
+
+    try {
+      const source = await rgbaDataUrl(5, 1, [
+        [252, 252, 252, 255],
+        [228, 228, 228, 255],
+        [24, 24, 24, 255],
+        [236, 236, 236, 255],
+        [18, 18, 18, 255]
+      ]);
+      const mask = await rgbaDataUrl(5, 1, [
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        [255, 255, 255, 255],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0]
+      ]);
+      const result = await runInpaintEngine(source, mask, "lama", {
+        lamaCommand: process.execPath,
+        lamaArgs: [scriptPath, "--source", "{source}", "--output", "{output}"],
+        settings: {
+          engine: "lama",
+          paddingPx: 0,
+          featherPx: 0,
+          tileSize: 128,
+          artifactCleanupPx: 1
+        }
+      });
+      const decoded = await decodeRgba(result);
+
+      expect(decoded[1 * 4 + 3]).toBeGreaterThan(0);
+      expect(decoded[1 * 4]).toBeGreaterThan(228);
+      expect(decoded[2 * 4 + 3]).toBe(255);
+      expect(decoded[4 * 4 + 3]).toBe(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   it("passes only the masked crop to an external LaMa-compatible command", async () => {
     const dir = await mkdtemp(join(tmpdir(), "inpaint-engine-crop-test-"));
     const scriptPath = join(dir, "assert-crop.cjs");

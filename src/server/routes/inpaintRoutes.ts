@@ -9,6 +9,7 @@ import {
   readLastImportedPsdMeta,
   readOptionalPsdPageQuery,
   readPsdPageQuery,
+  saveInpaintLayersRequest,
   saveInpaintMaskRequest,
   saveInpaintResultLayerRequest
 } from "../inpaintRequests";
@@ -16,6 +17,7 @@ import { asyncHandler } from "../serverUtils";
 import type {
   ExportInpaintPsdRequest,
   InpaintPageRequest,
+  SaveInpaintLayersRequest,
   SaveInpaintMaskRequest,
   SaveInpaintResultLayerRequest
 } from "../../shared/types";
@@ -33,6 +35,10 @@ export function createInpaintRoutes(upload: multer.Multer): express.Router {
 
   router.post("/api/inpaint/result-layer", asyncHandler(async (req, res) => {
     res.json(await saveInpaintResultLayerRequest(req.body as SaveInpaintResultLayerRequest));
+  }));
+
+  router.post("/api/inpaint/layers", asyncHandler(async (req, res) => {
+    res.json(await saveInpaintLayersRequest(req.body as SaveInpaintLayersRequest));
   }));
 
   router.post("/api/inpaint/psd/export", asyncHandler(async (req, res) => {

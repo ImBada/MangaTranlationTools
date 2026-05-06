@@ -1,12 +1,13 @@
 import { existsSync } from "node:fs";
 import { mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { ChapterSnapshot, InpaintSettings, PageImageLayer, RenderPageResult } from "../shared/types";
+import type { ChapterSnapshot, InpaintSettings, LibraryPageRecord, PageImageLayer, RenderPageResult } from "../shared/types";
 import { safeUnlink } from "./libraryFileIO";
 import {
-  clipOpaqueInpaintResultToMask,
+  clipOpaqueInpaintResultBufferToMask,
   dataUrlToBuffer,
   dataUrlToImageAsset,
+  normalizeInpaintLayerDataUrls,
   readImageFileAsset,
   sanitizeFileBasename,
   sanitizeRenderFilename,
@@ -60,25 +61,55 @@ export async function readPageImageAsset(chapterId: string, pageId: string, laye
   }
 
   if (layer === "inpaint-mask") {
-    if (page.inpaintMaskPath && existsSync(page.inpaintMaskPath)) {
-      return readImageFileAsset(page.inpaintMaskPath, page.updatedAt);
-    }
-    const legacyDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
-    if (legacyDataUrl) {
-      return dataUrlToImageAsset(legacyDataUrl, page.updatedAt);
+    const maskAsset = await readInpaintMaskAsset(page);
+    if (maskAsset) {
+      return maskAsset;
     }
   }
 
   if (layer === "inpaint-result") {
-    if (page.inpaintResultPath && existsSync(page.inpaintResultPath)) {
-      return readImageFileAsset(page.inpaintResultPath, page.updatedAt);
-    }
-    if (page.inpaintResultDataUrl) {
-      return dataUrlToImageAsset(page.inpaintResultDataUrl, page.updatedAt);
+    const resultAsset = await readInpaintResultAsset(page);
+    if (resultAsset) {
+      const resultPath = page.inpaintResultPath && existsSync(page.inpaintResultPath) ? page.inpaintResultPath : undefined;
+      return normalizeInpaintResultAsset(resultAsset, await readInpaintMaskAsset(page), resultPath);
     }
   }
 
   throw new Error("요청한 이미지 레이어를 찾지 못했습니다.");
+}
+
+async function readInpaintMaskAsset(page: LibraryPageRecord): Promise<PageImageAsset | null> {
+  if (page.inpaintMaskPath && existsSync(page.inpaintMaskPath)) {
+    return readImageFileAsset(page.inpaintMaskPath, page.updatedAt);
+  }
+  const legacyDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+  return legacyDataUrl ? dataUrlToImageAsset(legacyDataUrl, page.updatedAt) : null;
+}
+
+async function readInpaintResultAsset(page: LibraryPageRecord): Promise<PageImageAsset | null> {
+  if (page.inpaintResultPath && existsSync(page.inpaintResultPath)) {
+    return readImageFileAsset(page.inpaintResultPath, page.updatedAt);
+  }
+  return page.inpaintResultDataUrl ? dataUrlToImageAsset(page.inpaintResultDataUrl, page.updatedAt) : null;
+}
+
+async function normalizeInpaintResultAsset(resultAsset: PageImageAsset, maskAsset: PageImageAsset | null, resultPath?: string): Promise<PageImageAsset> {
+  if (!maskAsset) {
+    return resultAsset;
+  }
+
+  const clipped = await clipOpaqueInpaintResultBufferToMask(resultAsset.buffer, maskAsset.buffer);
+  if (!clipped) {
+    return resultAsset;
+  }
+  if (resultPath) {
+    await writeFile(resultPath, clipped);
+  }
+  return {
+    ...resultAsset,
+    buffer: clipped,
+    mime: "image/png"
+  };
 }
 
 export async function saveInpaintResult(
@@ -88,6 +119,17 @@ export async function saveInpaintResult(
   resultDataUrl: string,
   settings: InpaintSettings
 ): Promise<ChapterSnapshot> {
+  const layers = await normalizeInpaintLayerDataUrls(maskDataUrl, resultDataUrl);
+  return saveNormalizedInpaintLayers(chapterId, pageId, layers.maskDataUrl, layers.resultDataUrl, settings);
+}
+
+export async function saveNormalizedInpaintLayers(
+  chapterId: string,
+  pageId: string,
+  maskDataUrl: string,
+  resultDataUrl: string,
+  settings?: InpaintSettings
+): Promise<ChapterSnapshot> {
   const locator = await findChapterLocation(chapterId);
   if (!locator) {
     throw new Error("화를 찾지 못했습니다.");
@@ -96,22 +138,23 @@ export async function saveInpaintResult(
   if (!chapter) {
     throw new Error("화를 찾지 못했습니다.");
   }
+  const existingPage = chapter.pages.find((page) => page.id === pageId);
+  if (!existingPage) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
 
   const now = new Date().toISOString();
   const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
   await mkdir(inpaintDir, { recursive: true });
   const maskPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-mask.png`);
   const resultPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-result.png`);
-  const normalizedResultDataUrl = await clipOpaqueInpaintResultToMask(resultDataUrl, maskDataUrl);
   await writeFile(maskPath, dataUrlToBuffer(maskDataUrl));
-  await writeFile(resultPath, dataUrlToBuffer(normalizedResultDataUrl));
+  await writeFile(resultPath, dataUrlToBuffer(resultDataUrl));
 
-  let found = false;
   chapter.pages = chapter.pages.map((page) => {
     if (page.id !== pageId) {
       return page;
     }
-    found = true;
     return {
       ...page,
       inpaintMaskPath: maskPath,
@@ -119,13 +162,10 @@ export async function saveInpaintResult(
       inpaintMaskDataUrl: undefined,
       inpaintResultDataUrl: undefined,
       inpaintStatus: "completed",
-      inpaintSettings: settings,
+      inpaintSettings: settings ?? page.inpaintSettings,
       updatedAt: now
     };
   });
-  if (!found) {
-    throw new Error("페이지를 찾지 못했습니다.");
-  }
 
   chapter.updatedAt = now;
   await writeChapterFile(chapter);
@@ -225,45 +265,8 @@ export async function saveInpaintResultLayer(chapterId: string, pageId: string, 
 }
 
 export async function saveImportedInpaintLayers(chapterId: string, pageId: string, maskDataUrl: string, resultDataUrl: string): Promise<ChapterSnapshot> {
-  const locator = await findChapterLocation(chapterId);
-  if (!locator) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-  const chapter = await readChapterFile(locator.workId, locator.chapterId);
-  if (!chapter) {
-    throw new Error("화를 찾지 못했습니다.");
-  }
-
-  const page = chapter.pages.find((candidate) => candidate.id === pageId);
-  if (!page) {
-    throw new Error("페이지를 찾지 못했습니다.");
-  }
-
-  const now = new Date().toISOString();
-  const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
-  await mkdir(inpaintDir, { recursive: true });
-  const maskPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-mask.png`);
-  const resultPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-result.png`);
-  await writeFile(maskPath, dataUrlToBuffer(maskDataUrl));
-  await writeFile(resultPath, dataUrlToBuffer(resultDataUrl));
-
-  chapter.pages = chapter.pages.map((candidate) =>
-    candidate.id === pageId
-      ? {
-          ...candidate,
-          inpaintMaskPath: maskPath,
-          inpaintResultPath: resultPath,
-          inpaintMaskDataUrl: undefined,
-          inpaintResultDataUrl: undefined,
-          inpaintStatus: "completed",
-          updatedAt: now
-        }
-      : candidate
-  );
-  chapter.updatedAt = now;
-  await writeChapterFile(chapter);
-  await touchWork(locator.workId, now);
-  return hydrateChapter(chapter);
+  const layers = await normalizeInpaintLayerDataUrls(maskDataUrl, resultDataUrl);
+  return saveNormalizedInpaintLayers(chapterId, pageId, layers.maskDataUrl, layers.resultDataUrl);
 }
 
 export async function getInpaintPsdImportPath(chapterId: string, pageId: string): Promise<string> {

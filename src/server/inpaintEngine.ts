@@ -30,8 +30,15 @@ const DEFAULT_INPAINT_SETTINGS: InpaintSettings = {
   engine: "local-fill-fallback",
   paddingPx: 0,
   featherPx: 0,
-  tileSize: 1024
+  tileSize: 1024,
+  artifactCleanupPx: 8
 };
+const ARTIFACT_CLEANUP_STRENGTH = 0.9;
+const ARTIFACT_CLEANUP_MIN_LUMA = 190;
+const ARTIFACT_CLEANUP_SAMPLE_MIN_LUMA = 225;
+const ARTIFACT_CLEANUP_MAX_CHROMA = 24;
+const ARTIFACT_CLEANUP_MAX_BG_DISTANCE = 90;
+const ARTIFACT_CLEANUP_DARK_STROKE_LUMA = 150;
 const NEIGHBORS = [
   [-1, -1],
   [0, -1],
@@ -55,7 +62,7 @@ export async function runInpaintEngine(
   const bounds = resolveMaskBounds(mask);
 
   if (engine === "lama") {
-    return bounds ? runExternalLamaInpaint(source, mask, cropRectForBounds(bounds, source.width, source.height, settings), options) : emptyResultLayer(source.width, source.height);
+    return bounds ? runExternalLamaInpaint(source, mask, cropRectForBounds(bounds, source.width, source.height, settings), { ...options, settings }) : emptyResultLayer(source.width, source.height);
   }
 
   if (engine === "mask-fill-fallback") {
@@ -68,7 +75,7 @@ export async function runInpaintEngine(
 
   const rect = cropRectForBounds(bounds, source.width, source.height, settings);
   const result = localFillInpaint(cropImage(source, rect), cropImage(mask, rect));
-  return maskedResultLayer(source, result, cropImage(mask, rect), rect);
+  return maskedResultLayer(source, result, cropImage(mask, rect), rect, settings);
 }
 
 export function resolveLamaCommandFromEnv(env: NodeJS.ProcessEnv): InpaintEngineRunOptions {
@@ -99,7 +106,7 @@ async function runExternalLamaInpaint(source: DecodedImage, mask: DecodedImage, 
       (options.lamaArgs ?? DEFAULT_LAMA_ARGS).map((arg) => applyLamaArgPlaceholders(arg, sourcePath, maskPath, outputPath))
     );
     const inpainted = await decodeRgba(`data:image/png;base64,${(await readFile(outputPath)).toString("base64")}`, rect.width, rect.height);
-    return maskedResultLayer(source, inpainted, maskCrop, rect);
+    return maskedResultLayer(source, inpainted, maskCrop, rect, options.settings);
   } finally {
     await rm(workDir, { recursive: true, force: true });
   }
@@ -159,7 +166,8 @@ function normalizeInpaintSettings(engine: InpaintEngine, settings?: InpaintSetti
     engine,
     paddingPx: Math.max(0, Math.round(settings?.paddingPx ?? DEFAULT_INPAINT_SETTINGS.paddingPx)),
     featherPx: Math.max(0, Math.round(settings?.featherPx ?? DEFAULT_INPAINT_SETTINGS.featherPx)),
-    tileSize: Math.max(128, Math.round(settings?.tileSize ?? DEFAULT_INPAINT_SETTINGS.tileSize))
+    tileSize: Math.max(128, Math.round(settings?.tileSize ?? DEFAULT_INPAINT_SETTINGS.tileSize)),
+    artifactCleanupPx: Math.max(0, Math.round(settings?.artifactCleanupPx ?? DEFAULT_INPAINT_SETTINGS.artifactCleanupPx ?? 0))
   };
 }
 
@@ -322,7 +330,8 @@ function resolveMaskBounds(mask: DecodedImage): ImageRect | null {
 }
 
 function cropRectForBounds(bounds: ImageRect, width: number, height: number, settings: InpaintSettings): ImageRect {
-  const contextMargin = Math.max(settings.paddingPx + settings.featherPx + 32, Math.round(Math.min(settings.tileSize, 1024) * 0.25));
+  const cleanupPx = settings.artifactCleanupPx ?? 0;
+  const contextMargin = Math.max(settings.paddingPx + settings.featherPx + cleanupPx + 32, Math.round(Math.min(settings.tileSize, 1024) * 0.25));
   const x = Math.max(0, bounds.x - contextMargin);
   const y = Math.max(0, bounds.y - contextMargin);
   const right = Math.min(width, bounds.x + bounds.width + contextMargin);
@@ -353,16 +362,23 @@ async function emptyResultLayer(width: number, height: number): Promise<string> 
   return rgbaToPngDataUrl(Buffer.alloc(width * height * 4), width, height);
 }
 
-async function maskedResultLayer(source: DecodedImage, inpainted: DecodedImage, mask: DecodedImage, rect: ImageRect): Promise<string> {
+async function maskedResultLayer(source: DecodedImage, inpainted: DecodedImage, mask: DecodedImage, rect: ImageRect, settings?: InpaintSettings): Promise<string> {
   const output = Buffer.alloc(source.width * source.height * 4);
+  const artifactCleanupPx = Math.max(0, Math.round(settings?.artifactCleanupPx ?? DEFAULT_INPAINT_SETTINGS.artifactCleanupPx ?? 0));
+  const artifactCleanupMask = artifactCleanupPx > 0 ? buildArtifactCleanupMask(mask, artifactCleanupPx) : null;
+  const artifactBackground = artifactCleanupMask ? estimateArtifactBackgroundColor(source, mask, rect) : null;
+
   for (let y = 0; y < rect.height; y += 1) {
     for (let x = 0; x < rect.width; x += 1) {
       const cropOffset = (y * rect.width + x) * 4;
       const amount = mask.data[cropOffset];
+      const sourceOffset = ((rect.y + y) * source.width + rect.x + x) * 4;
       if (amount <= 0) {
+        if (artifactCleanupMask && artifactBackground) {
+          writeArtifactCleanupPixel(output, source, mask, rect, x, y, sourceOffset, artifactCleanupMask[y * rect.width + x], artifactBackground);
+        }
         continue;
       }
-      const sourceOffset = ((rect.y + y) * source.width + rect.x + x) * 4;
       output[sourceOffset] = inpainted.data[cropOffset];
       output[sourceOffset + 1] = inpainted.data[cropOffset + 1];
       output[sourceOffset + 2] = inpainted.data[cropOffset + 2];
@@ -371,6 +387,119 @@ async function maskedResultLayer(source: DecodedImage, inpainted: DecodedImage, 
   }
 
   return rgbaToPngDataUrl(output, source.width, source.height);
+}
+
+function buildArtifactCleanupMask(mask: DecodedImage, radius: number): Uint8Array {
+  const total = mask.width * mask.height;
+  const binary = new Uint8Array(total);
+  for (let index = 0; index < total; index += 1) {
+    binary[index] = mask.data[index * 4] > 0 ? 255 : 0;
+  }
+
+  const dilated = dilateMask(binary, mask.width, mask.height, radius);
+  const featherRadius = Math.max(1, Math.round(radius / 2));
+  return boxBlurMask(dilated, mask.width, mask.height, featherRadius);
+}
+
+function estimateArtifactBackgroundColor(source: DecodedImage, mask: DecodedImage, rect: ImageRect): [number, number, number] {
+  let red = 0;
+  let green = 0;
+  let blue = 0;
+  let weightSum = 0;
+
+  for (let y = 0; y < rect.height; y += 1) {
+    for (let x = 0; x < rect.width; x += 1) {
+      const cropOffset = (y * rect.width + x) * 4;
+      if (mask.data[cropOffset] > 0) {
+        continue;
+      }
+      const sourceOffset = ((rect.y + y) * source.width + rect.x + x) * 4;
+      const r = source.data[sourceOffset];
+      const g = source.data[sourceOffset + 1];
+      const b = source.data[sourceOffset + 2];
+      const luma = rgbLuma(r, g, b);
+      const chroma = rgbChroma(r, g, b);
+      if (luma < ARTIFACT_CLEANUP_SAMPLE_MIN_LUMA || chroma > ARTIFACT_CLEANUP_MAX_CHROMA) {
+        continue;
+      }
+      const weight = Math.max(0.1, (luma - ARTIFACT_CLEANUP_SAMPLE_MIN_LUMA) / (255 - ARTIFACT_CLEANUP_SAMPLE_MIN_LUMA));
+      red += r * weight;
+      green += g * weight;
+      blue += b * weight;
+      weightSum += weight;
+    }
+  }
+
+  if (weightSum <= 0) {
+    return [255, 255, 255];
+  }
+  return [red / weightSum, green / weightSum, blue / weightSum];
+}
+
+function writeArtifactCleanupPixel(
+  output: Buffer,
+  source: DecodedImage,
+  mask: DecodedImage,
+  rect: ImageRect,
+  x: number,
+  y: number,
+  sourceOffset: number,
+  cleanupAmount: number,
+  background: [number, number, number]
+): void {
+  if (cleanupAmount <= 0 || hasDarkUnmaskedNeighbor(source, mask, rect, x, y)) {
+    return;
+  }
+
+  const r = source.data[sourceOffset];
+  const g = source.data[sourceOffset + 1];
+  const b = source.data[sourceOffset + 2];
+  const luma = rgbLuma(r, g, b);
+  const chroma = rgbChroma(r, g, b);
+  if (luma < ARTIFACT_CLEANUP_MIN_LUMA || chroma > ARTIFACT_CLEANUP_MAX_CHROMA) {
+    return;
+  }
+
+  const backgroundDistance = rgbDistance([r, g, b], background);
+  if (backgroundDistance > ARTIFACT_CLEANUP_MAX_BG_DISTANCE) {
+    return;
+  }
+
+  const lumaWeight = clamp01((luma - ARTIFACT_CLEANUP_MIN_LUMA) / (255 - ARTIFACT_CLEANUP_MIN_LUMA));
+  const backgroundWeight = clamp01(1 - backgroundDistance / ARTIFACT_CLEANUP_MAX_BG_DISTANCE);
+  const alpha = Math.round(cleanupAmount * ARTIFACT_CLEANUP_STRENGTH * Math.max(lumaWeight, backgroundWeight));
+  if (alpha <= 0) {
+    return;
+  }
+
+  output[sourceOffset] = Math.round(background[0]);
+  output[sourceOffset + 1] = Math.round(background[1]);
+  output[sourceOffset + 2] = Math.round(background[2]);
+  output[sourceOffset + 3] = alpha;
+}
+
+function hasDarkUnmaskedNeighbor(source: DecodedImage, mask: DecodedImage, rect: ImageRect, x: number, y: number): boolean {
+  for (let dy = -1; dy <= 1; dy += 1) {
+    for (let dx = -1; dx <= 1; dx += 1) {
+      if (dx === 0 && dy === 0) {
+        continue;
+      }
+      const nx = x + dx;
+      const ny = y + dy;
+      if (nx < 0 || ny < 0 || nx >= rect.width || ny >= rect.height) {
+        continue;
+      }
+      const cropOffset = (ny * rect.width + nx) * 4;
+      if (mask.data[cropOffset] > 0) {
+        continue;
+      }
+      const sourceOffset = ((rect.y + ny) * source.width + rect.x + nx) * 4;
+      if (rgbLuma(source.data[sourceOffset], source.data[sourceOffset + 1], source.data[sourceOffset + 2]) < ARTIFACT_CLEANUP_DARK_STROKE_LUMA) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function localFillInpaint(source: DecodedImage, mask: DecodedImage): DecodedImage {
@@ -537,6 +666,25 @@ function writeColor(output: Buffer, index: number, color: [number, number, numbe
   output[offset] = Math.round(color[0]);
   output[offset + 1] = Math.round(color[1]);
   output[offset + 2] = Math.round(color[2]);
+}
+
+function rgbLuma(red: number, green: number, blue: number): number {
+  return red * 0.299 + green * 0.587 + blue * 0.114;
+}
+
+function rgbChroma(red: number, green: number, blue: number): number {
+  return Math.max(red, green, blue) - Math.min(red, green, blue);
+}
+
+function rgbDistance(a: [number, number, number], b: [number, number, number]): number {
+  const dr = a[0] - b[0];
+  const dg = a[1] - b[1];
+  const db = a[2] - b[2];
+  return Math.sqrt(dr * dr + dg * dg + db * db);
+}
+
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
 }
 
 async function decodeRgba(dataUrl: string, width?: number, height?: number): Promise<DecodedImage> {

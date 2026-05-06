@@ -68,6 +68,197 @@ describe("inpaint artifacts", () => {
     expect(chapterJson.pages[0]?.inpaintResultDataUrl).toBeUndefined();
   });
 
+  it("preserves inpaint result pixels outside the mask when the result layer has alpha", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-cleanup-artifacts-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot, saveInpaintResult } = await import("../src/server/library");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+
+    const chapter = await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+    const saved = await saveInpaintResult(
+      chapter.id,
+      "page-1",
+      await rgbaDataUrl(3, 1, [[0, 0, 0, 0], [255, 255, 255, 255], [0, 0, 0, 0]]),
+      await rgbaDataUrl(3, 1, [[250, 250, 250, 128], [9, 8, 7, 255], [1, 2, 3, 0]]),
+      {
+        engine: "lama",
+        paddingPx: 0,
+        featherPx: 0,
+        tileSize: 128,
+        artifactCleanupPx: 8
+      }
+    );
+
+    const resultPixels = await decodePng(saved.pages[0]?.inpaintResultPath ?? "");
+    const maskPixels = await decodePng(saved.pages[0]?.inpaintMaskPath ?? "");
+    expect([...maskPixels.subarray(0, 12)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0]);
+    expect([...resultPixels.subarray(0, 12)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255, 1, 2, 3, 0]);
+  });
+
+  it("saves normalized inpaint layers through one request", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-layers-request-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot } = await import("../src/server/library");
+    const { saveInpaintLayersRequest } = await import("../src/server/inpaintRequests");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+    await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+
+    const saved = await saveInpaintLayersRequest({
+      chapterId: "chapter-1",
+      pageId: "page-1",
+      maskDataUrl: await rgbaDataUrl(2, 1, [[0, 0, 0, 0], [255, 255, 255, 255]]),
+      resultDataUrl: await rgbaDataUrl(2, 1, [[250, 250, 250, 128], [9, 8, 7, 255]])
+    });
+
+    const maskPixels = await decodePng(saved.chapter.pages[0]?.inpaintMaskPath ?? "");
+    const resultPixels = await decodePng(saved.chapter.pages[0]?.inpaintResultPath ?? "");
+    expect([...maskPixels.subarray(0, 8)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255]);
+    expect([...resultPixels.subarray(0, 8)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255]);
+  });
+
+  it("does not create inpaint files when saving layers for a missing page", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-missing-page-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot } = await import("../src/server/library");
+    const { saveInpaintLayersRequest } = await import("../src/server/inpaintRequests");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+    await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+
+    await expect(saveInpaintLayersRequest({
+      chapterId: "chapter-1",
+      pageId: "missing-page",
+      maskDataUrl: await rgbaDataUrl(1, 1, [[255, 255, 255, 255]]),
+      resultDataUrl: await rgbaDataUrl(1, 1, [[9, 8, 7, 255]])
+    })).rejects.toThrow("페이지를 찾지 못했습니다.");
+    expect(existsSync(join(dataDir, "library", "works", "work-1", "chapters", "chapter-1", "inpaint"))).toBe(false);
+  });
+
+  it("clips opaque legacy inpaint result image assets to the saved mask", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-legacy-asset-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { readPageImageAsset, saveChapterSnapshot } = await import("../src/server/library");
+    const pagePath = join(dataDir, "page.png");
+    const maskPath = join(dataDir, "legacy-mask.png");
+    const resultPath = join(dataDir, "legacy-result.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await writeFile(maskPath, await rgbaBuffer(2, 1, [[255, 255, 255, 255], [0, 0, 0, 0]]));
+    await writeFile(resultPath, await rgbaBuffer(2, 1, [[9, 8, 7, 255], [1, 2, 3, 255]]));
+    await seedLibraryIndex(dataDir);
+
+    const chapter = makeChapterSnapshot(pagePath);
+    chapter.pages[0] = {
+      ...chapter.pages[0],
+      width: 2,
+      inpaintMaskPath: maskPath,
+      inpaintResultPath: resultPath
+    };
+    await saveChapterSnapshot(chapter);
+
+    const asset = await readPageImageAsset(chapter.id, "page-1", "inpaint-result");
+    const assetPixels = await decodePngBuffer(asset.buffer);
+    const filePixels = await decodePng(resultPath);
+
+    expect(asset.mime).toBe("image/png");
+    expect([...assetPixels.subarray(0, 8)]).toEqual([9, 8, 7, 255, 1, 2, 3, 0]);
+    expect([...filePixels.subarray(0, 8)]).toEqual([9, 8, 7, 255, 1, 2, 3, 0]);
+  });
+
+  it("disables inpaint artifact cleanup for PNG source pages", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-png-cleanup-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot } = await import("../src/server/library");
+    const { inpaintPage } = await import("../src/server/inpaintRequests");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+    await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+
+    const result = await inpaintPage({
+      chapterId: "chapter-1",
+      pageId: "page-1",
+      sourceDataUrl: await cleanupSourceDataUrl(),
+      maskDataUrl: await cleanupMaskDataUrl(),
+      settings: {
+        engine: "local-fill-fallback",
+        paddingPx: 0,
+        featherPx: 0,
+        tileSize: 128,
+        artifactCleanupPx: 1
+      }
+    });
+    const pixels = await decodePngDataUrl(result.resultDataUrl);
+    const maskPixels = await decodePngDataUrl(result.maskDataUrl);
+    const savedMaskPixels = await decodePng(result.chapter.pages[0]?.inpaintMaskPath ?? "");
+
+    expect(pixels[1 * 4 + 3]).toBe(0);
+    expect(pixels[2 * 4 + 3]).toBe(255);
+    expect(maskPixels[1 * 4 + 3]).toBe(0);
+    expect(maskPixels[2 * 4 + 3]).toBe(255);
+    expect(savedMaskPixels[1 * 4 + 3]).toBe(0);
+    expect(savedMaskPixels[2 * 4 + 3]).toBe(255);
+    expect(result.chapter.pages[0]?.inpaintSettings?.artifactCleanupPx).toBe(0);
+  });
+
+  it("keeps inpaint artifact cleanup enabled for JPEG source pages", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-jpeg-cleanup-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot } = await import("../src/server/library");
+    const { inpaintPage } = await import("../src/server/inpaintRequests");
+    const pagePath = join(dataDir, "page.jpeg");
+    await writeFile(pagePath, await pngBuffer([1, 2, 3, 255]));
+    await seedLibraryIndex(dataDir);
+    await saveChapterSnapshot(makeChapterSnapshot(pagePath));
+
+    const result = await inpaintPage({
+      chapterId: "chapter-1",
+      pageId: "page-1",
+      sourceDataUrl: await cleanupSourceDataUrl(),
+      maskDataUrl: await cleanupMaskDataUrl(),
+      settings: {
+        engine: "local-fill-fallback",
+        paddingPx: 0,
+        featherPx: 0,
+        tileSize: 128,
+        artifactCleanupPx: 1
+      }
+    });
+    const pixels = await decodePngDataUrl(result.resultDataUrl);
+    const maskPixels = await decodePngDataUrl(result.maskDataUrl);
+    const savedMaskPixels = await decodePng(result.chapter.pages[0]?.inpaintMaskPath ?? "");
+
+    expect(pixels[1 * 4 + 3]).toBeGreaterThan(0);
+    expect(pixels[2 * 4 + 3]).toBe(255);
+    expect(maskPixels[1 * 4 + 3]).toBe(255);
+    expect(maskPixels[2 * 4 + 3]).toBe(255);
+    expect(savedMaskPixels[1 * 4 + 3]).toBe(255);
+    expect(savedMaskPixels[2 * 4 + 3]).toBe(255);
+    expect(result.chapter.pages[0]?.inpaintSettings?.artifactCleanupPx).toBe(1);
+  });
+
   it("persists an edited inpaint mask before running inpaint", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-mask-"));
     tempDirs.push(dataDir);
@@ -191,6 +382,26 @@ async function rgbaDataUrl(width: number, height: number, pixels: [number, numbe
   return `data:image/png;base64,${(await rgbaBuffer(width, height, pixels)).toString("base64")}`;
 }
 
+function cleanupSourceDataUrl(): Promise<string> {
+  return rgbaDataUrl(5, 1, [
+    [252, 252, 252, 255],
+    [228, 228, 228, 255],
+    [24, 24, 24, 255],
+    [236, 236, 236, 255],
+    [18, 18, 18, 255]
+  ]);
+}
+
+function cleanupMaskDataUrl(): Promise<string> {
+  return rgbaDataUrl(5, 1, [
+    [0, 0, 0, 0],
+    [0, 0, 0, 0],
+    [255, 255, 255, 255],
+    [0, 0, 0, 0],
+    [0, 0, 0, 0]
+  ]);
+}
+
 function pngBuffer(pixel: [number, number, number, number]): Promise<Buffer> {
   return rgbaBuffer(1, 1, [pixel]);
 }
@@ -206,6 +417,19 @@ function rgbaBuffer(width: number, height: number, pixels: [number, number, numb
 }
 
 async function decodePng(path: string): Promise<Buffer> {
-  const { data } = await sharp(path).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return decodePngBuffer(await readFile(path));
+}
+
+async function decodePngBuffer(buffer: Buffer): Promise<Buffer> {
+  const { data } = await sharp(buffer).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return data;
+}
+
+async function decodePngDataUrl(dataUrl: string): Promise<Buffer> {
+  const match = /^data:image\/png;base64,(.+)$/u.exec(dataUrl);
+  if (!match) {
+    throw new Error("PNG data URL expected");
+  }
+  const { data } = await sharp(Buffer.from(match[1], "base64")).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return data;
 }
