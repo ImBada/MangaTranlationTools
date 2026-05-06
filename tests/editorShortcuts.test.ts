@@ -4,7 +4,8 @@ import {
   isBlockInlineEditShortcut,
   isBlockPasteShortcut,
   isDeleteShortcut,
-  isFindReplaceShortcut
+  isFindReplaceShortcut,
+  isPageProgressToggleShortcut
 } from "../src/client/src/lib/editorShortcuts";
 
 function keyboardEvent(patch: Partial<KeyboardEvent>): KeyboardEvent {
@@ -38,6 +39,15 @@ describe("editor shortcuts", () => {
     expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f", ctrlKey: true }))).toBe(true);
     expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f" }))).toBe(false);
     expect(isFindReplaceShortcut(keyboardEvent({ code: "KeyF", key: "f", ctrlKey: true, shiftKey: true }))).toBe(false);
+  });
+
+  it("recognizes the won key as page progress toggle without modifiers", () => {
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "₩" }))).toBe(true);
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "\\", code: "Backslash" }))).toBe(true);
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "", code: "IntlYen" }))).toBe(true);
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "`", code: "Backquote" }))).toBe(true);
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "₩", metaKey: true }))).toBe(false);
+    expect(isPageProgressToggleShortcut(keyboardEvent({ key: "₩", shiftKey: true }))).toBe(false);
   });
 
   it("recognizes E as selected block inline edit without command modifiers", () => {

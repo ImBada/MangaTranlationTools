@@ -58,6 +58,21 @@ export function isFindReplaceShortcut(event: KeyboardEvent): boolean {
   return !event.altKey && !event.shiftKey && hasFindModifier && (event.code === "KeyF" || event.key.toLowerCase() === "f");
 }
 
+export function isPageProgressToggleShortcut(event: KeyboardEvent): boolean {
+  if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
+    return false;
+  }
+  return (
+    event.key === "₩" ||
+    event.key === "\\" ||
+    event.key === "¥" ||
+    event.key === "`" ||
+    event.code === "IntlYen" ||
+    event.code === "Backslash" ||
+    event.code === "Backquote"
+  );
+}
+
 export function isBlockDuplicateModifier(event: ModifierKeyEvent, platform: string): boolean {
   return isMacLikePlatform(platform) ? event.metaKey : event.ctrlKey;
 }

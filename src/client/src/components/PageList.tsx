@@ -133,7 +133,8 @@ export function PageList({
                 checked={page.progressCompleted ?? false}
                 onChange={() => onToggleProgress(page.id)}
                 aria-label={`${page.name} 작업 완료`}
-                title="작업 완료"
+                aria-keyshortcuts="₩ `"
+                title="작업 완료 (₩/`)"
               />
               <button className="page-select px-2.5 py-2" onClick={() => onSelect(page.id)}>
                 <span className="min-w-0 truncate">{page.name}</span>

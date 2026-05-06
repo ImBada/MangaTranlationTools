@@ -550,6 +550,7 @@ export default function App(): React.JSX.Element {
     setZoomToolActive,
     temporaryPanHeldRef,
     temporaryPanShortcutEnabled,
+    toggleSelectedPageProgress: togglePageProgress,
     undoShortcutPlatform,
     workspacePanelRef,
     zoomToolActive

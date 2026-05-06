@@ -6,6 +6,7 @@ import {
   isBlockPasteShortcut,
   isDeleteShortcut,
   isFindReplaceShortcut,
+  isPageProgressToggleShortcut,
   isPointerToolShortcut,
   isRangeToolShortcut,
   isZoomToolShortcut,
@@ -48,6 +49,7 @@ type WorkspaceShortcutOptions = {
   setZoomToolActive: React.Dispatch<React.SetStateAction<boolean>>;
   temporaryPanHeldRef: React.MutableRefObject<boolean>;
   temporaryPanShortcutEnabled: boolean;
+  toggleSelectedPageProgress: (pageId: string, options?: { announce?: boolean }) => void;
   undoShortcutPlatform: string;
   workspacePanelRef: React.RefObject<HTMLElement | null>;
   zoomToolActive: boolean;
@@ -85,6 +87,7 @@ export function useWorkspaceShortcuts({
   setZoomToolActive,
   temporaryPanHeldRef,
   temporaryPanShortcutEnabled,
+  toggleSelectedPageProgress,
   undoShortcutPlatform,
   workspacePanelRef,
   zoomToolActive
@@ -276,6 +279,20 @@ export function useWorkspaceShortcuts({
         return;
       }
 
+      const pageProgressToggleShortcut =
+        !modalOpen &&
+        !editableTarget &&
+        isPageProgressToggleShortcut(event) &&
+        Boolean(selectedPageIdRef.current);
+      if (pageProgressToggleShortcut) {
+        event.preventDefault();
+        const selectedPageId = selectedPageIdRef.current;
+        if (selectedPageId) {
+          toggleSelectedPageProgress(selectedPageId, { announce: true });
+        }
+        return;
+      }
+
       const selectionClearShortcut =
         isDeleteShortcut(event, oneHandMode) &&
         !modalOpen &&
@@ -374,6 +391,7 @@ export function useWorkspaceShortcuts({
     setLibraryWidgetOpen,
     setRangeToolActive,
     setZoomToolActive,
+    toggleSelectedPageProgress,
     undoShortcutPlatform,
     workspacePanelRef,
     zoomToolActive
@@ -397,6 +415,7 @@ function isPlainSelectOverrideShortcut(event: KeyboardEvent): boolean {
     isZoomToolShortcut(event) ||
     isPointerToolShortcut(event) ||
     isRangeToolShortcut(event) ||
+    isPageProgressToggleShortcut(event) ||
     Boolean(resolveInpaintToolShortcut(event)) ||
     event.code === "KeyD" ||
     event.code === "KeyF" ||

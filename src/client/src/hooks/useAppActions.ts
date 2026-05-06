@@ -74,8 +74,12 @@ export function useAppActions({
   ]);
 
   const togglePageProgress = useCallback(
-    (pageId: string) => {
+    (pageId: string, options?: { announce?: boolean }) => {
       if (!currentChapter) {
+        return;
+      }
+      const targetPage = currentChapter.pages.find((page) => page.id === pageId);
+      if (!targetPage) {
         return;
       }
       updateCurrentChapter(pageId, (current) => ({
@@ -90,8 +94,11 @@ export function useAppActions({
               }
         )
       }));
+      if (options?.announce) {
+        pushStatus(`${targetPage.name} 작업 완료 상태 변경`);
+      }
     },
-    [currentChapter, updateCurrentChapter]
+    [currentChapter, pushStatus, updateCurrentChapter]
   );
 
   return {
