@@ -26,7 +26,7 @@ import { useStatusFeedback } from "./hooks/useStatusFeedback";
 import { useTranslationEditing } from "./hooks/useTranslationEditing";
 import { useWorkspaceShortcuts } from "./hooks/useWorkspaceShortcuts";
 import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
-import { resolveSelectedTranslationBlocks } from "./lib/blockSelection";
+import { resolveSelectedTranslationBlocks, resolveShiftSelectedTranslationBlockIds } from "./lib/blockSelection";
 import type { ActiveLayer } from "./lib/layerState";
 import "./styles.css";
 
@@ -134,6 +134,14 @@ export default function App(): React.JSX.Element {
     setSelectedBlockIds(uniqueBlockIds.length > 1 ? uniqueBlockIds : []);
     setSelectedBlockId(uniqueBlockIds[0] ?? null);
   }, [setSelectedBlockId]);
+  const updateBlockSelectionWithShiftClick = useCallback((blockId: string) => {
+    const nextBlockIds = resolveShiftSelectedTranslationBlockIds(selectedBlockId, selectedBlockIds, blockId);
+    if (!nextBlockIds) {
+      return false;
+    }
+    setSelectedBlockGroupIds(nextBlockIds);
+    return true;
+  }, [selectedBlockId, selectedBlockIds, setSelectedBlockGroupIds]);
   const lastOverlaySelectedBlockIdRef = useRef<string | null>(selectedBlockId);
 
   useEffect(() => {
@@ -816,6 +824,23 @@ export default function App(): React.JSX.Element {
           workspacePanelRef={workspacePanelRef}
           zoomToolActive={zoomToolActive}
           onBlockPointerDown={(event, block, mode) => {
+            const shiftMultiSelect =
+              mode === "move" &&
+              event.button === 0 &&
+              event.shiftKey &&
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              activeLayer === "overlay" &&
+              !rangeToolActive &&
+              !zoomToolActive &&
+              !temporaryPanActive &&
+              updateBlockSelectionWithShiftClick(block.id);
+            if (shiftMultiSelect) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             setSelectedBlockIds([]);
             onBlockPointerDown(event, block, mode);
           }}

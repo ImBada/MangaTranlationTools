@@ -26,6 +26,46 @@ export function resolveSelectedTranslationBlocks(page: MangaPage | null, blockId
   });
 }
 
+export function resolveShiftSelectedTranslationBlockIds(
+  selectedBlockId: string | null,
+  selectedBlockIds: readonly string[],
+  targetBlockId: string
+): string[] | null {
+  const currentSelection = resolveCurrentTranslationBlockSelection(selectedBlockId, selectedBlockIds);
+  const nextSelection = resolveToggledTranslationBlockIds(selectedBlockId, selectedBlockIds, [targetBlockId]);
+  return currentSelection.length > 0 || nextSelection.length > 1 ? nextSelection : null;
+}
+
+export function resolveToggledTranslationBlockIds(
+  selectedBlockId: string | null,
+  selectedBlockIds: readonly string[],
+  toggledBlockIds: readonly string[]
+): string[] {
+  const currentSelection = resolveCurrentTranslationBlockSelection(selectedBlockId, selectedBlockIds);
+  const currentSelectionSet = new Set(currentSelection);
+  const toggledBlockIdSet = new Set(toggledBlockIds);
+  const nextSelection = currentSelection.filter((blockId) => !toggledBlockIdSet.has(blockId));
+
+  toggledBlockIds.forEach((blockId) => {
+    if (!currentSelectionSet.has(blockId) && !nextSelection.includes(blockId)) {
+      nextSelection.push(blockId);
+    }
+  });
+
+  return nextSelection;
+}
+
+function resolveCurrentTranslationBlockSelection(
+  selectedBlockId: string | null,
+  selectedBlockIds: readonly string[]
+): string[] {
+  return selectedBlockIds.length > 1
+    ? [...selectedBlockIds]
+    : selectedBlockId
+      ? [selectedBlockId]
+      : [];
+}
+
 function blockIntersectsSelection(block: TranslationBlock, page: MangaPage, selectionRect: ImageRect): boolean {
   const blockBbox = bboxToPixels(resolveBlockRenderBbox(block), page.width, page.height);
   return rectsIntersect(

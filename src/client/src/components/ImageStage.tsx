@@ -1,7 +1,7 @@
 import React from "react";
 import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
-import { resolveTranslationBlockIdsInSelection } from "../lib/blockSelection";
+import { resolveToggledTranslationBlockIds, resolveTranslationBlockIdsInSelection } from "../lib/blockSelection";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { isEditableTarget } from "../lib/editorUtils";
 import { useImageStageView } from "../hooks/useImageStageView";
@@ -14,6 +14,7 @@ type RangeSelectionDragState = {
   pointerId: number;
   start: DrawPoint;
   target: "inpaint" | "block" | "blocks";
+  toggleBlockSelection: boolean;
 };
 
 type ImageStageProps = {
@@ -217,13 +218,18 @@ export function ImageStage({
     if (rect.width < 2 || rect.height < 2) {
       if (drag.target === "inpaint") {
         onInpaintSelectionChange(null);
-      } else if (drag.target === "blocks") {
+      } else if (drag.target === "blocks" && !drag.toggleBlockSelection) {
         onBlockSelectionChange([]);
       }
       return;
     }
     if (drag.target === "blocks") {
-      onBlockSelectionChange(resolveTranslationBlockIdsInSelection(page, rect));
+      const blockIds = resolveTranslationBlockIdsInSelection(page, rect);
+      onBlockSelectionChange(
+        drag.toggleBlockSelection
+          ? resolveToggledTranslationBlockIds(selectedBlockId, selectedBlockIds, blockIds)
+          : blockIds
+      );
       return;
     }
     if (drag.target === "block" && selectedBlockId) {
@@ -231,7 +237,15 @@ export function ImageStage({
       return;
     }
     onInpaintSelectionChange(rect);
-  }, [onBlockSelectionChange, onInpaintSelectionChange, onSelectedBlockRangeChange, page, pageSize, selectedBlockId]);
+  }, [
+    onBlockSelectionChange,
+    onInpaintSelectionChange,
+    onSelectedBlockRangeChange,
+    page,
+    pageSize,
+    selectedBlockId,
+    selectedBlockIds
+  ]);
 
   return (
     <div
@@ -304,7 +318,12 @@ export function ImageStage({
             event.stopPropagation();
             event.currentTarget.setPointerCapture(event.pointerId);
             const target = blockMultiSelectionActive ? "blocks" : blockRangeSelectionActive ? "block" : "inpaint";
-            rangeSelectionDragRef.current = { pointerId: event.pointerId, start: point, target };
+            rangeSelectionDragRef.current = {
+              pointerId: event.pointerId,
+              start: point,
+              target,
+              toggleBlockSelection: target === "blocks" && event.shiftKey
+            };
             setBlockRangeSelectionDragActive(target === "block");
             updateRangeSelectionPreview(point, point);
           }}

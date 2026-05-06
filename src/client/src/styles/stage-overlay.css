@@ -272,6 +272,10 @@
   outline-offset: 2px;
 }
 
+.overlay-block.selected.overflowing {
+  outline: 2px solid #6aa9ff;
+}
+
 .overlay-inline-editor {
   position: absolute;
   left: 0;

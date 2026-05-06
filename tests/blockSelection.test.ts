@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { MangaPage, TranslationBlock } from "../src/shared/types";
-import { resolveSelectedTranslationBlocks, resolveTranslationBlockIdsInSelection } from "../src/client/src/lib/blockSelection";
+import {
+  resolveSelectedTranslationBlocks,
+  resolveShiftSelectedTranslationBlockIds,
+  resolveToggledTranslationBlockIds,
+  resolveTranslationBlockIdsInSelection
+} from "../src/client/src/lib/blockSelection";
 
 const baseBlock: TranslationBlock = {
   id: "block-1",
@@ -62,5 +67,29 @@ describe("block selection", () => {
 
   it("resolves selected blocks in requested order and drops stale ids", () => {
     expect(resolveSelectedTranslationBlocks(page, ["block-2", "missing", "block-1"]).map((block) => block.id)).toEqual(["block-2", "block-1"]);
+  });
+
+  it("toggles block selection with shift-click while preserving selection order", () => {
+    expect(resolveShiftSelectedTranslationBlockIds("block-1", [], "block-2")).toEqual(["block-1", "block-2"]);
+    expect(resolveShiftSelectedTranslationBlockIds("block-1", ["block-1", "block-2"], "render-box")).toEqual([
+      "block-1",
+      "block-2",
+      "render-box"
+    ]);
+    expect(resolveShiftSelectedTranslationBlockIds("block-1", ["block-1", "block-2"], "block-2")).toEqual(["block-1"]);
+    expect(resolveShiftSelectedTranslationBlockIds("block-1", [], "block-1")).toEqual([]);
+  });
+
+  it("toggles block selection with drag range results", () => {
+    expect(resolveToggledTranslationBlockIds("block-1", [], ["block-1", "block-2"])).toEqual(["block-2"]);
+    expect(resolveToggledTranslationBlockIds("block-1", ["block-1", "block-2"], ["block-2", "render-box"])).toEqual([
+      "block-1",
+      "render-box"
+    ]);
+    expect(resolveToggledTranslationBlockIds("block-1", ["block-1", "block-2"], ["block-1", "block-2"])).toEqual([]);
+    expect(resolveToggledTranslationBlockIds(null, [], ["block-2", "render-box"])).toEqual([
+      "block-2",
+      "render-box"
+    ]);
   });
 });
