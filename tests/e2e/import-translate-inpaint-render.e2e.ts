@@ -36,6 +36,10 @@ test.describe("Electron user flow", () => {
         MANGA_TRANSLATOR_OPENAI_COMPATIBLE_API_KEY: "e2e-key",
         MANGA_TRANSLATOR_OPENAI_COMPATIBLE_BASE_URL: mockModel.baseUrl,
         MANGA_TRANSLATOR_OPENAI_COMPATIBLE_MODEL: "e2e-overlay-model",
+        MANGA_TRANSLATOR_LAMA_COMMAND: "",
+        MANGA_TRANSLATOR_LAMA_ARGS: "",
+        MANGA_TRANSLATOR_LAMA_CODE_DIR: "",
+        MANGA_TRANSLATOR_LAMA_WEIGHTS: "",
         MANGA_TRANSLATOR_PAGE_RETRIES: "1",
         MANGA_TRANSLATOR_PORT: String(appPort)
       };
