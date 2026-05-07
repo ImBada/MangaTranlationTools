@@ -27,7 +27,12 @@ import {
   sampleBlur,
   sampleSharpen
 } from "../src/client/src/lib/inpaintResultCanvas";
-import { mergeInpaintMaskPixels, normalizeOpaqueMaskPixels, resolveOpaqueMaskCanvasDataUrl } from "../src/client/src/lib/inpaintMaskImages";
+import {
+  mergeInpaintMaskPixels,
+  normalizeOpaqueMaskPixels,
+  renderInpaintMaskCanvasForDisplay,
+  resolveOpaqueMaskCanvasDataUrl
+} from "../src/client/src/lib/inpaintMaskImages";
 
 describe("inpaint layer canvas helpers", () => {
   it("tracks the applied canvas image state by source and size", () => {
@@ -216,6 +221,22 @@ describe("inpaint layer canvas helpers", () => {
     expect([...covered.data]).toEqual([
       0, 0, 0, 255,
       255, 255, 255, 255
+    ]);
+  });
+
+  it("renders stored opaque masks with transparent blank pixels for editing", () => {
+    const canvas = createEditableCanvasMock(3, 1, [
+      0, 0, 0, 255,
+      255, 255, 255, 1,
+      255, 255, 255, 0
+    ]);
+
+    renderInpaintMaskCanvasForDisplay(canvas);
+
+    expect([...canvas.data]).toEqual([
+      0, 0, 0, 0,
+      255, 255, 255, 255,
+      0, 0, 0, 0
     ]);
   });
 });

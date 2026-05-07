@@ -302,6 +302,29 @@ export function normalizeOpaqueMaskPixels(pixels: Uint8ClampedArray): boolean {
   return hasCoverage;
 }
 
+function normalizeMaskPixelsForTransparentDisplay(pixels: Uint8ClampedArray): boolean {
+  let hasCoverage = false;
+  for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
+    const covered = isInpaintMaskPixelCovered(pixels, offset);
+    writeTransparentMaskDisplayPixel(pixels, offset, covered);
+    hasCoverage = hasCoverage || covered;
+  }
+  return hasCoverage;
+}
+
+export function renderInpaintMaskCanvasForDisplay(
+  canvas: HTMLCanvasElement,
+  context: CanvasRenderingContext2D | null = canvas.getContext("2d", { willReadFrequently: true })
+): void {
+  if (!context) {
+    return;
+  }
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  normalizeMaskPixelsForTransparentDisplay(imageData.data);
+  context.putImageData(imageData, 0, 0);
+}
+
 export function resolveOpaqueMaskCanvasDataUrl(
   canvas: HTMLCanvasElement,
   options: { includeBlank?: boolean } = {}
@@ -345,6 +368,13 @@ function writeOpaqueMaskPixel(pixels: Uint8ClampedArray, offset: number, covered
   pixels[offset + 1] = covered ? 255 : 0;
   pixels[offset + 2] = covered ? 255 : 0;
   pixels[offset + 3] = 255;
+}
+
+function writeTransparentMaskDisplayPixel(pixels: Uint8ClampedArray, offset: number, covered: boolean): void {
+  pixels[offset] = covered ? 255 : 0;
+  pixels[offset + 1] = covered ? 255 : 0;
+  pixels[offset + 2] = covered ? 255 : 0;
+  pixels[offset + 3] = covered ? 255 : 0;
 }
 
 function clampImageRect(rect: ImageRect, width: number, height: number): ImageRect {

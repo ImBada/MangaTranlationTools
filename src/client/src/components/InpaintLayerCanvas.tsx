@@ -16,7 +16,7 @@ import {
   type SelectionDragState
 } from "../lib/inpaintLayerCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
-import { resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
+import { renderInpaintMaskCanvasForDisplay, resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
 
 export type InpaintTool = "select" | "brush" | "eraser" | "autoEraser";
 
@@ -50,6 +50,7 @@ export function InpaintLayerCanvas({
     markCanvasCommitted,
     markCanvasEdited
   } = useCanvasImageSync({
+    afterDraw: renderInpaintMaskCanvasForDisplay,
     dataUrl,
     loadErrorMessage: "인페인트 마스크를 불러오지 못했습니다.",
     pageSize
@@ -91,10 +92,17 @@ export function InpaintLayerCanvas({
 
     const previousDataUrl = undoDataUrlRef.current;
     const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
+    renderInpaintMaskCanvasForDisplay(canvas);
     undoDataUrlRef.current = undefined;
     changedRef.current = false;
     markCanvasCommitted(nextDataUrl);
     onChange(nextDataUrl, { previousDataUrl });
+  };
+
+  const captureOpaqueMaskDataUrl = (canvas: HTMLCanvasElement): string | undefined => {
+    const dataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
+    renderInpaintMaskCanvasForDisplay(canvas);
+    return dataUrl;
   };
 
   const updateAutoEraseSelection = (canvas: HTMLCanvasElement, from: DrawPoint, to: DrawPoint = from) => {
@@ -151,6 +159,7 @@ export function InpaintLayerCanvas({
 
     const previousDataUrl = undoDataUrlRef.current;
     const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
+    renderInpaintMaskCanvasForDisplay(canvas);
     undoDataUrlRef.current = undefined;
     drawingRef.current = false;
     lastPointRef.current = null;
@@ -187,7 +196,7 @@ export function InpaintLayerCanvas({
               return;
             }
             event.currentTarget.setPointerCapture(event.pointerId);
-            undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+            undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : captureOpaqueMaskDataUrl(event.currentTarget);
             autoEraseSelectionRef.current = selection;
             markCanvasEdited();
             drawingRef.current = true;
@@ -197,7 +206,7 @@ export function InpaintLayerCanvas({
           }
 
           event.currentTarget.setPointerCapture(event.pointerId);
-          undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+          undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : captureOpaqueMaskDataUrl(event.currentTarget);
           markCanvasEdited();
           drawingRef.current = true;
           lastPointRef.current = point;

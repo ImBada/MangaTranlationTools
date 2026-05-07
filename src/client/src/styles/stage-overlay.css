@@ -63,10 +63,6 @@
   pointer-events: auto;
 }
 
-.inpaint-mask-layer-preview .inpaint-layer {
-  mix-blend-mode: screen;
-}
-
 .inpaint-brush-cursor {
   position: absolute;
   z-index: 5;

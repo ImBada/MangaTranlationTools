@@ -12,6 +12,7 @@ export type CanvasImageSyncState = CanvasImageDrawSize & {
 };
 
 type UseCanvasImageSyncOptions = {
+  afterDraw?: (canvas: HTMLCanvasElement, context: CanvasRenderingContext2D) => void;
   dataUrl?: string;
   loadErrorMessage: string;
   pageSize: CanvasImageDrawSize;
@@ -45,6 +46,7 @@ export function isCanvasImageSyncStateCurrent(
 }
 
 export function useCanvasImageSync({
+  afterDraw,
   dataUrl,
   loadErrorMessage,
   pageSize,
@@ -80,6 +82,7 @@ export function useCanvasImageSync({
       .then((image) => {
         if (!cancelled && loadRevision === canvasEditRevisionRef.current && !drawingRef.current) {
           drawImageToCanvas(canvas, context, image, pageSize);
+          afterDraw?.(canvas, context);
           appliedCanvasStateRef.current = createCanvasImageSyncState(dataUrl, pageSize);
         }
       })
@@ -92,7 +95,7 @@ export function useCanvasImageSync({
     return () => {
       cancelled = true;
     };
-  }, [dataUrl, loadErrorMessage, pageSize.height, pageSize.width, willReadFrequently]);
+  }, [afterDraw, dataUrl, loadErrorMessage, pageSize.height, pageSize.width, willReadFrequently]);
 
   const markCanvasEdited = React.useCallback(() => {
     canvasEditRevisionRef.current += 1;
