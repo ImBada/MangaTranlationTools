@@ -921,6 +921,10 @@ input[type="checkbox"] {
   align-content: center;
 }
 
+.brush-size-field input[type="range"] {
+  grid-column: 1 / -1;
+}
+
 .mask-tool-settings {
   grid-template-columns: minmax(0, 1fr);
 }

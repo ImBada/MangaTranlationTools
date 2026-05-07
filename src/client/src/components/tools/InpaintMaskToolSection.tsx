@@ -10,6 +10,8 @@ import {
   INPAINT_MASK_BRUSH_SIZE_MIN
 } from "../../lib/inpaintToolSettings";
 import type { LayerVisibility } from "../../lib/layerState";
+import { mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
+import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type InpaintMaskToolSectionProps = {
   inpaintBrushSize: number;
@@ -76,7 +78,7 @@ export function InpaintMaskToolSection({
         />
       </div>
       <div className="result-tool-settings mask-tool-settings">
-        <label className="compact-tool-field result-size-field">
+        <label className="compact-tool-field result-size-field brush-size-field">
           <span>브러시 크기</span>
           <CompactNumberControl
             ariaLabel="마스크 브러시 크기"
@@ -87,6 +89,18 @@ export function InpaintMaskToolSection({
             suffix="px"
             disabled={maskToolsDisabled}
             onChange={(brushSize) => onInpaintBrushSizeChange(clampInpaintMaskBrushSize(brushSize))}
+          />
+          <input
+            type="range"
+            {...mouseOnlyRangeInputProps}
+            aria-label="마스크 브러시 크기 슬라이더"
+            min={INPAINT_MASK_BRUSH_SIZE_MIN}
+            max={INPAINT_MASK_BRUSH_SIZE_MAX}
+            step={1}
+            value={inpaintBrushSize}
+            style={rangeProgressStyle(inpaintBrushSize, INPAINT_MASK_BRUSH_SIZE_MIN, INPAINT_MASK_BRUSH_SIZE_MAX)}
+            disabled={maskToolsDisabled}
+            onChange={(event) => onInpaintBrushSizeChange(clampInpaintMaskBrushSize(Number(event.target.value)))}
           />
         </label>
       </div>

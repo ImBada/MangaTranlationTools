@@ -130,7 +130,7 @@ export function InpaintResultToolSection({
             />
           </span>
         </label>
-        <label className="compact-tool-field result-size-field">
+        <label className="compact-tool-field result-size-field brush-size-field">
           <span>크기</span>
           <CompactNumberControl
             ariaLabel="결과 브러시 크기"
@@ -141,6 +141,18 @@ export function InpaintResultToolSection({
             suffix="px"
             disabled={resultToolsDisabled}
             onChange={(brushSize) => onInpaintResultBrushSizeChange(clampInpaintResultBrushSize(brushSize))}
+          />
+          <input
+            type="range"
+            {...mouseOnlyRangeInputProps}
+            aria-label="결과 브러시 크기 슬라이더"
+            min={INPAINT_RESULT_BRUSH_SIZE_MIN}
+            max={INPAINT_RESULT_BRUSH_SIZE_MAX}
+            step={1}
+            value={inpaintResultBrushSize}
+            style={rangeProgressStyle(inpaintResultBrushSize, INPAINT_RESULT_BRUSH_SIZE_MIN, INPAINT_RESULT_BRUSH_SIZE_MAX)}
+            disabled={resultToolsDisabled}
+            onChange={(event) => onInpaintResultBrushSizeChange(clampInpaintResultBrushSize(Number(event.target.value)))}
           />
         </label>
         <label className="compact-tool-field">
