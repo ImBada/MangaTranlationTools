@@ -1,6 +1,7 @@
 import React from "react";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
+import { mouseOnlyColorInputProps } from "../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
 import { CompactNumberControl } from "./controls/CompactNumberControl";
 
@@ -168,6 +169,7 @@ export function EditorPanel({
           <span className="color-picker-shell" style={{ backgroundColor: block.backgroundColor }}>
             <input
               type="color"
+              {...mouseOnlyColorInputProps}
               className="outline-color-input"
               value={block.backgroundColor}
               disabled={disabled}

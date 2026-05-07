@@ -1,5 +1,6 @@
 import React from "react";
 import type { FontPresetPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
+import { mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 
 type FontOutlineValues = Pick<
@@ -63,6 +64,7 @@ export function FontOutlineControls({ disabled, onChange, renderLinkButton, valu
           <span className="color-picker-shell" style={{ backgroundColor: values.outlineColor ?? "#000000" }}>
             <input
               type="color"
+              {...mouseOnlyColorInputProps}
               className="outline-color-input"
               value={values.outlineColor ?? "#000000"}
               disabled={disabled}
@@ -93,6 +95,7 @@ export function FontOutlineControls({ disabled, onChange, renderLinkButton, valu
             <span className="color-picker-shell" style={{ backgroundColor: values.secondaryOutlineColor ?? "#ffffff" }}>
               <input
                 type="color"
+                {...mouseOnlyColorInputProps}
                 className="outline-color-input"
                 value={values.secondaryOutlineColor ?? "#ffffff"}
                 disabled={disabled}

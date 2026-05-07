@@ -11,6 +11,7 @@ import {
   INPAINT_RESULT_BRUSH_SIZE_MIN
 } from "../../lib/inpaintToolSettings";
 import type { LayerVisibility } from "../../lib/layerState";
+import { mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type InpaintResultToolSectionProps = {
@@ -121,6 +122,7 @@ export function InpaintResultToolSection({
           <span className="color-picker-shell" style={{ backgroundColor: inpaintResultBrushColor }}>
             <input
               type="color"
+              {...mouseOnlyColorInputProps}
               className="outline-color-input"
               value={inpaintResultBrushColor}
               disabled={resultToolsDisabled || (inpaintResultTool !== "brush" && inpaintResultTool !== "smartBrush")}

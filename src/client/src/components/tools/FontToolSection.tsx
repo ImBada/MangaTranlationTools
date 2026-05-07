@@ -22,7 +22,7 @@ import {
   buildScreentoneFillCssSize,
   resolveTextPosition
 } from "../../lib/overlayLayout";
-import { mouseOnlyCheckboxProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
@@ -436,6 +436,7 @@ export function FontToolSection({
             <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
               <input
                 type="color"
+                {...mouseOnlyColorInputProps}
                 className="outline-color-input"
                 value={fontControlValues.textColor ?? "#111111"}
                 disabled={selectedPageEditLocked}
@@ -550,6 +551,7 @@ export function FontToolSection({
                   <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.shadowColor ?? "#000000" }}>
                     <input
                       type="color"
+                      {...mouseOnlyColorInputProps}
                       className="outline-color-input"
                       value={fontControlValues.shadowColor ?? "#000000"}
                       disabled={selectedPageEditLocked}
