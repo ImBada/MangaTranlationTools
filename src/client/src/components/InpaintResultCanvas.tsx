@@ -537,14 +537,14 @@ export function InpaintResultCanvas({
             }
             return;
           }
-          if (!pointerEnabled) {
+          if (!pointerEnabled && !drawingRef.current) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
           if (!drawingRef.current || !lastPointRef.current) {
-            if ((event.buttons & 1) !== 0) {
+            if (pointerEnabled && (event.buttons & 1) !== 0) {
               startResultStroke(event.currentTarget, point, event.pointerId);
             }
             return;
@@ -564,7 +564,7 @@ export function InpaintResultCanvas({
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
             return;
           }
-          if (!pointerEnabled || !drawingRef.current) {
+          if (!drawingRef.current) {
             return;
           }
           event.preventDefault();
@@ -583,7 +583,7 @@ export function InpaintResultCanvas({
             setPreviewSelectionRect(null);
             return;
           }
-          if (!pointerEnabled || !drawingRef.current) {
+          if (!drawingRef.current) {
             return;
           }
           releaseCanvasPointer(event.currentTarget, event.pointerId);

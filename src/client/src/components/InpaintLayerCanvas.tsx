@@ -318,19 +318,19 @@ export function InpaintLayerCanvas({
             }
             return;
           }
-          if (!pointerEnabled) {
+          if (!pointerEnabled && !drawingRef.current) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
           if (!drawingRef.current || !lastPointRef.current) {
-            if ((event.buttons & 1) !== 0) {
+            if (pointerEnabled && (event.buttons & 1) !== 0) {
               startMaskStroke(event.currentTarget, point, event.pointerId);
             }
             return;
           }
-          if (autoEraseEnabled) {
+          if (autoEraseSelectionRef.current) {
             updateAutoEraseSelection(event.currentTarget, lastPointRef.current, point);
             lastPointRef.current = point;
             return;
@@ -350,14 +350,14 @@ export function InpaintLayerCanvas({
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
             return;
           }
-          if (!pointerEnabled || !drawingRef.current) {
+          if (!drawingRef.current) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
           releaseCanvasPointer(event.currentTarget, event.pointerId);
-          if (autoEraseEnabled) {
+          if (autoEraseSelectionRef.current) {
             updateAutoEraseSelection(event.currentTarget, lastPointRef.current ?? point, point);
             commitAutoEraseSelection(event.currentTarget);
             endEditSession();
@@ -375,11 +375,11 @@ export function InpaintLayerCanvas({
             setPreviewSelectionRect(null);
             return;
           }
-          if (!pointerEnabled || !drawingRef.current) {
+          if (!drawingRef.current) {
             return;
           }
           releaseCanvasPointer(event.currentTarget, event.pointerId);
-          if (autoEraseEnabled) {
+          if (autoEraseSelectionRef.current) {
             cancelAutoEraseSelection(event.currentTarget);
             endEditSession();
             return;
