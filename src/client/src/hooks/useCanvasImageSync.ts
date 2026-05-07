@@ -22,8 +22,10 @@ type UseCanvasImageSyncOptions = {
 type UseCanvasImageSyncState = {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   drawingRef: React.MutableRefObject<boolean>;
-  markCanvasCommitted: (dataUrl: string | undefined) => void;
+  markCanvasCommitted: (dataUrl: string | undefined, expectedSourceState?: CanvasImageSyncState) => boolean;
   markCanvasEdited: () => void;
+  readCanvasSourceState: () => CanvasImageSyncState;
+  readCommittedCanvasState: () => CanvasImageSyncState | null;
 };
 
 export function createCanvasImageSyncState(
@@ -56,6 +58,8 @@ export function useCanvasImageSync({
   const drawingRef = React.useRef(false);
   const appliedCanvasStateRef = React.useRef<CanvasImageSyncState | null>(null);
   const canvasEditRevisionRef = React.useRef(0);
+  const canvasSourceStateRef = React.useRef(createCanvasImageSyncState(dataUrl, pageSize));
+  canvasSourceStateRef.current = createCanvasImageSyncState(dataUrl, pageSize);
 
   React.useEffect(() => {
     const canvas = canvasRef.current;
@@ -101,15 +105,35 @@ export function useCanvasImageSync({
     canvasEditRevisionRef.current += 1;
   }, []);
 
-  const markCanvasCommitted = React.useCallback((nextDataUrl: string | undefined) => {
+  const markCanvasCommitted = React.useCallback((nextDataUrl: string | undefined, expectedSourceState?: CanvasImageSyncState) => {
+    const sourceState = canvasSourceStateRef.current;
+    if (
+      expectedSourceState &&
+      !isCanvasImageSyncStateCurrent(expectedSourceState, sourceState.dataUrl, sourceState)
+    ) {
+      return false;
+    }
     canvasEditRevisionRef.current += 1;
-    appliedCanvasStateRef.current = createCanvasImageSyncState(nextDataUrl, pageSize);
+    appliedCanvasStateRef.current = createCanvasImageSyncState(nextDataUrl, sourceState);
+    return true;
+  }, []);
+
+  const readCanvasSourceState = React.useCallback(() => canvasSourceStateRef.current, []);
+
+  const readCommittedCanvasState = React.useCallback(() => {
+    const state = appliedCanvasStateRef.current;
+    if (!state || state.width !== pageSize.width || state.height !== pageSize.height) {
+      return null;
+    }
+    return state;
   }, [pageSize.height, pageSize.width]);
 
   return {
     canvasRef,
     drawingRef,
     markCanvasCommitted,
-    markCanvasEdited
+    markCanvasEdited,
+    readCanvasSourceState,
+    readCommittedCanvasState
   };
 }

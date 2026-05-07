@@ -26,11 +26,13 @@ type UseInpaintLayerPersistenceOptions = {
 };
 
 type UseInpaintLayerPersistenceState = {
+  beginInpaintLayerInteraction: () => void;
   canUndoInpaintMask: (pageId: string) => boolean;
   canUndoInpaintResult: (pageId: string) => boolean;
   clearInpaintUndoStacks: () => void;
   clearPendingInpaintSaveTimers: () => void;
   clearPendingInpaintSaves: () => void;
+  endInpaintLayerInteraction: () => void;
   flushInpaintMaskSave: () => Promise<void>;
   flushInpaintResultSave: () => Promise<void>;
   recordInpaintMaskUndoSnapshot: (page: MangaPage, overrides?: Partial<InpaintMaskUndoSnapshot>) => void;
@@ -87,8 +89,10 @@ export function useInpaintLayerPersistence({
     };
   }, [currentChapterRef]);
   const {
+    beginInpaintLayerInteraction,
     clearPendingInpaintSaveTimers,
     clearPendingInpaintSaves,
+    endInpaintLayerInteraction,
     flushInpaintMaskSave,
     flushInpaintResultSave,
     scheduleInpaintLayersSave,
@@ -148,91 +152,117 @@ export function useInpaintLayerPersistence({
       return;
     }
 
-    const commitRevision = nextInpaintLayerCommitRevision();
+    const chapterId = currentChapter.id;
+    const targetPage = selectedPage;
     const previousDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
-    if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
-      recordInpaintMaskUndoSnapshot(selectedPage, { inpaintMaskDataUrl: previousDataUrl });
+    const livePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+    if (livePage === null || (livePage && resolvePageMaskDataUrl(livePage) !== previousDataUrl)) {
+      return;
     }
+    const applyLocalUpdate = livePage !== undefined;
+    const commitRevision = applyLocalUpdate ? nextInpaintLayerCommitRevision() : undefined;
 
-    const updatedAt = new Date().toISOString();
-    setCurrentChapter((current) => {
-      if (!current) {
-        return current;
+    if (livePage) {
+      if (options.recordUndo !== false) {
+        const undoDataUrls = resolveInpaintUndoDataUrlSequence(previousDataUrl, options.intermediateUndoDataUrls, dataUrl);
+        for (const undoDataUrl of undoDataUrls) {
+          recordInpaintMaskUndoSnapshot(livePage, { inpaintMaskDataUrl: undoDataUrl });
+        }
       }
-      return {
-        ...current,
-        updatedAt,
-        pages: current.pages.map((page) =>
-          page.id === selectedPage.id
-            ? {
-                ...page,
-                updatedAt,
-                inpaintMaskPath: dataUrl ? page.inpaintMaskPath : undefined,
-                inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
-                inpaintMaskDataUrl: dataUrl,
-                inpaintResultDataUrl: dataUrl ? page.inpaintResultDataUrl : undefined,
-                inpaintStatus: "idle" as const
-              }
-            : page
-        )
-      };
-    });
+
+      const updatedAt = new Date().toISOString();
+      setCurrentChapter((current) => {
+        if (!current || current.id !== chapterId) {
+          return current;
+        }
+        return {
+          ...current,
+          updatedAt,
+          pages: current.pages.map((page) =>
+            page.id === targetPage.id
+              ? {
+                  ...page,
+                  updatedAt,
+                  inpaintMaskPath: dataUrl ? page.inpaintMaskPath : undefined,
+                  inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
+                  inpaintMaskDataUrl: dataUrl,
+                  inpaintResultDataUrl: dataUrl ? page.inpaintResultDataUrl : undefined,
+                  inpaintStatus: "idle" as const
+                }
+              : page
+          )
+        };
+      });
+    }
 
     if (options.persist !== false) {
       scheduleInpaintMaskSave({
-        chapterId: currentChapter.id,
+        chapterId,
         commitRevision,
-        pageId: selectedPage.id,
+        pageId: targetPage.id,
         dataUrl
       });
     }
-  }, [currentChapter, nextInpaintLayerCommitRevision, recordInpaintMaskUndoSnapshot, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked, setCurrentChapter]);
+  }, [currentChapter, currentChapterRef, nextInpaintLayerCommitRevision, recordInpaintMaskUndoSnapshot, scheduleInpaintMaskSave, selectedPage, selectedPageEditLocked, setCurrentChapter]);
 
   const commitSelectedPageInpaintResult = React.useCallback((dataUrl: string | undefined, options: InpaintLayerChangeOptions = {}) => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked) {
       return;
     }
 
-    const commitRevision = nextInpaintLayerCommitRevision();
+    const chapterId = currentChapter.id;
+    const targetPage = selectedPage;
     const previousDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintResultDataUrl;
-    if (options.recordUndo !== false && previousDataUrl !== dataUrl) {
-      const stack = inpaintResultUndoStackRef.current.get(selectedPage.id) ?? [];
-      stack.push(previousDataUrl);
-      inpaintResultUndoStackRef.current.set(selectedPage.id, stack.slice(-30));
-      recordGlobalUndoEntry({ kind: "inpaint-result", chapterId: currentChapter.id, pageId: selectedPage.id });
+    const livePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+    if (livePage === null || (livePage && livePage.inpaintResultDataUrl !== previousDataUrl)) {
+      return;
     }
+    const applyLocalUpdate = livePage !== undefined;
+    const commitRevision = applyLocalUpdate ? nextInpaintLayerCommitRevision() : undefined;
 
-    const updatedAt = new Date().toISOString();
-    setCurrentChapter((current) => {
-      if (!current) {
-        return current;
+    if (livePage) {
+      if (options.recordUndo !== false) {
+        const undoDataUrls = resolveInpaintUndoDataUrlSequence(previousDataUrl, options.intermediateUndoDataUrls, dataUrl);
+        const stack = inpaintResultUndoStackRef.current.get(targetPage.id) ?? [];
+        for (const undoDataUrl of undoDataUrls) {
+          stack.push(undoDataUrl);
+          recordGlobalUndoEntry({ kind: "inpaint-result", chapterId, pageId: targetPage.id });
+        }
+        inpaintResultUndoStackRef.current.set(targetPage.id, stack.slice(-30));
       }
-      return {
-        ...current,
-        updatedAt,
-        pages: current.pages.map((page) =>
-          page.id === selectedPage.id
-            ? {
-                ...page,
-                updatedAt,
-                inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
-                inpaintResultDataUrl: dataUrl,
-                inpaintStatus: dataUrl ? "completed" as const : "idle" as const
-              }
-            : page
-        )
-      };
-    });
+
+      const updatedAt = new Date().toISOString();
+      setCurrentChapter((current) => {
+        if (!current || current.id !== chapterId) {
+          return current;
+        }
+        return {
+          ...current,
+          updatedAt,
+          pages: current.pages.map((page) =>
+            page.id === targetPage.id
+              ? {
+                  ...page,
+                  updatedAt,
+                  inpaintResultPath: dataUrl ? page.inpaintResultPath : undefined,
+                  inpaintResultDataUrl: dataUrl,
+                  inpaintStatus: dataUrl ? "completed" as const : "idle" as const
+                }
+              : page
+          )
+        };
+      });
+    }
 
     if (options.persist !== false) {
       scheduleInpaintResultSave({
-        chapterId: currentChapter.id,
+        chapterId,
         commitRevision,
-        pageId: selectedPage.id,
+        pageId: targetPage.id,
         dataUrl
       });
     }
-  }, [currentChapter, nextInpaintLayerCommitRevision, recordGlobalUndoEntry, scheduleInpaintResultSave, selectedPage, selectedPageEditLocked, setCurrentChapter]);
+  }, [currentChapter, currentChapterRef, nextInpaintLayerCommitRevision, recordGlobalUndoEntry, scheduleInpaintResultSave, selectedPage, selectedPageEditLocked, setCurrentChapter]);
 
   const commitSelectedPageInpaintLayers = React.useCallback(({
     chapterId,
@@ -242,49 +272,72 @@ export function useInpaintLayerPersistence({
     targetPage,
     previousMaskDataUrl,
     previousResultDataUrl,
+    intermediateLayerUndoSnapshots,
+    applyLocalUpdate,
     recordUndo,
     persist
   }: {
     chapterId: string;
-    commitRevision: number;
+    commitRevision: number | undefined;
     resultDataUrl: string | undefined;
     nextMaskDataUrl: string | undefined;
     targetPage: MangaPage;
     previousMaskDataUrl: string | undefined;
     previousResultDataUrl: string | undefined;
+    intermediateLayerUndoSnapshots?: {
+      maskDataUrl: string | undefined;
+      resultDataUrl: string | undefined;
+    }[];
+    applyLocalUpdate: boolean;
     recordUndo: boolean;
     persist: boolean;
   }) => {
-    if (recordUndo && (previousMaskDataUrl !== nextMaskDataUrl || previousResultDataUrl !== resultDataUrl)) {
-      recordInpaintMaskUndoSnapshot(targetPage, {
-        inpaintMaskDataUrl: previousMaskDataUrl,
-        inpaintResultDataUrl: previousResultDataUrl
+    if (applyLocalUpdate) {
+      if (recordUndo) {
+        const undoSnapshots = resolveInpaintLayerUndoSnapshotSequence(
+          {
+            maskDataUrl: previousMaskDataUrl,
+            resultDataUrl: previousResultDataUrl
+          },
+          intermediateLayerUndoSnapshots,
+          {
+            maskDataUrl: nextMaskDataUrl,
+            resultDataUrl
+          }
+        );
+        for (const undoSnapshot of undoSnapshots) {
+          recordInpaintMaskUndoSnapshot(targetPage, {
+            inpaintMaskDataUrl: undoSnapshot.maskDataUrl,
+            inpaintResultDataUrl: undoSnapshot.resultDataUrl,
+            inpaintStatus: undoSnapshot.resultDataUrl ? "completed" as const : "idle" as const
+          });
+        }
+      }
+
+      const updatedAt = new Date().toISOString();
+      setCurrentChapter((current) => {
+        if (!current || current.id !== chapterId) {
+          return current;
+        }
+        return {
+          ...current,
+          updatedAt,
+          pages: current.pages.map((page) =>
+            page.id === targetPage.id
+              ? {
+                  ...page,
+                  updatedAt,
+                  inpaintMaskPath: nextMaskDataUrl ? page.inpaintMaskPath : undefined,
+                  inpaintResultPath: resultDataUrl ? page.inpaintResultPath : undefined,
+                  inpaintMaskDataUrl: nextMaskDataUrl,
+                  inpaintResultDataUrl: resultDataUrl,
+                  inpaintStatus: resultDataUrl ? "completed" as const : "idle" as const
+                }
+              : page
+          )
+        };
       });
     }
-
-    const updatedAt = new Date().toISOString();
-    setCurrentChapter((current) => {
-      if (!current) {
-        return current;
-      }
-      return {
-        ...current,
-        updatedAt,
-        pages: current.pages.map((page) =>
-          page.id === targetPage.id
-            ? {
-                ...page,
-                updatedAt,
-                inpaintMaskPath: nextMaskDataUrl ? page.inpaintMaskPath : undefined,
-                inpaintResultPath: resultDataUrl ? page.inpaintResultPath : undefined,
-                inpaintMaskDataUrl: nextMaskDataUrl,
-                inpaintResultDataUrl: resultDataUrl,
-                inpaintStatus: resultDataUrl ? "completed" as const : "idle" as const
-              }
-            : page
-        )
-      };
-    });
 
     if (persist) {
       scheduleInpaintLayersSave({
@@ -306,7 +359,6 @@ export function useInpaintLayerPersistence({
       return;
     }
 
-    const commitRevision = nextInpaintLayerCommitRevision();
     const targetPage = selectedPage;
     const chapterId = currentChapter.id;
     const previousMaskDataUrl =
@@ -315,47 +367,77 @@ export function useInpaintLayerPersistence({
       selectedPage.inpaintLayerDataUrl;
     const previousResultDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintResultDataUrl;
     const patchMaskDataUrl = options.maskDataUrl;
+    const livePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+    if (
+      livePage === null ||
+      (livePage && (
+        resolvePageMaskDataUrl(livePage) !== previousMaskDataUrl ||
+        livePage.inpaintResultDataUrl !== previousResultDataUrl
+      ))
+    ) {
+      return;
+    }
+    const applyLocalUpdate = livePage !== undefined;
+    const commitRevision = applyLocalUpdate ? nextInpaintLayerCommitRevision() : undefined;
 
     void (patchMaskDataUrl
       ? mergePartialInpaintMask(previousMaskDataUrl, patchMaskDataUrl, targetPage.width, targetPage.height)
       : Promise.resolve(previousMaskDataUrl)
     ).then((nextMaskDataUrl) => {
-      if (inpaintLayerCommitRevisionRef.current !== commitRevision || selectedPageEditLocked) {
+      if (commitRevision !== undefined && inpaintLayerCommitRevisionRef.current !== commitRevision) {
         return;
       }
-      const liveChapter = currentChapterRef.current;
-      if (!liveChapter || liveChapter.id !== chapterId) {
+      const currentLivePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+      if (
+        currentLivePage === null ||
+        (currentLivePage && (
+          resolvePageMaskDataUrl(currentLivePage) !== previousMaskDataUrl ||
+          currentLivePage.inpaintResultDataUrl !== previousResultDataUrl
+        ))
+      ) {
         return;
       }
+      const applyCurrentLocalUpdate = applyLocalUpdate && Boolean(currentLivePage);
 
       commitSelectedPageInpaintLayers({
         chapterId,
-        commitRevision,
+        commitRevision: applyCurrentLocalUpdate ? commitRevision : undefined,
         resultDataUrl: dataUrl,
         nextMaskDataUrl,
-        targetPage,
+        targetPage: currentLivePage ?? targetPage,
         previousMaskDataUrl,
         previousResultDataUrl,
+        intermediateLayerUndoSnapshots: options.intermediateLayerUndoSnapshots,
+        applyLocalUpdate: applyCurrentLocalUpdate,
         recordUndo: options.recordUndo !== false,
         persist: options.persist !== false
       });
     }).catch((error) => {
       console.error(error);
-      if (inpaintLayerCommitRevisionRef.current !== commitRevision || selectedPageEditLocked) {
+      if (commitRevision !== undefined && inpaintLayerCommitRevisionRef.current !== commitRevision) {
         return;
       }
-      const liveChapter = currentChapterRef.current;
-      if (!liveChapter || liveChapter.id !== chapterId) {
+      const currentLivePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+      if (
+        currentLivePage === null ||
+        (currentLivePage && (
+          resolvePageMaskDataUrl(currentLivePage) !== previousMaskDataUrl ||
+          currentLivePage.inpaintResultDataUrl !== previousResultDataUrl
+        ))
+      ) {
         return;
       }
+      const applyCurrentLocalUpdate = applyLocalUpdate && Boolean(currentLivePage);
       commitSelectedPageInpaintLayers({
         chapterId,
-        commitRevision,
+        commitRevision: applyCurrentLocalUpdate ? commitRevision : undefined,
         resultDataUrl: dataUrl,
         nextMaskDataUrl: previousMaskDataUrl,
-        targetPage,
+        targetPage: currentLivePage ?? targetPage,
         previousMaskDataUrl,
         previousResultDataUrl,
+        intermediateLayerUndoSnapshots: options.intermediateLayerUndoSnapshots,
+        applyLocalUpdate: applyCurrentLocalUpdate,
         recordUndo: options.recordUndo !== false,
         persist: options.persist !== false
       });
@@ -469,11 +551,13 @@ export function useInpaintLayerPersistence({
   }, [consumeGlobalUndoEntry, currentChapterRef, nextInpaintLayerCommitRevision, scheduleInpaintResultSave, selectedPageEditLocked, setCurrentChapter]);
 
   return {
+    beginInpaintLayerInteraction,
     canUndoInpaintMask: (pageId) => (inpaintUndoStackRef.current.get(pageId)?.length ?? 0) > 0,
     canUndoInpaintResult: (pageId) => (inpaintResultUndoStackRef.current.get(pageId)?.length ?? 0) > 0,
     clearInpaintUndoStacks,
     clearPendingInpaintSaveTimers,
     clearPendingInpaintSaves,
+    endInpaintLayerInteraction,
     flushInpaintMaskSave,
     flushInpaintResultSave,
     recordInpaintMaskUndoSnapshot,
@@ -483,4 +567,86 @@ export function useInpaintLayerPersistence({
     updateSelectedPageInpaintMask,
     updateSelectedPageInpaintResult
   };
+}
+
+function resolveOpenChapterPage(
+  chapter: ChapterSnapshot | null,
+  chapterId: string,
+  pageId: string
+): MangaPage | null | undefined {
+  if (!chapter || chapter.id !== chapterId) {
+    return undefined;
+  }
+  return chapter.pages.find((page) => page.id === pageId) ?? null;
+}
+
+function resolvePageMaskDataUrl(page: MangaPage): string | undefined {
+  return page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+}
+
+export function resolveInpaintUndoDataUrlSequence(
+  previousDataUrl: string | undefined,
+  intermediateDataUrls: (string | undefined)[] | undefined,
+  nextDataUrl: string | undefined
+): (string | undefined)[] {
+  const sequence = [previousDataUrl, ...(intermediateDataUrls ?? [])];
+  const undoDataUrls: (string | undefined)[] = [];
+  for (const dataUrl of sequence) {
+    if (
+      dataUrl === nextDataUrl ||
+      (undoDataUrls.length > 0 && dataUrl === undoDataUrls[undoDataUrls.length - 1])
+    ) {
+      continue;
+    }
+    undoDataUrls.push(dataUrl);
+  }
+  return undoDataUrls;
+}
+
+export function resolveInpaintLayerUndoSnapshotSequence(
+  previousSnapshot: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  },
+  intermediateSnapshots: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  }[] | undefined,
+  nextSnapshot: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  }
+): {
+  maskDataUrl: string | undefined;
+  resultDataUrl: string | undefined;
+}[] {
+  const sequence = [previousSnapshot, ...(intermediateSnapshots ?? [])];
+  const undoSnapshots: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  }[] = [];
+  for (const snapshot of sequence) {
+    const lastSnapshot = undoSnapshots[undoSnapshots.length - 1];
+    if (
+      isInpaintLayerUndoSnapshotEqual(snapshot, nextSnapshot) ||
+      (lastSnapshot && isInpaintLayerUndoSnapshotEqual(snapshot, lastSnapshot))
+    ) {
+      continue;
+    }
+    undoSnapshots.push(snapshot);
+  }
+  return undoSnapshots;
+}
+
+function isInpaintLayerUndoSnapshotEqual(
+  left: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  },
+  right: {
+    maskDataUrl: string | undefined;
+    resultDataUrl: string | undefined;
+  }
+): boolean {
+  return left.maskDataUrl === right.maskDataUrl && left.resultDataUrl === right.resultDataUrl;
 }

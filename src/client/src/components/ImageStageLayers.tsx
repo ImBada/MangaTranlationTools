@@ -68,6 +68,8 @@ type ImageStageLayersProps = {
   onBlockTextAlignChange: (textAlign: TranslationBlock["textAlign"]) => void;
   onBlockInlineEditActiveChange: (active: boolean) => void;
   onFavoriteFontPresetSelect: (presetId: string) => void;
+  onInpaintLayerEditEnd: () => void;
+  onInpaintLayerEditStart: () => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
@@ -108,6 +110,8 @@ export function ImageStageLayers({
   onBlockTextAlignChange,
   onBlockInlineEditActiveChange,
   onFavoriteFontPresetSelect,
+  onInpaintLayerEditEnd,
+  onInpaintLayerEditStart,
   onInpaintLayerChange,
   onInpaintResultLayerChange,
   onInpaintSelectionChange
@@ -295,6 +299,8 @@ export function ImageStageLayers({
               disabled={inpaintResultDisabled || temporaryPanActive}
               selectionRect={null}
               onChange={onInpaintResultLayerChange}
+              onEditEnd={onInpaintLayerEditEnd}
+              onEditStart={onInpaintLayerEditStart}
               onSelectionChange={onInpaintSelectionChange}
               style={{
                 zIndex: activeLayer === "inpaintResult" ? 3 : 1,
@@ -321,6 +327,8 @@ export function ImageStageLayers({
                 disabled={inpaintDisabled || temporaryPanActive}
                 selectionRect={null}
                 onChange={onInpaintLayerChange}
+                onEditEnd={onInpaintLayerEditEnd}
+                onEditStart={onInpaintLayerEditStart}
                 onSelectionChange={onInpaintSelectionChange}
               />
             </div>

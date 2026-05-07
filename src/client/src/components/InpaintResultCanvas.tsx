@@ -1,12 +1,12 @@
 import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
-import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
+import { useCanvasImageSync, type CanvasImageSyncState } from "../hooks/useCanvasImageSync";
+import { encodeCanvasSnapshotDataUrl } from "../lib/canvasSnapshotEncoding";
 import {
   blendChannel,
   brushMaskAlpha,
   clamp01,
   createBrushGradient,
-  isCanvasBlank,
   parseHexColor,
   resolveBrushBounds,
   resolveSelectionRect,
@@ -16,8 +16,6 @@ import {
   type DrawPoint
 } from "../lib/inpaintResultCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
-import { isCanvasBlank as isMaskCanvasBlank } from "../lib/inpaintLayerCanvas";
-import { resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
 
 export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge";
 
@@ -38,6 +36,8 @@ type InpaintResultCanvasProps = {
   style?: React.CSSProperties;
   selectionRect: ImageRect | null;
   onChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onEditEnd?: () => void;
+  onEditStart?: () => void;
   onSelectionChange: (rect: ImageRect | null) => void;
 };
 
@@ -45,6 +45,43 @@ type SelectionDragState = {
   start: DrawPoint;
   current: DrawPoint;
 };
+
+type PendingResultCanvasCommit = {
+  capturesMaskDataUrl: boolean;
+  nextDataUrl: string | undefined;
+  nextMaskDataUrl: string | undefined;
+  onChange: InpaintResultCanvasProps["onChange"];
+  previousDataUrl: string | undefined;
+  previousMaskDataUrl: string | undefined;
+  resolved: boolean;
+  smartMaskSourceState: CanvasImageSyncState | undefined;
+  sourceState: CanvasImageSyncState;
+};
+
+type IntermediateResultSnapshot = {
+  capturesMaskDataUrl: boolean;
+  maskDataUrl: string | undefined;
+  resultDataUrl: string | undefined;
+};
+
+function resolveIntermediateLayerUndoSnapshots(
+  snapshots: IntermediateResultSnapshot[],
+  initialMaskDataUrl: string | undefined
+): {
+  maskDataUrl: string | undefined;
+  resultDataUrl: string | undefined;
+}[] {
+  let maskDataUrl = initialMaskDataUrl;
+  return snapshots.map((snapshot) => {
+    if (snapshot.capturesMaskDataUrl) {
+      maskDataUrl = snapshot.maskDataUrl;
+    }
+    return {
+      maskDataUrl,
+      resultDataUrl: snapshot.resultDataUrl
+    };
+  });
+}
 
 export function InpaintResultCanvas({
   dataUrl,
@@ -60,13 +97,17 @@ export function InpaintResultCanvas({
   style,
   selectionRect,
   onChange,
+  onEditEnd,
+  onEditStart,
   onSelectionChange
 }: InpaintResultCanvasProps): React.JSX.Element {
   const {
     canvasRef,
     drawingRef,
     markCanvasCommitted,
-    markCanvasEdited
+    markCanvasEdited,
+    readCanvasSourceState,
+    readCommittedCanvasState
   } = useCanvasImageSync({
     dataUrl,
     loadErrorMessage: "인페인트 결과 레이어를 불러오지 못했습니다.",
@@ -77,7 +118,9 @@ export function InpaintResultCanvas({
     canvasRef: smartMaskCanvasRef,
     drawingRef: smartMaskDrawingRef,
     markCanvasCommitted: markSmartMaskCommitted,
-    markCanvasEdited: markSmartMaskEdited
+    markCanvasEdited: markSmartMaskEdited,
+    readCanvasSourceState: readSmartMaskCanvasSourceState,
+    readCommittedCanvasState: readCommittedSmartMaskCanvasState
   } = useCanvasImageSync({
     dataUrl: maskDataUrl,
     loadErrorMessage: "인페인트 마스크를 불러오지 못했습니다.",
@@ -89,14 +132,16 @@ export function InpaintResultCanvas({
   const undoMaskDataUrlRef = useRef<string | undefined>(undefined);
   const smudgePatchRef = useRef<ImageData | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
+  const strokeForcesVisiblePixelsRef = useRef(false);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
+  const editSessionActiveRef = useRef(false);
+  const pendingCommitsRef = useRef<PendingResultCanvasCommit[]>([]);
+  const intermediateSnapshotsRef = useRef<IntermediateResultSnapshot[]>([]);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
-  const [cursorPoint, setCursorPoint] = useState<DrawPoint | null>(null);
 
   const pointerEnabled = !disabled && tool !== "select";
   const selectionEnabled = !disabled && tool === "select";
   const activeSelectionRect = previewSelectionRect ?? selectionRect;
-  const cursorSize = Math.max(1, brushSize);
 
   const drawSegment = (from: DrawPoint, to: DrawPoint) => {
     if (tool === "smudge") {
@@ -138,6 +183,7 @@ export function InpaintResultCanvas({
 
     fillBrushStamp(context, point, radius, gradient, tool === "eraser" ? "destination-out" : "source-over");
     changedRef.current = true;
+    strokeForcesVisiblePixelsRef.current = strokeForcesVisiblePixelsRef.current || tool !== "eraser";
   };
 
   const stampSmartMaskPatch = (point: DrawPoint) => {
@@ -286,6 +332,82 @@ export function InpaintResultCanvas({
     };
   };
 
+  const startEditSession = React.useCallback(() => {
+    if (editSessionActiveRef.current) {
+      return;
+    }
+    editSessionActiveRef.current = true;
+    onEditStart?.();
+  }, [onEditStart]);
+
+  const endEditSession = React.useCallback(() => {
+    if (!editSessionActiveRef.current) {
+      return;
+    }
+    editSessionActiveRef.current = false;
+    onEditEnd?.();
+  }, [onEditEnd]);
+
+  React.useEffect(() => {
+    return () => {
+      endEditSession();
+    };
+  }, [endEditSession]);
+
+  const appendIntermediateResultSnapshot = (commit: PendingResultCanvasCommit) => {
+    const snapshots = intermediateSnapshotsRef.current;
+    const lastSnapshot = snapshots[snapshots.length - 1];
+    if (
+      !lastSnapshot ||
+      lastSnapshot.resultDataUrl !== commit.nextDataUrl ||
+      lastSnapshot.capturesMaskDataUrl !== commit.capturesMaskDataUrl ||
+      (commit.capturesMaskDataUrl && lastSnapshot.maskDataUrl !== commit.nextMaskDataUrl)
+    ) {
+      snapshots.push({
+        capturesMaskDataUrl: commit.capturesMaskDataUrl,
+        maskDataUrl: commit.nextMaskDataUrl,
+        resultDataUrl: commit.nextDataUrl
+      });
+    }
+  };
+
+  const flushResolvedResultCommits = React.useCallback(() => {
+    const queue = pendingCommitsRef.current;
+    while (queue.length > 0 && queue[0].resolved) {
+      const commit = queue[0];
+      queue.shift();
+      if (queue.length > 0) {
+        appendIntermediateResultSnapshot(commit);
+        continue;
+      }
+
+      const committed = markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
+      const intermediateSnapshots = [...intermediateSnapshotsRef.current];
+      intermediateSnapshotsRef.current = [];
+      if (commit.capturesMaskDataUrl) {
+        if (committed) {
+          smartMaskDrawingRef.current = false;
+          markSmartMaskCommitted(commit.nextMaskDataUrl, commit.smartMaskSourceState);
+        }
+        commit.onChange(commit.nextDataUrl, {
+          previousDataUrl: commit.previousDataUrl,
+          previousMaskDataUrl: commit.previousMaskDataUrl,
+          maskDataUrl: commit.nextMaskDataUrl,
+          intermediateLayerUndoSnapshots: resolveIntermediateLayerUndoSnapshots(
+            intermediateSnapshots,
+            commit.previousMaskDataUrl
+          )
+        });
+        continue;
+      }
+
+      commit.onChange(commit.nextDataUrl, {
+        previousDataUrl: commit.previousDataUrl,
+        intermediateUndoDataUrls: intermediateSnapshots.map((snapshot) => snapshot.resultDataUrl)
+      });
+    }
+  }, [markCanvasCommitted, markSmartMaskCommitted]);
+
   const commitChange = () => {
     const canvas = canvasRef.current;
     if (!canvas || !changedRef.current) {
@@ -293,25 +415,54 @@ export function InpaintResultCanvas({
     }
 
     const previousDataUrl = undoDataUrlRef.current;
-    const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
-    const nextMaskDataUrl = tool === "smartBrush" ? resolveSmartMaskDataUrl() : undefined;
-    const previousMaskDataUrl = undoMaskDataUrlRef.current;
+    const includeBlank = strokeForcesVisiblePixelsRef.current;
+    const capturesMaskDataUrl =
+      tool === "smartBrush" ||
+      pendingCommitsRef.current.some((commit) => commit.capturesMaskDataUrl) ||
+      intermediateSnapshotsRef.current.some((snapshot) => snapshot.capturesMaskDataUrl);
+    const smartMaskSourceState = capturesMaskDataUrl ? readSmartMaskCanvasSourceState() : undefined;
+    const nextDataUrlPromise = encodeCanvasSnapshotDataUrl(canvas, { mode: "image", includeBlank });
+    const nextMaskDataUrlPromise = capturesMaskDataUrl
+      ? resolveSmartMaskDataUrl()
+      : Promise.resolve(undefined);
+    const previousMaskDataUrl = capturesMaskDataUrl
+      ? undoMaskDataUrlRef.current ?? readCommittedSmartMaskCanvasState()?.dataUrl ?? maskDataUrl
+      : undefined;
+    const commit: PendingResultCanvasCommit = {
+      capturesMaskDataUrl,
+      nextDataUrl: undefined,
+      nextMaskDataUrl: undefined,
+      onChange,
+      previousDataUrl,
+      previousMaskDataUrl,
+      resolved: false,
+      smartMaskSourceState,
+      sourceState: readCanvasSourceState()
+    };
+    pendingCommitsRef.current.push(commit);
     undoDataUrlRef.current = undefined;
     undoMaskDataUrlRef.current = undefined;
     changedRef.current = false;
-    markCanvasCommitted(nextDataUrl);
-    if (tool === "smartBrush") {
-      smartMaskDrawingRef.current = false;
-      markSmartMaskCommitted(nextMaskDataUrl);
-      onChange(nextDataUrl, { previousDataUrl, previousMaskDataUrl, maskDataUrl: nextMaskDataUrl });
-      return;
-    }
-    onChange(nextDataUrl, { previousDataUrl });
+    strokeForcesVisiblePixelsRef.current = false;
+    void Promise.all([nextDataUrlPromise, nextMaskDataUrlPromise])
+      .then(([nextDataUrl, nextMaskDataUrl]) => {
+        commit.nextDataUrl = nextDataUrl;
+        commit.nextMaskDataUrl = nextMaskDataUrl;
+        commit.resolved = true;
+        flushResolvedResultCommits();
+      })
+      .catch((error) => {
+        console.error(error);
+        commit.nextDataUrl = commit.previousDataUrl;
+        commit.nextMaskDataUrl = commit.previousMaskDataUrl;
+        commit.resolved = true;
+        flushResolvedResultCommits();
+      });
   };
 
-  const resolveSmartMaskDataUrl = (): string | undefined => {
+  const resolveSmartMaskDataUrl = (): Promise<string | undefined> => {
     const canvas = smartMaskCanvasRef.current;
-    return canvas ? resolveOpaqueMaskCanvasDataUrl(canvas) : undefined;
+    return canvas ? encodeCanvasSnapshotDataUrl(canvas, { mode: "mask" }) : Promise.resolve(undefined);
   };
 
   return (
@@ -339,14 +490,15 @@ export function InpaintResultCanvas({
           event.stopPropagation();
           event.currentTarget.setPointerCapture(event.pointerId);
           const point = resolvePoint(event);
-          setCursorPoint(point);
-          undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : event.currentTarget.toDataURL("image/png");
+          undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+          startEditSession();
           markCanvasEdited();
           drawingRef.current = true;
           lastPointRef.current = point;
+          strokeForcesVisiblePixelsRef.current = false;
           if (tool === "smartBrush") {
-            const maskCanvas = smartMaskCanvasRef.current;
-            undoMaskDataUrlRef.current = maskCanvas && !isMaskCanvasBlank(maskCanvas) ? maskCanvas.toDataURL("image/png") : maskDataUrl;
+            const committedSmartMaskState = readCommittedSmartMaskCanvasState();
+            undoMaskDataUrlRef.current = committedSmartMaskState ? committedSmartMaskState.dataUrl : maskDataUrl;
             markSmartMaskEdited();
             smartMaskDrawingRef.current = true;
           }
@@ -355,18 +507,11 @@ export function InpaintResultCanvas({
             drawSegment(point, point);
           }
         }}
-        onPointerEnter={(event) => {
-          if (!pointerEnabled && !selectionEnabled) {
-            return;
-          }
-          setCursorPoint(resolvePoint(event));
-        }}
         onPointerMove={(event) => {
           if (selectionEnabled) {
             event.preventDefault();
             event.stopPropagation();
             const point = resolvePoint(event);
-            setCursorPoint(point);
             const drag = selectionDragRef.current;
             if (drag) {
               drag.current = point;
@@ -380,17 +525,11 @@ export function InpaintResultCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          setCursorPoint(point);
           if (!drawingRef.current || !lastPointRef.current) {
             return;
           }
           drawSegment(lastPointRef.current, point);
           lastPointRef.current = point;
-        }}
-        onPointerLeave={() => {
-          if (!drawingRef.current) {
-            setCursorPoint(null);
-          }
         }}
         onPointerUp={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
@@ -414,6 +553,7 @@ export function InpaintResultCanvas({
           lastPointRef.current = null;
           smudgePatchRef.current = null;
           commitChange();
+          endEditSession();
         }}
         onPointerCancel={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
@@ -429,21 +569,10 @@ export function InpaintResultCanvas({
           drawingRef.current = false;
           lastPointRef.current = null;
           smudgePatchRef.current = null;
-          setCursorPoint(null);
           commitChange();
+          endEditSession();
         }}
       />
-      {pointerEnabled && cursorPoint ? (
-        <div
-          className={`inpaint-brush-cursor ${tool}`}
-          style={{
-            left: `${(cursorPoint.x / Math.max(1, pageSize.width)) * 100}%`,
-            top: `${(cursorPoint.y / Math.max(1, pageSize.height)) * 100}%`,
-            width: `${(cursorSize / Math.max(1, pageSize.width)) * 100}%`,
-            height: `${(cursorSize / Math.max(1, pageSize.height)) * 100}%`
-          }}
-        />
-      ) : null}
       {activeSelectionRect ? (
         <div
           className="inpaint-selection-rect"

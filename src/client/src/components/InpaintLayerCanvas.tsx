@@ -1,11 +1,11 @@
 import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
-import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
+import { useCanvasImageSync, type CanvasImageSyncState } from "../hooks/useCanvasImageSync";
+import { encodeCanvasSnapshotDataUrl } from "../lib/canvasSnapshotEncoding";
 import {
   createMaskIslandSelection,
   drawMaskSegment,
   eraseSelectedMaskIslands,
-  isCanvasBlank,
   renderMaskIslandSelectionPreview,
   resolveCanvasPoint,
   resolveSelectionRect,
@@ -16,7 +16,7 @@ import {
   type SelectionDragState
 } from "../lib/inpaintLayerCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
-import { renderInpaintMaskCanvasForDisplay, resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
+import { renderInpaintMaskCanvasForDisplay } from "../lib/inpaintMaskImages";
 
 export type InpaintTool = "select" | "brush" | "eraser" | "autoEraser";
 
@@ -31,7 +31,17 @@ type InpaintLayerCanvasProps = {
   disabled: boolean;
   selectionRect: ImageRect | null;
   onChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onEditEnd?: () => void;
+  onEditStart?: () => void;
   onSelectionChange: (rect: ImageRect | null) => void;
+};
+
+type PendingMaskCanvasCommit = {
+  nextDataUrl: string | undefined;
+  onChange: InpaintLayerCanvasProps["onChange"];
+  previousDataUrl: string | undefined;
+  resolved: boolean;
+  sourceState: CanvasImageSyncState;
 };
 
 export function InpaintLayerCanvas({
@@ -42,13 +52,17 @@ export function InpaintLayerCanvas({
   disabled,
   selectionRect,
   onChange,
+  onEditEnd,
+  onEditStart,
   onSelectionChange
 }: InpaintLayerCanvasProps): React.JSX.Element {
   const {
     canvasRef,
     drawingRef,
     markCanvasCommitted,
-    markCanvasEdited
+    markCanvasEdited,
+    readCanvasSourceState,
+    readCommittedCanvasState
   } = useCanvasImageSync({
     afterDraw: renderInpaintMaskCanvasForDisplay,
     dataUrl,
@@ -60,14 +74,15 @@ export function InpaintLayerCanvas({
   const autoEraseSelectionRef = useRef<MaskIslandSelection | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
+  const editSessionActiveRef = useRef(false);
+  const pendingCommitsRef = useRef<PendingMaskCanvasCommit[]>([]);
+  const intermediateUndoDataUrlsRef = useRef<(string | undefined)[]>([]);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
-  const [cursorPoint, setCursorPoint] = useState<DrawPoint | null>(null);
 
   const pointerEnabled = !disabled && tool !== "select";
   const autoEraseEnabled = !disabled && tool === "autoEraser";
   const selectionEnabled = !disabled && tool === "select";
   const activeSelectionRect = previewSelectionRect ?? selectionRect;
-  const cursorSize = Math.max(1, brushSize);
 
   const drawSegment = (from: DrawPoint, to: DrawPoint) => {
     const canvas = canvasRef.current;
@@ -84,6 +99,78 @@ export function InpaintLayerCanvas({
     return resolveCanvasPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), pageSize);
   };
 
+  const startEditSession = React.useCallback(() => {
+    if (editSessionActiveRef.current) {
+      return;
+    }
+    editSessionActiveRef.current = true;
+    onEditStart?.();
+  }, [onEditStart]);
+
+  const endEditSession = React.useCallback(() => {
+    if (!editSessionActiveRef.current) {
+      return;
+    }
+    editSessionActiveRef.current = false;
+    onEditEnd?.();
+  }, [onEditEnd]);
+
+  React.useEffect(() => {
+    return () => {
+      endEditSession();
+    };
+  }, [endEditSession]);
+
+  const appendIntermediateUndoDataUrl = (dataUrl: string | undefined) => {
+    const undoDataUrls = intermediateUndoDataUrlsRef.current;
+    if (undoDataUrls.length === 0 || undoDataUrls[undoDataUrls.length - 1] !== dataUrl) {
+      undoDataUrls.push(dataUrl);
+    }
+  };
+
+  const flushResolvedMaskCommits = React.useCallback(() => {
+    const queue = pendingCommitsRef.current;
+    while (queue.length > 0 && queue[0].resolved) {
+      const commit = queue[0];
+      queue.shift();
+      if (queue.length > 0) {
+        appendIntermediateUndoDataUrl(commit.nextDataUrl);
+        continue;
+      }
+
+      const intermediateUndoDataUrls = [...intermediateUndoDataUrlsRef.current];
+      intermediateUndoDataUrlsRef.current = [];
+      markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
+      commit.onChange(commit.nextDataUrl, {
+        previousDataUrl: commit.previousDataUrl,
+        intermediateUndoDataUrls
+      });
+    }
+  }, [markCanvasCommitted]);
+
+  const commitMaskCanvasSnapshot = (canvas: HTMLCanvasElement, previousDataUrl: string | undefined) => {
+    const commit: PendingMaskCanvasCommit = {
+      nextDataUrl: undefined,
+      onChange,
+      previousDataUrl,
+      resolved: false,
+      sourceState: readCanvasSourceState()
+    };
+    pendingCommitsRef.current.push(commit);
+    void encodeCanvasSnapshotDataUrl(canvas, { mode: "mask" })
+      .then((nextDataUrl) => {
+        commit.nextDataUrl = nextDataUrl;
+        commit.resolved = true;
+        flushResolvedMaskCommits();
+      })
+      .catch((error) => {
+        console.error(error);
+        commit.nextDataUrl = commit.previousDataUrl;
+        commit.resolved = true;
+        flushResolvedMaskCommits();
+      });
+  };
+
   const commitChange = () => {
     const canvas = canvasRef.current;
     if (!canvas || !changedRef.current) {
@@ -91,18 +178,9 @@ export function InpaintLayerCanvas({
     }
 
     const previousDataUrl = undoDataUrlRef.current;
-    const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
-    renderInpaintMaskCanvasForDisplay(canvas);
     undoDataUrlRef.current = undefined;
     changedRef.current = false;
-    markCanvasCommitted(nextDataUrl);
-    onChange(nextDataUrl, { previousDataUrl });
-  };
-
-  const captureOpaqueMaskDataUrl = (canvas: HTMLCanvasElement): string | undefined => {
-    const dataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
-    renderInpaintMaskCanvasForDisplay(canvas);
-    return dataUrl;
+    commitMaskCanvasSnapshot(canvas, previousDataUrl);
   };
 
   const updateAutoEraseSelection = (canvas: HTMLCanvasElement, from: DrawPoint, to: DrawPoint = from) => {
@@ -158,13 +236,10 @@ export function InpaintLayerCanvas({
     }
 
     const previousDataUrl = undoDataUrlRef.current;
-    const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
-    renderInpaintMaskCanvasForDisplay(canvas);
     undoDataUrlRef.current = undefined;
     drawingRef.current = false;
     lastPointRef.current = null;
-    markCanvasCommitted(nextDataUrl);
-    onChange(nextDataUrl, { previousDataUrl });
+    commitMaskCanvasSnapshot(canvas, previousDataUrl);
   };
 
   return (
@@ -189,14 +264,14 @@ export function InpaintLayerCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          setCursorPoint(point);
           if (autoEraseEnabled) {
             const selection = createMaskIslandSelection(event.currentTarget);
             if (!selection) {
               return;
             }
             event.currentTarget.setPointerCapture(event.pointerId);
-            undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : captureOpaqueMaskDataUrl(event.currentTarget);
+            undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+            startEditSession();
             autoEraseSelectionRef.current = selection;
             markCanvasEdited();
             drawingRef.current = true;
@@ -206,24 +281,18 @@ export function InpaintLayerCanvas({
           }
 
           event.currentTarget.setPointerCapture(event.pointerId);
-          undoDataUrlRef.current = isCanvasBlank(event.currentTarget) ? undefined : captureOpaqueMaskDataUrl(event.currentTarget);
+          undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+          startEditSession();
           markCanvasEdited();
           drawingRef.current = true;
           lastPointRef.current = point;
           drawSegment(point, point);
-        }}
-        onPointerEnter={(event) => {
-          if (!pointerEnabled && !selectionEnabled) {
-            return;
-          }
-          setCursorPoint(resolvePoint(event));
         }}
         onPointerMove={(event) => {
           if (selectionEnabled) {
             event.preventDefault();
             event.stopPropagation();
             const point = resolvePoint(event);
-            setCursorPoint(point);
             const drag = selectionDragRef.current;
             if (drag) {
               drag.current = point;
@@ -237,7 +306,6 @@ export function InpaintLayerCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          setCursorPoint(point);
           if (!drawingRef.current || !lastPointRef.current) {
             return;
           }
@@ -248,11 +316,6 @@ export function InpaintLayerCanvas({
           }
           drawSegment(lastPointRef.current, point);
           lastPointRef.current = point;
-        }}
-        onPointerLeave={() => {
-          if (!drawingRef.current) {
-            setCursorPoint(null);
-          }
         }}
         onPointerUp={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
@@ -272,16 +335,17 @@ export function InpaintLayerCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          setCursorPoint(point);
           event.currentTarget.releasePointerCapture(event.pointerId);
           if (autoEraseEnabled) {
             updateAutoEraseSelection(event.currentTarget, lastPointRef.current ?? point, point);
             commitAutoEraseSelection(event.currentTarget);
+            endEditSession();
             return;
           }
           drawingRef.current = false;
           lastPointRef.current = null;
           commitChange();
+          endEditSession();
         }}
         onPointerCancel={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
@@ -296,25 +360,15 @@ export function InpaintLayerCanvas({
           event.currentTarget.releasePointerCapture(event.pointerId);
           if (autoEraseEnabled) {
             cancelAutoEraseSelection(event.currentTarget);
+            endEditSession();
             return;
           }
           drawingRef.current = false;
           lastPointRef.current = null;
-          setCursorPoint(null);
           commitChange();
+          endEditSession();
         }}
       />
-      {pointerEnabled && cursorPoint ? (
-        <div
-          className={`inpaint-brush-cursor ${tool}`}
-          style={{
-            left: `${(cursorPoint.x / Math.max(1, pageSize.width)) * 100}%`,
-            top: `${(cursorPoint.y / Math.max(1, pageSize.height)) * 100}%`,
-            width: `${(cursorSize / Math.max(1, pageSize.width)) * 100}%`,
-            height: `${(cursorSize / Math.max(1, pageSize.height)) * 100}%`
-          }}
-        />
-      ) : null}
       {activeSelectionRect ? (
         <div
           className="inpaint-selection-rect"

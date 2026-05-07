@@ -319,12 +319,14 @@ export default function App(): React.JSX.Element {
     applyInpaintAllBlocks,
     applyInpaintAllPages,
     applyInpaintSelectedBlock,
+    beginInpaintLayerInteraction,
     canUndoInpaintMask,
     canUndoInpaintResult,
     clearInpaintUndoStacks,
     clearPendingInpaintSaves,
     clearSelectedInpaintSelection,
     downloadLastImportedInpaintPsd,
+    endInpaintLayerInteraction,
     exportSelectedPageInpaintPsd,
     fillSelectedInpaintSelection,
     flushInpaintMaskSave,
@@ -856,6 +858,8 @@ export default function App(): React.JSX.Element {
           onOpenFindReplace={openFindReplace}
           onDownloadLamaModel={downloadLamaModelFromEmptyState}
           onInpaintLayerChange={updateSelectedPageInpaintMask}
+          onInpaintLayerEditEnd={endInpaintLayerInteraction}
+          onInpaintLayerEditStart={beginInpaintLayerInteraction}
           onInpaintResultLayerChange={updateSelectedPageInpaintResult}
           onInpaintSelectionChange={setInpaintSelectionRect}
           onPrepareLama={prepareLamaFromEmptyState}

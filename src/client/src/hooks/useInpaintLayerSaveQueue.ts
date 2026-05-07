@@ -2,6 +2,8 @@ import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
+const INPAINT_LAYER_SAVE_IDLE_DELAY_MS = 1000;
+
 type PendingInpaintMaskSave = {
   chapterId: string;
   commitRevision?: number;
@@ -44,8 +46,10 @@ type UseInpaintLayerSaveQueueOptions = {
 };
 
 type UseInpaintLayerSaveQueueState = {
+  beginInpaintLayerInteraction: () => void;
   clearPendingInpaintSaveTimers: () => void;
   clearPendingInpaintSaves: () => void;
+  endInpaintLayerInteraction: () => void;
   flushInpaintMaskSave: () => Promise<void>;
   flushInpaintResultSave: () => Promise<void>;
   scheduleInpaintLayersSave: (pending: PendingInpaintLayersSave) => void;
@@ -69,6 +73,8 @@ export function useInpaintLayerSaveQueue({
   const inpaintLayerSaveTimerRef = React.useRef<number | null>(null);
   const inpaintLayerSaveStateRef = React.useRef<PendingInpaintLayerSave[]>([]);
   const inpaintLayerFlushPromiseRef = React.useRef<Promise<void> | null>(null);
+  const inpaintLayerInteractionDepthRef = React.useRef(0);
+  const inpaintLayerLastInteractionAtRef = React.useRef(0);
 
   const clearPendingInpaintSaveTimers = React.useCallback(() => {
     if (inpaintLayerSaveTimerRef.current !== null) {
@@ -180,8 +186,7 @@ export function useInpaintLayerSaveQueue({
     signalSaveComplete
   ]);
 
-  const scheduleInpaintLayerSave = React.useCallback((pending: PendingInpaintLayerSave) => {
-    inpaintLayerSaveStateRef.current = coalescePendingInpaintLayerSaves(inpaintLayerSaveStateRef.current, pending);
+  const scheduleInpaintLayerFlush = React.useCallback((delayMs = INPAINT_LAYER_SAVE_IDLE_DELAY_MS) => {
     if (inpaintLayerFlushPromiseRef.current) {
       return;
     }
@@ -190,9 +195,44 @@ export function useInpaintLayerSaveQueue({
     }
     inpaintLayerSaveTimerRef.current = window.setTimeout(() => {
       inpaintLayerSaveTimerRef.current = null;
+      const idleForMs = Date.now() - inpaintLayerLastInteractionAtRef.current;
+      if (inpaintLayerInteractionDepthRef.current > 0 || idleForMs < INPAINT_LAYER_SAVE_IDLE_DELAY_MS) {
+        scheduleInpaintLayerFlush(Math.max(50, INPAINT_LAYER_SAVE_IDLE_DELAY_MS - idleForMs));
+        return;
+      }
       void flushInpaintLayerSave();
-    }, 250);
+    }, delayMs);
   }, [flushInpaintLayerSave]);
+
+  const scheduleInpaintLayerSave = React.useCallback((pending: PendingInpaintLayerSave) => {
+    inpaintLayerSaveStateRef.current = coalescePendingInpaintLayerSaves(inpaintLayerSaveStateRef.current, pending);
+    if (inpaintLayerFlushPromiseRef.current) {
+      return;
+    }
+    scheduleInpaintLayerFlush();
+  }, [scheduleInpaintLayerFlush]);
+
+  const beginInpaintLayerInteraction = React.useCallback(() => {
+    inpaintLayerInteractionDepthRef.current += 1;
+    inpaintLayerLastInteractionAtRef.current = Date.now();
+    if (inpaintLayerSaveTimerRef.current !== null) {
+      window.clearTimeout(inpaintLayerSaveTimerRef.current);
+      inpaintLayerSaveTimerRef.current = null;
+    }
+  }, []);
+
+  const endInpaintLayerInteraction = React.useCallback(() => {
+    inpaintLayerInteractionDepthRef.current = Math.max(0, inpaintLayerInteractionDepthRef.current - 1);
+    inpaintLayerLastInteractionAtRef.current = Date.now();
+    if (
+      inpaintLayerInteractionDepthRef.current === 0 &&
+      inpaintLayerSaveStateRef.current.length > 0 &&
+      !inpaintLayerFlushPromiseRef.current &&
+      !inpaintLayerSaveTimerRef.current
+    ) {
+      scheduleInpaintLayerFlush();
+    }
+  }, [scheduleInpaintLayerFlush]);
 
   const scheduleInpaintMaskSave = React.useCallback((pending: PendingInpaintMaskSave) => {
     scheduleInpaintLayerSave({ ...pending, kind: "mask" });
@@ -207,8 +247,10 @@ export function useInpaintLayerSaveQueue({
   }, [scheduleInpaintLayerSave]);
 
   return {
+    beginInpaintLayerInteraction,
     clearPendingInpaintSaveTimers,
     clearPendingInpaintSaves,
+    endInpaintLayerInteraction,
     flushInpaintMaskSave: flushInpaintLayerSave,
     flushInpaintResultSave: flushInpaintLayerSave,
     scheduleInpaintLayersSave,

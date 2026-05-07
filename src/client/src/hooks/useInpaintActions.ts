@@ -44,6 +44,7 @@ type UseInpaintActionsState = {
   applyInpaintAllBlocks: () => Promise<void>;
   applyInpaintAllPages: () => Promise<void>;
   applyInpaintSelectedBlock: () => Promise<void>;
+  beginInpaintLayerInteraction: () => void;
   canUndoInpaintMask: (pageId: string) => boolean;
   canUndoInpaintResult: (pageId: string) => boolean;
   clearInpaintUndoStacks: () => void;
@@ -52,6 +53,7 @@ type UseInpaintActionsState = {
   downloadLastImportedInpaintPsd: () => Promise<void>;
   exportSelectedPageInpaintPsd: () => Promise<void>;
   fillSelectedInpaintSelection: () => Promise<void>;
+  endInpaintLayerInteraction: () => void;
   flushInpaintMaskSave: () => Promise<void>;
   flushInpaintResultSave: () => Promise<void>;
   handleInpaintPsdInputChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
@@ -126,11 +128,13 @@ export function useInpaintActions({
   }, [selectedPageCurrentId]);
 
   const {
+    beginInpaintLayerInteraction,
     canUndoInpaintMask,
     canUndoInpaintResult,
     clearInpaintUndoStacks,
     clearPendingInpaintSaveTimers,
     clearPendingInpaintSaves,
+    endInpaintLayerInteraction,
     flushInpaintMaskSave,
     flushInpaintResultSave,
     recordInpaintMaskUndoSnapshot,
@@ -236,12 +240,14 @@ export function useInpaintActions({
     applyInpaintAllBlocks,
     applyInpaintAllPages,
     applyInpaintSelectedBlock,
+    beginInpaintLayerInteraction,
     canUndoInpaintMask,
     canUndoInpaintResult,
     clearInpaintUndoStacks,
     clearPendingInpaintSaves,
     clearSelectedInpaintSelection,
     downloadLastImportedInpaintPsd,
+    endInpaintLayerInteraction,
     exportSelectedPageInpaintPsd,
     fillSelectedInpaintSelection,
     flushInpaintMaskSave,

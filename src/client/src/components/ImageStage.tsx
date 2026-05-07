@@ -6,6 +6,7 @@ import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib
 import { isEditableTarget } from "../lib/editorUtils";
 import { useImageStageView } from "../hooks/useImageStageView";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
+import { InpaintBrushCursorOverlay } from "./InpaintBrushCursorOverlay";
 import type { InpaintTool } from "./InpaintLayerCanvas";
 import { ImageStageLayers, type ImageStageActiveLayer, type ImageStageLayerOpacity, type ImageStageLayerVisibility } from "./ImageStageLayers";
 import type { InpaintResultTool } from "./InpaintResultCanvas";
@@ -47,6 +48,8 @@ type ImageStageProps = {
   temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onInpaintLayerEditEnd: () => void;
+  onInpaintLayerEditStart: () => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onZoomToolClick: (direction: "in" | "out") => void;
@@ -101,6 +104,8 @@ export function ImageStage({
   temporaryPanActive,
   inpaintSelectionRect,
   onInpaintLayerChange,
+  onInpaintLayerEditEnd,
+  onInpaintLayerEditStart,
   onInpaintSelectionChange,
   onInpaintResultLayerChange,
   onZoomToolClick,
@@ -166,6 +171,46 @@ export function ImageStage({
     Boolean(selectedBlock) &&
     (blockRangeSelectionModeActive || blockRangeSelectionDragActive);
   const rangeSelectionActive = inpaintRangeSelectionActive || blockMultiSelectionActive || blockRangeSelectionActive;
+  const activeInpaintBrushCursorTool = React.useMemo(() => {
+    if (
+      activeLayer === "inpaintMask" &&
+      !inpaintDisabled &&
+      inpaintTool !== "select" &&
+      !rangeSelectionActive &&
+      !temporaryPanActive &&
+      !zoomToolActive
+    ) {
+      return {
+        brushSize: inpaintBrushSize,
+        tool: inpaintTool
+      };
+    }
+    if (
+      activeLayer === "inpaintResult" &&
+      !inpaintResultDisabled &&
+      inpaintResultTool !== "select" &&
+      !rangeSelectionActive &&
+      !temporaryPanActive &&
+      !zoomToolActive
+    ) {
+      return {
+        brushSize: inpaintResultBrushSize,
+        tool: inpaintResultTool
+      };
+    }
+    return null;
+  }, [
+    activeLayer,
+    inpaintBrushSize,
+    inpaintDisabled,
+    inpaintResultBrushSize,
+    inpaintResultDisabled,
+    inpaintResultTool,
+    inpaintTool,
+    rangeSelectionActive,
+    temporaryPanActive,
+    zoomToolActive
+  ]);
 
   React.useEffect(() => {
     if (rangeSelectionActive) {
@@ -250,7 +295,7 @@ export function ImageStage({
   return (
     <div
       ref={wrapRef}
-      className={`stage-wrap${panning || temporaryPanActive ? " panning" : ""}`}
+      className={`stage-wrap${panning || temporaryPanActive ? " panning" : ""}${activeInpaintBrushCursorTool ? " inpaint-cursor-active" : ""}`}
       onPointerMove={handleStagePointerMove}
       onPointerUp={handleStagePointerUp}
       onPointerCancel={handleStagePointerCancel}
@@ -298,10 +343,21 @@ export function ImageStage({
           onBlockInlineEditActiveChange={onBlockInlineEditActiveChange}
           onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           onInpaintLayerChange={onInpaintLayerChange}
+          onInpaintLayerEditEnd={onInpaintLayerEditEnd}
+          onInpaintLayerEditStart={onInpaintLayerEditStart}
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}
         />
       </div>
+      {activeInpaintBrushCursorTool ? (
+        <InpaintBrushCursorOverlay
+          brushSize={activeInpaintBrushCursorTool.brushSize}
+          pageSize={pageSize}
+          stageRef={stageRef}
+          tool={activeInpaintBrushCursorTool.tool}
+          wrapRef={wrapRef}
+        />
+      ) : null}
       {rangeSelectionActive ? (
         <div
           className="stage-range-hit-area"

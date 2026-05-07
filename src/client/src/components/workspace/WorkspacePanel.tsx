@@ -91,6 +91,8 @@ type WorkspacePanelProps = {
   onDownloadLamaModel: () => void | Promise<unknown>;
   onOpenFindReplace: () => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onInpaintLayerEditEnd: () => void;
+  onInpaintLayerEditStart: () => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onPrepareLama: () => void | Promise<unknown>;
@@ -169,6 +171,8 @@ export function WorkspacePanel({
   onDownloadLamaModel,
   onOpenFindReplace,
   onInpaintLayerChange,
+  onInpaintLayerEditEnd,
+  onInpaintLayerEditStart,
   onInpaintResultLayerChange,
   onInpaintSelectionChange,
   onPrepareLama,
@@ -329,6 +333,8 @@ export function WorkspacePanel({
             temporaryPanActive={temporaryPanActive}
             inpaintSelectionRect={inpaintSelectionRect}
             onInpaintLayerChange={onInpaintLayerChange}
+            onInpaintLayerEditEnd={onInpaintLayerEditEnd}
+            onInpaintLayerEditStart={onInpaintLayerEditStart}
             onInpaintSelectionChange={onInpaintSelectionChange}
             onInpaintResultLayerChange={onInpaintResultLayerChange}
             onZoomToolClick={handleZoomToolClick}
