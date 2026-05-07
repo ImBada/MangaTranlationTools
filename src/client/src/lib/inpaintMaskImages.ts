@@ -7,6 +7,7 @@ const TEXT_MASK_MIN_COMPONENT_RATIO = 0.00002;
 const TEXT_MASK_EDGE_COMPONENT_RATIO = 0.008;
 const TEXT_MASK_BROAD_OUTER_RATIO = 0.01;
 const TEXT_MASK_CORNER_STROKE_RATIO = 0.0015;
+const TEXT_MASK_CENTER_KEEP_INSET_RATIO = 0.14;
 
 type TextMaskComponent = {
   pixels: number[];
@@ -440,7 +441,11 @@ function paintSourceTextPixelsOnMask(
     }
   }
 
-  const filteredMask = filterTextCandidateMask(candidateMask, rect.width, rect.height);
+  const filteredMask = retainCenteredTextMaskComponents(
+    filterTextCandidateMask(candidateMask, rect.width, rect.height),
+    rect.width,
+    rect.height
+  );
   for (let index = 0; index < filteredMask.length; index += 1) {
     if (filteredMask[index] <= 0) {
       continue;
@@ -473,6 +478,29 @@ function filterTextCandidateMask(mask: Uint8Array, width: number, height: number
 
     const component = collectTextMaskComponent(mask, visited, width, height, index);
     if (component.pixels.length < minPixels || isLikelyNonTextMaskComponent(component, width, height)) {
+      continue;
+    }
+
+    for (const pixelIndex of component.pixels) {
+      output[pixelIndex] = 255;
+    }
+  }
+
+  return output;
+}
+
+export function retainCenteredTextMaskComponents(mask: Uint8Array, width: number, height: number): Uint8Array {
+  const output = new Uint8Array(mask.length);
+  const visited = new Uint8Array(mask.length);
+  const keepRect = centeredTextMaskKeepRect(width, height);
+
+  for (let index = 0; index < mask.length; index += 1) {
+    if (visited[index] > 0 || mask[index] <= 0) {
+      continue;
+    }
+
+    const component = collectTextMaskComponent(mask, visited, width, height, index);
+    if (!textMaskComponentIntersectsRect(component, keepRect)) {
       continue;
     }
 
@@ -618,6 +646,24 @@ function isOuterTextMaskStroke(component: TextMaskComponent, width: number, heig
     componentHeight >= Math.max(7, height * 0.08) &&
     component.pixels.length / Math.max(1, componentWidth * componentHeight) < 0.58;
   return thinVertical || thinHorizontal || diagonalStroke;
+}
+
+function centeredTextMaskKeepRect(width: number, height: number): { left: number; top: number; right: number; bottom: number } {
+  const insetX = Math.floor(width * TEXT_MASK_CENTER_KEEP_INSET_RATIO);
+  const insetY = Math.floor(height * TEXT_MASK_CENTER_KEEP_INSET_RATIO);
+  return {
+    left: insetX,
+    top: insetY,
+    right: Math.max(insetX, width - 1 - insetX),
+    bottom: Math.max(insetY, height - 1 - insetY)
+  };
+}
+
+function textMaskComponentIntersectsRect(
+  component: TextMaskComponent,
+  rect: { left: number; top: number; right: number; bottom: number }
+): boolean {
+  return component.maxX >= rect.left && component.minX <= rect.right && component.maxY >= rect.top && component.minY <= rect.bottom;
 }
 
 function textMaskScanRect(block: TranslationBlock, pageWidth: number, pageHeight: number): { x: number; y: number; width: number; height: number } {

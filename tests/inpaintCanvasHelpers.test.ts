@@ -30,6 +30,7 @@ import {
 import {
   mergeInpaintMaskPixels,
   normalizeOpaqueMaskPixels,
+  retainCenteredTextMaskComponents,
   renderInpaintMaskCanvasForDisplay,
   resolveOpaqueMaskCanvasDataUrl
 } from "../src/client/src/lib/inpaintMaskImages";
@@ -239,6 +240,20 @@ describe("inpaint layer canvas helpers", () => {
       0, 0, 0, 0
     ]);
   });
+
+  it("keeps only text mask components that reach the block center band", () => {
+    const mask = binaryMask(20, 20, [
+      [0, 0], [0, 1], [1, 0], [1, 1],
+      [9, 9], [9, 10], [10, 9], [10, 10],
+      [19, 1], [19, 2]
+    ]);
+
+    const centered = retainCenteredTextMaskComponents(mask, 20, 20);
+
+    expect(maskPoints(centered, 20)).toEqual([
+      [9, 9], [10, 9], [9, 10], [10, 10]
+    ]);
+  });
 });
 
 describe("inpaint result canvas helpers", () => {
@@ -378,4 +393,22 @@ function rgbImage(width: number, height: number, pixels: [number, number, number
     data[index * 4 + 3] = 255;
   }
   return data;
+}
+
+function binaryMask(width: number, height: number, points: [number, number][]): Uint8Array {
+  const mask = new Uint8Array(width * height);
+  for (const [x, y] of points) {
+    mask[y * width + x] = 255;
+  }
+  return mask;
+}
+
+function maskPoints(mask: Uint8Array, width: number): [number, number][] {
+  const points: [number, number][] = [];
+  for (let index = 0; index < mask.length; index += 1) {
+    if (mask[index] > 0) {
+      points.push([index % width, Math.floor(index / width)]);
+    }
+  }
+  return points;
 }
