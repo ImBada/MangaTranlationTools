@@ -465,6 +465,40 @@ export function InpaintResultCanvas({
     return canvas ? encodeCanvasSnapshotDataUrl(canvas, { mode: "mask" }) : Promise.resolve(undefined);
   };
 
+  const captureCanvasPointer = (canvas: HTMLCanvasElement, pointerId: number) => {
+    try {
+      canvas.setPointerCapture(pointerId);
+    } catch {
+      // The pointer may have started outside this canvas; drawing can continue without capture.
+    }
+  };
+
+  const releaseCanvasPointer = (canvas: HTMLCanvasElement, pointerId: number) => {
+    if (canvas.hasPointerCapture(pointerId)) {
+      canvas.releasePointerCapture(pointerId);
+    }
+  };
+
+  const startResultStroke = (canvas: HTMLCanvasElement, point: DrawPoint, pointerId: number) => {
+    captureCanvasPointer(canvas, pointerId);
+    undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+    startEditSession();
+    markCanvasEdited();
+    drawingRef.current = true;
+    lastPointRef.current = point;
+    strokeForcesVisiblePixelsRef.current = false;
+    if (tool === "smartBrush") {
+      const committedSmartMaskState = readCommittedSmartMaskCanvasState();
+      undoMaskDataUrlRef.current = committedSmartMaskState ? committedSmartMaskState.dataUrl : maskDataUrl;
+      markSmartMaskEdited();
+      smartMaskDrawingRef.current = true;
+    }
+    smudgePatchRef.current = tool === "smudge" ? captureSmudgePatch(point) : null;
+    if (tool !== "smudge") {
+      drawSegment(point, point);
+    }
+  };
+
   return (
     <>
       <canvas ref={smartMaskCanvasRef} aria-hidden="true" style={{ display: "none" }} />
@@ -488,24 +522,8 @@ export function InpaintResultCanvas({
           }
           event.preventDefault();
           event.stopPropagation();
-          event.currentTarget.setPointerCapture(event.pointerId);
           const point = resolvePoint(event);
-          undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
-          startEditSession();
-          markCanvasEdited();
-          drawingRef.current = true;
-          lastPointRef.current = point;
-          strokeForcesVisiblePixelsRef.current = false;
-          if (tool === "smartBrush") {
-            const committedSmartMaskState = readCommittedSmartMaskCanvasState();
-            undoMaskDataUrlRef.current = committedSmartMaskState ? committedSmartMaskState.dataUrl : maskDataUrl;
-            markSmartMaskEdited();
-            smartMaskDrawingRef.current = true;
-          }
-          smudgePatchRef.current = tool === "smudge" ? captureSmudgePatch(point) : null;
-          if (tool !== "smudge") {
-            drawSegment(point, point);
-          }
+          startResultStroke(event.currentTarget, point, event.pointerId);
         }}
         onPointerMove={(event) => {
           if (selectionEnabled) {
@@ -526,6 +544,9 @@ export function InpaintResultCanvas({
           event.stopPropagation();
           const point = resolvePoint(event);
           if (!drawingRef.current || !lastPointRef.current) {
+            if ((event.buttons & 1) !== 0) {
+              startResultStroke(event.currentTarget, point, event.pointerId);
+            }
             return;
           }
           drawSegment(lastPointRef.current, point);
@@ -537,7 +558,7 @@ export function InpaintResultCanvas({
             event.stopPropagation();
             const point = resolvePoint(event);
             const rect = resolveSelectionRect(selectionDragRef.current.start, point, pageSize);
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
             setPreviewSelectionRect(null);
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
@@ -548,7 +569,7 @@ export function InpaintResultCanvas({
           }
           event.preventDefault();
           event.stopPropagation();
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          releaseCanvasPointer(event.currentTarget, event.pointerId);
           drawingRef.current = false;
           lastPointRef.current = null;
           smudgePatchRef.current = null;
@@ -557,7 +578,7 @@ export function InpaintResultCanvas({
         }}
         onPointerCancel={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
             setPreviewSelectionRect(null);
             return;
@@ -565,7 +586,7 @@ export function InpaintResultCanvas({
           if (!pointerEnabled || !drawingRef.current) {
             return;
           }
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          releaseCanvasPointer(event.currentTarget, event.pointerId);
           drawingRef.current = false;
           lastPointRef.current = null;
           smudgePatchRef.current = null;

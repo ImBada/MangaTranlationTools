@@ -125,27 +125,6 @@ export function ImageStage({
   onFavoriteFontPresetSelect
 }: ImageStageProps): React.JSX.Element {
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
-  const {
-    clearZoomCursor,
-    handleStagePointerCancel,
-    handleStagePointerDown,
-    handleStagePointerMove,
-    handleStagePointerUp,
-    panning,
-    stageStyle,
-    updateZoomCursor,
-    wrapRef,
-    zoomCursor
-  } = useImageStageView({
-    onStagePointerDown,
-    onStagePointerMove,
-    onStagePointerUp,
-    pageSize,
-    temporaryPanActive,
-    viewResetKey,
-    viewScale,
-    zoomToolActive
-  });
   const rangeSelectionDragRef = React.useRef<RangeSelectionDragState | null>(null);
   const [rangeSelectionPreviewRect, setRangeSelectionPreviewRect] = React.useState<ImageRect | null>(null);
   const [blockRangeSelectionModeActive, setBlockRangeSelectionModeActive] = React.useState(false);
@@ -211,6 +190,28 @@ export function ImageStage({
     temporaryPanActive,
     zoomToolActive
   ]);
+  const {
+    clearZoomCursor,
+    handleStagePointerCancel,
+    handleStagePointerDown,
+    handleStagePointerMove,
+    handleStagePointerUp,
+    panning,
+    stageStyle,
+    updateZoomCursor,
+    wrapRef,
+    zoomCursor
+  } = useImageStageView({
+    onStagePointerDown,
+    onStagePointerMove,
+    onStagePointerUp,
+    pageSize,
+    stagePanDisabled: Boolean(activeInpaintBrushCursorTool),
+    temporaryPanActive,
+    viewResetKey,
+    viewScale,
+    zoomToolActive
+  });
 
   React.useEffect(() => {
     if (rangeSelectionActive) {

@@ -171,6 +171,20 @@ export function InpaintLayerCanvas({
       });
   };
 
+  const captureCanvasPointer = (canvas: HTMLCanvasElement, pointerId: number) => {
+    try {
+      canvas.setPointerCapture(pointerId);
+    } catch {
+      // The pointer may have started outside this canvas; drawing can continue without capture.
+    }
+  };
+
+  const releaseCanvasPointer = (canvas: HTMLCanvasElement, pointerId: number) => {
+    if (canvas.hasPointerCapture(pointerId)) {
+      canvas.releasePointerCapture(pointerId);
+    }
+  };
+
   const commitChange = () => {
     const canvas = canvasRef.current;
     if (!canvas || !changedRef.current) {
@@ -242,6 +256,32 @@ export function InpaintLayerCanvas({
     commitMaskCanvasSnapshot(canvas, previousDataUrl);
   };
 
+  const startMaskStroke = (canvas: HTMLCanvasElement, point: DrawPoint, pointerId: number) => {
+    if (autoEraseEnabled) {
+      const selection = createMaskIslandSelection(canvas);
+      if (!selection) {
+        return;
+      }
+      captureCanvasPointer(canvas, pointerId);
+      undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+      startEditSession();
+      autoEraseSelectionRef.current = selection;
+      markCanvasEdited();
+      drawingRef.current = true;
+      lastPointRef.current = point;
+      updateAutoEraseSelection(canvas, point);
+      return;
+    }
+
+    captureCanvasPointer(canvas, pointerId);
+    undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+    startEditSession();
+    markCanvasEdited();
+    drawingRef.current = true;
+    lastPointRef.current = point;
+    drawSegment(point, point);
+  };
+
   return (
     <>
       <canvas
@@ -264,29 +304,7 @@ export function InpaintLayerCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          if (autoEraseEnabled) {
-            const selection = createMaskIslandSelection(event.currentTarget);
-            if (!selection) {
-              return;
-            }
-            event.currentTarget.setPointerCapture(event.pointerId);
-            undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
-            startEditSession();
-            autoEraseSelectionRef.current = selection;
-            markCanvasEdited();
-            drawingRef.current = true;
-            lastPointRef.current = point;
-            updateAutoEraseSelection(event.currentTarget, point);
-            return;
-          }
-
-          event.currentTarget.setPointerCapture(event.pointerId);
-          undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
-          startEditSession();
-          markCanvasEdited();
-          drawingRef.current = true;
-          lastPointRef.current = point;
-          drawSegment(point, point);
+          startMaskStroke(event.currentTarget, point, event.pointerId);
         }}
         onPointerMove={(event) => {
           if (selectionEnabled) {
@@ -307,6 +325,9 @@ export function InpaintLayerCanvas({
           event.stopPropagation();
           const point = resolvePoint(event);
           if (!drawingRef.current || !lastPointRef.current) {
+            if ((event.buttons & 1) !== 0) {
+              startMaskStroke(event.currentTarget, point, event.pointerId);
+            }
             return;
           }
           if (autoEraseEnabled) {
@@ -323,7 +344,7 @@ export function InpaintLayerCanvas({
             event.stopPropagation();
             const point = resolvePoint(event);
             const rect = resolveSelectionRect(selectionDragRef.current.start, point, pageSize);
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
             setPreviewSelectionRect(null);
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
@@ -335,7 +356,7 @@ export function InpaintLayerCanvas({
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          releaseCanvasPointer(event.currentTarget, event.pointerId);
           if (autoEraseEnabled) {
             updateAutoEraseSelection(event.currentTarget, lastPointRef.current ?? point, point);
             commitAutoEraseSelection(event.currentTarget);
@@ -349,7 +370,7 @@ export function InpaintLayerCanvas({
         }}
         onPointerCancel={(event) => {
           if (selectionEnabled && selectionDragRef.current) {
-            event.currentTarget.releasePointerCapture(event.pointerId);
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
             setPreviewSelectionRect(null);
             return;
@@ -357,7 +378,7 @@ export function InpaintLayerCanvas({
           if (!pointerEnabled || !drawingRef.current) {
             return;
           }
-          event.currentTarget.releasePointerCapture(event.pointerId);
+          releaseCanvasPointer(event.currentTarget, event.pointerId);
           if (autoEraseEnabled) {
             cancelAutoEraseSelection(event.currentTarget);
             endEditSession();

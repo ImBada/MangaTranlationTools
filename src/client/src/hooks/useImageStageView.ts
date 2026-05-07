@@ -25,6 +25,7 @@ type UseImageStageViewOptions = {
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   pageSize: ViewportSize;
+  stagePanDisabled?: boolean;
   temporaryPanActive: boolean;
   viewResetKey: number;
   viewScale: number | null;
@@ -49,6 +50,7 @@ export function useImageStageView({
   onStagePointerMove,
   onStagePointerUp,
   pageSize,
+  stagePanDisabled = false,
   temporaryPanActive,
   viewResetKey,
   viewScale,
@@ -200,7 +202,7 @@ export function useImageStageView({
 
   const handleStagePointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     onStagePointerDown(event);
-    if (event.button !== 0 || event.defaultPrevented) {
+    if (event.button !== 0 || event.defaultPrevented || stagePanDisabled) {
       return;
     }
     event.preventDefault();
@@ -212,7 +214,7 @@ export function useImageStageView({
       startPan: panOffsetRef.current
     };
     setPanning(true);
-  }, [onStagePointerDown]);
+  }, [onStagePointerDown, stagePanDisabled]);
 
   const stageStyle = fitSize ? {
     width: `${fitSize.width}px`,
