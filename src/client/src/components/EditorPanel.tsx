@@ -1,7 +1,7 @@
 import React from "react";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
-import { mouseOnlyColorInputProps } from "../lib/mouseOnlyCheckbox";
+import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
 import { CompactNumberControl } from "./controls/CompactNumberControl";
 
@@ -112,6 +112,7 @@ export function EditorPanel({
         <div className="rotation-row">
           <input
             type="range"
+            {...mouseOnlyRangeInputProps}
             min="-180"
             max="180"
             step="1"

@@ -11,7 +11,7 @@ import {
   INPAINT_RESULT_BRUSH_SIZE_MIN
 } from "../../lib/inpaintToolSettings";
 import type { LayerVisibility } from "../../lib/layerState";
-import { mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type InpaintResultToolSectionProps = {
@@ -150,6 +150,7 @@ export function InpaintResultToolSection({
           </span>
           <input
             type="range"
+            {...mouseOnlyRangeInputProps}
             min={0}
             max={1}
             step={0.01}
@@ -166,6 +167,7 @@ export function InpaintResultToolSection({
           </span>
           <input
             type="range"
+            {...mouseOnlyRangeInputProps}
             min={0.05}
             max={1}
             step={0.01}

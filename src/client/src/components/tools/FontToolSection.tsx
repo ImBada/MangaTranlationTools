@@ -22,7 +22,7 @@ import {
   buildScreentoneFillCssSize,
   resolveTextPosition
 } from "../../lib/overlayLayout";
-import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
@@ -644,6 +644,7 @@ export function FontToolSection({
                     </span>
                     <input
                       type="range"
+                      {...mouseOnlyRangeInputProps}
                       min={0.05}
                       max={1}
                       step={0.01}
@@ -661,6 +662,7 @@ export function FontToolSection({
                     </span>
                     <input
                       type="range"
+                      {...mouseOnlyRangeInputProps}
                       min={0.05}
                       max={1}
                       step={0.01}

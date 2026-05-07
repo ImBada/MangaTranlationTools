@@ -32,3 +32,18 @@ export const mouseOnlyColorInputProps = {
     blurInputSoon(event.currentTarget);
   }
 } satisfies Pick<React.InputHTMLAttributes<HTMLInputElement>, "tabIndex" | "onKeyDown" | "onClick" | "onInput">;
+
+export const mouseOnlyRangeInputProps = {
+  tabIndex: -1,
+  onKeyDown: (event: React.KeyboardEvent<HTMLInputElement>) => {
+    if (event.code === "Space" || event.key === " " || event.key === "Enter") {
+      event.preventDefault();
+    }
+  },
+  onPointerUp: (event: React.PointerEvent<HTMLInputElement>) => {
+    blurInputSoon(event.currentTarget);
+  },
+  onPointerCancel: (event: React.PointerEvent<HTMLInputElement>) => {
+    blurInputSoon(event.currentTarget);
+  }
+} satisfies Pick<React.InputHTMLAttributes<HTMLInputElement>, "tabIndex" | "onKeyDown" | "onPointerUp" | "onPointerCancel">;

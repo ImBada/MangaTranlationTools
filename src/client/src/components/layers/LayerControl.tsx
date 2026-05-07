@@ -1,5 +1,5 @@
 import React from "react";
-import { mouseOnlyCheckboxProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyCheckboxProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type LayerControlProps = {
@@ -75,6 +75,7 @@ export function LayerControl({
         <input
           className="layer-opacity-slider"
           type="range"
+          {...mouseOnlyRangeInputProps}
           min={0}
           max={1}
           step={0.01}
