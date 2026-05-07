@@ -230,9 +230,19 @@ export function useInpaintRunActions({
     if (blocks.length === 0) {
       return;
     }
+    const patchMaskDataUrl = await drawBlocksOnInpaintMask(page, blocks, { includeExistingMask: false });
+    const hasExistingInpaintLayers = Boolean(page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl ?? page.inpaintResultDataUrl);
+    if (!hasExistingInpaintLayers) {
+      await runInpaintForPage(
+        { ...page, inpaintMaskDataUrl: patchMaskDataUrl },
+        patchMaskDataUrl,
+        blocks.length > 1 ? "선택된 블록만 인페인트했습니다." : "선택 블록만 인페인트했습니다."
+      );
+      return;
+    }
     await runPartialInpaintForPage({
       page,
-      createPatchMaskDataUrl: () => drawBlocksOnInpaintMask(page, blocks, { includeExistingMask: false }),
+      createPatchMaskDataUrl: () => Promise.resolve(patchMaskDataUrl),
       baseMaskDataUrl: page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl,
       statusMessage: blocks.length > 1 ? "선택된 블록만 인페인트했습니다." : "선택 블록만 인페인트했습니다.",
       localFillStatusMessage: blocks.length > 1 ? "선택된 블록 로컬 인페인트 결과를 저장했습니다." : "선택 블록 로컬 인페인트 결과를 저장했습니다.",
@@ -244,6 +254,7 @@ export function useInpaintRunActions({
     currentChapter,
     currentChapterRef,
     inpaintBusy,
+    runInpaintForPage,
     runPartialInpaintForPage,
     selectedBlock,
     selectedBlocks,
