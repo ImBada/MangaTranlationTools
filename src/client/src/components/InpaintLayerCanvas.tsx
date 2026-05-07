@@ -16,6 +16,7 @@ import {
   type SelectionDragState
 } from "../lib/inpaintLayerCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
+import { resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
 
 export type InpaintTool = "select" | "brush" | "eraser" | "autoEraser";
 
@@ -89,7 +90,7 @@ export function InpaintLayerCanvas({
     }
 
     const previousDataUrl = undoDataUrlRef.current;
-    const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
+    const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
     undoDataUrlRef.current = undefined;
     changedRef.current = false;
     markCanvasCommitted(nextDataUrl);
@@ -149,7 +150,7 @@ export function InpaintLayerCanvas({
     }
 
     const previousDataUrl = undoDataUrlRef.current;
-    const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
+    const nextDataUrl = resolveOpaqueMaskCanvasDataUrl(canvas);
     undoDataUrlRef.current = undefined;
     drawingRef.current = false;
     lastPointRef.current = null;

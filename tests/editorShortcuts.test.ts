@@ -67,6 +67,13 @@ describe("editor shortcuts", () => {
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyE", key: "e", altKey: true, metaKey: true }))).toBe(null);
   });
 
+  it("recognizes Alt B as the inpaint result smart brush shortcut", () => {
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyB", key: "b", altKey: true }))).toBe("smartBrush");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyB", key: "b" }))).toBe("brush");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyB", key: "b", altKey: true, shiftKey: true }))).toBe(null);
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyB", key: "b", altKey: true, ctrlKey: true }))).toBe(null);
+  });
+
   it("recognizes Q as delete only in one-hand mode", () => {
     expect(isDeleteShortcut(keyboardEvent({ key: "Backspace" }), false)).toBe(true);
     expect(isDeleteShortcut(keyboardEvent({ key: "Delete" }), false)).toBe(true);

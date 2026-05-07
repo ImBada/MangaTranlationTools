@@ -631,6 +631,7 @@ export default function App(): React.JSX.Element {
     rangeToolActive,
     openFindReplace,
     selectLayer: selectLayerWithBlockSelection,
+    selectInpaintResultEditTool,
     selectPageForReading,
     selectPointerTool,
     selectRangeTool,

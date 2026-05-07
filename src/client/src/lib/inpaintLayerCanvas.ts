@@ -1,4 +1,5 @@
 import type { ImageRect } from "../../../shared/types";
+import { isInpaintMaskPixelCovered } from "./inpaintMaskImages";
 
 export type DrawPoint = {
   x: number;
@@ -154,8 +155,8 @@ export function isCanvasBlank(canvas: HTMLCanvasElement): boolean {
   }
 
   const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  for (let index = 3; index < pixels.length; index += 4) {
-    if (pixels[index] !== 0) {
+  for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
+    if (isInpaintMaskPixelCovered(pixels, offset)) {
       return false;
     }
   }
@@ -200,7 +201,7 @@ function resolveMaskIslandStartIndexes(selection: MaskIslandSelection, point: Dr
 }
 
 function isSelectableMaskPixel(selection: MaskIslandSelection, index: number): boolean {
-  return selection.selected[index] === 0 && selection.originalData[index * 4 + 3] > 0;
+  return selection.selected[index] === 0 && isInpaintMaskPixelCovered(selection.originalData, index * 4);
 }
 
 function markMaskPixelSelected(selection: MaskIslandSelection, index: number): void {

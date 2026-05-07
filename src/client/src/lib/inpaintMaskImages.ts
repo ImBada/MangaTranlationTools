@@ -46,7 +46,7 @@ export async function drawBlocksOnInpaintMask(
   sourceCanvas.height = page.height;
   const sourceContext = sourceCanvas.getContext("2d", { willReadFrequently: true });
   if (!sourceContext) {
-    return canvas.toDataURL("image/png");
+    return resolveOpaqueMaskCanvasDataUrl(canvas, { includeBlank: true }) ?? "";
   }
 
   const sourceImage = await loadImage(page.dataUrl);
@@ -58,7 +58,7 @@ export async function drawBlocksOnInpaintMask(
   }
   expandCanvasMask(context, page.width, page.height, 1);
 
-  return canvas.toDataURL("image/png");
+  return resolveOpaqueMaskCanvasDataUrl(canvas, { includeBlank: true }) ?? "";
 }
 
 export async function maskDataUrlForSelection(maskDataUrl: string, width: number, height: number, rect: ImageRect): Promise<string | null> {
@@ -98,7 +98,7 @@ export async function maskDataUrlForSelection(maskDataUrl: string, width: number
     return null;
   }
   context.putImageData(pixels, 0, 0);
-  return canvas.toDataURL("image/png");
+  return resolveOpaqueMaskCanvasDataUrl(canvas) ?? null;
 }
 
 export async function clearImageDataUrlRect(dataUrl: string, width: number, height: number, rect: ImageRect): Promise<string | undefined> {
@@ -115,6 +115,22 @@ export async function clearImageDataUrlRect(dataUrl: string, width: number, heig
   const selection = clampImageRect(rect, width, height);
   context.clearRect(selection.x, selection.y, selection.width, selection.height);
   return canvasHasVisiblePixels(canvas) ? canvas.toDataURL("image/png") : undefined;
+}
+
+export async function clearMaskDataUrlRect(dataUrl: string, width: number, height: number, rect: ImageRect): Promise<string | undefined> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return dataUrl;
+  }
+
+  const image = await loadImage(dataUrl);
+  context.drawImage(image, 0, 0, width, height);
+  const selection = clampImageRect(rect, width, height);
+  context.clearRect(selection.x, selection.y, selection.width, selection.height);
+  return resolveOpaqueMaskCanvasDataUrl(canvas);
 }
 
 export async function fillImageDataUrlRect({
@@ -147,6 +163,36 @@ export async function fillImageDataUrlRect({
   context.fillStyle = fillStyle;
   context.fillRect(selection.x, selection.y, selection.width, selection.height);
   return canvas.toDataURL("image/png");
+}
+
+export async function fillMaskDataUrlRect({
+  dataUrl,
+  width,
+  height,
+  rect
+}: {
+  dataUrl: string | undefined;
+  width: number;
+  height: number;
+  rect: ImageRect;
+}): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return dataUrl ?? "";
+  }
+
+  if (dataUrl) {
+    const image = await loadImage(dataUrl);
+    context.drawImage(image, 0, 0, width, height);
+  }
+
+  const selection = clampImageRect(rect, width, height);
+  context.fillStyle = "#ffffff";
+  context.fillRect(selection.x, selection.y, selection.width, selection.height);
+  return resolveOpaqueMaskCanvasDataUrl(canvas) ?? "";
 }
 
 export async function mergePartialInpaintResult(
@@ -221,18 +267,54 @@ export async function mergePartialInpaintMask(
 ): Promise<string> {
   return previousMaskDataUrl
     ? mergeInpaintMaskDataUrls(previousMaskDataUrl, patchMaskDataUrl, width, height)
-    : patchMaskDataUrl;
+    : normalizeInpaintMaskDataUrl(patchMaskDataUrl, width, height);
+}
+
+async function normalizeInpaintMaskDataUrl(dataUrl: string, width: number, height: number): Promise<string> {
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return dataUrl;
+  }
+
+  const image = await loadImage(dataUrl);
+  context.drawImage(image, 0, 0, width, height);
+  return resolveOpaqueMaskCanvasDataUrl(canvas) ?? "";
 }
 
 export function mergeInpaintMaskPixels(basePixels: Uint8ClampedArray, patchPixels: Uint8ClampedArray): void {
   const length = Math.min(basePixels.length, patchPixels.length);
   for (let offset = 0; offset + 3 < length; offset += 4) {
-    const covered = maskPixelCovered(basePixels, offset) || maskPixelCovered(patchPixels, offset);
-    basePixels[offset] = covered ? 255 : basePixels[offset];
-    basePixels[offset + 1] = covered ? 255 : basePixels[offset + 1];
-    basePixels[offset + 2] = covered ? 255 : basePixels[offset + 2];
-    basePixels[offset + 3] = covered ? 255 : 0;
+    const covered = isInpaintMaskPixelCovered(basePixels, offset) || isInpaintMaskPixelCovered(patchPixels, offset);
+    writeOpaqueMaskPixel(basePixels, offset, covered);
   }
+}
+
+export function normalizeOpaqueMaskPixels(pixels: Uint8ClampedArray): boolean {
+  let hasCoverage = false;
+  for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
+    const covered = isInpaintMaskPixelCovered(pixels, offset);
+    writeOpaqueMaskPixel(pixels, offset, covered);
+    hasCoverage = hasCoverage || covered;
+  }
+  return hasCoverage;
+}
+
+export function resolveOpaqueMaskCanvasDataUrl(
+  canvas: HTMLCanvasElement,
+  options: { includeBlank?: boolean } = {}
+): string | undefined {
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  if (!context) {
+    return undefined;
+  }
+
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  const hasCoverage = normalizeOpaqueMaskPixels(imageData.data);
+  context.putImageData(imageData, 0, 0);
+  return hasCoverage || options.includeBlank ? canvas.toDataURL("image/png") : undefined;
 }
 
 function replacePixelsInsideMask(
@@ -242,7 +324,7 @@ function replacePixelsInsideMask(
 ): void {
   const length = Math.min(targetPixels.length, patchPixels.length, maskPixels.length);
   for (let offset = 0; offset + 3 < length; offset += 4) {
-    if (!maskPixelCovered(maskPixels, offset) && patchPixels[offset + 3] === 0) {
+    if (!isInpaintMaskPixelCovered(maskPixels, offset) && patchPixels[offset + 3] === 0) {
       continue;
     }
     targetPixels[offset] = patchPixels[offset];
@@ -252,10 +334,17 @@ function replacePixelsInsideMask(
   }
 }
 
-function maskPixelCovered(pixels: Uint8ClampedArray, offset: number): boolean {
+export function isInpaintMaskPixelCovered(pixels: Uint8ClampedArray, offset: number): boolean {
   const alpha = pixels[offset + 3] / 255;
   const luma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
   return alpha * luma > 0;
+}
+
+function writeOpaqueMaskPixel(pixels: Uint8ClampedArray, offset: number, covered: boolean): void {
+  pixels[offset] = covered ? 255 : 0;
+  pixels[offset + 1] = covered ? 255 : 0;
+  pixels[offset + 2] = covered ? 255 : 0;
+  pixels[offset + 3] = 255;
 }
 
 function clampImageRect(rect: ImageRect, width: number, height: number): ImageRect {

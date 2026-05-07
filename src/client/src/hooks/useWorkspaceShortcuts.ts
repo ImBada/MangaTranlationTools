@@ -1,6 +1,7 @@
 import React from "react";
 import type { ChapterSnapshot, ImageRect } from "../../../shared/types";
 import type { InpaintTool } from "../components/InpaintLayerCanvas";
+import type { InpaintResultTool } from "../components/InpaintResultCanvas";
 import {
   isBlockCopyShortcut,
   isBlockPasteShortcut,
@@ -36,6 +37,7 @@ type WorkspaceShortcutOptions = {
   openFindReplace: () => void;
   selectLayer: (layer: ActiveLayer) => void;
   selectPageForReading: (pageId: string | null) => void;
+  selectInpaintResultEditTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   selectPointerTool: () => void;
   selectRangeTool: () => void;
   selectSharedInpaintTool: (tool: InpaintTool) => void;
@@ -75,6 +77,7 @@ export function useWorkspaceShortcuts({
   openFindReplace,
   selectLayer,
   selectPageForReading,
+  selectInpaintResultEditTool,
   selectPointerTool,
   selectRangeTool,
   selectSharedInpaintTool,
@@ -273,11 +276,15 @@ export function useWorkspaceShortcuts({
         : null;
       const inpaintToolShortcutEnabled =
         !selectedPageEditLocked &&
-        ((activeLayer === "inpaintMask" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
+        ((activeLayer === "inpaintMask" && inpaintToolShortcut !== "smartBrush" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
           (inpaintToolShortcut !== "autoEraser" && activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
       if (inpaintToolShortcut && inpaintToolShortcutEnabled) {
         event.preventDefault();
-        selectSharedInpaintTool(inpaintToolShortcut);
+        if (inpaintToolShortcut === "smartBrush") {
+          selectInpaintResultEditTool("smartBrush");
+        } else {
+          selectSharedInpaintTool(inpaintToolShortcut);
+        }
         return;
       }
 
@@ -383,6 +390,7 @@ export function useWorkspaceShortcuts({
     rangeToolActive,
     selectLayer,
     selectPageForReading,
+    selectInpaintResultEditTool,
     selectPointerTool,
     selectRangeTool,
     selectSharedInpaintTool,

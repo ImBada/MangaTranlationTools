@@ -27,6 +27,23 @@ export async function mergeInpaintMaskWithResultCoverage(maskDataUrl: string, re
   return `data:image/png;base64,${merged.toString("base64")}`;
 }
 
+export async function normalizeInpaintMaskDataUrl(maskDataUrl: string): Promise<string> {
+  const mask = await sharp(dataUrlToBuffer(maskDataUrl)).ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  const normalized = Buffer.alloc(mask.info.width * mask.info.height * 4);
+  for (let offset = 0; offset < normalized.length; offset += 4) {
+    writeOpaqueMaskPixel(normalized, offset, isInpaintMaskPixelCovered(mask.data, offset));
+  }
+
+  const buffer = await sharp(normalized, {
+    raw: {
+      width: mask.info.width,
+      height: mask.info.height,
+      channels: 4
+    }
+  }).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
 export async function normalizeInpaintLayerDataUrls(
   maskDataUrl: string,
   resultDataUrl: string
@@ -59,9 +76,7 @@ export async function clipOpaqueInpaintResultBufferToMask(resultBuffer: Buffer, 
     .toBuffer({ resolveWithObject: true });
 
   for (let offset = 0; offset < resultData.length; offset += 4) {
-    const alpha = mask.data[offset + 3] / 255;
-    const luma = (mask.data[offset] * 0.299 + mask.data[offset + 1] * 0.587 + mask.data[offset + 2] * 0.114) / 255;
-    resultData[offset + 3] = alpha * luma > 0 ? 255 : 0;
+    resultData[offset + 3] = isInpaintMaskPixelCovered(mask.data, offset) ? 255 : 0;
   }
 
   return sharp(resultData, {
@@ -83,13 +98,8 @@ async function mergeInpaintMaskBufferWithResultCoverage(maskBuffer: Buffer, resu
   const merged = Buffer.alloc(mask.info.width * mask.info.height * 4);
 
   for (let offset = 0; offset < merged.length; offset += 4) {
-    const maskAlpha = mask.data[offset + 3] / 255;
-    const maskLuma = (mask.data[offset] * 0.299 + mask.data[offset + 1] * 0.587 + mask.data[offset + 2] * 0.114) / 255;
-    const covered = maskAlpha * maskLuma > 0 || result.data[offset + 3] > 0;
-    merged[offset] = covered ? 255 : mask.data[offset];
-    merged[offset + 1] = covered ? 255 : mask.data[offset + 1];
-    merged[offset + 2] = covered ? 255 : mask.data[offset + 2];
-    merged[offset + 3] = covered ? 255 : 0;
+    const covered = isInpaintMaskPixelCovered(mask.data, offset) || result.data[offset + 3] > 0;
+    writeOpaqueMaskPixel(merged, offset, covered);
   }
 
   return sharp(merged, {
@@ -99,6 +109,19 @@ async function mergeInpaintMaskBufferWithResultCoverage(maskBuffer: Buffer, resu
       channels: 4
     }
   }).png().toBuffer();
+}
+
+function isInpaintMaskPixelCovered(pixels: Buffer, offset: number): boolean {
+  const alpha = pixels[offset + 3] / 255;
+  const luma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
+  return alpha * luma > 0;
+}
+
+function writeOpaqueMaskPixel(pixels: Buffer, offset: number, covered: boolean): void {
+  pixels[offset] = covered ? 255 : 0;
+  pixels[offset + 1] = covered ? 255 : 0;
+  pixels[offset + 2] = covered ? 255 : 0;
+  pixels[offset + 3] = 255;
 }
 
 export function sanitizeFileBasename(value: string, fallback: string): string {

@@ -4,7 +4,7 @@ import type { FontWeightAvailability } from "../lib/overlayLayout";
 import { renderPageToPngDataUrl } from "../lib/pageRender";
 
 type UseInpaintPsdActionsOptions = {
-  clearPendingInpaintSaves: () => void;
+  clearPendingInpaintSaveTimers: () => void;
   currentChapter: ChapterSnapshot | null;
   currentChapterId: string | null;
   dirty: boolean;
@@ -40,7 +40,7 @@ function sanitizeDownloadBasename(value: string, fallback: string): string {
 }
 
 export function useInpaintPsdActions({
-  clearPendingInpaintSaves,
+  clearPendingInpaintSaveTimers,
   currentChapter,
   currentChapterId,
   dirty,
@@ -178,7 +178,7 @@ export function useInpaintPsdActions({
 
     setInpaintPsdBusy(true);
     try {
-      clearPendingInpaintSaves();
+      clearPendingInpaintSaveTimers();
       await flushInpaintMaskSave();
       await flushInpaintResultSave();
       if (dirty) {
@@ -201,7 +201,7 @@ export function useInpaintPsdActions({
       setInpaintPsdBusy(false);
     }
   }, [
-    clearPendingInpaintSaves,
+    clearPendingInpaintSaveTimers,
     currentChapter,
     dirty,
     flushInpaintMaskSave,

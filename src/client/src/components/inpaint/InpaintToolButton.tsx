@@ -26,9 +26,18 @@ function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Ele
     case "brush":
       return (
         <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-          <path d="M14 5l5 5-8.5 8.5a4 4 0 0 1-5.7 0l-.3-.3L14 5z" />
-          <path d="M16 3l5 5" />
-          <path d="M5 18c-.5 1.6-1.5 2.5-3 2.8 2.4 1.1 5 .7 6.7-1" />
+          <BrushIconPaths />
+        </svg>
+      );
+    case "smartBrush":
+      return (
+        <svg className="tool-option-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+          <BrushIconPaths />
+          <path d="M4 4h5v5H4z" />
+          <path d="M6.5 2.8v2.4" />
+          <path d="M6.5 7.8v2.4" />
+          <path d="M2.8 6.5h2.4" />
+          <path d="M7.8 6.5h2.4" />
         </svg>
       );
     case "eraser":
@@ -76,6 +85,16 @@ function InpaintToolIcon({ name }: { name: InpaintToolIconName }): React.JSX.Ele
         </svg>
       );
   }
+}
+
+function BrushIconPaths(): React.JSX.Element {
+  return (
+    <>
+      <path d="M14 5l5 5-8.5 8.5a4 4 0 0 1-5.7 0l-.3-.3L14 5z" />
+      <path d="M16 3l5 5" />
+      <path d="M5 18c-.5 1.6-1.5 2.5-3 2.8 2.4 1.1 5 .7 6.7-1" />
+    </>
+  );
 }
 
 export function InpaintToolButton({ active, disabled, icon, label, onClick, shortcut, text }: InpaintToolButtonProps): React.JSX.Element {

@@ -77,6 +77,15 @@ export function InpaintResultToolSection({
           disabled={resultToolsDisabled}
         />
         <InpaintToolButton
+          active={inpaintResultTool === "smartBrush"}
+          icon="smartBrush"
+          label="스마트 브러시"
+          text="스마트"
+          shortcut={INPAINT_TOOL_SHORTCUTS.smartBrush}
+          onClick={() => onSelectInpaintResultEditTool("smartBrush")}
+          disabled={resultToolsDisabled}
+        />
+        <InpaintToolButton
           active={inpaintResultTool === "eraser"}
           icon="eraser"
           label="지우개"
@@ -114,7 +123,7 @@ export function InpaintResultToolSection({
               type="color"
               className="outline-color-input"
               value={inpaintResultBrushColor}
-              disabled={resultToolsDisabled || inpaintResultTool !== "brush"}
+              disabled={resultToolsDisabled || (inpaintResultTool !== "brush" && inpaintResultTool !== "smartBrush")}
               onChange={(event) => onInpaintResultBrushColorChange(event.target.value)}
             />
           </span>
@@ -160,7 +169,7 @@ export function InpaintResultToolSection({
             step={0.01}
             value={inpaintResultToolStrength}
             style={rangeProgressStyle(inpaintResultToolStrength, 0.05, 1)}
-            disabled={resultToolsDisabled || inpaintResultTool === "brush" || inpaintResultTool === "eraser"}
+            disabled={resultToolsDisabled || inpaintResultTool === "brush" || inpaintResultTool === "smartBrush" || inpaintResultTool === "eraser"}
             onChange={(event) => onInpaintResultToolStrengthChange(Number(event.target.value))}
           />
         </label>

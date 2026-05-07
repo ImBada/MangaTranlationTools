@@ -129,6 +129,7 @@ export function useInpaintActions({
     canUndoInpaintMask,
     canUndoInpaintResult,
     clearInpaintUndoStacks,
+    clearPendingInpaintSaveTimers,
     clearPendingInpaintSaves,
     flushInpaintMaskSave,
     flushInpaintResultSave,
@@ -166,7 +167,7 @@ export function useInpaintActions({
     lastImportedInpaintPsdLabel,
     selectInpaintPsdFile
   } = useInpaintPsdActions({
-    clearPendingInpaintSaves,
+    clearPendingInpaintSaveTimers,
     currentChapter,
     currentChapterId,
     dirty,

@@ -1,11 +1,12 @@
 import { isMacLikePlatform } from "./globalUndo";
 
-type InpaintToolKey = "select" | "brush" | "eraser" | "autoEraser";
+type InpaintToolKey = "select" | "brush" | "smartBrush" | "eraser" | "autoEraser";
 type ModifierKeyEvent = Pick<KeyboardEvent | PointerEvent, "ctrlKey" | "metaKey">;
 
 export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
   select: "T",
   brush: "B",
+  smartBrush: "Alt+B",
   eraser: "E",
   autoEraser: "Alt+E"
 };
@@ -13,7 +14,13 @@ export const BLOCK_INLINE_EDIT_SHORTCUT = "E";
 
 export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey | null {
   if (event.altKey) {
-    return !event.ctrlKey && !event.metaKey && !event.shiftKey && isKeyE(event) ? "autoEraser" : null;
+    if (event.ctrlKey || event.metaKey || event.shiftKey) {
+      return null;
+    }
+    if (isKeyB(event)) {
+      return "smartBrush";
+    }
+    return isKeyE(event) ? "autoEraser" : null;
   }
 
   if (event.ctrlKey || event.metaKey) {
@@ -35,6 +42,10 @@ export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey
     default:
       return null;
   }
+}
+
+function isKeyB(event: KeyboardEvent): boolean {
+  return event.code === "KeyB" || event.key.toLowerCase() === "b";
 }
 
 function isKeyE(event: KeyboardEvent): boolean {

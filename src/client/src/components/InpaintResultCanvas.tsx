@@ -16,11 +16,14 @@ import {
   type DrawPoint
 } from "../lib/inpaintResultCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
+import { isCanvasBlank as isMaskCanvasBlank } from "../lib/inpaintLayerCanvas";
+import { resolveOpaqueMaskCanvasDataUrl } from "../lib/inpaintMaskImages";
 
-export type InpaintResultTool = "select" | "brush" | "eraser" | "blur" | "sharpen" | "smudge";
+export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge";
 
 type InpaintResultCanvasProps = {
   dataUrl?: string;
+  maskDataUrl?: string;
   pageSize: {
     width: number;
     height: number;
@@ -45,6 +48,7 @@ type SelectionDragState = {
 
 export function InpaintResultCanvas({
   dataUrl,
+  maskDataUrl,
   pageSize,
   tool,
   brushSize,
@@ -69,8 +73,20 @@ export function InpaintResultCanvas({
     pageSize,
     willReadFrequently: true
   });
+  const {
+    canvasRef: smartMaskCanvasRef,
+    drawingRef: smartMaskDrawingRef,
+    markCanvasCommitted: markSmartMaskCommitted,
+    markCanvasEdited: markSmartMaskEdited
+  } = useCanvasImageSync({
+    dataUrl: maskDataUrl,
+    loadErrorMessage: "인페인트 마스크를 불러오지 못했습니다.",
+    pageSize,
+    willReadFrequently: true
+  });
   const changedRef = useRef(false);
   const lastPointRef = useRef<DrawPoint | null>(null);
+  const undoMaskDataUrlRef = useRef<string | undefined>(undefined);
   const smudgePatchRef = useRef<ImageData | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
@@ -89,7 +105,7 @@ export function InpaintResultCanvas({
     }
 
     const distance = Math.hypot(to.x - from.x, to.y - from.y);
-    const step = Math.max(1, brushSize / (tool === "brush" || tool === "eraser" ? 4 : 2));
+    const step = Math.max(1, brushSize / (tool === "brush" || tool === "smartBrush" || tool === "eraser" ? 4 : 2));
     const steps = Math.max(1, Math.ceil(distance / step));
     for (let index = 0; index <= steps; index += 1) {
       const t = index / steps;
@@ -97,8 +113,11 @@ export function InpaintResultCanvas({
         x: from.x + (to.x - from.x) * t,
         y: from.y + (to.y - from.y) * t
       };
-      if (tool === "brush" || tool === "eraser") {
+      if (tool === "brush" || tool === "smartBrush" || tool === "eraser") {
         stampPaint(point);
+        if (tool === "smartBrush") {
+          stampSmartMaskPatch(point);
+        }
       } else if (tool === "blur" || tool === "sharpen") {
         stampFilter(point, tool);
       }
@@ -112,32 +131,63 @@ export function InpaintResultCanvas({
       return;
     }
 
-    const radius = Math.max(0.5, brushSize / 2);
     const color = parseHexColor(brushColor);
-    const hardness = clamp01(brushHardness);
-    const innerRadius = radius * hardness;
-    const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
-    const solidStop = Math.min(1, hardness);
+    const centerColor = tool === "eraser" ? "rgba(0, 0, 0, 1)" : rgbaToCss(color, 1);
+    const edgeColor = tool === "eraser" ? "rgba(0, 0, 0, 0)" : rgbaToCss(color, edgeBrushAlpha());
+    const { gradient, radius } = createStampGradient(context, point, centerColor, edgeColor);
 
-    if (tool === "eraser") {
-      gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
-      gradient.addColorStop(solidStop, "rgba(0, 0, 0, 1)");
-      gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-    } else {
-      gradient.addColorStop(0, rgbaToCss(color, 1));
-      gradient.addColorStop(solidStop, rgbaToCss(color, 1));
-      gradient.addColorStop(1, rgbaToCss(color, innerRadius >= radius ? 1 : 0));
+    fillBrushStamp(context, point, radius, gradient, tool === "eraser" ? "destination-out" : "source-over");
+    changedRef.current = true;
+  };
+
+  const stampSmartMaskPatch = (point: DrawPoint) => {
+    const canvas = smartMaskCanvasRef.current;
+    const context = canvas?.getContext("2d");
+    if (!canvas || !context) {
+      return;
     }
 
+    const { gradient, radius } = createStampGradient(
+      context,
+      point,
+      "rgba(255, 255, 255, 1)",
+      `rgba(255, 255, 255, ${edgeBrushAlpha()})`
+    );
+    fillBrushStamp(context, point, radius, gradient, "source-over");
+  };
+
+  const createStampGradient = (
+    context: CanvasRenderingContext2D,
+    point: DrawPoint,
+    centerColor: string,
+    edgeColor: string
+  ): { gradient: CanvasGradient; radius: number } => {
+    const radius = Math.max(0.5, brushSize / 2);
+    const hardness = clamp01(brushHardness);
+    const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
+    gradient.addColorStop(0, centerColor);
+    gradient.addColorStop(Math.min(1, hardness), centerColor);
+    gradient.addColorStop(1, edgeColor);
+    return { gradient, radius };
+  };
+
+  const fillBrushStamp = (
+    context: CanvasRenderingContext2D,
+    point: DrawPoint,
+    radius: number,
+    fillStyle: CanvasGradient,
+    compositeOperation: GlobalCompositeOperation
+  ) => {
     context.save();
-    context.globalCompositeOperation = tool === "eraser" ? "destination-out" : "source-over";
-    context.fillStyle = gradient;
+    context.globalCompositeOperation = compositeOperation;
+    context.fillStyle = fillStyle;
     context.beginPath();
     context.arc(point.x, point.y, radius, 0, Math.PI * 2);
     context.fill();
     context.restore();
-    changedRef.current = true;
   };
+
+  const edgeBrushAlpha = (): number => (clamp01(brushHardness) >= 1 ? 1 : 0);
 
   const stampFilter = (point: DrawPoint, filterTool: "blur" | "sharpen") => {
     const canvas = canvasRef.current;
@@ -244,14 +294,29 @@ export function InpaintResultCanvas({
 
     const previousDataUrl = undoDataUrlRef.current;
     const nextDataUrl = isCanvasBlank(canvas) ? undefined : canvas.toDataURL("image/png");
+    const nextMaskDataUrl = tool === "smartBrush" ? resolveSmartMaskDataUrl() : undefined;
+    const previousMaskDataUrl = undoMaskDataUrlRef.current;
     undoDataUrlRef.current = undefined;
+    undoMaskDataUrlRef.current = undefined;
     changedRef.current = false;
     markCanvasCommitted(nextDataUrl);
+    if (tool === "smartBrush") {
+      smartMaskDrawingRef.current = false;
+      markSmartMaskCommitted(nextMaskDataUrl);
+      onChange(nextDataUrl, { previousDataUrl, previousMaskDataUrl, maskDataUrl: nextMaskDataUrl });
+      return;
+    }
     onChange(nextDataUrl, { previousDataUrl });
+  };
+
+  const resolveSmartMaskDataUrl = (): string | undefined => {
+    const canvas = smartMaskCanvasRef.current;
+    return canvas ? resolveOpaqueMaskCanvasDataUrl(canvas) : undefined;
   };
 
   return (
     <>
+      <canvas ref={smartMaskCanvasRef} aria-hidden="true" style={{ display: "none" }} />
       <canvas
         ref={canvasRef}
         className={`${className ?? ""} ${pointerEnabled ? "editing" : ""} ${selectionEnabled ? "selecting" : ""}`.trim()}
@@ -279,6 +344,12 @@ export function InpaintResultCanvas({
           markCanvasEdited();
           drawingRef.current = true;
           lastPointRef.current = point;
+          if (tool === "smartBrush") {
+            const maskCanvas = smartMaskCanvasRef.current;
+            undoMaskDataUrlRef.current = maskCanvas && !isMaskCanvasBlank(maskCanvas) ? maskCanvas.toDataURL("image/png") : maskDataUrl;
+            markSmartMaskEdited();
+            smartMaskDrawingRef.current = true;
+          }
           smudgePatchRef.current = tool === "smudge" ? captureSmudgePatch(point) : null;
           if (tool !== "smudge") {
             drawSegment(point, point);

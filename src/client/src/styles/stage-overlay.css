@@ -63,6 +63,10 @@
   pointer-events: auto;
 }
 
+.inpaint-mask-layer-preview .inpaint-layer {
+  mix-blend-mode: screen;
+}
+
 .inpaint-brush-cursor {
   position: absolute;
   z-index: 5;
@@ -81,6 +85,10 @@
 
 .inpaint-brush-cursor.autoEraser {
   border-color: rgba(255, 205, 42, 0.98);
+}
+
+.inpaint-brush-cursor.smartBrush {
+  border-color: rgba(159, 122, 255, 0.98);
 }
 
 .inpaint-brush-cursor.blur,
@@ -142,6 +150,7 @@
   mask-mode: luminance;
   mask-repeat: no-repeat;
   mask-size: 100% 100%;
+  -webkit-mask-mode: luminance;
   -webkit-mask-repeat: no-repeat;
   -webkit-mask-size: 100% 100%;
   pointer-events: none;

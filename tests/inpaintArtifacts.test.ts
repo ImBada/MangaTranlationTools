@@ -58,7 +58,7 @@ describe("inpaint artifacts", () => {
     expect(existsSync(hydratedPage?.inpaintResultPath ?? "")).toBe(true);
     const maskPixels = await decodePng(hydratedPage?.inpaintMaskPath ?? "");
     const resultPixels = await decodePng(hydratedPage?.inpaintResultPath ?? "");
-    expect([...maskPixels.subarray(0, 8)]).toEqual([255, 255, 255, 255, 0, 0, 0, 0]);
+    expect([...maskPixels.subarray(0, 8)]).toEqual([255, 255, 255, 255, 0, 0, 0, 255]);
     expect([...resultPixels.subarray(0, 8)]).toEqual([9, 8, 7, 255, 1, 2, 3, 0]);
 
     const chapterJson = JSON.parse(await readFile(join(dataDir, "library", "works", "work-1", "chapters", "chapter-1", "chapter.json"), "utf8")) as ChapterSnapshot;
@@ -96,7 +96,7 @@ describe("inpaint artifacts", () => {
 
     const resultPixels = await decodePng(saved.pages[0]?.inpaintResultPath ?? "");
     const maskPixels = await decodePng(saved.pages[0]?.inpaintMaskPath ?? "");
-    expect([...maskPixels.subarray(0, 12)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 0]);
+    expect([...maskPixels.subarray(0, 12)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
     expect([...resultPixels.subarray(0, 12)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255, 1, 2, 3, 0]);
   });
 
@@ -126,7 +126,7 @@ describe("inpaint artifacts", () => {
     expect([...resultPixels.subarray(0, 8)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255]);
   });
 
-  it("preserves the supplied mask when saving partial inpaint layers", async () => {
+  it("preserves the supplied mask coverage when saving partial inpaint layers", async () => {
     const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-partial-layers-request-"));
     tempDirs.push(dataDir);
     process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
@@ -149,7 +149,7 @@ describe("inpaint artifacts", () => {
 
     const maskPixels = await decodePng(saved.chapter.pages[0]?.inpaintMaskPath ?? "");
     const resultPixels = await decodePng(saved.chapter.pages[0]?.inpaintResultPath ?? "");
-    expect([...maskPixels.subarray(0, 12)]).toEqual([0, 0, 0, 0, 255, 255, 255, 255, 0, 0, 0, 0]);
+    expect([...maskPixels.subarray(0, 12)]).toEqual([0, 0, 0, 255, 255, 255, 255, 255, 0, 0, 0, 255]);
     expect([...resultPixels.subarray(0, 12)]).toEqual([250, 250, 250, 128, 9, 8, 7, 255, 1, 2, 3, 0]);
   });
 
@@ -240,10 +240,8 @@ describe("inpaint artifacts", () => {
 
     expect(pixels[1 * 4 + 3]).toBe(0);
     expect(pixels[2 * 4 + 3]).toBe(255);
-    expect(maskPixels[1 * 4 + 3]).toBe(0);
-    expect(maskPixels[2 * 4 + 3]).toBe(255);
-    expect(savedMaskPixels[1 * 4 + 3]).toBe(0);
-    expect(savedMaskPixels[2 * 4 + 3]).toBe(255);
+    expect([...maskPixels.subarray(1 * 4, 3 * 4)]).toEqual([0, 0, 0, 255, 255, 255, 255, 255]);
+    expect([...savedMaskPixels.subarray(1 * 4, 3 * 4)]).toEqual([0, 0, 0, 255, 255, 255, 255, 255]);
     expect(result.chapter.pages[0]?.inpaintSettings?.artifactCleanupPx).toBe(0);
   });
 
@@ -279,10 +277,8 @@ describe("inpaint artifacts", () => {
 
     expect(pixels[1 * 4 + 3]).toBeGreaterThan(0);
     expect(pixels[2 * 4 + 3]).toBe(255);
-    expect(maskPixels[1 * 4 + 3]).toBe(255);
-    expect(maskPixels[2 * 4 + 3]).toBe(255);
-    expect(savedMaskPixels[1 * 4 + 3]).toBe(255);
-    expect(savedMaskPixels[2 * 4 + 3]).toBe(255);
+    expect([...maskPixels.subarray(1 * 4, 3 * 4)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255]);
+    expect([...savedMaskPixels.subarray(1 * 4, 3 * 4)]).toEqual([255, 255, 255, 255, 255, 255, 255, 255]);
     expect(result.chapter.pages[0]?.inpaintSettings?.artifactCleanupPx).toBe(1);
   });
 
@@ -308,7 +304,7 @@ describe("inpaint artifacts", () => {
     expect(hydratedPage?.inpaintMaskPath).toBeTruthy();
     expect(hydratedPage?.inpaintMaskDataUrl?.startsWith("/api/library/chapters/chapter-1/pages/page-1/images/inpaint-mask")).toBe(true);
     expect(existsSync(hydratedPage?.inpaintMaskPath ?? "")).toBe(true);
-    expect([...(await decodePng(hydratedPage?.inpaintMaskPath ?? ""))]).toEqual([0, 0, 0, 0, 255, 255, 255, 255]);
+    expect([...(await decodePng(hydratedPage?.inpaintMaskPath ?? ""))]).toEqual([0, 0, 0, 255, 255, 255, 255, 255]);
 
     const reopened = await openChapter(chapter.id);
     expect(reopened.pages[0]?.inpaintMaskDataUrl).toBe(hydratedPage?.inpaintMaskDataUrl);

@@ -27,7 +27,7 @@ import {
   sampleBlur,
   sampleSharpen
 } from "../src/client/src/lib/inpaintResultCanvas";
-import { mergeInpaintMaskPixels } from "../src/client/src/lib/inpaintMaskImages";
+import { mergeInpaintMaskPixels, normalizeOpaqueMaskPixels, resolveOpaqueMaskCanvasDataUrl } from "../src/client/src/lib/inpaintMaskImages";
 
 describe("inpaint layer canvas helpers", () => {
   it("tracks the applied canvas image state by source and size", () => {
@@ -95,8 +95,9 @@ describe("inpaint layer canvas helpers", () => {
     expect(context.stroke).toHaveBeenCalledTimes(1);
   });
 
-  it("detects blank and nonblank mask canvases by alpha channel", () => {
+  it("detects blank and nonblank mask canvases by mask coverage", () => {
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 0]))).toBe(true);
+    expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 255]))).toBe(true);
     expect(isMaskCanvasBlank(createCanvasMock([0, 0, 0, 0, 255, 255, 255, 1]))).toBe(false);
   });
 
@@ -177,15 +178,17 @@ describe("inpaint layer canvas helpers", () => {
     ]));
   });
 
-  it("merges mask pixels as opaque coverage", () => {
+  it("merges mask pixels as opaque black and white coverage", () => {
     const base = new Uint8ClampedArray([
       0, 0, 0, 0,
       255, 255, 255, 128,
-      255, 255, 255, 128
+      255, 255, 255, 128,
+      0, 0, 0, 0
     ]);
     const patch = new Uint8ClampedArray([
       255, 255, 255, 96,
       255, 255, 255, 64,
+      0, 0, 0, 0,
       0, 0, 0, 0
     ]);
 
@@ -194,6 +197,24 @@ describe("inpaint layer canvas helpers", () => {
     expect([...base]).toEqual([
       255, 255, 255, 255,
       255, 255, 255, 255,
+      255, 255, 255, 255,
+      0, 0, 0, 255
+    ]);
+  });
+
+  it("serializes mask canvases as opaque black and white pixels", () => {
+    const blank = createEditableCanvasMock(1, 1, [0, 0, 0, 255]);
+    expect(resolveOpaqueMaskCanvasDataUrl(blank)).toBeUndefined();
+    expect([...blank.data]).toEqual([0, 0, 0, 255]);
+    expect(resolveOpaqueMaskCanvasDataUrl(blank, { includeBlank: true })).toBe("data:image/png;base64,mock");
+
+    const covered = createEditableCanvasMock(2, 1, [
+      0, 0, 0, 255,
+      255, 255, 255, 1
+    ]);
+    expect(resolveOpaqueMaskCanvasDataUrl(covered)).toBe("data:image/png;base64,mock");
+    expect([...covered.data]).toEqual([
+      0, 0, 0, 255,
       255, 255, 255, 255
     ]);
   });
@@ -268,6 +289,21 @@ describe("inpaint result canvas helpers", () => {
     expect(isResultCanvasBlank(createCanvasMock([12, 34, 56, 0]))).toBe(true);
     expect(isResultCanvasBlank(createCanvasMock([12, 34, 56, 128]))).toBe(false);
   });
+
+  it("normalizes smart brush mask pixels to opaque black and white coverage", () => {
+    const pixels = new Uint8ClampedArray([
+      255, 255, 255, 24,
+      0, 0, 0, 255,
+      255, 255, 255, 0
+    ]);
+
+    expect(normalizeOpaqueMaskPixels(pixels)).toBe(true);
+    expect([...pixels]).toEqual([
+      255, 255, 255, 255,
+      0, 0, 0, 255,
+      0, 0, 0, 255
+    ]);
+  });
 });
 
 function createCanvasContextMock(): CanvasRenderingContext2D {
@@ -296,6 +332,7 @@ function createEditableCanvasMock(width: number, height: number, pixels: number[
     width,
     height,
     data: new Uint8ClampedArray(pixels),
+    toDataURL: () => "data:image/png;base64,mock",
     getContext: () => ({
       createImageData: (imageWidth: number, imageHeight: number) => ({
         data: new Uint8ClampedArray(imageWidth * imageHeight * 4),

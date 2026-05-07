@@ -285,6 +285,7 @@ export function ImageStageLayers({
             <InpaintResultCanvas
               className="inpaint-result-canvas"
               dataUrl={page.inpaintResultDataUrl}
+              maskDataUrl={inpaintMaskDataUrl}
               pageSize={pageSize}
               tool={inpaintResultTool}
               brushSize={inpaintResultBrushSize}

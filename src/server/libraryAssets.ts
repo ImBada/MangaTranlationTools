@@ -8,6 +8,7 @@ import {
   dataUrlToBuffer,
   dataUrlToImageAsset,
   normalizeInpaintLayerDataUrls,
+  normalizeInpaintMaskDataUrl,
   readImageFileAsset,
   sanitizeFileBasename,
   sanitizeRenderFilename,
@@ -191,10 +192,11 @@ export async function saveInpaintMask(chapterId: string, pageId: string, maskDat
   const now = new Date().toISOString();
   const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
   const maskPath = join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-mask.png`);
+  const normalizedMaskDataUrl = maskDataUrl ? await normalizeInpaintMaskDataUrl(maskDataUrl) : undefined;
 
-  if (maskDataUrl) {
+  if (normalizedMaskDataUrl) {
     await mkdir(inpaintDir, { recursive: true });
-    await writeFile(maskPath, dataUrlToBuffer(maskDataUrl));
+    await writeFile(maskPath, dataUrlToBuffer(normalizedMaskDataUrl));
   } else {
     await safeUnlink(page.inpaintMaskPath ?? maskPath);
     if (page.inpaintResultPath) {
@@ -206,8 +208,8 @@ export async function saveInpaintMask(chapterId: string, pageId: string, maskDat
     candidate.id === pageId
       ? {
           ...candidate,
-          inpaintMaskPath: maskDataUrl ? maskPath : undefined,
-          inpaintResultPath: maskDataUrl ? candidate.inpaintResultPath : undefined,
+          inpaintMaskPath: normalizedMaskDataUrl ? maskPath : undefined,
+          inpaintResultPath: normalizedMaskDataUrl ? candidate.inpaintResultPath : undefined,
           inpaintMaskDataUrl: undefined,
           inpaintResultDataUrl: undefined,
           inpaintStatus: "idle",

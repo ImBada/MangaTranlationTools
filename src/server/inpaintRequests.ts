@@ -3,7 +3,7 @@ import { readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { extname } from "node:path";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
 import { exportInpaintPsd, importInpaintPsd } from "./inpaintPsd";
-import { clipOpaqueInpaintResultToMask, normalizeInpaintLayerDataUrls } from "./libraryImageData";
+import { clipOpaqueInpaintResultToMask, normalizeInpaintLayerDataUrls, normalizeInpaintMaskDataUrl } from "./libraryImageData";
 import {
   getInpaintPsdImportPath,
   openChapter,
@@ -105,13 +105,18 @@ export async function saveInpaintLayersRequest(request: SaveInpaintLayersRequest
   assertImageDataUrl(request.resultDataUrl, "인페인트 결과 레이어");
 
   const layers = request.preserveMaskDataUrl
-    ? {
-        maskDataUrl: request.maskDataUrl,
-        resultDataUrl: await clipOpaqueInpaintResultToMask(request.resultDataUrl, request.maskDataUrl)
-      }
+    ? await resolvePreservedInpaintLayers(request.maskDataUrl, request.resultDataUrl)
     : await normalizeInpaintLayerDataUrls(request.maskDataUrl, request.resultDataUrl);
   return {
     chapter: await saveNormalizedInpaintLayers(request.chapterId, request.pageId, layers.maskDataUrl, layers.resultDataUrl)
+  };
+}
+
+async function resolvePreservedInpaintLayers(maskDataUrl: string, resultDataUrl: string): Promise<{ maskDataUrl: string; resultDataUrl: string }> {
+  const normalizedMaskDataUrl = await normalizeInpaintMaskDataUrl(maskDataUrl);
+  return {
+    maskDataUrl: normalizedMaskDataUrl,
+    resultDataUrl: await clipOpaqueInpaintResultToMask(resultDataUrl, normalizedMaskDataUrl)
   };
 }
 
