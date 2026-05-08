@@ -44,6 +44,7 @@ type ImageStageLayersProps = {
   inpaintSelectionRect: ImageRect | null;
   rangeSelectionPreviewRect: ImageRect | null;
   inpaintTool: InpaintTool;
+  inpaintStrokeActive: boolean;
   favoriteFontPresets: FontPreset[];
   fontWeightAvailability: readonly FontWeightAvailability[];
   layerOpacity: ImageStageLayerOpacity;
@@ -94,6 +95,7 @@ export function ImageStageLayers({
   inpaintSelectionRect,
   rangeSelectionPreviewRect,
   inpaintTool,
+  inpaintStrokeActive,
   favoriteFontPresets,
   fontWeightAvailability,
   layerOpacity,
@@ -143,7 +145,8 @@ export function ImageStageLayers({
   const renderInpaintMaskLayer =
     layerVisibility.inpaintMask ||
     (activeLayer === "inpaintMask" && temporaryPanActive);
-  const inpaintMaskEditingEnabled = activeLayer === "inpaintMask";
+  const inpaintEditingEnabled = !temporaryPanActive || inpaintStrokeActive;
+  const inpaintMaskEditingEnabled = activeLayer === "inpaintMask" && inpaintEditingEnabled;
   const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
@@ -315,7 +318,7 @@ export function ImageStageLayers({
               brushColor={inpaintResultBrushColor}
               brushHardness={inpaintResultBrushHardness}
               toolStrength={inpaintResultToolStrength}
-              disabled={inpaintResultDisabled}
+              disabled={inpaintResultDisabled || !inpaintEditingEnabled}
               selectionRect={null}
               onChange={onInpaintResultLayerChange}
               onColorPick={onInpaintResultColorPick}
@@ -344,7 +347,7 @@ export function ImageStageLayers({
                 pageSize={pageSize}
                 tool={inpaintTool}
                 brushSize={inpaintBrushSize}
-                disabled={inpaintDisabled}
+                disabled={inpaintDisabled || !inpaintEditingEnabled}
                 selectionRect={null}
                 onChange={onInpaintLayerChange}
                 onEditEnd={onInpaintLayerEditEnd}

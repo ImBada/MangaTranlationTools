@@ -144,6 +144,7 @@ export function ImageStage({
   const [rangeSelectionPreviewRect, setRangeSelectionPreviewRect] = React.useState<ImageRect | null>(null);
   const [blockRangeSelectionModeActive, setBlockRangeSelectionModeActive] = React.useState(false);
   const [blockRangeSelectionDragActive, setBlockRangeSelectionDragActive] = React.useState(false);
+  const [inpaintStrokeActive, setInpaintStrokeActive] = React.useState(false);
   const selectedBlock = React.useMemo(
     () => page.blocks.find((block) => block.id === selectedBlockId) ?? null,
     [page.blocks, selectedBlockId]
@@ -165,11 +166,13 @@ export function ImageStage({
     Boolean(selectedBlock) &&
     (blockRangeSelectionModeActive || blockRangeSelectionDragActive);
   const rangeSelectionActive = inpaintRangeSelectionActive || blockMultiSelectionActive || blockRangeSelectionActive;
+  const inpaintBrushInputActive = !temporaryPanActive || inpaintStrokeActive;
   const activeInpaintBrushCursorTool = React.useMemo(() => {
     if (
       activeLayer === "inpaintMask" &&
       !inpaintDisabled &&
       inpaintTool !== "select" &&
+      inpaintBrushInputActive &&
       !rangeSelectionActive &&
       !zoomToolActive
     ) {
@@ -183,6 +186,7 @@ export function ImageStage({
       !inpaintResultDisabled &&
       inpaintResultTool !== "select" &&
       inpaintResultTool !== "colorPicker" &&
+      inpaintBrushInputActive &&
       !rangeSelectionActive &&
       !zoomToolActive
     ) {
@@ -195,6 +199,7 @@ export function ImageStage({
   }, [
     activeLayer,
     inpaintBrushSize,
+    inpaintBrushInputActive,
     inpaintDisabled,
     inpaintResultBrushSize,
     inpaintResultDisabled,
@@ -228,6 +233,16 @@ export function ImageStage({
     zoomToolActive
   });
   const temporaryPanCursorActive = temporaryPanActive && !activeInpaintBrushCursorTool;
+
+  const handleInpaintLayerEditStart = React.useCallback(() => {
+    setInpaintStrokeActive(true);
+    onInpaintLayerEditStart();
+  }, [onInpaintLayerEditStart]);
+
+  const handleInpaintLayerEditEnd = React.useCallback(() => {
+    setInpaintStrokeActive(false);
+    onInpaintLayerEditEnd();
+  }, [onInpaintLayerEditEnd]);
 
   React.useEffect(() => {
     if (rangeSelectionActive) {
@@ -370,6 +385,7 @@ export function ImageStage({
           inpaintSelectionRect={inpaintSelectionRect}
           rangeSelectionPreviewRect={rangeSelectionPreviewRect}
           inpaintTool={inpaintTool}
+          inpaintStrokeActive={inpaintStrokeActive}
           favoriteFontPresets={favoriteFontPresets}
           fontWeightAvailability={fontWeightAvailability}
           layerOpacity={layerOpacity}
@@ -392,8 +408,8 @@ export function ImageStage({
           onBlockInlineEditActiveChange={onBlockInlineEditActiveChange}
           onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
           onInpaintLayerChange={onInpaintLayerChange}
-          onInpaintLayerEditEnd={onInpaintLayerEditEnd}
-          onInpaintLayerEditStart={onInpaintLayerEditStart}
+          onInpaintLayerEditEnd={handleInpaintLayerEditEnd}
+          onInpaintLayerEditStart={handleInpaintLayerEditStart}
           onInpaintResultColorPick={onInpaintResultColorPick}
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}
