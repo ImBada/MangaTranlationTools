@@ -38,8 +38,6 @@ type UseWorkspaceToolStateState = {
   setZoomToolActive: React.Dispatch<React.SetStateAction<boolean>>;
   showInpaintLayers: () => void;
   showOverlayLayer: () => void;
-  stageLayerOpacity: LayerOpacity;
-  stageLayerVisibility: LayerVisibility;
   temporaryPanActive: boolean;
   temporaryPanHeldRef: React.MutableRefObject<boolean>;
   temporaryPanShortcutEnabled: boolean;
@@ -94,20 +92,6 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
     activeLayer === "inpaintMask" ||
     activeLayer === "inpaintResult";
   const temporaryPanShortcutEnabled = layerToolActive || zoomToolActive;
-
-  const stageLayerOpacity = React.useMemo(
-    () => temporaryPanActive
-      ? DEFAULT_LAYER_OPACITY
-      : { ...layerOpacity, overlay: overlayOpacityEditMode ? 1 : layerOpacity.overlay },
-    [layerOpacity, overlayOpacityEditMode, temporaryPanActive]
-  );
-
-  const stageLayerVisibility = React.useMemo(
-    () => temporaryPanActive
-      ? { image: true, inpaint: true, inpaintResult: true, inpaintMask: true, overlay: true }
-      : layerVisibility,
-    [layerVisibility, temporaryPanActive]
-  );
 
   const selectSharedInpaintTool = React.useCallback((tool: InpaintTool) => {
     setZoomToolActive(false);
@@ -167,8 +151,6 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
     setZoomToolActive,
     showInpaintLayers,
     showOverlayLayer,
-    stageLayerOpacity,
-    stageLayerVisibility,
     temporaryPanActive,
     temporaryPanHeldRef,
     temporaryPanShortcutEnabled,

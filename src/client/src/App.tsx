@@ -59,8 +59,6 @@ export default function App(): React.JSX.Element {
     setZoomToolActive,
     showInpaintLayers,
     showOverlayLayer,
-    stageLayerOpacity,
-    stageLayerVisibility,
     temporaryPanActive,
     temporaryPanHeldRef,
     temporaryPanShortcutEnabled,
@@ -801,7 +799,9 @@ export default function App(): React.JSX.Element {
           lamaActionBusy={lamaActionBusy}
           lamaActionMessage={lamaActionMessage}
           lamaNoticePlatform={lamaNoticePlatform}
+          layerOpacity={layerOpacity}
           layerVisibility={layerVisibility}
+          overlayOpacityEditMode={overlayOpacityEditMode}
           rangeToolActive={rangeToolActive}
           recoverableFailures={recoverableFailures}
           selectedBlockId={selectedBlockId}
@@ -811,8 +811,6 @@ export default function App(): React.JSX.Element {
           selectedPageInpaintNotice={selectedPageInpaintNotice}
           showLamaEmptyNotice={showLamaEmptyNotice}
           showOriginalStageSize={showOriginalStageSize}
-          stageLayerOpacity={stageLayerOpacity}
-          stageLayerVisibility={stageLayerVisibility}
           stageRef={stageRef}
           stageSize={stageSize}
           stageViewResetKey={stageViewResetKey}

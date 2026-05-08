@@ -35,6 +35,7 @@ type ImageStageProps = {
   layerOpacity: ImageStageLayerOpacity;
   activeLayer: ImageStageActiveLayer;
   finalOutputPreviewActive: boolean;
+  inpaintResultComposite: boolean;
   inpaintTool: InpaintTool;
   inpaintBrushSize: number;
   inpaintResultTool: InpaintResultTool;
@@ -93,6 +94,7 @@ export function ImageStage({
   layerOpacity,
   activeLayer,
   finalOutputPreviewActive,
+  inpaintResultComposite,
   inpaintTool,
   inpaintBrushSize,
   inpaintResultTool,
@@ -316,6 +318,7 @@ export function ImageStage({
         <ImageStageLayers
           activeLayer={activeLayer}
           finalOutputPreviewActive={finalOutputPreviewActive}
+          inpaintResultComposite={inpaintResultComposite}
           imageRef={imageRef}
           inpaintBrushSize={inpaintBrushSize}
           inpaintDisabled={inpaintDisabled}

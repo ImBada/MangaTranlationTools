@@ -13,7 +13,8 @@ import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRe
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { InpaintLayerChangeOptions } from "../../lib/inpaintLayerChange";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
-import { DEFAULT_LAYER_OPACITY, type ActiveLayer, type LayerOpacity, type LayerVisibility } from "../../lib/layerState";
+import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
+import { resolveStageLayerPreviewState } from "../../lib/layerPreviewState";
 import { isMacLikePlatform } from "../../lib/globalUndo";
 import type { FontWeightAvailability, ViewportSize } from "../../lib/overlayLayout";
 import { ImageStage } from "../ImageStage";
@@ -52,6 +53,8 @@ type WorkspacePanelProps = {
   lamaActionMessage: string | null;
   lamaNoticePlatform: LamaNoticePlatform;
   layerVisibility: LayerVisibility;
+  layerOpacity: LayerOpacity;
+  overlayOpacityEditMode: boolean;
   rangeToolActive: boolean;
   recoverableFailures: RecoverableFailure[];
   selectedBlockId: string | null;
@@ -61,8 +64,6 @@ type WorkspacePanelProps = {
   selectedPageInpaintNotice: PageInpaintNotice | null;
   showLamaEmptyNotice: boolean;
   showOriginalStageSize: () => void;
-  stageLayerOpacity: LayerOpacity;
-  stageLayerVisibility: LayerVisibility;
   stageRef: React.RefObject<HTMLDivElement | null>;
   stageSize: ViewportSize | null;
   stageViewResetKey: number;
@@ -138,7 +139,9 @@ export function WorkspacePanel({
   lamaActionBusy,
   lamaActionMessage,
   lamaNoticePlatform,
+  layerOpacity,
   layerVisibility,
+  overlayOpacityEditMode,
   rangeToolActive,
   recoverableFailures,
   selectedBlockId,
@@ -148,8 +151,6 @@ export function WorkspacePanel({
   selectedPageInpaintNotice,
   showLamaEmptyNotice,
   showOriginalStageSize,
-  stageLayerOpacity,
-  stageLayerVisibility,
   stageRef,
   stageSize,
   stageViewResetKey,
@@ -225,17 +226,22 @@ export function WorkspacePanel({
       : activeLayer === "inpaintResult"
         ? inpaintResultTool === "select"
         : true);
-  const finalOutputPreviewActive = activeLayer === "inpaintResult" && inpaintResultTool === "colorPicker";
-  const effectiveStageLayerOpacity = finalOutputPreviewActive ? DEFAULT_LAYER_OPACITY : stageLayerOpacity;
-  const effectiveStageLayerVisibility = finalOutputPreviewActive
-    ? {
-        image: true,
-        inpaint: true,
-        inpaintResult: true,
-        inpaintMask: false,
-        overlay: true
-      }
-    : stageLayerVisibility;
+  const colorPickerFinalOutputPreviewActive = activeLayer === "inpaintResult" && inpaintResultTool === "colorPicker";
+  const stageLayerPreview = React.useMemo(() => resolveStageLayerPreviewState({
+    activeLayer,
+    forceFinalOutputPreviewActive: colorPickerFinalOutputPreviewActive,
+    layerOpacity,
+    layerVisibility,
+    overlayOpacityEditMode,
+    temporaryPanActive
+  }), [
+    activeLayer,
+    colorPickerFinalOutputPreviewActive,
+    layerOpacity,
+    layerVisibility,
+    overlayOpacityEditMode,
+    temporaryPanActive
+  ]);
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const multiBlockSelectionActive = selectedBlockIds.length > 1;
   const blockInlineEditShortcutVisible =
@@ -268,7 +274,7 @@ export function WorkspacePanel({
           blockInlineEditShortcut={BLOCK_INLINE_EDIT_SHORTCUT}
           blockInlineEditShortcutActive={blockInlineEditActive && blockInlineEditShortcutVisible}
           blockInlineEditShortcutVisible={blockInlineEditShortcutVisible}
-          colorPickerActive={activeLayer === "inpaintResult" && inpaintResultTool === "colorPicker"}
+          colorPickerActive={colorPickerFinalOutputPreviewActive}
           colorPickerShortcut={INPAINT_TOOL_SHORTCUTS.colorPicker ?? "I"}
           colorPickerVisible={activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult}
           pointerToolActive={pointerToolActive}
@@ -344,10 +350,11 @@ export function WorkspacePanel({
             rangeToolActive={rangeToolActive}
             selectedBlockId={selectedBlockId}
             selectedBlockIds={selectedBlockIds}
-            layerOpacity={effectiveStageLayerOpacity}
-            layerVisibility={effectiveStageLayerVisibility}
+            layerOpacity={stageLayerPreview.layerOpacity}
+            layerVisibility={stageLayerPreview.layerVisibility}
             activeLayer={activeLayer}
-            finalOutputPreviewActive={finalOutputPreviewActive}
+            finalOutputPreviewActive={stageLayerPreview.finalOutputPreviewActive}
+            inpaintResultComposite={stageLayerPreview.inpaintResultComposite}
             inpaintTool={inpaintTool}
             inpaintBrushSize={inpaintBrushSize}
             inpaintResultTool={inpaintResultTool}

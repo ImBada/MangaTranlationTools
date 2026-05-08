@@ -32,6 +32,7 @@ type ImageStageLayersProps = {
   activeLayer: ImageStageActiveLayer;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   finalOutputPreviewActive: boolean;
+  inpaintResultComposite: boolean;
   inpaintBrushSize: number;
   inpaintDisabled: boolean;
   inpaintResultBrushColor: string;
@@ -81,6 +82,7 @@ export function ImageStageLayers({
   activeLayer,
   imageRef,
   finalOutputPreviewActive,
+  inpaintResultComposite,
   inpaintBrushSize,
   inpaintDisabled,
   inpaintResultBrushColor,
@@ -134,6 +136,7 @@ export function ImageStageLayers({
     activeLayer === "overlay" ? rangeSelectionPreviewRect : rangeSelectionPreviewRect ?? inpaintSelectionRect;
   const rangeSelectionLayerVisible =
     rangeToolActive || Boolean(rangeSelectionPreviewRect) || (activeLayer !== "overlay" && Boolean(inpaintSelectionRect));
+  const inpaintResultMaskImage = inpaintResultComposite && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined;
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
@@ -312,10 +315,10 @@ export function ImageStageLayers({
               onEditStart={onInpaintLayerEditStart}
               onSelectionChange={onInpaintSelectionChange}
               style={{
-                zIndex: finalOutputPreviewActive ? undefined : activeLayer === "inpaintResult" ? 3 : 1,
+                zIndex: inpaintResultComposite ? 1 : 3,
                 opacity: layerOpacity.inpaintResult,
-                maskImage: (activeLayer !== "inpaintResult" || temporaryPanActive || finalOutputPreviewActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
-                WebkitMaskImage: (activeLayer !== "inpaintResult" || temporaryPanActive || finalOutputPreviewActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
+                maskImage: inpaintResultMaskImage,
+                WebkitMaskImage: inpaintResultMaskImage
               }}
             />
           ) : null}
