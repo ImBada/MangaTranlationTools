@@ -459,7 +459,7 @@ export default function App(): React.JSX.Element {
   registerTranslationUndoClearer(clearTranslationUndoStack);
   const {
     fitStageToWorkspace,
-    handleZoomToolClick,
+    handleZoomToolDrag,
     imageRef,
     onBlockPointerDown,
     onSelectedBlockRangeChange,
@@ -784,7 +784,7 @@ export default function App(): React.JSX.Element {
           fitStageToWorkspace={fitStageToWorkspace}
           favoriteFontPresets={favoriteFontPresets}
           fontWeightAvailability={systemFonts}
-          handleZoomToolClick={handleZoomToolClick}
+          handleZoomToolDrag={handleZoomToolDrag}
           imageRef={imageRef}
           inpaintBrushSize={inpaintBrushSize}
           inpaintBusy={inpaintBusy}

@@ -1,6 +1,6 @@
 import React from "react";
 import type { ViewportSize } from "../lib/overlayLayout";
-import { resolveStageFitSize } from "../lib/stageFit";
+import { resolveStageFitSize, resolveStageZoomAnchorPanOffset } from "../lib/stageFit";
 
 type PanOffset = {
   x: number;
@@ -17,7 +17,15 @@ type StagePanState = {
 type ZoomCursorState = {
   x: number;
   y: number;
-  altKey: boolean;
+  zoomOut: boolean;
+};
+
+export type StageZoomPanAnchor = {
+  clientX: number;
+  clientY: number;
+  contentX: number;
+  contentY: number;
+  startScale: number;
 };
 
 type UseImageStageViewOptions = {
@@ -33,6 +41,8 @@ type UseImageStageViewOptions = {
 };
 
 type UseImageStageViewState = {
+  applyStageZoomAnchor: (anchor: StageZoomPanAnchor | null, nextScale: number) => void;
+  beginStageZoomAnchor: (clientX: number, clientY: number, startScale: number) => StageZoomPanAnchor | null;
   clearZoomCursor: () => void;
   handleStagePointerCancel: (event: React.PointerEvent<HTMLDivElement>) => void;
   handleStagePointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -40,7 +50,7 @@ type UseImageStageViewState = {
   handleStagePointerUp: (event: React.PointerEvent<HTMLDivElement>) => void;
   panning: boolean;
   stageStyle: React.CSSProperties | undefined;
-  updateZoomCursor: (event: React.PointerEvent<HTMLElement>) => void;
+  updateZoomCursor: (event: React.PointerEvent<HTMLElement>, zoomOut?: boolean) => void;
   wrapRef: React.RefObject<HTMLDivElement | null>;
   zoomCursor: ZoomCursorState | null;
 };
@@ -126,47 +136,59 @@ export function useImageStageView({
   React.useEffect(() => {
     if (!zoomToolActive || temporaryPanActive) {
       setZoomCursor(null);
-      return;
     }
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key !== "Alt") {
-        return;
-      }
-      setZoomCursor((current) => current ? { ...current, altKey: true } : current);
-    };
-    const onKeyUp = (event: KeyboardEvent) => {
-      if (event.key !== "Alt") {
-        return;
-      }
-      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
-    };
-    const resetAlt = () => {
-      setZoomCursor((current) => current ? { ...current, altKey: false } : current);
-    };
-
-    window.addEventListener("keydown", onKeyDown);
-    window.addEventListener("keyup", onKeyUp);
-    window.addEventListener("blur", resetAlt);
-    return () => {
-      window.removeEventListener("keydown", onKeyDown);
-      window.removeEventListener("keyup", onKeyUp);
-      window.removeEventListener("blur", resetAlt);
-    };
   }, [temporaryPanActive, zoomToolActive]);
 
-  const updateZoomCursor = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+  const updateZoomCursor = React.useCallback((event: React.PointerEvent<HTMLElement>, zoomOut = false) => {
     const rect = event.currentTarget.getBoundingClientRect();
     setZoomCursor({
       x: event.clientX - rect.left,
       y: event.clientY - rect.top,
-      altKey: event.altKey
+      zoomOut
     });
   }, []);
 
   const clearZoomCursor = React.useCallback(() => {
     setZoomCursor(null);
   }, []);
+
+  const beginStageZoomAnchor = React.useCallback((clientX: number, clientY: number, startScale: number): StageZoomPanAnchor | null => {
+    const wrap = wrapRef.current;
+    if (!wrap) {
+      return null;
+    }
+
+    const rect = wrap.getBoundingClientRect();
+    const pan = panOffsetRef.current;
+    return {
+      clientX,
+      clientY,
+      contentX: clientX - (rect.left + rect.width / 2) - pan.x,
+      contentY: clientY - (rect.top + rect.height / 2) - pan.y,
+      startScale
+    };
+  }, []);
+
+  const applyStageZoomAnchor = React.useCallback((anchor: StageZoomPanAnchor | null, nextScale: number) => {
+    const wrap = wrapRef.current;
+    if (!wrap || !anchor) {
+      return;
+    }
+
+    const rect = wrap.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    applyPanOffset(resolveStageZoomAnchorPanOffset({
+      anchorClientX: anchor.clientX,
+      anchorClientY: anchor.clientY,
+      centerClientX: centerX,
+      centerClientY: centerY,
+      contentX: anchor.contentX,
+      contentY: anchor.contentY,
+      nextScale,
+      startScale: anchor.startScale
+    }));
+  }, [applyPanOffset]);
 
   const handleStagePointerMove = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
     const pan = panRef.current;
@@ -219,10 +241,12 @@ export function useImageStageView({
   const stageStyle = fitSize ? {
     width: `${fitSize.width}px`,
     height: `${fitSize.height}px`,
-    transform: `translate(${panOffset.x}px, ${panOffset.y}px)`
+    transform: `translate(-50%, -50%) translate(${panOffset.x}px, ${panOffset.y}px)`
   } : undefined;
 
   return {
+    applyStageZoomAnchor,
+    beginStageZoomAnchor,
     clearZoomCursor,
     handleStagePointerCancel,
     handleStagePointerDown,

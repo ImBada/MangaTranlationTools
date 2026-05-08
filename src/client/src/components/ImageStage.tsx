@@ -4,8 +4,9 @@ import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout"
 import { resolveToggledTranslationBlockIds, resolveTranslationBlockIdsInSelection } from "../lib/blockSelection";
 import { resolveCanvasPoint, resolveSelectionRect, type DrawPoint } from "../lib/inpaintLayerCanvas";
 import { isEditableTarget } from "../lib/editorUtils";
-import { useImageStageView } from "../hooks/useImageStageView";
+import { useImageStageView, type StageZoomPanAnchor } from "../hooks/useImageStageView";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
+import { resolveStageDragZoomScale } from "../lib/stageFit";
 import { InpaintBrushCursorOverlay } from "./InpaintBrushCursorOverlay";
 import type { InpaintTool } from "./InpaintLayerCanvas";
 import { ImageStageLayers, type ImageStageActiveLayer, type ImageStageLayerOpacity, type ImageStageLayerVisibility } from "./ImageStageLayers";
@@ -16,6 +17,13 @@ type RangeSelectionDragState = {
   start: DrawPoint;
   target: "inpaint" | "block" | "blocks";
   toggleBlockSelection: boolean;
+};
+
+type ZoomToolDragState = {
+  panAnchor: StageZoomPanAnchor | null;
+  pointerId: number;
+  startScale: number;
+  startX: number;
 };
 
 type ImageStageProps = {
@@ -55,7 +63,7 @@ type ImageStageProps = {
   onInpaintResultColorPick: (color: string) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
-  onZoomToolClick: (direction: "in" | "out") => void;
+  onZoomToolDrag: (scale: number) => void;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
@@ -114,7 +122,7 @@ export function ImageStage({
   onInpaintResultColorPick,
   onInpaintSelectionChange,
   onInpaintResultLayerChange,
-  onZoomToolClick,
+  onZoomToolDrag,
   onStagePointerMove,
   onStagePointerUp,
   onStagePointerDown,
@@ -132,6 +140,7 @@ export function ImageStage({
 }: ImageStageProps): React.JSX.Element {
   const pageSize = React.useMemo(() => ({ width: page.width, height: page.height }), [page.height, page.width]);
   const rangeSelectionDragRef = React.useRef<RangeSelectionDragState | null>(null);
+  const zoomToolDragRef = React.useRef<ZoomToolDragState | null>(null);
   const [rangeSelectionPreviewRect, setRangeSelectionPreviewRect] = React.useState<ImageRect | null>(null);
   const [blockRangeSelectionModeActive, setBlockRangeSelectionModeActive] = React.useState(false);
   const [blockRangeSelectionDragActive, setBlockRangeSelectionDragActive] = React.useState(false);
@@ -198,6 +207,8 @@ export function ImageStage({
     zoomToolActive
   ]);
   const {
+    applyStageZoomAnchor,
+    beginStageZoomAnchor,
     clearZoomCursor,
     handleStagePointerCancel,
     handleStagePointerDown,
@@ -258,6 +269,36 @@ export function ImageStage({
   const updateRangeSelectionPreview = React.useCallback((start: DrawPoint, current: DrawPoint) => {
     setRangeSelectionPreviewRect(resolveSelectionRect(start, current, pageSize));
   }, [pageSize]);
+
+  const resolveCurrentZoomScale = React.useCallback(() => {
+    const stage = stageRef.current;
+    const rect = stage?.getBoundingClientRect();
+    if (rect?.width) {
+      return rect.width / Math.max(1, page.width);
+    }
+    if (stageSize?.width) {
+      return stageSize.width / Math.max(1, page.width);
+    }
+    return viewScale ?? 1;
+  }, [page.width, stageRef, stageSize?.width, viewScale]);
+
+  const updateZoomCursorFromDrag = React.useCallback((event: React.PointerEvent<HTMLElement>, drag: ZoomToolDragState | null) => {
+    updateZoomCursor(event, drag ? event.clientX < drag.startX : false);
+  }, [updateZoomCursor]);
+
+  const clearZoomCursorIfOutside = React.useCallback((event: React.PointerEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    if (
+      event.clientX < rect.left ||
+      event.clientX > rect.right ||
+      event.clientY < rect.top ||
+      event.clientY > rect.bottom
+    ) {
+      clearZoomCursor();
+    } else {
+      updateZoomCursorFromDrag(event, null);
+    }
+  }, [clearZoomCursor, updateZoomCursorFromDrag]);
 
   const finishRangeSelection = React.useCallback((current: DrawPoint) => {
     const drag = rangeSelectionDragRef.current;
@@ -442,30 +483,68 @@ export function ImageStage({
         <div
           className="stage-zoom-hit-area"
           aria-label="줌 도구"
-          onPointerEnter={updateZoomCursor}
-          onPointerMove={updateZoomCursor}
-          onPointerLeave={clearZoomCursor}
+          onPointerEnter={(event) => updateZoomCursorFromDrag(event, zoomToolDragRef.current)}
+          onPointerMove={(event) => {
+            const drag = zoomToolDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) {
+              updateZoomCursorFromDrag(event, null);
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            updateZoomCursorFromDrag(event, drag);
+            const nextScale = resolveStageDragZoomScale(drag.startScale, event.clientX - drag.startX);
+            applyStageZoomAnchor(drag.panAnchor, nextScale);
+            onZoomToolDrag(nextScale);
+          }}
+          onPointerLeave={() => {
+            if (!zoomToolDragRef.current) {
+              clearZoomCursor();
+            }
+          }}
           onPointerDown={(event) => {
             if (event.button !== 0) {
               return;
             }
             event.preventDefault();
             event.stopPropagation();
-            updateZoomCursor(event);
-            onZoomToolClick(event.altKey ? "out" : "in");
+            event.currentTarget.setPointerCapture(event.pointerId);
+            const startScale = resolveCurrentZoomScale();
+            zoomToolDragRef.current = {
+              panAnchor: beginStageZoomAnchor(event.clientX, event.clientY, startScale),
+              pointerId: event.pointerId,
+              startScale,
+              startX: event.clientX
+            };
+            updateZoomCursorFromDrag(event, zoomToolDragRef.current);
           }}
           onPointerUp={(event) => {
+            const drag = zoomToolDragRef.current;
+            if (!drag || drag.pointerId !== event.pointerId) {
+              event.preventDefault();
+              event.stopPropagation();
+              return;
+            }
             event.preventDefault();
             event.stopPropagation();
+            event.currentTarget.releasePointerCapture(event.pointerId);
+            zoomToolDragRef.current = null;
+            clearZoomCursorIfOutside(event);
           }}
           onPointerCancel={(event) => {
+            const drag = zoomToolDragRef.current;
             event.preventDefault();
             event.stopPropagation();
+            if (drag?.pointerId === event.pointerId) {
+              event.currentTarget.releasePointerCapture(event.pointerId);
+              zoomToolDragRef.current = null;
+            }
+            clearZoomCursorIfOutside(event);
           }}
         >
           {zoomCursor ? (
             <div
-              className={`stage-zoom-cursor ${zoomCursor.altKey ? "zoom-out" : "zoom-in"}`}
+              className={`stage-zoom-cursor ${zoomCursor.zoomOut ? "zoom-out" : "zoom-in"}`}
               style={{
                 left: `${zoomCursor.x}px`,
                 top: `${zoomCursor.y}px`

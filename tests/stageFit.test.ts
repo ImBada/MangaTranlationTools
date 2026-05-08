@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { clampStageViewScale, resolveStageFitSize } from "../src/client/src/lib/stageFit";
+import {
+  clampStageViewScale,
+  resolveStageDragZoomScale,
+  resolveStageFitSize,
+  resolveStageZoomAnchorPanOffset
+} from "../src/client/src/lib/stageFit";
 
 describe("stage fit sizing", () => {
   it("fits tall manga pages inside the available height", () => {
@@ -40,6 +45,51 @@ describe("stage fit sizing", () => {
 
   it("clamps explicit zoom scales", () => {
     expect(clampStageViewScale(0.01)).toBe(0.1);
-    expect(clampStageViewScale(4)).toBe(2);
+    expect(clampStageViewScale(12)).toBe(10);
+  });
+
+  it("resolves smooth drag zoom from horizontal movement", () => {
+    expect(resolveStageDragZoomScale(1, 240)).toBe(2);
+    expect(resolveStageDragZoomScale(1, -240)).toBe(0.5);
+    expect(resolveStageDragZoomScale(1, 120)).toBeCloseTo(Math.SQRT2);
+  });
+
+  it("clamps drag zoom to supported bounds", () => {
+    expect(resolveStageDragZoomScale(1, 2000)).toBe(10);
+    expect(resolveStageDragZoomScale(1, -2000)).toBe(0.1);
+  });
+
+  it("offsets pan so drag zoom stays anchored to the clicked point", () => {
+    const pan = resolveStageZoomAnchorPanOffset({
+      anchorClientX: 620,
+      anchorClientY: 430,
+      centerClientX: 500,
+      centerClientY: 350,
+      contentX: 120,
+      contentY: 80,
+      startScale: 1,
+      nextScale: 2
+    });
+
+    expect(pan).toEqual({ x: -120, y: -80 });
+    expect(500 + pan.x + 120 * 2).toBe(620);
+    expect(350 + pan.y + 80 * 2).toBe(430);
+  });
+
+  it("anchors drag zoom against workspace scale instead of canvas bounds", () => {
+    const pan = resolveStageZoomAnchorPanOffset({
+      anchorClientX: 900,
+      anchorClientY: 160,
+      centerClientX: 500,
+      centerClientY: 350,
+      contentX: 400,
+      contentY: -190,
+      startScale: 0.5,
+      nextScale: 1
+    });
+
+    expect(pan).toEqual({ x: -400, y: 190 });
+    expect(500 + pan.x + 400 * 2).toBe(900);
+    expect(350 + pan.y - 190 * 2).toBe(160);
   });
 });

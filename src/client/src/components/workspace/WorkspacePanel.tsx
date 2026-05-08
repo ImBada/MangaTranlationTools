@@ -37,7 +37,7 @@ type WorkspacePanelProps = {
   favoriteFontPresets: FontPreset[];
   fontWeightAvailability: readonly FontWeightAvailability[];
   fitStageToWorkspace: () => void;
-  handleZoomToolClick: (direction: "in" | "out") => void;
+  handleZoomToolDrag: (scale: number) => void;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   inpaintBrushSize: number;
   inpaintBusy: boolean;
@@ -124,7 +124,7 @@ export function WorkspacePanel({
   favoriteFontPresets,
   fontWeightAvailability,
   fitStageToWorkspace,
-  handleZoomToolClick,
+  handleZoomToolDrag,
   imageRef,
   inpaintBrushSize,
   inpaintBusy,
@@ -374,7 +374,7 @@ export function WorkspacePanel({
             onInpaintResultColorPick={onInpaintResultColorPick}
             onInpaintSelectionChange={onInpaintSelectionChange}
             onInpaintResultLayerChange={onInpaintResultLayerChange}
-            onZoomToolClick={handleZoomToolClick}
+            onZoomToolDrag={handleZoomToolDrag}
             onStagePointerMove={onStagePointerMove}
             onStagePointerUp={onStagePointerUp}
             onStagePointerDown={() => {

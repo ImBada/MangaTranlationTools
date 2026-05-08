@@ -14,7 +14,6 @@ import { clampStageViewScale } from "../lib/stageFit";
 import { useStageSize } from "./useStageSize";
 
 type DragMode = "move" | "resize" | "rotate";
-type StageZoomDirection = "in" | "out";
 
 type DragState = {
   mode: DragMode;
@@ -43,7 +42,7 @@ type UseStageInteractionOptions = {
 
 type UseStageInteractionState = {
   fitStageToWorkspace: () => void;
-  handleZoomToolClick: (direction: StageZoomDirection) => void;
+  handleZoomToolDrag: (scale: number) => void;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => void;
   onSelectedBlockRangeChange: (blockId: string, rect: ImageRect) => void;
@@ -117,18 +116,20 @@ export function useStageInteraction({
     [selectedPage?.height, selectedPage?.width]
   );
   const stageSize = useStageSize(imageRef, selectedPageSize);
-  const currentStageScale = selectedPage && stageSize
-    ? stageSize.width / Math.max(1, selectedPage.width)
-    : (stageViewScale ?? 1);
+  const currentStageScale = typeof stageViewScale === "number"
+    ? stageViewScale
+    : selectedPage && stageSize
+      ? stageSize.width / Math.max(1, selectedPage.width)
+      : 1;
   const stageZoomLabel = `${Math.round(currentStageScale * 100)}%`;
 
   const zoomStage = React.useCallback((factor: number) => {
     setStageViewScale((current) => clampStageViewScale((current ?? currentStageScale) * factor));
   }, [currentStageScale]);
 
-  const handleZoomToolClick = React.useCallback((direction: StageZoomDirection) => {
-    zoomStage(direction === "out" ? 1 / STAGE_ZOOM_STEP : STAGE_ZOOM_STEP);
-  }, [zoomStage]);
+  const handleZoomToolDrag = React.useCallback((scale: number) => {
+    setStageViewScale(clampStageViewScale(scale));
+  }, []);
 
   const zoomInStage = React.useCallback(() => {
     zoomStage(STAGE_ZOOM_STEP);
@@ -300,7 +301,7 @@ export function useStageInteraction({
 
   return {
     fitStageToWorkspace,
-    handleZoomToolClick,
+    handleZoomToolDrag,
     imageRef,
     onBlockPointerDown,
     onSelectedBlockRangeChange,
