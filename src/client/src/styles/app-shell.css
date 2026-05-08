@@ -981,6 +981,11 @@
   stroke-linejoin: round;
 }
 
+.stage-tool-eyedropper-icon {
+  fill: currentColor;
+  stroke: none;
+}
+
 .stage-tool-icon path:first-child {
   fill: currentColor;
 }

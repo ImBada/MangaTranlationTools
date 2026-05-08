@@ -260,11 +260,8 @@ export function StageToolOverlay({
             onClick={onSelectResultColorPicker}
             disabled={selectedPageEditLocked}
           >
-            <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M16.5 3.5l4 4" />
-              <path d="M14 6l4 4" />
-              <path d="M5 19l4.5-1 8.2-8.2-3.5-3.5L6 14.5 5 19z" />
-              <path d="M9.5 17.5 6.5 14.5" />
+            <svg className="stage-tool-icon stage-tool-eyedropper-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M20.7 5.6 18.4 3.3c-.4-.4-1-.4-1.4 0l-3.1 3.1-1.9-1.9-1.4 1.4 1.4 1.4L3 16.3V21h4.7l8.9-8.9 1.4 1.4 1.4-1.4-1.9-1.9 3.1-3.1c.5-.5.5-1.1.1-1.5zM6.9 19H5v-1.9L13.1 9l1.9 1.9L6.9 19z" />
             </svg>
             <span className="stage-tool-shortcut" aria-hidden="true">{colorPickerShortcut}</span>
           </button>
