@@ -366,34 +366,48 @@ export function useInpaintLayerPersistence({
       selectedPage.inpaintMaskDataUrl ??
       selectedPage.inpaintLayerDataUrl;
     const previousResultDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintResultDataUrl;
-    const patchMaskDataUrl = options.maskDataUrl;
+    const incomingMaskDataUrl = options.maskDataUrl;
+    const maskDataUrlMode = options.maskDataUrlMode ?? "patch";
     const livePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+    const liveMaskDataUrl = livePage ? resolvePageMaskDataUrl(livePage) : undefined;
+    const liveResultDataUrl = livePage ? livePage.inpaintResultDataUrl : undefined;
+    const liveStateChanged = Boolean(
+      livePage && (
+        liveMaskDataUrl !== previousMaskDataUrl ||
+        liveResultDataUrl !== previousResultDataUrl
+      )
+    );
     if (
       livePage === null ||
-      (livePage && (
-        resolvePageMaskDataUrl(livePage) !== previousMaskDataUrl ||
-        livePage.inpaintResultDataUrl !== previousResultDataUrl
-      ))
+      (liveStateChanged && maskDataUrlMode !== "full")
     ) {
       return;
     }
     const applyLocalUpdate = livePage !== undefined;
     const commitRevision = applyLocalUpdate ? nextInpaintLayerCommitRevision() : undefined;
 
-    void (patchMaskDataUrl
-      ? mergePartialInpaintMask(previousMaskDataUrl, patchMaskDataUrl, targetPage.width, targetPage.height)
-      : Promise.resolve(previousMaskDataUrl)
-    ).then((nextMaskDataUrl) => {
+    const commitResolvedInpaintLayers = (nextMaskDataUrl: string | undefined) => {
       if (commitRevision !== undefined && inpaintLayerCommitRevisionRef.current !== commitRevision) {
         return;
       }
       const currentLivePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
+      const currentLiveMaskDataUrl = currentLivePage ? resolvePageMaskDataUrl(currentLivePage) : undefined;
+      const currentLiveResultDataUrl = currentLivePage ? currentLivePage.inpaintResultDataUrl : undefined;
+      const currentLiveStateChanged = Boolean(
+        currentLivePage && (
+          currentLiveMaskDataUrl !== previousMaskDataUrl ||
+          currentLiveResultDataUrl !== previousResultDataUrl
+        )
+      );
+      const currentPreviousMaskDataUrl = maskDataUrlMode === "full" && currentLivePage
+        ? currentLiveMaskDataUrl
+        : previousMaskDataUrl;
+      const currentPreviousResultDataUrl = maskDataUrlMode === "full" && currentLivePage
+        ? currentLiveResultDataUrl
+        : previousResultDataUrl;
       if (
         currentLivePage === null ||
-        (currentLivePage && (
-          resolvePageMaskDataUrl(currentLivePage) !== previousMaskDataUrl ||
-          currentLivePage.inpaintResultDataUrl !== previousResultDataUrl
-        ))
+        (currentLiveStateChanged && maskDataUrlMode !== "full")
       ) {
         return;
       }
@@ -405,42 +419,27 @@ export function useInpaintLayerPersistence({
         resultDataUrl: dataUrl,
         nextMaskDataUrl,
         targetPage: currentLivePage ?? targetPage,
-        previousMaskDataUrl,
-        previousResultDataUrl,
-        intermediateLayerUndoSnapshots: options.intermediateLayerUndoSnapshots,
+        previousMaskDataUrl: currentPreviousMaskDataUrl,
+        previousResultDataUrl: currentPreviousResultDataUrl,
+        intermediateLayerUndoSnapshots: maskDataUrlMode === "full" && currentLiveStateChanged
+          ? undefined
+          : options.intermediateLayerUndoSnapshots,
         applyLocalUpdate: applyCurrentLocalUpdate,
         recordUndo: options.recordUndo !== false,
         persist: options.persist !== false
       });
-    }).catch((error) => {
+    };
+
+    if (!incomingMaskDataUrl || maskDataUrlMode === "full") {
+      commitResolvedInpaintLayers(incomingMaskDataUrl ?? previousMaskDataUrl);
+      return;
+    }
+
+    void mergePartialInpaintMask(previousMaskDataUrl, incomingMaskDataUrl, targetPage.width, targetPage.height).then(
+      commitResolvedInpaintLayers
+    ).catch((error) => {
       console.error(error);
-      if (commitRevision !== undefined && inpaintLayerCommitRevisionRef.current !== commitRevision) {
-        return;
-      }
-      const currentLivePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
-      if (
-        currentLivePage === null ||
-        (currentLivePage && (
-          resolvePageMaskDataUrl(currentLivePage) !== previousMaskDataUrl ||
-          currentLivePage.inpaintResultDataUrl !== previousResultDataUrl
-        ))
-      ) {
-        return;
-      }
-      const applyCurrentLocalUpdate = applyLocalUpdate && Boolean(currentLivePage);
-      commitSelectedPageInpaintLayers({
-        chapterId,
-        commitRevision: applyCurrentLocalUpdate ? commitRevision : undefined,
-        resultDataUrl: dataUrl,
-        nextMaskDataUrl: previousMaskDataUrl,
-        targetPage: currentLivePage ?? targetPage,
-        previousMaskDataUrl,
-        previousResultDataUrl,
-        intermediateLayerUndoSnapshots: options.intermediateLayerUndoSnapshots,
-        applyLocalUpdate: applyCurrentLocalUpdate,
-        recordUndo: options.recordUndo !== false,
-        persist: options.persist !== false
-      });
+      commitResolvedInpaintLayers(previousMaskDataUrl);
     });
   }, [commitSelectedPageInpaintLayers, commitSelectedPageInpaintResult, currentChapter, currentChapterRef, nextInpaintLayerCommitRevision, selectedPage, selectedPageEditLocked]);
 

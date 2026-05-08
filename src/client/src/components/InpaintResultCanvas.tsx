@@ -1,6 +1,6 @@
 import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
-import { useCanvasImageSync, type CanvasImageSyncState } from "../hooks/useCanvasImageSync";
+import { useCanvasImageSync } from "../hooks/useCanvasImageSync";
 import { encodeCanvasSnapshotDataUrl } from "../lib/canvasSnapshotEncoding";
 import {
   blendChannel,
@@ -69,8 +69,6 @@ type PendingResultCanvasCommit = {
   previousDataUrl: string | undefined;
   previousMaskDataUrl: string | undefined;
   resolved: boolean;
-  smartMaskSourceState: CanvasImageSyncState | undefined;
-  sourceState: CanvasImageSyncState;
 };
 
 type IntermediateResultSnapshot = {
@@ -129,7 +127,6 @@ export function InpaintResultCanvas({
     drawingRef,
     markCanvasCommitted,
     markCanvasEdited,
-    readCanvasSourceState,
     readCommittedCanvasState
   } = useCanvasImageSync({
     dataUrl,
@@ -142,7 +139,6 @@ export function InpaintResultCanvas({
     drawingRef: smartMaskDrawingRef,
     markCanvasCommitted: markSmartMaskCommitted,
     markCanvasEdited: markSmartMaskEdited,
-    readCanvasSourceState: readSmartMaskCanvasSourceState,
     readCommittedCanvasState: readCommittedSmartMaskCanvasState
   } = useCanvasImageSync({
     dataUrl: maskDataUrl,
@@ -457,18 +453,17 @@ export function InpaintResultCanvas({
         continue;
       }
 
-      const committed = markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
+      markCanvasCommitted(commit.nextDataUrl);
       const intermediateSnapshots = [...intermediateSnapshotsRef.current];
       intermediateSnapshotsRef.current = [];
       if (commit.capturesMaskDataUrl) {
-        if (committed) {
-          smartMaskDrawingRef.current = false;
-          markSmartMaskCommitted(commit.nextMaskDataUrl, commit.smartMaskSourceState);
-        }
+        smartMaskDrawingRef.current = false;
+        markSmartMaskCommitted(commit.nextMaskDataUrl);
         commit.onChange(commit.nextDataUrl, {
           previousDataUrl: commit.previousDataUrl,
           previousMaskDataUrl: commit.previousMaskDataUrl,
           maskDataUrl: commit.nextMaskDataUrl,
+          maskDataUrlMode: "full",
           intermediateLayerUndoSnapshots: resolveIntermediateLayerUndoSnapshots(
             intermediateSnapshots,
             commit.previousMaskDataUrl
@@ -497,7 +492,6 @@ export function InpaintResultCanvas({
       smartMaskDrawingRef.current ||
       pendingCommitsRef.current.some((commit) => commit.capturesMaskDataUrl) ||
       intermediateSnapshotsRef.current.some((snapshot) => snapshot.capturesMaskDataUrl);
-    const smartMaskSourceState = capturesMaskDataUrl ? readSmartMaskCanvasSourceState() : undefined;
     const nextDataUrlPromise = encodeCanvasSnapshotDataUrl(canvas, { mode: "image", includeBlank });
     const nextMaskDataUrlPromise = capturesMaskDataUrl
       ? resolveSmartMaskDataUrl()
@@ -512,9 +506,7 @@ export function InpaintResultCanvas({
       onChange,
       previousDataUrl,
       previousMaskDataUrl,
-      resolved: false,
-      smartMaskSourceState,
-      sourceState: readCanvasSourceState()
+      resolved: false
     };
     pendingCommitsRef.current.push(commit);
     undoDataUrlRef.current = undefined;
@@ -571,8 +563,7 @@ export function InpaintResultCanvas({
     lastPointRef.current = point;
     strokeForcesVisiblePixelsRef.current = false;
     if (strokeTool === "smartBrush") {
-      const committedSmartMaskState = readCommittedSmartMaskCanvasState();
-      undoMaskDataUrlRef.current = committedSmartMaskState ? committedSmartMaskState.dataUrl : maskDataUrl;
+      undoMaskDataUrlRef.current = readCommittedSmartMaskCanvasState()?.dataUrl ?? maskDataUrl;
       markSmartMaskEdited();
       smartMaskDrawingRef.current = true;
     }

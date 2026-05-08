@@ -187,11 +187,9 @@ export function useChapterSession({
   );
 
   const setCurrentChapter = React.useCallback<React.Dispatch<React.SetStateAction<ChapterSnapshot | null>>>((action) => {
-    setCurrentChapterState((current) => {
-      const next = resolveStateAction(action, current);
-      currentChapterRef.current = next;
-      return next;
-    });
+    const next = resolveStateAction(action, currentChapterRef.current);
+    currentChapterRef.current = next;
+    setCurrentChapterState(next);
   }, []);
 
   const setSelectedPageId = React.useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
