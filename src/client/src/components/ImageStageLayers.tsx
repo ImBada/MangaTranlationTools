@@ -137,6 +137,12 @@ export function ImageStageLayers({
   const rangeSelectionLayerVisible =
     rangeToolActive || Boolean(rangeSelectionPreviewRect) || (activeLayer !== "overlay" && Boolean(inpaintSelectionRect));
   const inpaintResultMaskImage = inpaintResultComposite && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined;
+  const renderInpaintResultLayer =
+    layerVisibility.inpaintResult &&
+    (Boolean(page.inpaintResultDataUrl) || activeLayer === "inpaintResult");
+  const renderInpaintMaskLayer =
+    layerVisibility.inpaintMask ||
+    (activeLayer === "inpaintMask" && temporaryPanActive);
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
@@ -293,7 +299,7 @@ export function ImageStageLayers({
       />
       {layerVisibility.inpaint ? (
         <div className="inpaint-layer-preview" style={{ opacity: layerOpacity.inpaint }}>
-          {layerVisibility.inpaintResult && (page.inpaintResultDataUrl || (activeLayer === "inpaintResult" && !temporaryPanActive)) ? (
+          {renderInpaintResultLayer ? (
             <InpaintResultCanvas
               className="inpaint-result-canvas"
               colorPickerSampleRequired={finalOutputPreviewActive}
@@ -322,12 +328,12 @@ export function ImageStageLayers({
               }}
             />
           ) : null}
-          {layerVisibility.inpaintMask ? (
+          {renderInpaintMaskLayer ? (
             <div
               className="inpaint-mask-layer-preview"
               style={{
                 zIndex: activeLayer === "inpaintMask" ? 3 : 2,
-                opacity: layerOpacity.inpaintMask,
+                opacity: layerVisibility.inpaintMask ? layerOpacity.inpaintMask : 0,
                 pointerEvents: activeLayer === "inpaintMask" && !temporaryPanActive ? "auto" : "none"
               }}
             >

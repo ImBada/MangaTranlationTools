@@ -18,6 +18,7 @@ import {
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 
 export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge" | "colorPicker";
+type InpaintResultPaintTool = Exclude<InpaintResultTool, "select" | "colorPicker">;
 
 type InpaintResultCanvasProps = {
   colorPickerSampleRequired?: boolean;
@@ -77,6 +78,10 @@ type IntermediateResultSnapshot = {
   maskDataUrl: string | undefined;
   resultDataUrl: string | undefined;
 };
+
+function isInpaintResultPaintTool(tool: InpaintResultTool): tool is InpaintResultPaintTool {
+  return tool !== "select" && tool !== "colorPicker";
+}
 
 function resolveIntermediateLayerUndoSnapshots(
   snapshots: IntermediateResultSnapshot[],
@@ -153,6 +158,7 @@ export function InpaintResultCanvas({
   const strokeForcesVisiblePixelsRef = useRef(false);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
   const editSessionActiveRef = useRef(false);
+  const activeStrokeToolRef = useRef<InpaintResultPaintTool | null>(null);
   const pendingCommitsRef = useRef<PendingResultCanvasCommit[]>([]);
   const intermediateSnapshotsRef = useRef<IntermediateResultSnapshot[]>([]);
   const colorPickerPointerIdRef = useRef<number | null>(null);
@@ -165,14 +171,14 @@ export function InpaintResultCanvas({
   const selectionEnabled = !disabled && tool === "select";
   const activeSelectionRect = previewSelectionRect ?? selectionRect;
 
-  const drawSegment = (from: DrawPoint, to: DrawPoint) => {
-    if (tool === "smudge") {
+  const drawSegment = (from: DrawPoint, to: DrawPoint, strokeTool: InpaintResultPaintTool) => {
+    if (strokeTool === "smudge") {
       drawSmudge(to);
       return;
     }
 
     const distance = Math.hypot(to.x - from.x, to.y - from.y);
-    const step = Math.max(1, brushSize / (tool === "brush" || tool === "smartBrush" || tool === "eraser" ? 4 : 2));
+    const step = Math.max(1, brushSize / (strokeTool === "brush" || strokeTool === "smartBrush" || strokeTool === "eraser" ? 4 : 2));
     const steps = Math.max(1, Math.ceil(distance / step));
     for (let index = 0; index <= steps; index += 1) {
       const t = index / steps;
@@ -180,18 +186,18 @@ export function InpaintResultCanvas({
         x: from.x + (to.x - from.x) * t,
         y: from.y + (to.y - from.y) * t
       };
-      if (tool === "brush" || tool === "smartBrush" || tool === "eraser") {
-        stampPaint(point);
-        if (tool === "smartBrush") {
+      if (strokeTool === "brush" || strokeTool === "smartBrush" || strokeTool === "eraser") {
+        stampPaint(point, strokeTool);
+        if (strokeTool === "smartBrush") {
           stampSmartMaskPatch(point);
         }
-      } else if (tool === "blur" || tool === "sharpen") {
-        stampFilter(point, tool);
+      } else if (strokeTool === "blur" || strokeTool === "sharpen") {
+        stampFilter(point, strokeTool);
       }
     }
   };
 
-  const stampPaint = (point: DrawPoint) => {
+  const stampPaint = (point: DrawPoint, strokeTool: "brush" | "smartBrush" | "eraser") => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d");
     if (!canvas || !context) {
@@ -199,13 +205,13 @@ export function InpaintResultCanvas({
     }
 
     const color = parseHexColor(brushColor);
-    const centerColor = tool === "eraser" ? "rgba(0, 0, 0, 1)" : rgbaToCss(color, 1);
-    const edgeColor = tool === "eraser" ? "rgba(0, 0, 0, 0)" : rgbaToCss(color, edgeBrushAlpha());
+    const centerColor = strokeTool === "eraser" ? "rgba(0, 0, 0, 1)" : rgbaToCss(color, 1);
+    const edgeColor = strokeTool === "eraser" ? "rgba(0, 0, 0, 0)" : rgbaToCss(color, edgeBrushAlpha());
     const { gradient, radius } = createStampGradient(context, point, centerColor, edgeColor);
 
-    fillBrushStamp(context, point, radius, gradient, tool === "eraser" ? "destination-out" : "source-over");
+    fillBrushStamp(context, point, radius, gradient, strokeTool === "eraser" ? "destination-out" : "source-over");
     changedRef.current = true;
-    strokeForcesVisiblePixelsRef.current = strokeForcesVisiblePixelsRef.current || tool !== "eraser";
+    strokeForcesVisiblePixelsRef.current = strokeForcesVisiblePixelsRef.current || strokeTool !== "eraser";
   };
 
   const stampSmartMaskPatch = (point: DrawPoint) => {
@@ -477,7 +483,7 @@ export function InpaintResultCanvas({
     }
   }, [markCanvasCommitted, markSmartMaskCommitted]);
 
-  const commitChange = () => {
+  const commitChange = (strokeTool: InpaintResultPaintTool | null) => {
     const canvas = canvasRef.current;
     if (!canvas || !changedRef.current) {
       return;
@@ -486,7 +492,8 @@ export function InpaintResultCanvas({
     const previousDataUrl = undoDataUrlRef.current;
     const includeBlank = strokeForcesVisiblePixelsRef.current;
     const capturesMaskDataUrl =
-      tool === "smartBrush" ||
+      strokeTool === "smartBrush" ||
+      smartMaskDrawingRef.current ||
       pendingCommitsRef.current.some((commit) => commit.capturesMaskDataUrl) ||
       intermediateSnapshotsRef.current.some((snapshot) => snapshot.capturesMaskDataUrl);
     const smartMaskSourceState = capturesMaskDataUrl ? readSmartMaskCanvasSourceState() : undefined;
@@ -549,22 +556,27 @@ export function InpaintResultCanvas({
   };
 
   const startResultStroke = (canvas: HTMLCanvasElement, point: DrawPoint, pointerId: number) => {
+    if (!isInpaintResultPaintTool(tool)) {
+      return;
+    }
+    const strokeTool = tool;
     captureCanvasPointer(canvas, pointerId);
     undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
     startEditSession();
     markCanvasEdited();
     drawingRef.current = true;
+    activeStrokeToolRef.current = strokeTool;
     lastPointRef.current = point;
     strokeForcesVisiblePixelsRef.current = false;
-    if (tool === "smartBrush") {
+    if (strokeTool === "smartBrush") {
       const committedSmartMaskState = readCommittedSmartMaskCanvasState();
       undoMaskDataUrlRef.current = committedSmartMaskState ? committedSmartMaskState.dataUrl : maskDataUrl;
       markSmartMaskEdited();
       smartMaskDrawingRef.current = true;
     }
-    smudgePatchRef.current = tool === "smudge" ? captureSmudgePatch(point) : null;
-    if (tool !== "smudge") {
-      drawSegment(point, point);
+    smudgePatchRef.current = strokeTool === "smudge" ? captureSmudgePatch(point) : null;
+    if (strokeTool !== "smudge") {
+      drawSegment(point, point, strokeTool);
     }
   };
 
@@ -615,6 +627,17 @@ export function InpaintResultCanvas({
           startResultStroke(event.currentTarget, point, event.pointerId);
         }}
         onPointerMove={(event) => {
+          if (drawingRef.current) {
+            event.preventDefault();
+            event.stopPropagation();
+            const point = resolvePoint(event);
+            if (!lastPointRef.current) {
+              return;
+            }
+            drawSegment(lastPointRef.current, point, activeStrokeToolRef.current ?? "brush");
+            lastPointRef.current = point;
+            return;
+          }
           if (colorPickerEnabled) {
             if (colorPickerPointerIdRef.current !== event.pointerId) {
               setColorPickerHover({ point: resolvePoint(event) });
@@ -636,20 +659,15 @@ export function InpaintResultCanvas({
             }
             return;
           }
-          if (!pointerEnabled && !drawingRef.current) {
+          if (!pointerEnabled) {
             return;
           }
           event.preventDefault();
           event.stopPropagation();
           const point = resolvePoint(event);
-          if (!drawingRef.current || !lastPointRef.current) {
-            if (pointerEnabled && (event.buttons & 1) !== 0) {
-              startResultStroke(event.currentTarget, point, event.pointerId);
-            }
-            return;
+          if (isInpaintResultPaintTool(tool) && (event.buttons & 1) !== 0) {
+            startResultStroke(event.currentTarget, point, event.pointerId);
           }
-          drawSegment(lastPointRef.current, point);
-          lastPointRef.current = point;
         }}
         onPointerUp={(event) => {
           if (colorPickerEnabled && colorPickerPointerIdRef.current === event.pointerId) {
@@ -681,10 +699,12 @@ export function InpaintResultCanvas({
           event.preventDefault();
           event.stopPropagation();
           releaseCanvasPointer(event.currentTarget, event.pointerId);
+          const strokeTool = activeStrokeToolRef.current;
           drawingRef.current = false;
+          activeStrokeToolRef.current = null;
           lastPointRef.current = null;
           smudgePatchRef.current = null;
-          commitChange();
+          commitChange(strokeTool);
           endEditSession();
         }}
         onPointerLeave={() => {
@@ -710,10 +730,12 @@ export function InpaintResultCanvas({
             return;
           }
           releaseCanvasPointer(event.currentTarget, event.pointerId);
+          const strokeTool = activeStrokeToolRef.current;
           drawingRef.current = false;
+          activeStrokeToolRef.current = null;
           lastPointRef.current = null;
           smudgePatchRef.current = null;
-          commitChange();
+          commitChange(strokeTool);
           endEditSession();
         }}
       />
