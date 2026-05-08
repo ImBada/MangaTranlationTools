@@ -36,6 +36,7 @@ type UseWorkspaceToolStateState = {
   setRangeToolActive: React.Dispatch<React.SetStateAction<boolean>>;
   setTemporaryPanActive: React.Dispatch<React.SetStateAction<boolean>>;
   setZoomToolActive: React.Dispatch<React.SetStateAction<boolean>>;
+  showInpaintResultLayer: () => void;
   showInpaintLayers: () => void;
   showOverlayLayer: () => void;
   temporaryPanActive: boolean;
@@ -72,6 +73,10 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
 
   const showInpaintLayers = React.useCallback(() => {
     setLayerVisibility((current) => ({ ...current, inpaint: true, inpaintResult: true, inpaintMask: true }));
+  }, []);
+
+  const showInpaintResultLayer = React.useCallback(() => {
+    setLayerVisibility((current) => ({ ...current, inpaint: true, inpaintResult: true }));
   }, []);
 
   const selectLayer = React.useCallback((nextLayer: ActiveLayer) => {
@@ -149,6 +154,7 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
     setRangeToolActive,
     setTemporaryPanActive,
     setZoomToolActive,
+    showInpaintResultLayer,
     showInpaintLayers,
     showOverlayLayer,
     temporaryPanActive,

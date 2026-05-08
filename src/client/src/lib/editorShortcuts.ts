@@ -1,7 +1,23 @@
 import { isMacLikePlatform } from "./globalUndo";
+import type { ActiveLayer, LayerVisibility } from "./layerState";
 
 type InpaintToolKey = "select" | "brush" | "smartBrush" | "eraser" | "autoEraser" | "colorPicker";
 type ModifierKeyEvent = Pick<KeyboardEvent | PointerEvent, "ctrlKey" | "metaKey">;
+type ResolvedInpaintToolShortcut = Exclude<InpaintToolKey, "select">;
+type InpaintMaskShortcutTool = Extract<ResolvedInpaintToolShortcut, "brush" | "eraser" | "autoEraser">;
+type InpaintResultShortcutTool = Extract<ResolvedInpaintToolShortcut, "brush" | "smartBrush" | "eraser" | "colorPicker">;
+
+export type InpaintToolShortcutAction =
+  | {
+    layer: "inpaintMask";
+    selectLayer: false;
+    tool: InpaintMaskShortcutTool;
+  }
+  | {
+    layer: "inpaintResult";
+    selectLayer: boolean;
+    tool: InpaintResultShortcutTool;
+  };
 
 export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
   select: "T",
@@ -47,6 +63,68 @@ export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey
     default:
       return null;
   }
+}
+
+export function resolveInpaintToolShortcutAction(options: {
+  activeLayer: ActiveLayer;
+  layerVisibility: LayerVisibility;
+  selectedPageEditLocked: boolean;
+  shortcut: InpaintToolKey | null;
+}): InpaintToolShortcutAction | null {
+  const {
+    activeLayer,
+    layerVisibility,
+    selectedPageEditLocked,
+    shortcut
+  } = options;
+
+  if (!shortcut || selectedPageEditLocked) {
+    return null;
+  }
+
+  if (shortcut === "colorPicker") {
+    return {
+      layer: "inpaintResult",
+      selectLayer: activeLayer !== "inpaintResult",
+      tool: "colorPicker"
+    };
+  }
+
+  if (
+    activeLayer === "inpaintMask" &&
+    isInpaintMaskShortcutTool(shortcut) &&
+    layerVisibility.inpaint &&
+    layerVisibility.inpaintMask
+  ) {
+    return {
+      layer: "inpaintMask",
+      selectLayer: false,
+      tool: shortcut
+    };
+  }
+
+  if (
+    activeLayer === "inpaintResult" &&
+    isInpaintResultShortcutTool(shortcut) &&
+    layerVisibility.inpaint &&
+    layerVisibility.inpaintResult
+  ) {
+    return {
+      layer: "inpaintResult",
+      selectLayer: false,
+      tool: shortcut
+    };
+  }
+
+  return null;
+}
+
+function isInpaintMaskShortcutTool(shortcut: InpaintToolKey): shortcut is InpaintMaskShortcutTool {
+  return shortcut === "brush" || shortcut === "eraser" || shortcut === "autoEraser";
+}
+
+function isInpaintResultShortcutTool(shortcut: InpaintToolKey): shortcut is InpaintResultShortcutTool {
+  return shortcut === "brush" || shortcut === "smartBrush" || shortcut === "eraser" || shortcut === "colorPicker";
 }
 
 function isKeyB(event: KeyboardEvent): boolean {

@@ -6,6 +6,7 @@ import {
   isDeleteShortcut,
   isFindReplaceShortcut,
   isPageProgressToggleShortcut,
+  resolveInpaintToolShortcutAction,
   resolveInpaintToolShortcut
 } from "../src/client/src/lib/editorShortcuts";
 
@@ -79,6 +80,59 @@ describe("editor shortcuts", () => {
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "I", shiftKey: true }))).toBe("colorPicker");
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i", metaKey: true }))).toBe(null);
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i", ctrlKey: true }))).toBe(null);
+  });
+
+  it("resolves I as an inpaint result layer macro outside the result layer", () => {
+    expect(resolveInpaintToolShortcutAction({
+      activeLayer: "overlay",
+      layerVisibility: {
+        image: true,
+        inpaint: true,
+        inpaintResult: true,
+        inpaintMask: true,
+        overlay: true
+      },
+      selectedPageEditLocked: false,
+      shortcut: "colorPicker"
+    })).toEqual({
+      layer: "inpaintResult",
+      selectLayer: true,
+      tool: "colorPicker"
+    });
+
+    expect(resolveInpaintToolShortcutAction({
+      activeLayer: "inpaintResult",
+      layerVisibility: {
+        image: true,
+        inpaint: true,
+        inpaintResult: true,
+        inpaintMask: true,
+        overlay: true
+      },
+      selectedPageEditLocked: false,
+      shortcut: "colorPicker"
+    })).toEqual({
+      layer: "inpaintResult",
+      selectLayer: false,
+      tool: "colorPicker"
+    });
+
+    expect(resolveInpaintToolShortcutAction({
+      activeLayer: "image",
+      layerVisibility: {
+        image: true,
+        inpaint: false,
+        inpaintResult: false,
+        inpaintMask: false,
+        overlay: true
+      },
+      selectedPageEditLocked: false,
+      shortcut: "colorPicker"
+    })).toEqual({
+      layer: "inpaintResult",
+      selectLayer: true,
+      tool: "colorPicker"
+    });
   });
 
   it("recognizes Q as delete only in one-hand mode", () => {

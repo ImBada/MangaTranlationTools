@@ -11,6 +11,7 @@ import {
   isPointerToolShortcut,
   isRangeToolShortcut,
   isZoomToolShortcut,
+  resolveInpaintToolShortcutAction,
   resolveInpaintToolShortcut
 } from "../lib/editorShortcuts";
 import { isEditableTarget } from "../lib/editorUtils";
@@ -50,6 +51,7 @@ type WorkspaceShortcutOptions = {
   setRangeToolActive: React.Dispatch<React.SetStateAction<boolean>>;
   setTemporaryPanActive: React.Dispatch<React.SetStateAction<boolean>>;
   setZoomToolActive: React.Dispatch<React.SetStateAction<boolean>>;
+  showInpaintResultLayer: () => void;
   temporaryPanHeldRef: React.MutableRefObject<boolean>;
   temporaryPanShortcutEnabled: boolean;
   toggleSelectedPageProgress: (pageId: string, options?: { announce?: boolean }) => void;
@@ -90,6 +92,7 @@ export function useWorkspaceShortcuts({
   setRangeToolActive,
   setTemporaryPanActive,
   setZoomToolActive,
+  showInpaintResultLayer,
   temporaryPanHeldRef,
   temporaryPanShortcutEnabled,
   toggleSelectedPageProgress,
@@ -274,16 +277,29 @@ export function useWorkspaceShortcuts({
       const inpaintToolShortcut = !modalOpen && !editableTarget && !event.ctrlKey && !event.metaKey
         ? resolveInpaintToolShortcut(event)
         : null;
-      const inpaintToolShortcutEnabled =
-        !selectedPageEditLocked &&
-        ((activeLayer === "inpaintMask" && inpaintToolShortcut !== "smartBrush" && inpaintToolShortcut !== "colorPicker" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
-          (inpaintToolShortcut !== "autoEraser" && activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
-      if (inpaintToolShortcut && inpaintToolShortcutEnabled) {
+      const inpaintToolShortcutAction = resolveInpaintToolShortcutAction({
+        activeLayer,
+        layerVisibility,
+        selectedPageEditLocked,
+        shortcut: inpaintToolShortcut
+      });
+      if (inpaintToolShortcutAction) {
         event.preventDefault();
-        if (inpaintToolShortcut === "smartBrush" || inpaintToolShortcut === "colorPicker") {
-          selectInpaintResultEditTool(inpaintToolShortcut);
+        if (inpaintToolShortcutAction.selectLayer) {
+          selectLayer("inpaintResult");
+          workspacePanelRef.current?.focus();
+        }
+        if (inpaintToolShortcutAction.layer === "inpaintResult") {
+          if (inpaintToolShortcutAction.tool === "smartBrush" || inpaintToolShortcutAction.tool === "colorPicker") {
+            if (inpaintToolShortcutAction.tool === "colorPicker") {
+              showInpaintResultLayer();
+            }
+            selectInpaintResultEditTool(inpaintToolShortcutAction.tool);
+          } else {
+            selectSharedInpaintTool(inpaintToolShortcutAction.tool);
+          }
         } else {
-          selectSharedInpaintTool(inpaintToolShortcut);
+          selectSharedInpaintTool(inpaintToolShortcutAction.tool);
         }
         return;
       }
@@ -402,6 +418,7 @@ export function useWorkspaceShortcuts({
     setLibraryWidgetOpen,
     setRangeToolActive,
     setZoomToolActive,
+    showInpaintResultLayer,
     toggleSelectedPageProgress,
     undoShortcutPlatform,
     workspacePanelRef,
