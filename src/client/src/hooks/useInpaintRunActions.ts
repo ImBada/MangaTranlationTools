@@ -11,6 +11,8 @@ type UseInpaintRunActionsOptions = {
   currentChapter: ChapterSnapshot | null;
   currentChapterRef: React.RefObject<ChapterSnapshot | null>;
   dirty: boolean;
+  flushInpaintMaskSave: () => Promise<void>;
+  flushInpaintResultSave: () => Promise<void>;
   inpaintSelectionRect: ImageRect | null;
   pushStatus: (line: string) => void;
   refreshLibrary: () => Promise<void>;
@@ -54,6 +56,8 @@ export function useInpaintRunActions({
   currentChapter,
   currentChapterRef,
   dirty,
+  flushInpaintMaskSave,
+  flushInpaintResultSave,
   inpaintSelectionRect,
   pushStatus,
   refreshLibrary,
@@ -71,6 +75,11 @@ export function useInpaintRunActions({
 }: UseInpaintRunActionsOptions): UseInpaintRunActionsState {
   const [inpaintBusy, setInpaintBusy] = React.useState(false);
 
+  const flushPendingInpaintLayerSaves = React.useCallback(async () => {
+    await flushInpaintMaskSave();
+    await flushInpaintResultSave();
+  }, [flushInpaintMaskSave, flushInpaintResultSave]);
+
   const runInpaintForPage = React.useCallback(async (page: MangaPage, maskDataUrl: string, statusMessage = "인페인트 결과를 저장했습니다.") => {
     if (!currentChapter || inpaintBusy) {
       return;
@@ -78,6 +87,7 @@ export function useInpaintRunActions({
 
     setInpaintBusy(true);
     try {
+      await flushPendingInpaintLayerSaves();
       if (dirty) {
         await saveNow();
       }
@@ -114,6 +124,7 @@ export function useInpaintRunActions({
     clearRecoverableFailure,
     currentChapter,
     dirty,
+    flushPendingInpaintLayerSaves,
     inpaintBusy,
     pushStatus,
     refreshLibrary,
@@ -140,6 +151,7 @@ export function useInpaintRunActions({
 
     setInpaintBusy(true);
     try {
+      await flushPendingInpaintLayerSaves();
       if (dirty) {
         await saveNow();
       }
@@ -203,6 +215,7 @@ export function useInpaintRunActions({
     clearRecoverableFailure,
     currentChapter,
     dirty,
+    flushPendingInpaintLayerSaves,
     inpaintBusy,
     pushStatus,
     refreshLibrary,
@@ -267,10 +280,38 @@ export function useInpaintRunActions({
       return;
     }
 
-    const maskDataUrl = await drawBlocksOnInpaintMask(selectedPage, selectedPage.blocks);
-    updateSelectedPageInpaintMask(maskDataUrl, { persist: false });
-    await runInpaintForPage({ ...selectedPage, inpaintMaskDataUrl: maskDataUrl }, maskDataUrl, "전체 블록 인페인트 결과를 저장했습니다.");
-  }, [inpaintBusy, runInpaintForPage, selectedPage, selectedPageEditLocked, updateSelectedPageInpaintMask]);
+    await flushPendingInpaintLayerSaves();
+    const page = currentChapterRef.current?.pages.find((candidate) => candidate.id === selectedPage.id) ?? selectedPage;
+    if (page.blocks.length === 0) {
+      return;
+    }
+
+    const previousMaskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+    const previousResultDataUrl = page.inpaintResultDataUrl;
+    const maskDataUrl = await drawBlocksOnInpaintMask(page, page.blocks, { includeExistingMask: false });
+    updateSelectedPageInpaintMask(maskDataUrl, {
+      persist: false,
+      previousDataUrl: previousMaskDataUrl,
+      intermediateUndoDataUrls: previousMaskDataUrl ? [undefined] : undefined
+    });
+    if (previousResultDataUrl) {
+      updateSelectedPageInpaintResult(undefined, { persist: false, previousDataUrl: previousResultDataUrl });
+    }
+    await runInpaintForPage(
+      { ...page, inpaintMaskDataUrl: maskDataUrl, inpaintResultDataUrl: undefined },
+      maskDataUrl,
+      "전체 블록 인페인트 결과를 저장했습니다."
+    );
+  }, [
+    currentChapterRef,
+    flushPendingInpaintLayerSaves,
+    inpaintBusy,
+    runInpaintForPage,
+    selectedPage,
+    selectedPageEditLocked,
+    updateSelectedPageInpaintMask,
+    updateSelectedPageInpaintResult
+  ]);
 
   const applyInpaintAllPages = React.useCallback(async () => {
     const initialChapter = currentChapterRef.current;
@@ -286,6 +327,7 @@ export function useInpaintRunActions({
 
     setInpaintBusy(true);
     try {
+      await flushPendingInpaintLayerSaves();
       if (dirty) {
         await saveNow();
       }
@@ -298,7 +340,7 @@ export function useInpaintRunActions({
       pushStatus(`전체 인페인트 시작: ${pagesWithBlocks.length}p`);
       for (const [index, queuedPage] of pagesWithBlocks.entries()) {
         const page = currentChapterRef.current?.pages.find((candidate) => candidate.id === queuedPage.id) ?? queuedPage;
-        const maskDataUrl = await drawBlocksOnInpaintMask(page, page.blocks);
+        const maskDataUrl = await drawBlocksOnInpaintMask(page, page.blocks, { includeExistingMask: false });
 
         updatePageInpaintStatus(page.id, "running");
         try {
@@ -340,6 +382,7 @@ export function useInpaintRunActions({
     clearRecoverableFailure,
     currentChapterRef,
     dirty,
+    flushPendingInpaintLayerSaves,
     inpaintBusy,
     pushStatus,
     refreshLibrary,

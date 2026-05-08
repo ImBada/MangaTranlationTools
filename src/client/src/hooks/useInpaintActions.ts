@@ -203,6 +203,8 @@ export function useInpaintActions({
     currentChapter,
     currentChapterRef,
     dirty,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
     inpaintSelectionRect,
     pushStatus,
     reportRecoverableFailure,
