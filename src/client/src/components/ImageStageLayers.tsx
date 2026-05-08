@@ -143,6 +143,8 @@ export function ImageStageLayers({
   const renderInpaintMaskLayer =
     layerVisibility.inpaintMask ||
     (activeLayer === "inpaintMask" && temporaryPanActive);
+  const inpaintMaskEditingEnabled = activeLayer === "inpaintMask";
+  const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
@@ -313,7 +315,7 @@ export function ImageStageLayers({
               brushColor={inpaintResultBrushColor}
               brushHardness={inpaintResultBrushHardness}
               toolStrength={inpaintResultToolStrength}
-              disabled={inpaintResultDisabled || temporaryPanActive}
+              disabled={inpaintResultDisabled}
               selectionRect={null}
               onChange={onInpaintResultLayerChange}
               onColorPick={onInpaintResultColorPick}
@@ -334,7 +336,7 @@ export function ImageStageLayers({
               style={{
                 zIndex: activeLayer === "inpaintMask" ? 3 : 2,
                 opacity: layerVisibility.inpaintMask ? layerOpacity.inpaintMask : 0,
-                pointerEvents: activeLayer === "inpaintMask" && !temporaryPanActive ? "auto" : "none"
+                pointerEvents: inpaintMaskEditingEnabled ? "auto" : "none"
               }}
             >
               <InpaintLayerCanvas
@@ -342,7 +344,7 @@ export function ImageStageLayers({
                 pageSize={pageSize}
                 tool={inpaintTool}
                 brushSize={inpaintBrushSize}
-                disabled={inpaintDisabled || temporaryPanActive}
+                disabled={inpaintDisabled}
                 selectionRect={null}
                 onChange={onInpaintLayerChange}
                 onEditEnd={onInpaintLayerEditEnd}
@@ -359,7 +361,7 @@ export function ImageStageLayers({
               className={`overlay-layer-preview${duplicateBlockMode ? " duplicate-block-mode" : ""}`}
               style={{
                 opacity: layerOpacity.overlay,
-                pointerEvents: activeLayer === "overlay" && !temporaryPanActive ? "auto" : "none"
+                pointerEvents: overlayEditingEnabled ? "auto" : "none"
               }}
               onPointerEnter={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
               onPointerMove={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
@@ -369,7 +371,7 @@ export function ImageStageLayers({
                 canvasRef={overlayRenderCanvasRef}
                 page={page}
                 stageSize={resolvedStageSize}
-                editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
+                editingEnabled={overlayEditingEnabled}
                 fontWeightAvailability={fontWeightAvailability}
               />
               {page.blocks.map((block) => (
@@ -379,7 +381,7 @@ export function ImageStageLayers({
                   pageSize={pageSize}
                   stageSize={resolvedStageSize}
                   selected={selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId)}
-                  editingEnabled={activeLayer === "overlay" && !temporaryPanActive}
+                  editingEnabled={overlayEditingEnabled}
                   widgetsVisible={!blockRangeSelectionActive && !multiBlockSelectionActive}
                   inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
                   inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}

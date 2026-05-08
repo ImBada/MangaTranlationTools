@@ -158,6 +158,7 @@ export function InpaintResultCanvas({
   const strokeForcesVisiblePixelsRef = useRef(false);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
   const editSessionActiveRef = useRef(false);
+  const activeStrokePointerIdRef = useRef<number | null>(null);
   const activeStrokeToolRef = useRef<InpaintResultPaintTool | null>(null);
   const pendingCommitsRef = useRef<PendingResultCanvasCommit[]>([]);
   const intermediateSnapshotsRef = useRef<IntermediateResultSnapshot[]>([]);
@@ -565,6 +566,7 @@ export function InpaintResultCanvas({
     startEditSession();
     markCanvasEdited();
     drawingRef.current = true;
+    activeStrokePointerIdRef.current = pointerId;
     activeStrokeToolRef.current = strokeTool;
     lastPointRef.current = point;
     strokeForcesVisiblePixelsRef.current = false;
@@ -579,6 +581,53 @@ export function InpaintResultCanvas({
       drawSegment(point, point, strokeTool);
     }
   };
+
+  const finishResultStroke = (pointerId: number | null = null) => {
+    if (!drawingRef.current) {
+      return;
+    }
+    const activePointerId = activeStrokePointerIdRef.current;
+    if (activePointerId !== null && pointerId !== null && activePointerId !== pointerId) {
+      return;
+    }
+
+    const canvas = canvasRef.current;
+    if (canvas && activePointerId !== null) {
+      releaseCanvasPointer(canvas, activePointerId);
+    }
+    const strokeTool = activeStrokeToolRef.current;
+    drawingRef.current = false;
+    activeStrokePointerIdRef.current = null;
+    activeStrokeToolRef.current = null;
+    lastPointRef.current = null;
+    smudgePatchRef.current = null;
+    commitChange(strokeTool);
+    endEditSession();
+  };
+
+  React.useEffect(() => {
+    if (!disabled) {
+      return;
+    }
+    finishResultStroke(activeStrokePointerIdRef.current);
+  }, [disabled, finishResultStroke]);
+
+  React.useEffect(() => {
+    const finishActivePointer = (event: PointerEvent) => {
+      const canvas = canvasRef.current;
+      if (canvas && event.composedPath().includes(canvas)) {
+        return;
+      }
+      finishResultStroke(event.pointerId);
+    };
+
+    window.addEventListener("pointerup", finishActivePointer, true);
+    window.addEventListener("pointercancel", finishActivePointer, true);
+    return () => {
+      window.removeEventListener("pointerup", finishActivePointer, true);
+      window.removeEventListener("pointercancel", finishActivePointer, true);
+    };
+  }, [finishResultStroke]);
 
   return (
     <>
@@ -630,6 +679,10 @@ export function InpaintResultCanvas({
           if (drawingRef.current) {
             event.preventDefault();
             event.stopPropagation();
+            if (disabled || (event.buttons & 1) === 0) {
+              finishResultStroke(event.pointerId);
+              return;
+            }
             const point = resolvePoint(event);
             if (!lastPointRef.current) {
               return;
@@ -698,14 +751,7 @@ export function InpaintResultCanvas({
           }
           event.preventDefault();
           event.stopPropagation();
-          releaseCanvasPointer(event.currentTarget, event.pointerId);
-          const strokeTool = activeStrokeToolRef.current;
-          drawingRef.current = false;
-          activeStrokeToolRef.current = null;
-          lastPointRef.current = null;
-          smudgePatchRef.current = null;
-          commitChange(strokeTool);
-          endEditSession();
+          finishResultStroke(event.pointerId);
         }}
         onPointerLeave={() => {
           if (colorPickerPointerIdRef.current === null) {
@@ -729,14 +775,7 @@ export function InpaintResultCanvas({
           if (!drawingRef.current) {
             return;
           }
-          releaseCanvasPointer(event.currentTarget, event.pointerId);
-          const strokeTool = activeStrokeToolRef.current;
-          drawingRef.current = false;
-          activeStrokeToolRef.current = null;
-          lastPointRef.current = null;
-          smudgePatchRef.current = null;
-          commitChange(strokeTool);
-          endEditSession();
+          finishResultStroke(event.pointerId);
         }}
       />
       {activeSelectionRect ? (

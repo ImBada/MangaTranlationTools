@@ -171,7 +171,6 @@ export function ImageStage({
       !inpaintDisabled &&
       inpaintTool !== "select" &&
       !rangeSelectionActive &&
-      !temporaryPanActive &&
       !zoomToolActive
     ) {
       return {
@@ -185,7 +184,6 @@ export function ImageStage({
       inpaintResultTool !== "select" &&
       inpaintResultTool !== "colorPicker" &&
       !rangeSelectionActive &&
-      !temporaryPanActive &&
       !zoomToolActive
     ) {
       return {
@@ -203,7 +201,6 @@ export function ImageStage({
     inpaintResultTool,
     inpaintTool,
     rangeSelectionActive,
-    temporaryPanActive,
     zoomToolActive
   ]);
   const {
@@ -230,6 +227,7 @@ export function ImageStage({
     viewScale,
     zoomToolActive
   });
+  const temporaryPanCursorActive = temporaryPanActive && !activeInpaintBrushCursorTool;
 
   React.useEffect(() => {
     if (rangeSelectionActive) {
@@ -344,7 +342,7 @@ export function ImageStage({
   return (
     <div
       ref={wrapRef}
-      className={`stage-wrap${panning || temporaryPanActive ? " panning" : ""}${activeInpaintBrushCursorTool ? " inpaint-cursor-active" : ""}`}
+      className={`stage-wrap${panning || temporaryPanCursorActive ? " panning" : ""}${activeInpaintBrushCursorTool ? " inpaint-cursor-active" : ""}`}
       onPointerMove={handleStagePointerMove}
       onPointerUp={handleStagePointerUp}
       onPointerCancel={handleStagePointerCancel}
@@ -353,7 +351,7 @@ export function ImageStage({
       <div
         ref={stageRef}
         data-testid="image-stage"
-        className={`image-stage${panning || temporaryPanActive ? " panning" : ""}`}
+        className={`image-stage${panning || temporaryPanCursorActive ? " panning" : ""}`}
         style={stageStyle}
       >
         <ImageStageLayers
