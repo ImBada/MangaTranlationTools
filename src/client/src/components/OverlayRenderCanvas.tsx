@@ -23,7 +23,7 @@ export function OverlayRenderCanvas({
 
   useEffect(() => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
     if (!canvas || !context) {
       return;
     }

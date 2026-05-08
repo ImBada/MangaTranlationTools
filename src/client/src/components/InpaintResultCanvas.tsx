@@ -196,7 +196,7 @@ export function InpaintResultCanvas({
 
   const stampPaint = (point: DrawPoint, strokeTool: "brush" | "smartBrush" | "eraser") => {
     const canvas = canvasRef.current;
-    const context = canvas?.getContext("2d");
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
     if (!canvas || !context) {
       return;
     }
@@ -213,7 +213,7 @@ export function InpaintResultCanvas({
 
   const stampSmartMaskPatch = (point: DrawPoint) => {
     const canvas = smartMaskCanvasRef.current;
-    const context = canvas?.getContext("2d");
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
     if (!canvas || !context) {
       return;
     }
