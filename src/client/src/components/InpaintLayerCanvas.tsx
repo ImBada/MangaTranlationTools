@@ -67,7 +67,8 @@ export function InpaintLayerCanvas({
     afterDraw: renderInpaintMaskCanvasForDisplay,
     dataUrl,
     loadErrorMessage: "인페인트 마스크를 불러오지 못했습니다.",
-    pageSize
+    pageSize,
+    willReadFrequently: true
   });
   const changedRef = useRef(false);
   const lastPointRef = useRef<DrawPoint | null>(null);
