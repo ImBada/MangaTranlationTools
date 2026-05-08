@@ -254,7 +254,7 @@ export function WorkspacePanel({
   return (
     <section
       ref={workspacePanelRef}
-      className={`workspace relative grid place-items-center outline-none${selectedPage ? " has-stage-find-replace" : ""}`}
+      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-find-replace has-layer-glow layer-${activeLayer}` : ""}`}
       tabIndex={0}
       aria-label="읽기 영역"
       onMouseDown={() => workspacePanelRef.current?.focus()}

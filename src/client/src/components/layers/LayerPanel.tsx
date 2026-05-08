@@ -48,6 +48,7 @@ export function LayerPanel({
         </label>
       </div>
       <LayerControl
+        layer="output"
         label="1 최종 아웃풋"
         active={activeLayer === "output"}
         visible={true}
@@ -58,6 +59,7 @@ export function LayerPanel({
         viewOnly
       />
       <LayerControl
+        layer="overlay"
         label="2 번역 블록"
         active={activeLayer === "overlay"}
         visible={layerVisibility.overlay}
@@ -81,6 +83,7 @@ export function LayerPanel({
         }}
       />
       <LayerControl
+        layer="inpaint"
         label="인페인트 레이어"
         active={activeLayer === "inpaint" || activeLayer === "inpaintResult" || activeLayer === "inpaintMask"}
         visible={layerVisibility.inpaint}
@@ -98,6 +101,7 @@ export function LayerPanel({
       />
       <div className="layer-subgroup">
         <LayerControl
+          layer="inpaintResult"
           label="3 인페인트 결과"
           active={activeLayer === "inpaintResult"}
           visible={layerVisibility.inpaint && layerVisibility.inpaintResult}
@@ -108,6 +112,7 @@ export function LayerPanel({
           nested
         />
         <LayerControl
+          layer="inpaintMask"
           label="4 인페인트 마스크"
           active={activeLayer === "inpaintMask"}
           visible={layerVisibility.inpaint && layerVisibility.inpaintMask}
@@ -119,6 +124,7 @@ export function LayerPanel({
         />
       </div>
       <LayerControl
+        layer="image"
         label="5 원본 이미지"
         active={activeLayer === "image"}
         visible={layerVisibility.image}

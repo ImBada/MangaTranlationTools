@@ -352,6 +352,42 @@
     #141820;
 }
 
+.layer-output {
+  --layer-accent-rgb: 248, 250, 252;
+  --layer-accent-color: #f8fafc;
+  --layer-accent-glow: rgba(248, 250, 252, 0.36);
+}
+
+.layer-overlay {
+  --layer-accent-rgb: 56, 189, 248;
+  --layer-accent-color: #38bdf8;
+  --layer-accent-glow: rgba(56, 189, 248, 0.4);
+}
+
+.layer-inpaint {
+  --layer-accent-rgb: 167, 139, 250;
+  --layer-accent-color: #a78bfa;
+  --layer-accent-glow: rgba(167, 139, 250, 0.4);
+}
+
+.layer-inpaintResult {
+  --layer-accent-rgb: 52, 211, 153;
+  --layer-accent-color: #34d399;
+  --layer-accent-glow: rgba(52, 211, 153, 0.4);
+}
+
+.layer-inpaintMask {
+  --layer-accent-rgb: 251, 113, 133;
+  --layer-accent-color: #fb7185;
+  --layer-accent-glow: rgba(251, 113, 133, 0.4);
+}
+
+.layer-image {
+  --layer-accent-rgb: 251, 191, 36;
+  --layer-accent-color: #fbbf24;
+  --layer-accent-glow: rgba(251, 191, 36, 0.42);
+}
+
 .workspace {
   position: relative;
   display: grid;
@@ -362,6 +398,31 @@
   padding: 24px;
   background: #101114;
   outline: none;
+}
+
+.workspace.has-layer-glow::before,
+.workspace.has-layer-glow::after {
+  position: absolute;
+  content: "";
+  pointer-events: none;
+}
+
+.workspace.has-layer-glow::before {
+  inset: 5px;
+  z-index: 69;
+  border: 2px solid var(--layer-accent-color);
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.24),
+    0 0 20px rgba(var(--layer-accent-rgb), 0.8),
+    inset 0 0 18px rgba(var(--layer-accent-rgb), 0.24);
+}
+
+.workspace.has-layer-glow::after {
+  inset: 1px;
+  z-index: 68;
+  border: 8px solid var(--layer-accent-glow);
+  filter: blur(13px);
+  opacity: 0.78;
 }
 
 .toolbar {

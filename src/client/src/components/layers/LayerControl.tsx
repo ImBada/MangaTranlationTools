@@ -1,8 +1,10 @@
 import React from "react";
+import type { ActiveLayer } from "../../lib/layerState";
 import { mouseOnlyCheckboxProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 type LayerControlProps = {
+  layer: ActiveLayer;
   label: string;
   active: boolean;
   visible: boolean;
@@ -18,6 +20,7 @@ type LayerControlProps = {
 };
 
 export function LayerControl({
+  layer,
   label,
   active,
   visible,
@@ -35,7 +38,8 @@ export function LayerControl({
     <div
       data-layer-label={label}
       data-active={active ? "true" : "false"}
-      className={`layer-control${active ? " active" : ""}${nested ? " nested" : ""}`}
+      data-visible={visible ? "true" : "false"}
+      className={`layer-control layer-${layer}${active ? " active" : ""}${nested ? " nested" : ""}`}
       role="button"
       tabIndex={0}
       onClick={onSelect}
