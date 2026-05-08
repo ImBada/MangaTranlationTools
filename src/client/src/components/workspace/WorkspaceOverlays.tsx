@@ -42,11 +42,16 @@ type StageToolOverlayProps = {
   blockInlineEditShortcutActive: boolean;
   blockInlineEditShortcut: string;
   blockInlineEditShortcutVisible: boolean;
+  colorPickerActive: boolean;
+  colorPickerShortcut: string;
+  colorPickerVisible: boolean;
+  pointerToolActive: boolean;
   rangeShortcut: string;
   rangeToolActive: boolean;
   selectedPageEditLocked: boolean;
   zoomToolActive: boolean;
   onSelectPointerTool: () => void;
+  onSelectResultColorPicker: () => void;
   onSelectRangeTool: () => void;
   onSelectZoomTool: () => void;
 };
@@ -164,15 +169,19 @@ export function StageToolOverlay({
   blockInlineEditShortcutActive,
   blockInlineEditShortcut,
   blockInlineEditShortcutVisible,
+  colorPickerActive,
+  colorPickerShortcut,
+  colorPickerVisible,
+  pointerToolActive,
   rangeShortcut,
   rangeToolActive,
   selectedPageEditLocked,
   zoomToolActive,
   onSelectPointerTool,
+  onSelectResultColorPicker,
   onSelectRangeTool,
   onSelectZoomTool
 }: StageToolOverlayProps): React.JSX.Element {
-  const pointerToolActive = !zoomToolActive && !rangeToolActive;
   const showPointerToolHints = activeLayer === "overlay" && pointerToolActive;
 
   return (
@@ -239,6 +248,26 @@ export function StageToolOverlay({
             </svg>
             <span className="stage-tool-shortcut" aria-hidden="true">{blockInlineEditShortcut}</span>
           </div>
+        ) : null}
+        {colorPickerVisible ? (
+          <button
+            type="button"
+            className={`stage-layer-tool-button${colorPickerActive ? " active" : ""}`}
+            aria-label="결과 레이어 컬러 피커"
+            aria-pressed={colorPickerActive}
+            aria-keyshortcuts={colorPickerShortcut}
+            title={`결과 레이어 컬러 피커 (${colorPickerShortcut})`}
+            onClick={onSelectResultColorPicker}
+            disabled={selectedPageEditLocked}
+          >
+            <svg className="stage-tool-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M16.5 3.5l4 4" />
+              <path d="M14 6l4 4" />
+              <path d="M5 19l4.5-1 8.2-8.2-3.5-3.5L6 14.5 5 19z" />
+              <path d="M9.5 17.5 6.5 14.5" />
+            </svg>
+            <span className="stage-tool-shortcut" aria-hidden="true">{colorPickerShortcut}</span>
+          </button>
         ) : null}
       </div>
       {showPointerToolHints ? (

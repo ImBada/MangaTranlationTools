@@ -121,6 +121,8 @@ export function useWorkspaceToolState(): UseWorkspaceToolStateState {
   const selectPointerTool = React.useCallback(() => {
     setZoomToolActive(false);
     setRangeToolActive(false);
+    inpaintToolSettersRef.current?.setInpaintTool("select");
+    inpaintToolSettersRef.current?.setInpaintResultTool("select");
   }, []);
 
   const selectRangeTool = React.useCallback(() => {

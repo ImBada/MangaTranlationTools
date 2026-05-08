@@ -1,6 +1,6 @@
 import { isMacLikePlatform } from "./globalUndo";
 
-type InpaintToolKey = "select" | "brush" | "smartBrush" | "eraser" | "autoEraser";
+type InpaintToolKey = "select" | "brush" | "smartBrush" | "eraser" | "autoEraser" | "colorPicker";
 type ModifierKeyEvent = Pick<KeyboardEvent | PointerEvent, "ctrlKey" | "metaKey">;
 
 export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
@@ -8,7 +8,8 @@ export const INPAINT_TOOL_SHORTCUTS: Partial<Record<InpaintToolKey, string>> = {
   brush: "B",
   smartBrush: "Alt+B",
   eraser: "E",
-  autoEraser: "Alt+E"
+  autoEraser: "Alt+E",
+  colorPicker: "I"
 };
 export const BLOCK_INLINE_EDIT_SHORTCUT = "E";
 
@@ -32,6 +33,8 @@ export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey
       return "brush";
     case "KeyE":
       return "eraser";
+    case "KeyI":
+      return "colorPicker";
   }
 
   switch (event.key.toLowerCase()) {
@@ -39,6 +42,8 @@ export function resolveInpaintToolShortcut(event: KeyboardEvent): InpaintToolKey
       return "brush";
     case "e":
       return "eraser";
+    case "i":
+      return "colorPicker";
     default:
       return null;
   }

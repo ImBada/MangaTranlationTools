@@ -13,7 +13,7 @@ import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRe
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { InpaintLayerChangeOptions } from "../../lib/inpaintLayerChange";
 import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib/lamaRuntimeNotice";
-import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
+import { DEFAULT_LAYER_OPACITY, type ActiveLayer, type LayerOpacity, type LayerVisibility } from "../../lib/layerState";
 import { isMacLikePlatform } from "../../lib/globalUndo";
 import type { FontWeightAvailability, ViewportSize } from "../../lib/overlayLayout";
 import { ImageStage } from "../ImageStage";
@@ -93,6 +93,7 @@ type WorkspacePanelProps = {
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintLayerEditEnd: () => void;
   onInpaintLayerEditStart: () => void;
+  onInpaintResultColorPick: (color: string) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onPrepareLama: () => void | Promise<unknown>;
@@ -101,6 +102,7 @@ type WorkspacePanelProps = {
   onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   onSelectBlock: React.Dispatch<React.SetStateAction<string | null>>;
   onSelectImportFiles: (mode: ImportSourceKind) => void;
+  onSelectInpaintResultTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectPointerTool: () => void;
   onSelectRangeTool: () => void;
   onSelectZoomTool: () => void;
@@ -173,6 +175,7 @@ export function WorkspacePanel({
   onInpaintLayerChange,
   onInpaintLayerEditEnd,
   onInpaintLayerEditStart,
+  onInpaintResultColorPick,
   onInpaintResultLayerChange,
   onInpaintSelectionChange,
   onPrepareLama,
@@ -181,6 +184,7 @@ export function WorkspacePanel({
   onRetryRecoverableFailure,
   onSelectBlock,
   onSelectImportFiles,
+  onSelectInpaintResultTool,
   onSelectPointerTool,
   onSelectRangeTool,
   onSelectZoomTool,
@@ -213,6 +217,25 @@ export function WorkspacePanel({
     !layerVisibility.inpaintResult ||
     inpaintResultTool === "select";
   const rangeSelectionDisabled = selectedPageEditLocked || inpaintBusy || !layerVisibility.inpaint;
+  const pointerToolActive =
+    !zoomToolActive &&
+    !rangeToolActive &&
+    (activeLayer === "inpaintMask"
+      ? inpaintTool === "select"
+      : activeLayer === "inpaintResult"
+        ? inpaintResultTool === "select"
+        : true);
+  const finalOutputPreviewActive = activeLayer === "inpaintResult" && inpaintResultTool === "colorPicker";
+  const effectiveStageLayerOpacity = finalOutputPreviewActive ? DEFAULT_LAYER_OPACITY : stageLayerOpacity;
+  const effectiveStageLayerVisibility = finalOutputPreviewActive
+    ? {
+        image: true,
+        inpaint: true,
+        inpaintResult: true,
+        inpaintMask: false,
+        overlay: true
+      }
+    : stageLayerVisibility;
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const multiBlockSelectionActive = selectedBlockIds.length > 1;
   const blockInlineEditShortcutVisible =
@@ -245,11 +268,16 @@ export function WorkspacePanel({
           blockInlineEditShortcut={BLOCK_INLINE_EDIT_SHORTCUT}
           blockInlineEditShortcutActive={blockInlineEditActive && blockInlineEditShortcutVisible}
           blockInlineEditShortcutVisible={blockInlineEditShortcutVisible}
+          colorPickerActive={activeLayer === "inpaintResult" && inpaintResultTool === "colorPicker"}
+          colorPickerShortcut={INPAINT_TOOL_SHORTCUTS.colorPicker ?? "I"}
+          colorPickerVisible={activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult}
+          pointerToolActive={pointerToolActive}
           rangeShortcut={INPAINT_TOOL_SHORTCUTS.select ?? "T"}
           rangeToolActive={rangeToolActive}
           selectedPageEditLocked={selectedPageEditLocked}
           zoomToolActive={zoomToolActive}
           onSelectPointerTool={onSelectPointerTool}
+          onSelectResultColorPicker={() => onSelectInpaintResultTool("colorPicker")}
           onSelectRangeTool={onSelectRangeTool}
           onSelectZoomTool={onSelectZoomTool}
         />
@@ -316,9 +344,10 @@ export function WorkspacePanel({
             rangeToolActive={rangeToolActive}
             selectedBlockId={selectedBlockId}
             selectedBlockIds={selectedBlockIds}
-            layerVisibility={stageLayerVisibility}
-            layerOpacity={stageLayerOpacity}
+            layerOpacity={effectiveStageLayerOpacity}
+            layerVisibility={effectiveStageLayerVisibility}
             activeLayer={activeLayer}
+            finalOutputPreviewActive={finalOutputPreviewActive}
             inpaintTool={inpaintTool}
             inpaintBrushSize={inpaintBrushSize}
             inpaintResultTool={inpaintResultTool}
@@ -335,6 +364,7 @@ export function WorkspacePanel({
             onInpaintLayerChange={onInpaintLayerChange}
             onInpaintLayerEditEnd={onInpaintLayerEditEnd}
             onInpaintLayerEditStart={onInpaintLayerEditStart}
+            onInpaintResultColorPick={onInpaintResultColorPick}
             onInpaintSelectionChange={onInpaintSelectionChange}
             onInpaintResultLayerChange={onInpaintResultLayerChange}
             onZoomToolClick={handleZoomToolClick}

@@ -2,7 +2,7 @@ import React from "react";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
 import type { InpaintTool } from "../InpaintLayerCanvas";
 
-type InpaintToolIconName = InpaintResultTool | Extract<InpaintTool, "autoEraser">;
+type InpaintToolIconName = Exclude<InpaintResultTool, "colorPicker"> | Extract<InpaintTool, "autoEraser">;
 
 type InpaintToolButtonProps = {
   active: boolean;

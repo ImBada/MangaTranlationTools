@@ -34,6 +34,7 @@ type ImageStageProps = {
   layerVisibility: ImageStageLayerVisibility;
   layerOpacity: ImageStageLayerOpacity;
   activeLayer: ImageStageActiveLayer;
+  finalOutputPreviewActive: boolean;
   inpaintTool: InpaintTool;
   inpaintBrushSize: number;
   inpaintResultTool: InpaintResultTool;
@@ -50,6 +51,7 @@ type ImageStageProps = {
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintLayerEditEnd: () => void;
   onInpaintLayerEditStart: () => void;
+  onInpaintResultColorPick: (color: string) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onZoomToolClick: (direction: "in" | "out") => void;
@@ -90,6 +92,7 @@ export function ImageStage({
   layerVisibility,
   layerOpacity,
   activeLayer,
+  finalOutputPreviewActive,
   inpaintTool,
   inpaintBrushSize,
   inpaintResultTool,
@@ -106,6 +109,7 @@ export function ImageStage({
   onInpaintLayerChange,
   onInpaintLayerEditEnd,
   onInpaintLayerEditStart,
+  onInpaintResultColorPick,
   onInpaintSelectionChange,
   onInpaintResultLayerChange,
   onZoomToolClick,
@@ -168,6 +172,7 @@ export function ImageStage({
       activeLayer === "inpaintResult" &&
       !inpaintResultDisabled &&
       inpaintResultTool !== "select" &&
+      inpaintResultTool !== "colorPicker" &&
       !rangeSelectionActive &&
       !temporaryPanActive &&
       !zoomToolActive
@@ -310,6 +315,7 @@ export function ImageStage({
       >
         <ImageStageLayers
           activeLayer={activeLayer}
+          finalOutputPreviewActive={finalOutputPreviewActive}
           imageRef={imageRef}
           inpaintBrushSize={inpaintBrushSize}
           inpaintDisabled={inpaintDisabled}
@@ -346,6 +352,7 @@ export function ImageStage({
           onInpaintLayerChange={onInpaintLayerChange}
           onInpaintLayerEditEnd={onInpaintLayerEditEnd}
           onInpaintLayerEditStart={onInpaintLayerEditStart}
+          onInpaintResultColorPick={onInpaintResultColorPick}
           onInpaintResultLayerChange={onInpaintResultLayerChange}
           onInpaintSelectionChange={onInpaintSelectionChange}
         />

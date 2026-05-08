@@ -860,6 +860,7 @@ export default function App(): React.JSX.Element {
           onInpaintLayerChange={updateSelectedPageInpaintMask}
           onInpaintLayerEditEnd={endInpaintLayerInteraction}
           onInpaintLayerEditStart={beginInpaintLayerInteraction}
+          onInpaintResultColorPick={setInpaintResultBrushColor}
           onInpaintResultLayerChange={updateSelectedPageInpaintResult}
           onInpaintSelectionChange={setInpaintSelectionRect}
           onPrepareLama={prepareLamaFromEmptyState}
@@ -869,6 +870,7 @@ export default function App(): React.JSX.Element {
           onSelectBlock={setSingleSelectedBlockId}
           onBlockSelectionChange={setSelectedBlockGroupIds}
           onSelectImportFiles={selectImportFiles}
+          onSelectInpaintResultTool={selectInpaintResultEditTool}
           onSelectPointerTool={selectPointerTool}
           onSelectRangeTool={selectRangeTool}
           onSelectZoomTool={selectZoomTool}

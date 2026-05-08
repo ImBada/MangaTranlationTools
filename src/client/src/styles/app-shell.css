@@ -941,6 +941,24 @@
   user-select: none;
 }
 
+.stage-tool-overlay button.stage-layer-tool-button {
+  border-color: rgba(245, 193, 87, 0.86);
+  background: rgba(245, 193, 87, 0.18);
+  color: #ffe3a3;
+}
+
+.stage-tool-overlay button.stage-layer-tool-button:hover:not(:disabled) {
+  border-color: rgba(245, 193, 87, 0.96);
+  background: rgba(245, 193, 87, 0.28);
+  color: #ffffff;
+}
+
+.stage-tool-overlay button.stage-layer-tool-button.active {
+  border-color: #77b7ff;
+  background: rgba(77, 144, 230, 0.28);
+  color: #ffffff;
+}
+
 .stage-tool-shortcut-guide.active {
   border-color: #77b7ff;
   background: rgba(77, 144, 230, 0.28);
@@ -991,6 +1009,14 @@
 
 .stage-tool-shortcut-guide .stage-tool-shortcut {
   color: #ffe3a3;
+}
+
+.stage-tool-overlay button.stage-layer-tool-button .stage-tool-shortcut {
+  color: #ffe3a3;
+}
+
+.stage-tool-overlay button.stage-layer-tool-button.active .stage-tool-shortcut {
+  color: #ffffff;
 }
 
 .stage-tool-shortcut-guide.active .stage-tool-shortcut {

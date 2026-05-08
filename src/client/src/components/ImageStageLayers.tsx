@@ -31,6 +31,7 @@ export type ImageStageLayerOpacity = {
 type ImageStageLayersProps = {
   activeLayer: ImageStageActiveLayer;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
+  finalOutputPreviewActive: boolean;
   inpaintBrushSize: number;
   inpaintDisabled: boolean;
   inpaintResultBrushColor: string;
@@ -71,6 +72,7 @@ type ImageStageLayersProps = {
   onInpaintLayerEditEnd: () => void;
   onInpaintLayerEditStart: () => void;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onInpaintResultColorPick: (color: string) => void;
   onInpaintResultLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintSelectionChange: (rect: ImageRect | null) => void;
 };
@@ -78,6 +80,7 @@ type ImageStageLayersProps = {
 export function ImageStageLayers({
   activeLayer,
   imageRef,
+  finalOutputPreviewActive,
   inpaintBrushSize,
   inpaintDisabled,
   inpaintResultBrushColor,
@@ -113,6 +116,7 @@ export function ImageStageLayers({
   onInpaintLayerEditEnd,
   onInpaintLayerEditStart,
   onInpaintLayerChange,
+  onInpaintResultColorPick,
   onInpaintResultLayerChange,
   onInpaintSelectionChange
 }: ImageStageLayersProps): React.JSX.Element {
@@ -120,6 +124,7 @@ export function ImageStageLayers({
   const resolvedStageSize = stageSize ?? pageSize;
   const [inlineEdit, setInlineEdit] = React.useState<{ blockId: string; draft: string } | null>(null);
   const inlineEditorRef = React.useRef<HTMLTextAreaElement | null>(null);
+  const overlayRenderCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const suppressInlineCommitBlockIdRef = React.useRef<string | null>(null);
   const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
@@ -288,7 +293,10 @@ export function ImageStageLayers({
           {layerVisibility.inpaintResult && (page.inpaintResultDataUrl || (activeLayer === "inpaintResult" && !temporaryPanActive)) ? (
             <InpaintResultCanvas
               className="inpaint-result-canvas"
+              colorPickerSampleRequired={finalOutputPreviewActive}
               dataUrl={page.inpaintResultDataUrl}
+              fallbackCanvasRef={imageRef}
+              finalOutputOverlayCanvasRef={overlayRenderCanvasRef}
               maskDataUrl={inpaintMaskDataUrl}
               pageSize={pageSize}
               tool={inpaintResultTool}
@@ -299,14 +307,15 @@ export function ImageStageLayers({
               disabled={inpaintResultDisabled || temporaryPanActive}
               selectionRect={null}
               onChange={onInpaintResultLayerChange}
+              onColorPick={onInpaintResultColorPick}
               onEditEnd={onInpaintLayerEditEnd}
               onEditStart={onInpaintLayerEditStart}
               onSelectionChange={onInpaintSelectionChange}
               style={{
-                zIndex: activeLayer === "inpaintResult" ? 3 : 1,
+                zIndex: finalOutputPreviewActive ? undefined : activeLayer === "inpaintResult" ? 3 : 1,
                 opacity: layerOpacity.inpaintResult,
-                maskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
-                WebkitMaskImage: (activeLayer !== "inpaintResult" || temporaryPanActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
+                maskImage: (activeLayer !== "inpaintResult" || temporaryPanActive || finalOutputPreviewActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined,
+                WebkitMaskImage: (activeLayer !== "inpaintResult" || temporaryPanActive || finalOutputPreviewActive) && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined
               }}
             />
           ) : null}
@@ -348,6 +357,7 @@ export function ImageStageLayers({
               onPointerLeave={() => setDuplicateBlockMode(false)}
             >
               <OverlayRenderCanvas
+                canvasRef={overlayRenderCanvasRef}
                 page={page}
                 stageSize={resolvedStageSize}
                 editingEnabled={activeLayer === "overlay" && !temporaryPanActive}

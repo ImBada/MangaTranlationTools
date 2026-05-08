@@ -276,12 +276,12 @@ export function useWorkspaceShortcuts({
         : null;
       const inpaintToolShortcutEnabled =
         !selectedPageEditLocked &&
-        ((activeLayer === "inpaintMask" && inpaintToolShortcut !== "smartBrush" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
+        ((activeLayer === "inpaintMask" && inpaintToolShortcut !== "smartBrush" && inpaintToolShortcut !== "colorPicker" && layerVisibility.inpaint && layerVisibility.inpaintMask) ||
           (inpaintToolShortcut !== "autoEraser" && activeLayer === "inpaintResult" && layerVisibility.inpaint && layerVisibility.inpaintResult));
       if (inpaintToolShortcut && inpaintToolShortcutEnabled) {
         event.preventDefault();
-        if (inpaintToolShortcut === "smartBrush") {
-          selectInpaintResultEditTool("smartBrush");
+        if (inpaintToolShortcut === "smartBrush" || inpaintToolShortcut === "colorPicker") {
+          selectInpaintResultEditTool(inpaintToolShortcut);
         } else {
           selectSharedInpaintTool(inpaintToolShortcut);
         }

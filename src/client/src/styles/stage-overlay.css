@@ -124,7 +124,7 @@
 }
 
 .inpaint-layer-preview {
-  z-index: 1;
+  z-index: auto;
 }
 
 .stage-range-selection-layer {
@@ -168,6 +168,99 @@
 .inpaint-result-canvas.selecting {
   cursor: crosshair;
   pointer-events: auto;
+}
+
+.inpaint-result-canvas.color-picking {
+  cursor: none;
+  pointer-events: auto;
+}
+
+.inpaint-color-picker-cursor {
+  position: absolute;
+  z-index: 82;
+  width: 24px;
+  height: 24px;
+  border: 2px solid rgba(255, 255, 255, 0.94);
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1.5px rgba(0, 0, 0, 0.76),
+    0 2px 8px rgba(0, 0, 0, 0.28);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.inpaint-color-picker-cursor::before,
+.inpaint-color-picker-cursor::after {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.72);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.inpaint-color-picker-cursor::before {
+  width: 2px;
+  height: 34px;
+}
+
+.inpaint-color-picker-cursor::after {
+  width: 34px;
+  height: 2px;
+}
+
+.inpaint-color-picker-preview {
+  position: absolute;
+  z-index: 82;
+  width: 128px;
+  height: 128px;
+  border: 16px solid rgba(128, 128, 128, 0.96);
+  border-radius: 999px;
+  overflow: hidden;
+  background: transparent;
+  box-shadow:
+    0 0 0 1px rgba(255, 255, 255, 0.75),
+    0 16px 36px rgba(0, 0, 0, 0.32);
+  pointer-events: none;
+  transform: translate(-50%, -50%);
+}
+
+.inpaint-color-picker-preview-half {
+  position: absolute;
+  inset: 14px;
+  border-radius: 999px;
+  mask-image: radial-gradient(circle, transparent 0 52%, #000 53%);
+  -webkit-mask-image: radial-gradient(circle, transparent 0 52%, #000 53%);
+}
+
+.inpaint-color-picker-preview-half.sampled {
+  clip-path: polygon(0 0, 100% 0, 100% 50%, 0 50%);
+}
+
+.inpaint-color-picker-preview-half.current {
+  clip-path: polygon(0 50%, 100% 50%, 100% 100%, 0 100%);
+}
+
+.inpaint-color-picker-preview::after {
+  position: absolute;
+  inset: 50% 14px auto;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.86);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.62);
+  content: "";
+}
+
+.inpaint-color-picker-preview-crosshair {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border: 1.5px solid rgba(255, 255, 255, 0.94);
+  border-radius: 999px;
+  box-shadow: 0 0 0 1.5px rgba(0, 0, 0, 0.76);
+  transform: translate(-50%, -50%);
 }
 
 .stage-range-hit-area {

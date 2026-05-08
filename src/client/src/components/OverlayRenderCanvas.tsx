@@ -4,14 +4,22 @@ import { drawOverlayBlocks } from "../lib/pageRender";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 
 type OverlayRenderCanvasProps = {
+  canvasRef?: React.RefObject<HTMLCanvasElement | null>;
   page: MangaPage;
   stageSize: ViewportSize;
   editingEnabled: boolean;
   fontWeightAvailability: readonly FontWeightAvailability[];
 };
 
-export function OverlayRenderCanvas({ page, stageSize, editingEnabled, fontWeightAvailability }: OverlayRenderCanvasProps): React.JSX.Element {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+export function OverlayRenderCanvas({
+  canvasRef: externalCanvasRef,
+  page,
+  stageSize,
+  editingEnabled,
+  fontWeightAvailability
+}: OverlayRenderCanvasProps): React.JSX.Element {
+  const internalCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRef = externalCanvasRef ?? internalCanvasRef;
 
   useEffect(() => {
     const canvas = canvasRef.current;

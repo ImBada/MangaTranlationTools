@@ -17,10 +17,12 @@ import {
 } from "../lib/inpaintResultCanvas";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 
-export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge";
+export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge" | "colorPicker";
 
 type InpaintResultCanvasProps = {
+  colorPickerSampleRequired?: boolean;
   dataUrl?: string;
+  finalOutputOverlayCanvasRef?: React.RefObject<HTMLCanvasElement | null>;
   maskDataUrl?: string;
   pageSize: {
     width: number;
@@ -33,9 +35,11 @@ type InpaintResultCanvasProps = {
   toolStrength: number;
   disabled: boolean;
   className?: string;
+  fallbackCanvasRef?: React.RefObject<HTMLCanvasElement | null>;
   style?: React.CSSProperties;
   selectionRect: ImageRect | null;
   onChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
+  onColorPick: (color: string) => void;
   onEditEnd?: () => void;
   onEditStart?: () => void;
   onSelectionChange: (rect: ImageRect | null) => void;
@@ -44,6 +48,16 @@ type InpaintResultCanvasProps = {
 type SelectionDragState = {
   start: DrawPoint;
   current: DrawPoint;
+};
+
+type ColorPickerPreview = {
+  currentColor: string;
+  point: DrawPoint;
+  sampledColor: string;
+};
+
+type ColorPickerHover = {
+  point: DrawPoint;
 };
 
 type PendingResultCanvasCommit = {
@@ -84,7 +98,9 @@ function resolveIntermediateLayerUndoSnapshots(
 }
 
 export function InpaintResultCanvas({
+  colorPickerSampleRequired = false,
   dataUrl,
+  finalOutputOverlayCanvasRef,
   maskDataUrl,
   pageSize,
   tool,
@@ -94,9 +110,11 @@ export function InpaintResultCanvas({
   toolStrength,
   disabled,
   className,
+  fallbackCanvasRef,
   style,
   selectionRect,
   onChange,
+  onColorPick,
   onEditEnd,
   onEditStart,
   onSelectionChange
@@ -137,9 +155,13 @@ export function InpaintResultCanvas({
   const editSessionActiveRef = useRef(false);
   const pendingCommitsRef = useRef<PendingResultCanvasCommit[]>([]);
   const intermediateSnapshotsRef = useRef<IntermediateResultSnapshot[]>([]);
+  const colorPickerPointerIdRef = useRef<number | null>(null);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
+  const [colorPickerHover, setColorPickerHover] = useState<ColorPickerHover | null>(null);
+  const [colorPickerPreview, setColorPickerPreview] = useState<ColorPickerPreview | null>(null);
 
-  const pointerEnabled = !disabled && tool !== "select";
+  const colorPickerEnabled = !disabled && tool === "colorPicker";
+  const pointerEnabled = !disabled && tool !== "select" && tool !== "colorPicker";
   const selectionEnabled = !disabled && tool === "select";
   const activeSelectionRect = previewSelectionRect ?? selectionRect;
 
@@ -332,6 +354,44 @@ export function InpaintResultCanvas({
     };
   };
 
+  const sampleCanvasColor = (point: DrawPoint): string | null => {
+    if (colorPickerSampleRequired) {
+      return sampleFinalOutputColor({
+        imageCanvas: fallbackCanvasRef?.current,
+        maskCanvas: smartMaskCanvasRef.current,
+        overlayCanvas: finalOutputOverlayCanvasRef?.current,
+        point,
+        resultCanvas: canvasRef.current
+      });
+    }
+
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !context) {
+      return null;
+    }
+
+    const x = Math.min(canvas.width - 1, Math.max(0, Math.floor(point.x)));
+    const y = Math.min(canvas.height - 1, Math.max(0, Math.floor(point.y)));
+    const [red, green, blue, alpha] = context.getImageData(x, y, 1, 1).data;
+    if (alpha === 0) {
+      const fallbackColor = pickFallbackCanvasColor(fallbackCanvasRef?.current, x, y);
+      if (fallbackColor) {
+        return fallbackColor;
+      }
+    }
+    return rgbToHex(red, green, blue);
+  };
+
+  const updateColorPickerPreview = (point: DrawPoint, currentColor = brushColor): string | null => {
+    const sampledColor = sampleCanvasColor(point);
+    if (!sampledColor) {
+      return null;
+    }
+    setColorPickerPreview({ currentColor, point, sampledColor });
+    return sampledColor;
+  };
+
   const startEditSession = React.useCallback(() => {
     if (editSessionActiveRef.current) {
       return;
@@ -353,6 +413,15 @@ export function InpaintResultCanvas({
       endEditSession();
     };
   }, [endEditSession]);
+
+  React.useEffect(() => {
+    if (colorPickerEnabled) {
+      return;
+    }
+    colorPickerPointerIdRef.current = null;
+    setColorPickerHover(null);
+    setColorPickerPreview(null);
+  }, [colorPickerEnabled]);
 
   const appendIntermediateResultSnapshot = (commit: PendingResultCanvasCommit) => {
     const snapshots = intermediateSnapshotsRef.current;
@@ -504,10 +573,30 @@ export function InpaintResultCanvas({
       <canvas ref={smartMaskCanvasRef} aria-hidden="true" style={{ display: "none" }} />
       <canvas
         ref={canvasRef}
-        className={`${className ?? ""} ${pointerEnabled ? "editing" : ""} ${selectionEnabled ? "selecting" : ""}`.trim()}
+        className={`${className ?? ""} ${pointerEnabled ? "editing" : ""} ${selectionEnabled ? "selecting" : ""} ${colorPickerEnabled ? "color-picking" : ""}`.trim()}
         style={style}
         aria-label="인페인트 결과 레이어"
+        onPointerEnter={(event) => {
+          if (!colorPickerEnabled || colorPickerPointerIdRef.current !== null) {
+            return;
+          }
+          setColorPickerHover({ point: resolvePoint(event) });
+        }}
         onPointerDown={(event) => {
+          if (colorPickerEnabled) {
+            if (event.button !== 0) {
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            const point = resolvePoint(event);
+            if (!updateColorPickerPreview(point)) {
+              return;
+            }
+            captureCanvasPointer(event.currentTarget, event.pointerId);
+            colorPickerPointerIdRef.current = event.pointerId;
+            return;
+          }
           if (selectionEnabled) {
             event.preventDefault();
             event.stopPropagation();
@@ -526,6 +615,16 @@ export function InpaintResultCanvas({
           startResultStroke(event.currentTarget, point, event.pointerId);
         }}
         onPointerMove={(event) => {
+          if (colorPickerEnabled) {
+            if (colorPickerPointerIdRef.current !== event.pointerId) {
+              setColorPickerHover({ point: resolvePoint(event) });
+              return;
+            }
+            event.preventDefault();
+            event.stopPropagation();
+            updateColorPickerPreview(resolvePoint(event), colorPickerPreview?.currentColor ?? brushColor);
+            return;
+          }
           if (selectionEnabled) {
             event.preventDefault();
             event.stopPropagation();
@@ -553,6 +652,18 @@ export function InpaintResultCanvas({
           lastPointRef.current = point;
         }}
         onPointerUp={(event) => {
+          if (colorPickerEnabled && colorPickerPointerIdRef.current === event.pointerId) {
+            event.preventDefault();
+            event.stopPropagation();
+            const sampledColor = updateColorPickerPreview(resolvePoint(event), colorPickerPreview?.currentColor ?? brushColor);
+            if (sampledColor) {
+              onColorPick(sampledColor);
+            }
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
+            colorPickerPointerIdRef.current = null;
+            setColorPickerPreview(null);
+            return;
+          }
           if (selectionEnabled && selectionDragRef.current) {
             event.preventDefault();
             event.stopPropagation();
@@ -576,7 +687,19 @@ export function InpaintResultCanvas({
           commitChange();
           endEditSession();
         }}
+        onPointerLeave={() => {
+          if (colorPickerPointerIdRef.current === null) {
+            setColorPickerHover(null);
+          }
+        }}
         onPointerCancel={(event) => {
+          if (colorPickerEnabled && colorPickerPointerIdRef.current === event.pointerId) {
+            releaseCanvasPointer(event.currentTarget, event.pointerId);
+            colorPickerPointerIdRef.current = null;
+            setColorPickerHover(null);
+            setColorPickerPreview(null);
+            return;
+          }
           if (selectionEnabled && selectionDragRef.current) {
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
@@ -605,6 +728,112 @@ export function InpaintResultCanvas({
           }}
         />
       ) : null}
+      {colorPickerEnabled && colorPickerHover && !colorPickerPreview ? (
+        <div
+          className="inpaint-color-picker-cursor"
+          style={{
+            left: `${(colorPickerHover.point.x / Math.max(1, pageSize.width)) * 100}%`,
+            top: `${(colorPickerHover.point.y / Math.max(1, pageSize.height)) * 100}%`
+          }}
+          aria-hidden="true"
+        />
+      ) : null}
+      {colorPickerPreview ? (
+        <div
+          className="inpaint-color-picker-preview"
+          style={{
+            left: `${(colorPickerPreview.point.x / Math.max(1, pageSize.width)) * 100}%`,
+            top: `${(colorPickerPreview.point.y / Math.max(1, pageSize.height)) * 100}%`
+          }}
+          aria-hidden="true"
+        >
+          <span
+            className="inpaint-color-picker-preview-half sampled"
+            style={{ backgroundColor: colorPickerPreview.sampledColor }}
+          />
+          <span
+            className="inpaint-color-picker-preview-half current"
+            style={{ backgroundColor: colorPickerPreview.currentColor }}
+          />
+          <span className="inpaint-color-picker-preview-crosshair" />
+        </div>
+      ) : null}
     </>
   );
+}
+
+function rgbToHex(red: number, green: number, blue: number): string {
+  return `#${[red, green, blue]
+    .map((channel) => Math.min(255, Math.max(0, channel)).toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+function pickFallbackCanvasColor(canvas: HTMLCanvasElement | null | undefined, x: number, y: number): string | null {
+  const context = canvas?.getContext("2d", { willReadFrequently: true });
+  if (!canvas || !context || x >= canvas.width || y >= canvas.height) {
+    return null;
+  }
+
+  const [red, green, blue] = context.getImageData(x, y, 1, 1).data;
+  return rgbToHex(red, green, blue);
+}
+
+function sampleFinalOutputColor({
+  imageCanvas,
+  maskCanvas,
+  overlayCanvas,
+  point,
+  resultCanvas
+}: {
+  imageCanvas: HTMLCanvasElement | null | undefined;
+  maskCanvas: HTMLCanvasElement | null | undefined;
+  overlayCanvas: HTMLCanvasElement | null | undefined;
+  point: DrawPoint;
+  resultCanvas: HTMLCanvasElement | null | undefined;
+}): string | null {
+  const x = Math.floor(point.x);
+  const y = Math.floor(point.y);
+  const base = readCanvasRgba(imageCanvas, x, y);
+  const overlay = readCanvasRgba(overlayCanvas, x, y);
+  if (!base || !overlay) {
+    return null;
+  }
+
+  const result = readCanvasRgba(resultCanvas, x, y);
+  const mask = readCanvasRgba(maskCanvas, x, y);
+  const maskedResult = result && mask
+    ? { ...result, a: result.a * (mask.a / 255) * (Math.max(mask.r, mask.g, mask.b) / 255) }
+    : result;
+  const withResult = maskedResult ? compositeRgba(base, maskedResult) : base;
+  const finalColor = compositeRgba(withResult, overlay);
+  return rgbToHex(Math.round(finalColor.r), Math.round(finalColor.g), Math.round(finalColor.b));
+}
+
+function readCanvasRgba(canvas: HTMLCanvasElement | null | undefined, x: number, y: number): { r: number; g: number; b: number; a: number } | null {
+  const context = canvas?.getContext("2d", { willReadFrequently: true });
+  if (!canvas || !context || canvas.width <= 0 || canvas.height <= 0) {
+    return null;
+  }
+  const sampleX = Math.min(canvas.width - 1, Math.max(0, x));
+  const sampleY = Math.min(canvas.height - 1, Math.max(0, y));
+  const [r, g, b, a] = context.getImageData(sampleX, sampleY, 1, 1).data;
+  return { r, g, b, a };
+}
+
+function compositeRgba(
+  base: { r: number; g: number; b: number; a: number },
+  top: { r: number; g: number; b: number; a: number }
+): { r: number; g: number; b: number; a: number } {
+  const topAlpha = top.a / 255;
+  const baseAlpha = base.a / 255;
+  const outAlpha = topAlpha + baseAlpha * (1 - topAlpha);
+  if (outAlpha <= 0) {
+    return { r: 0, g: 0, b: 0, a: 0 };
+  }
+  return {
+    r: (top.r * topAlpha + base.r * baseAlpha * (1 - topAlpha)) / outAlpha,
+    g: (top.g * topAlpha + base.g * baseAlpha * (1 - topAlpha)) / outAlpha,
+    b: (top.b * topAlpha + base.b * baseAlpha * (1 - topAlpha)) / outAlpha,
+    a: outAlpha * 255
+  };
 }

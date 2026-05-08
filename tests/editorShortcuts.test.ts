@@ -74,6 +74,13 @@ describe("editor shortcuts", () => {
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyB", key: "b", altKey: true, ctrlKey: true }))).toBe(null);
   });
 
+  it("recognizes I as the inpaint result color picker shortcut", () => {
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i" }))).toBe("colorPicker");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "I", shiftKey: true }))).toBe("colorPicker");
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i", metaKey: true }))).toBe(null);
+    expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i", ctrlKey: true }))).toBe(null);
+  });
+
   it("recognizes Q as delete only in one-hand mode", () => {
     expect(isDeleteShortcut(keyboardEvent({ key: "Backspace" }), false)).toBe(true);
     expect(isDeleteShortcut(keyboardEvent({ key: "Delete" }), false)).toBe(true);
