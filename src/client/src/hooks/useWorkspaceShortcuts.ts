@@ -290,10 +290,10 @@ export function useWorkspaceShortcuts({
           workspacePanelRef.current?.focus();
         }
         if (inpaintToolShortcutAction.layer === "inpaintResult") {
+          if (!layerVisibility.inpaint || !layerVisibility.inpaintResult) {
+            showInpaintResultLayer();
+          }
           if (inpaintToolShortcutAction.tool === "smartBrush" || inpaintToolShortcutAction.tool === "colorPicker") {
-            if (inpaintToolShortcutAction.tool === "colorPicker") {
-              showInpaintResultLayer();
-            }
             selectInpaintResultEditTool(inpaintToolShortcutAction.tool);
           } else {
             selectSharedInpaintTool(inpaintToolShortcutAction.tool);

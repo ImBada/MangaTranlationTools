@@ -22,6 +22,22 @@ function keyboardEvent(patch: Partial<KeyboardEvent>): KeyboardEvent {
   } as KeyboardEvent;
 }
 
+const visibleLayerVisibility = {
+  image: true,
+  inpaint: true,
+  inpaintResult: true,
+  inpaintMask: true,
+  overlay: true
+};
+
+const hiddenInpaintLayerVisibility = {
+  image: true,
+  inpaint: false,
+  inpaintResult: false,
+  inpaintMask: false,
+  overlay: true
+};
+
 describe("editor shortcuts", () => {
   it("recognizes block copy with Command or Control", () => {
     expect(isBlockCopyShortcut(keyboardEvent({ code: "KeyC", key: "c", metaKey: true }))).toBe(true);
@@ -82,56 +98,51 @@ describe("editor shortcuts", () => {
     expect(resolveInpaintToolShortcut(keyboardEvent({ code: "KeyI", key: "i", ctrlKey: true }))).toBe(null);
   });
 
-  it("resolves I as an inpaint result layer macro outside the result layer", () => {
-    expect(resolveInpaintToolShortcutAction({
-      activeLayer: "overlay",
-      layerVisibility: {
-        image: true,
-        inpaint: true,
-        inpaintResult: true,
-        inpaintMask: true,
-        overlay: true
-      },
-      selectedPageEditLocked: false,
-      shortcut: "colorPicker"
-    })).toEqual({
-      layer: "inpaintResult",
-      selectLayer: true,
-      tool: "colorPicker"
-    });
+  it("resolves result layer macro shortcuts and keeps the mask brush exception", () => {
+    for (const shortcut of ["brush", "smartBrush", "colorPicker"] as const) {
+      expect(resolveInpaintToolShortcutAction({
+        activeLayer: "overlay",
+        layerVisibility: visibleLayerVisibility,
+        selectedPageEditLocked: false,
+        shortcut
+      })).toEqual({
+        layer: "inpaintResult",
+        selectLayer: true,
+        tool: shortcut
+      });
+
+      expect(resolveInpaintToolShortcutAction({
+        activeLayer: "inpaintResult",
+        layerVisibility: visibleLayerVisibility,
+        selectedPageEditLocked: false,
+        shortcut
+      })).toEqual({
+        layer: "inpaintResult",
+        selectLayer: false,
+        tool: shortcut
+      });
+
+      expect(resolveInpaintToolShortcutAction({
+        activeLayer: "image",
+        layerVisibility: hiddenInpaintLayerVisibility,
+        selectedPageEditLocked: false,
+        shortcut
+      })).toEqual({
+        layer: "inpaintResult",
+        selectLayer: true,
+        tool: shortcut
+      });
+    }
 
     expect(resolveInpaintToolShortcutAction({
-      activeLayer: "inpaintResult",
-      layerVisibility: {
-        image: true,
-        inpaint: true,
-        inpaintResult: true,
-        inpaintMask: true,
-        overlay: true
-      },
+      activeLayer: "inpaintMask",
+      layerVisibility: visibleLayerVisibility,
       selectedPageEditLocked: false,
-      shortcut: "colorPicker"
+      shortcut: "brush"
     })).toEqual({
-      layer: "inpaintResult",
+      layer: "inpaintMask",
       selectLayer: false,
-      tool: "colorPicker"
-    });
-
-    expect(resolveInpaintToolShortcutAction({
-      activeLayer: "image",
-      layerVisibility: {
-        image: true,
-        inpaint: false,
-        inpaintResult: false,
-        inpaintMask: false,
-        overlay: true
-      },
-      selectedPageEditLocked: false,
-      shortcut: "colorPicker"
-    })).toEqual({
-      layer: "inpaintResult",
-      selectLayer: true,
-      tool: "colorPicker"
+      tool: "brush"
     });
   });
 

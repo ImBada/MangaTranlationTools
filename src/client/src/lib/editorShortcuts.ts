@@ -82,11 +82,15 @@ export function resolveInpaintToolShortcutAction(options: {
     return null;
   }
 
-  if (shortcut === "colorPicker") {
+  if (
+    shortcut === "colorPicker" ||
+    shortcut === "smartBrush" ||
+    (shortcut === "brush" && activeLayer !== "inpaintMask")
+  ) {
     return {
       layer: "inpaintResult",
       selectLayer: activeLayer !== "inpaintResult",
-      tool: "colorPicker"
+      tool: shortcut
     };
   }
 
