@@ -3,6 +3,7 @@ import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
 import { createInpaintMaskUndoSnapshot, type InpaintMaskUndoSnapshot } from "../lib/editorUtils";
 import type { GlobalUndoHistoryEntry, GlobalUndoKind } from "../lib/editorUndoHistory";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
+import { summarizeDataUrl, writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
 import { mergePartialInpaintMask } from "../lib/inpaintMaskImages";
 import { useInpaintLayerSaveQueue, type PendingInpaintLayerSave } from "./useInpaintLayerSaveQueue";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
@@ -155,12 +156,36 @@ export function useInpaintLayerPersistence({
     const chapterId = currentChapter.id;
     const targetPage = selectedPage;
     const previousDataUrl = "previousDataUrl" in options ? options.previousDataUrl : selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl;
+    const previousSourceDataUrl = options.previousMaskSourceDataUrl;
     const livePage = resolveOpenChapterPage(currentChapterRef.current, chapterId, targetPage.id);
-    if (livePage === null || (livePage && resolvePageMaskDataUrl(livePage) !== previousDataUrl)) {
+    const liveMaskDataUrl = livePage ? resolvePageMaskDataUrl(livePage) : undefined;
+    if (livePage === null || (livePage && !isExpectedPreviousInpaintMask(liveMaskDataUrl, previousDataUrl, previousSourceDataUrl))) {
+      writeInpaintDebugLog("inpaint-mask:state-skip", {
+        reason: livePage === null ? "page-not-found" : "previous-mask-mismatch",
+        chapterId,
+        pageId: targetPage.id,
+        incomingDataUrl: summarizeDataUrl(dataUrl),
+        liveMaskDataUrl: summarizeDataUrl(liveMaskDataUrl),
+        previousDataUrl: summarizeDataUrl(previousDataUrl),
+        previousSourceDataUrl: summarizeDataUrl(previousSourceDataUrl),
+        selectedPageMaskDataUrl: summarizeDataUrl(selectedPage.inpaintMaskDataUrl ?? selectedPage.inpaintLayerDataUrl)
+      });
       return;
     }
     const applyLocalUpdate = livePage !== undefined;
     const commitRevision = applyLocalUpdate ? nextInpaintLayerCommitRevision() : undefined;
+    writeInpaintDebugLog("inpaint-mask:state-update", {
+      chapterId,
+      pageId: targetPage.id,
+      applyLocalUpdate,
+      commitRevision,
+      incomingDataUrl: summarizeDataUrl(dataUrl),
+      intermediateUndoCount: options.intermediateUndoDataUrls?.length ?? 0,
+      persist: options.persist !== false,
+      previousDataUrl: summarizeDataUrl(previousDataUrl),
+      previousSourceDataUrl: summarizeDataUrl(previousSourceDataUrl),
+      recordUndo: options.recordUndo !== false
+    });
 
     if (livePage) {
       if (options.recordUndo !== false) {
@@ -581,6 +606,14 @@ function resolveOpenChapterPage(
 
 function resolvePageMaskDataUrl(page: MangaPage): string | undefined {
   return page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+}
+
+export function isExpectedPreviousInpaintMask(
+  liveMaskDataUrl: string | undefined,
+  previousDataUrl: string | undefined,
+  previousSourceDataUrl: string | undefined
+): boolean {
+  return liveMaskDataUrl === previousDataUrl || Boolean(previousSourceDataUrl && liveMaskDataUrl === previousSourceDataUrl);
 }
 
 export function resolveInpaintUndoDataUrlSequence(

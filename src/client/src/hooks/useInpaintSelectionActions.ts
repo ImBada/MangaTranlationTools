@@ -54,7 +54,7 @@ export function useInpaintSelectionActions({
       }
       const previousDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(maskDataUrl);
       const nextDataUrl = previousDataUrl ? await clearMaskDataUrlRect(previousDataUrl, page.width, page.height, inpaintSelectionRect) : undefined;
-      updateSelectedPageInpaintMask(nextDataUrl, { previousDataUrl });
+      updateSelectedPageInpaintMask(nextDataUrl, { previousDataUrl, previousMaskSourceDataUrl: maskDataUrl });
       pushStatus("선택 범위의 인페인트 마스크를 지웠습니다.");
       return true;
     }
@@ -96,14 +96,15 @@ export function useInpaintSelectionActions({
     }
 
     if (activeLayer === "inpaintMask" && rangeToolActive) {
-      const previousDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl);
+      const maskDataUrl = page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl;
+      const previousDataUrl = await window.mangaApi.resolveOptionalImageDataUrl(maskDataUrl);
       const nextDataUrl = await fillMaskDataUrlRect({
         dataUrl: previousDataUrl,
         width: page.width,
         height: page.height,
         rect: inpaintSelectionRect
       });
-      updateSelectedPageInpaintMask(nextDataUrl, { previousDataUrl });
+      updateSelectedPageInpaintMask(nextDataUrl, { previousDataUrl, previousMaskSourceDataUrl: maskDataUrl });
       pushStatus("선택 범위를 인페인트 마스크로 채웠습니다.");
       return;
     }

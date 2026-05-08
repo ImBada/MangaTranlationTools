@@ -8,6 +8,7 @@ export type InpaintLayerChangeOptions = {
   maskDataUrlMode?: "full" | "patch";
   persist?: boolean;
   previousMaskDataUrl?: string;
+  previousMaskSourceDataUrl?: string;
   previousDataUrl?: string;
   recordUndo?: boolean;
 };

@@ -1,10 +1,27 @@
 import { describe, expect, it } from "vitest";
 import {
+  isExpectedPreviousInpaintMask,
   resolveInpaintLayerUndoSnapshotSequence,
   resolveInpaintUndoDataUrlSequence
 } from "../src/client/src/hooks/useInpaintLayerPersistence";
 
 describe("inpaint layer persistence helpers", () => {
+  it("accepts a saved mask image URL as the previous source for canvas data URL edits", () => {
+    expect(isExpectedPreviousInpaintMask(
+      "/api/library/chapters/chapter/pages/page/images/inpaint-mask",
+      "data:image/png;base64,previous-canvas-mask",
+      "/api/library/chapters/chapter/pages/page/images/inpaint-mask"
+    )).toBe(true);
+  });
+
+  it("rejects stale mask edits when neither the previous data URL nor source URL matches the live mask", () => {
+    expect(isExpectedPreviousInpaintMask(
+      "/api/library/chapters/chapter/pages/page/images/inpaint-mask?updatedAt=newer",
+      "data:image/png;base64,previous-canvas-mask",
+      "/api/library/chapters/chapter/pages/page/images/inpaint-mask?updatedAt=older"
+    )).toBe(false);
+  });
+
   it("keeps intermediate undo data URLs while removing no-op and adjacent duplicate states", () => {
     expect(resolveInpaintUndoDataUrlSequence(
       "before",

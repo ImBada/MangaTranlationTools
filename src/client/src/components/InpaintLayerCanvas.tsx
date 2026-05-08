@@ -145,6 +145,7 @@ export function InpaintLayerCanvas({
       markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
       commit.onChange(commit.nextDataUrl, {
         previousDataUrl: commit.previousDataUrl,
+        previousMaskSourceDataUrl: commit.sourceState.dataUrl,
         intermediateUndoDataUrls
       });
     }
