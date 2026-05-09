@@ -700,7 +700,7 @@ export function InpaintResultCanvas({
   };
 
   React.useEffect(() => {
-    if (!disabled) {
+    if (!disabled || !drawingRef.current) {
       return;
     }
     finishResultStroke(activeStrokePointerIdRef.current);
@@ -708,6 +708,13 @@ export function InpaintResultCanvas({
 
   React.useEffect(() => {
     const finishActivePointer = (event: PointerEvent) => {
+      if (!drawingRef.current) {
+        return;
+      }
+      const activePointerId = activeStrokePointerIdRef.current;
+      if (activePointerId !== null && activePointerId !== event.pointerId) {
+        return;
+      }
       const canvas = canvasRef.current;
       if (canvas && event.composedPath().includes(canvas)) {
         return;

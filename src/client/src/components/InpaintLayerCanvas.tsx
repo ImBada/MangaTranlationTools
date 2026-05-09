@@ -497,14 +497,25 @@ export function InpaintLayerCanvas({
   };
 
   React.useEffect(() => {
-    if (!disabled) {
+    if (!disabled || !drawingRef.current) {
       return;
     }
     finishMaskStroke(activePointerIdRef.current);
   }, [disabled, finishMaskStroke]);
 
   React.useEffect(() => {
+    const shouldIgnoreInactivePointer = (event: PointerEvent) => {
+      if (!drawingRef.current) {
+        return true;
+      }
+      const activePointerId = activePointerIdRef.current;
+      return activePointerId !== null && activePointerId !== event.pointerId;
+    };
+
     const finishActivePointer = (event: PointerEvent) => {
+      if (shouldIgnoreInactivePointer(event)) {
+        return;
+      }
       const canvas = canvasRef.current;
       if (canvas && event.composedPath().includes(canvas)) {
         return;
@@ -515,6 +526,9 @@ export function InpaintLayerCanvas({
       finishMaskStroke(event.pointerId, point);
     };
     const cancelActivePointer = (event: PointerEvent) => {
+      if (shouldIgnoreInactivePointer(event)) {
+        return;
+      }
       const canvas = canvasRef.current;
       if (canvas && event.composedPath().includes(canvas)) {
         return;
