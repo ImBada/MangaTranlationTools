@@ -5,6 +5,7 @@ export type FontPresetPatch = Partial<
   Pick<
     FontPreset,
     | "fontFamily"
+    | "characterFontOverrides"
     | "fontWeight"
     | "fontStyle"
     | "textDecoration"
@@ -28,7 +29,7 @@ export type FontPresetPatch = Partial<
   >
 >;
 export type BlockFontPatch = FontPresetPatch & Partial<Pick<TranslationBlock, "textAlign" | "textPosition">>;
-export type LinkableFontPresetKey = Exclude<keyof FontPresetPatch, "fontFamily">;
+export type LinkableFontPresetKey = Exclude<keyof FontPresetPatch, "fontFamily" | "characterFontOverrides">;
 
 const PRESET_LINK_FIELD_BY_KEY = {
   fontSizePx: "fontSizeLinkedToPreset",
@@ -95,6 +96,7 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     id: `font-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
     fontFamily: source.fontFamily ?? DEFAULT_FONT_PRESET.fontFamily,
+    characterFontOverrides: cloneCharacterFontOverrides(source.characterFontOverrides ?? DEFAULT_FONT_PRESET.characterFontOverrides),
     fontWeight: source.fontWeight ?? DEFAULT_FONT_PRESET.fontWeight,
     fontStyle: source.fontStyle ?? DEFAULT_FONT_PRESET.fontStyle,
     textDecoration: source.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
@@ -150,6 +152,39 @@ export function clearFontPresetLinkFields(block: TranslationBlock): TranslationB
   return nextBlock;
 }
 
+export function normalizeCharacterOverrideCharacter(value: string): string {
+  const normalized = value.trim();
+  return [...normalized][0] ?? "";
+}
+
+export function normalizeCharacterFontOverrides(
+  overrides: readonly NonNullable<FontPreset["characterFontOverrides"]>[number][] | undefined
+): NonNullable<FontPreset["characterFontOverrides"]> {
+  const byCharacter = new Map<string, NonNullable<FontPreset["characterFontOverrides"]>[number]>();
+
+  for (const override of overrides ?? []) {
+    const character = normalizeCharacterOverrideCharacter(override.character);
+    const fontFamily = override.fontFamily?.trim();
+    if (!character || !fontFamily) {
+      continue;
+    }
+    byCharacter.set(character, { character, fontFamily });
+  }
+
+  return [...byCharacter.values()];
+}
+
+function cloneCharacterFontOverrides(
+  overrides: FontPreset["characterFontOverrides"] | TranslationBlock["characterFontOverrides"] | undefined
+): NonNullable<FontPreset["characterFontOverrides"]> | undefined {
+  const normalized = normalizeCharacterFontOverrides(overrides);
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isFullFontPresetPatch(patch: FontPresetPatch): patch is FontPreset {
+  return "id" in patch && "name" in patch;
+}
+
 export function applyFontPresetPatchToBlock(
   block: TranslationBlock,
   patch: FontPresetPatch,
@@ -160,6 +195,10 @@ export function applyFontPresetPatchToBlock(
   return {
     ...block,
     fontFamily: patch.fontFamily ?? block.fontFamily,
+    characterFontOverrides:
+      patch.characterFontOverrides !== undefined || isFullFontPresetPatch(patch)
+        ? cloneCharacterFontOverrides(patch.characterFontOverrides)
+        : block.characterFontOverrides,
     fontWeight:
       patch.fontWeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontWeight"))
         ? patch.fontWeight

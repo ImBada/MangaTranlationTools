@@ -14,6 +14,8 @@ import type { InpaintTool } from "../InpaintLayerCanvas";
 import type { InpaintResultTool } from "../InpaintResultCanvas";
 import type { BlockFontPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
 import type { ActiveLayer, LayerVisibility } from "../../lib/layerState";
+import { DEFAULT_OVERLAY_FONT_FAMILY } from "../../lib/overlayLayout";
+import { FontCharacterOverrideModal } from "./FontCharacterOverrideModal";
 import { FontToolSection } from "./FontToolSection";
 import { InpaintMaskToolSection } from "./InpaintMaskToolSection";
 import { InpaintPsdToolSection } from "./InpaintPsdToolSection";
@@ -149,9 +151,38 @@ export function LayerToolPanel({
   onSelectInpaintResultEditTool,
   onSelectSharedInpaintTool
 }: LayerToolPanelProps): React.JSX.Element {
+  const [characterOverrideModalOpen, setCharacterOverrideModalOpen] = React.useState(false);
+  const layerToolTitle = resolveLayerToolTitle(activeLayer);
+  const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
+  const activeFontPresetName = fontPresets.find((preset) => preset.id === activeFontPresetId)?.name ?? "선택한";
+  const characterOverrideButtonEnabled = activeLayer === "overlay" && Boolean(activeFontPresetId && fontControlValues);
+
+  React.useEffect(() => {
+    if (!characterOverrideButtonEnabled) {
+      setCharacterOverrideModalOpen(false);
+    }
+  }, [characterOverrideButtonEnabled]);
+
   return (
     <section className="layer-tool-panel layer-tools-panel">
-      <h2>{resolveLayerToolTitle(activeLayer)}</h2>
+      <h2>
+        <span>{layerToolTitle}</span>
+        {activeLayer === "overlay" ? (
+          <button
+            type="button"
+            className="font-character-settings-button"
+            disabled={!characterOverrideButtonEnabled}
+            aria-label="커스텀 문자 설정"
+            title={characterOverrideButtonEnabled ? "커스텀 문자 설정" : "폰트 프리셋 선택 후 설정 가능"}
+            onClick={() => setCharacterOverrideModalOpen(true)}
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <circle cx="12" cy="12" r="3.2" />
+              <path d="M19.4 13.5a7.8 7.8 0 0 0 0-3l2-1.2-2-3.4-2.2.9a8 8 0 0 0-2.6-1.5L14.3 3h-4.6l-.3 2.3a8 8 0 0 0-2.6 1.5l-2.2-.9-2 3.4 2 1.2a7.8 7.8 0 0 0 0 3l-2 1.2 2 3.4 2.2-.9a8 8 0 0 0 2.6 1.5l.3 2.3h4.6l.3-2.3a8 8 0 0 0 2.6-1.5l2.2.9 2-3.4-2-1.2Z" />
+            </svg>
+          </button>
+        ) : null}
+      </h2>
       {activeLayer === "overlay" ? (
         <FontToolSection
           currentChapter={currentChapter}
@@ -243,6 +274,20 @@ export function LayerToolPanel({
       ) : (
         <p className="muted-line">최종 아웃풋 레이어에는 사용할 도구가 없습니다.</p>
       )}
+      {characterOverrideModalOpen && fontControlValues ? (
+        <FontCharacterOverrideModal
+          defaultFontFamily={fontControlValues.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}
+          disabled={selectedPageEditLocked}
+          fontFamilyOptions={fontFamilyOptions}
+          overrides={fontControlValues.characterFontOverrides ?? []}
+          presetName={activeFontPresetName}
+          onCancel={() => setCharacterOverrideModalOpen(false)}
+          onSubmit={(characterFontOverrides) => {
+            onFontSettingChange({ characterFontOverrides });
+            setCharacterOverrideModalOpen(false);
+          }}
+        />
+      ) : null}
     </section>
   );
 }

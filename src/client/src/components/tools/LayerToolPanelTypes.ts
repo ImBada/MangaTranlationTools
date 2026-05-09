@@ -1,8 +1,9 @@
-import type { TextDecoration, TextFontStyle } from "../../../../shared/types";
+import type { FontCharacterOverride, TextDecoration, TextFontStyle } from "../../../../shared/types";
 
 export type LayerToolFontControlValues = {
   autoFitText?: boolean;
   fontFamily?: string;
+  characterFontOverrides?: FontCharacterOverride[];
   fontStyle?: TextFontStyle;
   fontWeight?: number;
   fontSizePx: number;

@@ -10,6 +10,7 @@ import {
   buildScreentoneFillCssSize,
   hexToRgba,
   resolveBlockTextLayout,
+  resolveCharacterFontRuns,
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
@@ -223,15 +224,31 @@ export function OverlayBlock({
   const secondaryOutlineLineStyle: React.CSSProperties = {
     alignSelf: horizontalLineAlignSelf
   };
+  const characterFontRunCache = new Map<string, ReturnType<typeof resolveCharacterFontRuns>>();
+  const renderTextWithCharacterFonts = (text: string): React.ReactNode => {
+    let runs = characterFontRunCache.get(text);
+    if (!runs) {
+      runs = resolveCharacterFontRuns(block, text);
+      characterFontRunCache.set(text, runs);
+    }
+    if (runs.length === 1 && !runs[0].fontFamily) {
+      return text;
+    }
+    return runs.map((run, index) => (
+      <span key={`${run.text}-${index}`} style={run.fontFamily ? { fontFamily: run.fontFamily } : undefined}>
+        {run.text}
+      </span>
+    ));
+  };
   const renderTextContent = (contentLayerStyle: React.CSSProperties, contentLineStyle: React.CSSProperties, ariaHidden = false) => (
     <span className="overlay-text-content" style={contentLayerStyle} aria-hidden={ariaHidden}>
       {block.renderDirection === "horizontal"
         ? horizontalLines.map((line, index) => (
             <span key={`${line}-${index}`} className="overlay-text-line" style={contentLineStyle}>
-              {line}
+              {renderTextWithCharacterFonts(line)}
             </span>
           ))
-        : displayText}
+        : renderTextWithCharacterFonts(displayText)}
     </span>
   );
   return (

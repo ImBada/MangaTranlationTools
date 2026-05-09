@@ -2,6 +2,8 @@ import { afterEach, describe, expect, it } from "vitest";
 import {
   buildOverlayCanvasFont,
   hasNativeBoldFontWeight,
+  measureTextWidthWithLetterSpacing,
+  resolveCharacterFontRuns,
   resolveOverlayCanvasFontWeight,
   resolveBlockPaddingPx,
   resolveBlockTextLayout,
@@ -176,6 +178,44 @@ describe("render layout padding", () => {
     expect(resolveSyntheticItalicSkewX({ fontStyle: "normal" })).toBe(0);
     expect(resolveSyntheticItalicSkewX({ fontStyle: "italic" })).toBeLessThan(0);
     expect(buildOverlayCanvasFont(24, { fontFamily: "Arial", fontWeight: 400, fontStyle: "italic" })).toBe("normal 400 24px Arial");
+  });
+
+  it("splits text into runs for custom character fonts", () => {
+    expect(
+      resolveCharacterFontRuns(
+        { characterFontOverrides: [{ character: "ㅋ", fontFamily: "\"Laugh Font\", sans-serif" }] },
+        "아ㅋㅋ!"
+      )
+    ).toEqual([
+      { text: "아" },
+      { text: "ㅋㅋ", fontFamily: "\"Laugh Font\", sans-serif" },
+      { text: "!" }
+    ]);
+  });
+
+  it("measures custom character font runs with their assigned font family", () => {
+    const context = {
+      font: "normal 400 10px Base",
+      measureText(text: string) {
+        const unitWidth = this.font.includes("Wide Font") ? 20 : 10;
+        return { width: [...text].length * unitWidth } as TextMetrics;
+      }
+    };
+
+    expect(
+      measureTextWidthWithLetterSpacing(
+        context as CanvasRenderingContext2D,
+        {
+          fontFamily: "Base",
+          fontWeight: 400,
+          fontStyle: "normal",
+          characterFontOverrides: [{ character: "B", fontFamily: "\"Wide Font\", sans-serif" }]
+        },
+        "AB",
+        10
+      )
+    ).toBe(30);
+    expect(context.font).toBe("normal 400 10px Base");
   });
 });
 

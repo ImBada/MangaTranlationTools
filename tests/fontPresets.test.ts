@@ -5,6 +5,7 @@ import {
   buildNextFontSizePresetName,
   isBlockFontPresetValueLinked,
   isBlockFontSizeLinkedToPreset,
+  normalizeCharacterFontOverrides,
   resolveFontPreset
 } from "../src/client/src/lib/fontPresets";
 import type { FontPreset, TranslationBlock } from "../src/shared/types";
@@ -66,6 +67,37 @@ describe("font preset block links", () => {
       fontSizePx: 36
     });
     expect(resolveFontPreset(preset, []).fontSizePx).toBe(24);
+  });
+
+  it("copies custom character fonts from presets to linked blocks", () => {
+    const block = createBlock();
+    const preset = createPreset({
+      characterFontOverrides: [{ character: "！", fontFamily: "\"Impact\", sans-serif" }]
+    });
+
+    const updated = applyFontPresetPatchToBlock(block, preset);
+
+    expect(updated.characterFontOverrides).toEqual([{ character: "！", fontFamily: "\"Impact\", sans-serif" }]);
+    expect(updated.characterFontOverrides).not.toBe(preset.characterFontOverrides);
+  });
+
+  it("clears stale custom character fonts when applying a preset without mappings", () => {
+    const block = createBlock({
+      characterFontOverrides: [{ character: "！", fontFamily: "\"Impact\", sans-serif" }]
+    });
+    const preset = createPreset();
+
+    expect(applyFontPresetPatchToBlock(block, preset).characterFontOverrides).toBeUndefined();
+  });
+
+  it("normalizes custom character font mappings to one character per entry", () => {
+    expect(
+      normalizeCharacterFontOverrides([
+        { character: " AB", fontFamily: "First Font" },
+        { character: "A", fontFamily: "Second Font" },
+        { character: "", fontFamily: "Ignored Font" }
+      ])
+    ).toEqual([{ character: "A", fontFamily: "Second Font" }]);
   });
 });
 

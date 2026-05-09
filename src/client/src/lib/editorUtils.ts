@@ -9,6 +9,7 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "fontPresetId",
   ...FONT_PRESET_LINK_FIELDS,
   "fontFamily",
+  "characterFontOverrides",
   "fontWeight",
   "fontStyle",
   "textDecoration",
@@ -85,7 +86,8 @@ export function cloneTranslationBlock(block: TranslationBlock): TranslationBlock
   return {
     ...block,
     bbox: { ...block.bbox },
-    renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined
+    renderBbox: block.renderBbox ? { ...block.renderBbox } : undefined,
+    characterFontOverrides: block.characterFontOverrides?.map((override) => ({ ...override }))
   };
 }
 
@@ -224,7 +226,10 @@ export function createTranslationUndoSnapshot(
     selectedBlockId,
     editingFontPresetId,
     favoriteFontPresetIds: chapter.favoriteFontPresetIds ? [...chapter.favoriteFontPresetIds] : undefined,
-    fontPresets: chapter.fontPresets?.map((preset) => ({ ...preset })),
+    fontPresets: chapter.fontPresets?.map((preset) => ({
+      ...preset,
+      characterFontOverrides: preset.characterFontOverrides?.map((override) => ({ ...override }))
+    })),
     fontSizePresets: chapter.fontSizePresets?.map((preset) => ({ ...preset })),
     pages: chapter.pages.map((page) => ({
       pageId: page.id,

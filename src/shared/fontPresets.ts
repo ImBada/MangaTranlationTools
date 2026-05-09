@@ -102,6 +102,7 @@ export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPre
     fontPresetId: preset.id,
     ...buildLinkedFontPresetFields(),
     fontFamily: preset.fontFamily,
+    characterFontOverrides: preset.characterFontOverrides?.map((override) => ({ ...override })),
     fontWeight: preset.fontWeight,
     fontStyle: preset.fontStyle,
     textDecoration: preset.textDecoration,

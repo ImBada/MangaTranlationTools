@@ -338,6 +338,7 @@ export function useTranslationBlockActions({
       fontStyleLinkedToPreset: editingFontPreset ? true : undefined,
       textDecorationLinkedToPreset: editingFontPreset ? true : undefined,
       fontFamily: sourcePreset.fontFamily,
+      characterFontOverrides: sourcePreset.characterFontOverrides?.map((override) => ({ ...override })),
       fontWeight: sourcePreset.fontWeight,
       fontStyle: sourcePreset.fontStyle,
       textDecoration: sourcePreset.textDecoration,

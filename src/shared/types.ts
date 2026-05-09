@@ -15,6 +15,11 @@ export type TextPosition =
 export type TextFontStyle = "normal" | "italic";
 export type TextDecoration = "none" | "underline";
 
+export type FontCharacterOverride = {
+  character: string;
+  fontFamily: string;
+};
+
 export type JobKind = "model-analysis" | "library-import";
 export type ModelProvider = "openai-codex" | "openai-compatible";
 export type CodexReasoningEffort = "none" | "low" | "medium" | "high" | "xhigh";
@@ -128,6 +133,7 @@ export type TranslationBlock = {
   fontStyleLinkedToPreset?: boolean;
   textDecorationLinkedToPreset?: boolean;
   fontFamily?: string;
+  characterFontOverrides?: FontCharacterOverride[];
   fontWeight?: number;
   fontStyle?: TextFontStyle;
   textDecoration?: TextDecoration;
@@ -161,6 +167,7 @@ export type FontPreset = {
   name: string;
   fontSizePresetId?: string;
   fontFamily?: string;
+  characterFontOverrides?: FontCharacterOverride[];
   fontWeight?: number;
   fontStyle?: TextFontStyle;
   textDecoration?: TextDecoration;

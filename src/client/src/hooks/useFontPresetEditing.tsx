@@ -20,6 +20,7 @@ import {
   createFontSizePreset,
   DEFAULT_FONT_PRESET,
   isBlockFontPresetValueLinked,
+  normalizeCharacterFontOverrides,
   resolveFontPreset,
   type BlockFontPatch,
   type FontPresetPatch,
@@ -81,7 +82,7 @@ function resolveFavoriteFontPresetIds(favoriteFontPresetIds: readonly string[] |
 }
 
 function applyFontPresetListBackupToChapter(chapter: ChapterSnapshot, backup: FontPresetBackupSnapshot): ChapterSnapshot {
-  const nextFontPresets = backup.fontPresets.map((preset) => ({ ...preset }));
+  const nextFontPresets = backup.fontPresets.map(cloneFontPreset);
   const nextFontSizePresets = backup.fontSizePresets.map((preset) => ({ ...preset }));
   const presetById = new Map(nextFontPresets.map((preset) => [preset.id, resolveFontPreset(preset, nextFontSizePresets)]));
   const now = new Date().toISOString();
@@ -115,6 +116,13 @@ function applyFontPresetListBackupToChapter(chapter: ChapterSnapshot, backup: Fo
           }
         : page;
     })
+  };
+}
+
+function cloneFontPreset(preset: FontPreset): FontPreset {
+  return {
+    ...preset,
+    characterFontOverrides: preset.characterFontOverrides?.map((override) => ({ ...override }))
   };
 }
 
@@ -247,9 +255,15 @@ export function useFontPresetEditing({
 
     updateCurrentChapter(undefined, (current) => {
       const nextFontSizePresets = current.fontSizePresets ?? [];
-      const nextFontPresets = (current.fontPresets ?? []).map((preset) => (preset.id === presetId ? { ...preset, ...patch } : preset));
+      const normalizedPatch: AssignedFontPresetPatch =
+        patch.characterFontOverrides !== undefined
+          ? { ...patch, characterFontOverrides: normalizeCharacterFontOverrides(patch.characterFontOverrides) }
+          : patch;
+      const nextFontPresets = (current.fontPresets ?? []).map((preset) =>
+        preset.id === presetId ? { ...preset, ...normalizedPatch } : preset
+      );
       const nextPreset = nextFontPresets.find((preset) => preset.id === presetId);
-      const blockPatch = nextPreset ? resolveFontPreset(nextPreset, nextFontSizePresets) : patch;
+      const blockPatch = nextPreset ? resolveFontPreset(nextPreset, nextFontSizePresets) : normalizedPatch;
       return {
         ...current,
         fontPresets: nextFontPresets,
@@ -327,7 +341,11 @@ export function useFontPresetEditing({
         if (value === undefined) {
           continue;
         }
-        if (key === "fontFamily" || isBlockFontPresetValueLinked(selectedBlock, key)) {
+        if (
+          key === "fontFamily" ||
+          key === "characterFontOverrides" ||
+          isBlockFontPresetValueLinked(selectedBlock, key as LinkableFontPresetKey)
+        ) {
           if (key === "fontSizePx" && selectedFontPreset?.fontSizePresetId) {
             updateFontSizePresetValue(selectedFontPreset.fontSizePresetId, value as number);
             continue;

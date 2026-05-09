@@ -1,4 +1,4 @@
-import type { TextPosition, TranslationBlock } from "../../../shared/types";
+import type { FontCharacterOverride, TextPosition, TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp, clampTextPaddingPx, resolveBlockRenderBbox } from "../../../shared/geometry";
 import {
   DEFAULT_OVERLAY_FONT_FAMILY,
@@ -66,6 +66,14 @@ export type FontWeightAvailability = {
   weights?: number[];
 };
 
+export type CharacterFontRun = {
+  text: string;
+  fontFamily?: string;
+};
+
+const EMPTY_CHARACTER_FONT_OVERRIDE_MAP = new Map<string, string>();
+const characterFontOverrideMapCache = new WeakMap<readonly FontCharacterOverride[], Map<string, string>>();
+
 export function resolveTextPosition(position: TextPosition | undefined): TextPosition {
   return position ?? DEFAULT_OVERLAY_TEXT_POSITION;
 }
@@ -99,7 +107,8 @@ export function resolveOverlayFontSizePx(block: TranslationBlock, text: string, 
 }
 
 export function resolveWrappedTextLines(
-  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle"> & Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  block: Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle"> &
+    Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx" | "characterFontOverrides">>,
   text: string,
   fontSize: number,
   maxWidth: number,
@@ -107,7 +116,7 @@ export function resolveWrappedTextLines(
 ): string[] {
   const context = getMeasureContext();
   context.font = fontWeightAvailability ? buildOverlayCanvasFont(fontSize, block, fontWeightAvailability) : buildFont(fontSize, block);
-  return wrapTextToWidth(context, block, text, fontSize, maxWidth);
+  return wrapTextToWidth(context, block, text, fontSize, maxWidth, fontWeightAvailability);
 }
 
 export function resolveTextLetterSpacingPx(block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>, fontSize: number): number {
@@ -184,16 +193,99 @@ export function resolveSyntheticItalicSkewX(block: Partial<Pick<TranslationBlock
 }
 
 export function measureTextWidthWithLetterSpacing(
-  context: Pick<CanvasRenderingContext2D, "measureText">,
-  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  context: Pick<CanvasRenderingContext2D, "font" | "measureText">,
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle" | "fontSizePx" | "letterSpacingPx" | "characterFontOverrides">>,
   text: string,
-  fontSize: number
+  fontSize: number,
+  fontWeightAvailability?: readonly FontWeightAvailability[]
 ): number {
   const glyphCount = [...text].length;
+  const letterSpacingWidth = glyphCount > 1 ? resolveTextLetterSpacingPx(block, fontSize) * (glyphCount - 1) : 0;
+  const overrideByCharacter = getCharacterFontOverrideMap(block.characterFontOverrides);
+  if (overrideByCharacter.size === 0) {
+    return context.measureText(text).width + letterSpacingWidth;
+  }
   if (glyphCount <= 1) {
+    return measureTextRunWidth(context, block, text, fontSize, overrideByCharacter, fontWeightAvailability);
+  }
+  return measureTextRunWidth(context, block, text, fontSize, overrideByCharacter, fontWeightAvailability) + letterSpacingWidth;
+}
+
+export function resolveCharacterFontRuns(
+  block: Partial<Pick<TranslationBlock, "characterFontOverrides">>,
+  text: string
+): CharacterFontRun[] {
+  const overrideByCharacter = getCharacterFontOverrideMap(block.characterFontOverrides);
+  return resolveCharacterFontRunsFromMap(overrideByCharacter, text);
+}
+
+function resolveCharacterFontRunsFromMap(overrideByCharacter: ReadonlyMap<string, string>, text: string): CharacterFontRun[] {
+  if (overrideByCharacter.size === 0 || !text) {
+    return [{ text }];
+  }
+
+  const runs: CharacterFontRun[] = [];
+  for (const char of [...text]) {
+    const fontFamily = overrideByCharacter.get(char);
+    const lastRun = runs[runs.length - 1];
+    if (lastRun && lastRun.fontFamily === fontFamily) {
+      lastRun.text += char;
+      continue;
+    }
+    runs.push(fontFamily ? { text: char, fontFamily } : { text: char });
+  }
+  return runs;
+}
+
+function getCharacterFontOverrideMap(overrides: readonly FontCharacterOverride[] | undefined): Map<string, string> {
+  if (!overrides || overrides.length === 0) {
+    return EMPTY_CHARACTER_FONT_OVERRIDE_MAP;
+  }
+
+  const cached = characterFontOverrideMapCache.get(overrides);
+  if (cached) {
+    return cached;
+  }
+
+  const overrideByCharacter = new Map<string, string>();
+  for (const override of overrides) {
+    const character = [...override.character][0] ?? "";
+    const fontFamily = override.fontFamily.trim();
+    if (character && fontFamily) {
+      overrideByCharacter.set(character, fontFamily);
+    }
+  }
+  characterFontOverrideMapCache.set(overrides, overrideByCharacter);
+  return overrideByCharacter;
+}
+
+function measureTextRunWidth(
+  context: Pick<CanvasRenderingContext2D, "font" | "measureText">,
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle" | "characterFontOverrides">>,
+  text: string,
+  fontSize: number,
+  overrideByCharacter: ReadonlyMap<string, string>,
+  fontWeightAvailability?: readonly FontWeightAvailability[]
+): number {
+  if (overrideByCharacter.size === 0) {
     return context.measureText(text).width;
   }
-  return context.measureText(text).width + resolveTextLetterSpacingPx(block, fontSize) * (glyphCount - 1);
+
+  const runs = resolveCharacterFontRunsFromMap(overrideByCharacter, text);
+  const originalFont = context.font ?? "";
+  let width = 0;
+  for (const run of runs) {
+    if (run.fontFamily) {
+      context.font = fontWeightAvailability
+        ? buildOverlayCanvasFont(fontSize, { ...block, fontFamily: run.fontFamily }, fontWeightAvailability)
+        : buildFont(fontSize, { ...block, fontFamily: run.fontFamily });
+    } else {
+      context.font = originalFont;
+    }
+    width += context.measureText(run.text).width;
+  }
+  context.font = originalFont;
+  return width;
 }
 
 function resolveAutoBlockPaddingPx(rect: PixelRect): number {
@@ -382,10 +474,11 @@ type TextWrapSegment = {
 
 function wrapTextToWidth(
   context: CanvasRenderingContext2D,
-  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle" | "fontSizePx" | "letterSpacingPx" | "characterFontOverrides">>,
   text: string,
   fontSize: number,
-  maxWidth: number
+  maxWidth: number,
+  fontWeightAvailability?: readonly FontWeightAvailability[]
 ): string[] {
   const paragraphs = text.replace(/\r/g, "").split("\n");
   const lines: string[] = [];
@@ -401,7 +494,7 @@ function wrapTextToWidth(
     let current = segments[0]?.text ?? "";
     for (const segment of segments.slice(1)) {
       const candidate = `${current}${segment.separator}${segment.text}`;
-      if (measureTextWidthWithLetterSpacing(context, block, candidate, fontSize) <= maxWidth) {
+      if (measureTextWidthWithLetterSpacing(context, block, candidate, fontSize, fontWeightAvailability) <= maxWidth) {
         current = candidate;
         continue;
       }
@@ -441,17 +534,21 @@ function splitWordAtSoftWrapMarks(word: string): string[] {
 
 function measureWrappedText(
   context: CanvasRenderingContext2D,
-  block: Partial<Pick<TranslationBlock, "fontSizePx" | "letterSpacingPx">>,
+  block: Partial<Pick<TranslationBlock, "fontFamily" | "fontWeight" | "fontStyle" | "fontSizePx" | "letterSpacingPx" | "characterFontOverrides">>,
   text: string,
   fontSize: number,
   maxWidth: number,
-  lineHeight: number
+  lineHeight: number,
+  fontWeightAvailability?: readonly FontWeightAvailability[]
 ) : { lines: string[]; totalHeight: number; maxLineWidth: number } {
-  const lines = wrapTextToWidth(context, block, text, fontSize, maxWidth);
+  const lines = wrapTextToWidth(context, block, text, fontSize, maxWidth, fontWeightAvailability);
   return {
     lines,
     totalHeight: lines.length * lineHeight,
-    maxLineWidth: lines.reduce((widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize)), 0)
+    maxLineWidth: lines.reduce(
+      (widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize, fontWeightAvailability)),
+      0
+    )
   };
 }
 

@@ -10,6 +10,7 @@ import {
   measureTextWidthWithLetterSpacing,
   resolveSyntheticBoldStrokeWidthPx,
   resolveSyntheticItalicSkewX,
+  resolveCharacterFontRuns,
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
@@ -56,6 +57,7 @@ const DEFAULT_TEXT_OUTLINE_COLOR = "#000000";
 type CanvasPaint = CanvasRenderingContext2D["strokeStyle"];
 
 type TextRenderStyle = {
+  fontWeightAvailability: readonly FontWeightAvailability[];
   syntheticBoldWidthPx: number;
   syntheticItalicSkewX: number;
 };
@@ -220,6 +222,7 @@ function drawRenderedBlock(
 
 function resolveTextRenderStyle(block: TranslationBlock, fontSize: number, options: OverlayRenderOptions): TextRenderStyle {
   return {
+    fontWeightAvailability: options.fontWeightAvailability ?? [],
     syntheticBoldWidthPx: resolveSyntheticBoldStrokeWidthPx(block, fontSize, options.fontWeightAvailability),
     syntheticItalicSkewX: resolveSyntheticItalicSkewX(block)
   };
@@ -243,7 +246,10 @@ function drawHorizontalRenderedText(
   const totalHeight = lines.length * lineHeightPx;
   const textPositionFactors = resolveTextPositionFactors(block.textPosition);
   const startY = top + (innerHeight - totalHeight) * textPositionFactors.y + Math.max(0, (lineHeightPx - fontSize) / 2);
-  const maxSpacedLineWidth = lines.reduce((widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize)), 0);
+  const maxSpacedLineWidth = lines.reduce(
+    (widest, line) => Math.max(widest, measureTextWidthWithLetterSpacing(context, block, line, fontSize, fontWeightAvailability)),
+    0
+  );
   const textLeft = left + (innerWidth - maxSpacedLineWidth) * textPositionFactors.x;
   const x =
     block.textAlign === "left"
@@ -256,7 +262,7 @@ function drawHorizontalRenderedText(
   for (const [index, line] of lines.entries()) {
     const y = startY + index * lineHeightPx;
     drawFilledText(context, block, line, x, y, fontSize, textRenderStyle);
-    drawTextDecoration(context, block, line, x, y, fontSize);
+    drawTextDecoration(context, block, line, x, y, fontSize, fontWeightAvailability);
   }
 }
 
@@ -284,16 +290,24 @@ function drawVerticalRenderedText(
   for (const [index, char] of chars.entries()) {
     const y = startY + index * charAdvancePx;
     drawFilledText(context, block, char, x, y, fontSize, textRenderStyle);
-    drawTextDecoration(context, block, char, x, y, fontSize);
+    drawTextDecoration(context, block, char, x, y, fontSize, textRenderStyle.fontWeightAvailability);
   }
 }
 
-function drawTextDecoration(context: CanvasRenderingContext2D, block: TranslationBlock, text: string, x: number, y: number, fontSize: number): void {
+function drawTextDecoration(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  fontWeightAvailability: readonly FontWeightAvailability[]
+): void {
   if ((block.textDecoration ?? DEFAULT_OVERLAY_TEXT_DECORATION) !== "underline") {
     return;
   }
 
-  const width = measureTextWidthWithLetterSpacing(context, block, text, fontSize);
+  const width = measureTextWidthWithLetterSpacing(context, block, text, fontSize, fontWeightAvailability);
   const startX = context.textAlign === "right" ? x - width : context.textAlign === "center" ? x - width / 2 : x;
   const underlineY = y + fontSize * 1.05;
   context.save();
@@ -471,12 +485,12 @@ function drawTextRun(
     context.translate(x, pivotY);
     context.transform(1, 0, textRenderStyle.syntheticItalicSkewX, 1, 0, 0);
     context.translate(-x, -pivotY);
-    drawTextRunGlyphs(context, block, text, x, y, fontSize, mode);
+    drawTextRunGlyphs(context, block, text, x, y, fontSize, mode, textRenderStyle);
     context.restore();
     return;
   }
 
-  drawTextRunGlyphs(context, block, text, x, y, fontSize, mode);
+  drawTextRunGlyphs(context, block, text, x, y, fontSize, mode, textRenderStyle);
 }
 
 function drawTextRunGlyphs(
@@ -486,32 +500,62 @@ function drawTextRunGlyphs(
   x: number,
   y: number,
   fontSize: number,
-  mode: "fill" | "stroke"
+  mode: "fill" | "stroke",
+  textRenderStyle: TextRenderStyle
 ): void {
-  const chars = [...text];
   const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
   const hasCenteredEllipsis = text.includes(CENTERED_ELLIPSIS);
-  if (letterSpacingPx === 0 && !hasCenteredEllipsis) {
+  const hasCharacterFontOverrides = (block.characterFontOverrides?.length ?? 0) > 0;
+  if (letterSpacingPx === 0 && !hasCenteredEllipsis && !hasCharacterFontOverrides) {
     drawTextGlyph(context, text, x, y, fontSize, mode);
     return;
   }
-  const runWidth = measureTextWidthWithLetterSpacing(context, block, text, fontSize);
+  const runWidth = measureTextWidthWithLetterSpacing(context, block, text, fontSize, textRenderStyle.fontWeightAvailability);
   let cursorX = context.textAlign === "right" ? x - runWidth : context.textAlign === "center" ? x - runWidth / 2 : x;
+  const originalFont = context.font;
 
   context.save();
   context.textAlign = "left";
   if (letterSpacingPx === 0) {
-    for (const segment of splitTextRunByCenteredEllipsis(chars)) {
-      drawTextGlyph(context, segment, cursorX, y, fontSize, mode);
-      cursorX += context.measureText(segment).width;
+    for (const segment of splitTextRunSegments(block, text)) {
+      applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode);
+      cursorX += context.measureText(segment.text).width;
     }
   } else {
-    for (const char of chars) {
-      drawTextGlyph(context, char, cursorX, y, fontSize, mode);
-      cursorX += context.measureText(char).width + letterSpacingPx;
+    for (const segment of splitTextRunSegments(block, text, true)) {
+      applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode);
+      cursorX += context.measureText(segment.text).width + letterSpacingPx;
     }
   }
+  context.font = originalFont;
   context.restore();
+}
+
+type TextRunSegment = {
+  text: string;
+  fontFamily?: string;
+};
+
+function splitTextRunSegments(block: TranslationBlock, text: string, forceSingleGlyph = false): TextRunSegment[] {
+  const segments: TextRunSegment[] = [];
+  const runs = resolveCharacterFontRuns(block, text);
+
+  for (const run of runs) {
+    if (forceSingleGlyph) {
+      for (const char of [...run.text]) {
+        segments.push({ text: char, fontFamily: run.fontFamily });
+      }
+      continue;
+    }
+
+    for (const segment of splitTextRunByCenteredEllipsis([...run.text])) {
+      segments.push({ text: segment, fontFamily: run.fontFamily });
+    }
+  }
+
+  return segments;
 }
 
 function splitTextRunByCenteredEllipsis(chars: readonly string[]): string[] {
@@ -534,6 +578,21 @@ function splitTextRunByCenteredEllipsis(chars: readonly string[]): string[] {
     segments.push(run);
   }
   return segments;
+}
+
+function applySegmentFont(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  fontFamily: string | undefined,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle,
+  fallbackFont: string
+): void {
+  if (!fontFamily) {
+    context.font = fallbackFont;
+    return;
+  }
+  context.font = buildOverlayCanvasFont(fontSize, { ...block, fontFamily }, textRenderStyle.fontWeightAvailability);
 }
 
 function drawTextGlyph(
