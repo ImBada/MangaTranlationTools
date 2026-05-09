@@ -61,6 +61,22 @@ npm run app:build
 
 다른 위치를 쓰려면 실행 전에 `MANGA_TRANSLATOR_DATA_DIR` 환경 변수를 지정하세요.
 
+### 인페인트 디버그 로그
+
+인페인트 브러시, 지우개, 되돌리기, 저장 큐 문제를 추적할 때는 브라우저 개발자 도구 콘솔에서 아래 값을 켜고 새로고침하세요.
+
+```js
+localStorage.setItem("mangaTranslationTools.inpaintDebugLogs", "1")
+```
+
+로그는 `~/Documents/MangaTranslationTools/logs/app.log`에 기록됩니다. 끄려면 아래 값을 실행하고 새로고침하세요.
+
+```js
+localStorage.removeItem("mangaTranslationTools.inpaintDebugLogs")
+```
+
+임시로 한 번만 켜려면 URL에 `?inpaintDebug=1`을 붙여도 됩니다.
+
 ## 설정
 
 - 한손모드: 편집 화면에서 `Q` 키를 삭제 키처럼 사용
