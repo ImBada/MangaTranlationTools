@@ -11,6 +11,7 @@ const originalDataDir = process.env.MANGA_TRANSLATOR_DATA_DIR;
 describe("chapter save conflict handling", () => {
   afterEach(async () => {
     process.env.MANGA_TRANSLATOR_DATA_DIR = originalDataDir;
+    vi.doUnmock("node:fs/promises");
     vi.resetModules();
     while (tempDirs.length > 0) {
       const dir = tempDirs.pop();
@@ -111,6 +112,83 @@ describe("chapter save conflict handling", () => {
     expect(chapterJson.pages[0]?.blocks[0]?.translatedText).toBe("패치 저장");
     expect(chapterJson.pages[1]?.blocks[0]?.translatedText).toBe("번역 완료");
     expect(chapterJson.pages[1]?.analysisStatus).toBe("completed");
+  });
+
+  it("serializes inpaint mask saves with queued chapter patches", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-inpaint-save-race-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer());
+    await seedLibraryIndex(dataDir);
+
+    const maskWriteStarted = defer<void>();
+    const releaseMaskWrite = defer<void>();
+    const patchCommitted = defer<void>();
+    const patchTempPaths = new Set<string>();
+
+    vi.doMock("node:fs/promises", async (importOriginal) => {
+      const actual = await importOriginal<typeof import("node:fs/promises")>();
+      return {
+        ...actual,
+        writeFile: async (...args: Parameters<typeof actual.writeFile>) => {
+          const target = args[0]?.toString() ?? "";
+          const content = String(args[1]);
+          if (target.endsWith("-mask.png")) {
+            maskWriteStarted.resolve(undefined);
+            await releaseMaskWrite.promise;
+          }
+          if (target.includes("chapter.json.") && content.includes("패치 저장")) {
+            patchTempPaths.add(target);
+          }
+          return actual.writeFile(...args);
+        },
+        rename: async (...args: Parameters<typeof actual.rename>) => {
+          const from = args[0]?.toString() ?? "";
+          const to = args[1]?.toString() ?? "";
+          const result = await actual.rename(...args);
+          if (to.endsWith("chapter.json") && patchTempPaths.has(from)) {
+            patchCommitted.resolve(undefined);
+          }
+          return result;
+        }
+      };
+    });
+
+    const { patchChapterSnapshot, saveChapterSnapshot, saveInpaintMask } = await import("../src/server/library");
+    const initial = makeChapterSnapshot(pagePath);
+    await saveChapterSnapshot(initial);
+
+    const maskSave = saveInpaintMask(initial.id, "page-1", await rgbaDataUrl(1, 1, [[255, 255, 255, 255]]));
+    await maskWriteStarted.promise;
+
+    const patchSave = patchChapterSnapshot(initial.id, {
+      chapter: {
+        id: initial.id,
+        workId: initial.workId,
+        updatedAt: "2026-01-01T00:04:00.000Z"
+      },
+      pages: [
+        {
+          id: "page-2",
+          blocks: [{ ...initial.pages[1].blocks[0], translatedText: "패치 저장" }],
+          updatedAt: "2026-01-01T00:04:00.000Z"
+        }
+      ]
+    });
+
+    const patchCommittedBeforeMaskWriteFinished = await resolvesWithin(patchCommitted.promise, 100);
+    releaseMaskWrite.resolve(undefined);
+    await Promise.all([maskSave, patchSave]);
+
+    const chapterJson = JSON.parse(
+      await readFile(join(dataDir, "library", "works", "work-1", "chapters", "chapter-1", "chapter.json"), "utf8")
+    ) as ChapterSnapshot;
+    expect(patchCommittedBeforeMaskWriteFinished).toBe(false);
+    expect(chapterJson.pages[0]?.inpaintMaskPath).toBeTruthy();
+    expect(chapterJson.pages[1]?.blocks[0]?.translatedText).toBe("패치 저장");
   });
 
   it("preserves existing blocks when a failed analysis update carries empty blocks", async () => {
@@ -225,4 +303,28 @@ async function pngBuffer(): Promise<Buffer> {
       background: { r: 1, g: 2, b: 3, alpha: 1 }
     }
   }).png().toBuffer();
+}
+
+async function rgbaDataUrl(width: number, height: number, pixels: [number, number, number, number][]): Promise<string> {
+  const buffer = await sharp(Buffer.from(pixels.flat()), {
+    raw: { width, height, channels: 4 }
+  }).png().toBuffer();
+  return `data:image/png;base64,${buffer.toString("base64")}`;
+}
+
+function defer<T>(): { promise: Promise<T>; resolve: (value: T | PromiseLike<T>) => void } {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+function resolvesWithin<T>(promise: Promise<T>, ms: number): Promise<boolean> {
+  return Promise.race([
+    promise.then(() => true),
+    new Promise<boolean>((resolve) => {
+      setTimeout(() => resolve(false), ms);
+    })
+  ]);
 }
