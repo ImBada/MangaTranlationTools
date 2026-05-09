@@ -34,15 +34,24 @@ import type {
 type ImportKind = "images" | "folder" | "zip" | "zip-folder";
 type LastImportedInpaintPsdMeta = { exists: boolean; importedAt?: string };
 
-async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+function requestHeaders(init?: RequestInit): HeadersInit | undefined {
+  return init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers };
+}
+
+async function request(url: string, init?: RequestInit): Promise<Response> {
   const response = await fetch(url, {
     ...init,
-    headers: init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers }
+    headers: requestHeaders(init)
   });
   if (!response.ok) {
     const payload = await response.json().catch(() => null);
     throw new Error(payload?.error || `${response.status} ${response.statusText}`);
   }
+  return response;
+}
+
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const response = await request(url, init);
   return response.json() as Promise<T>;
 }
 
@@ -50,15 +59,12 @@ function postJson<T>(url: string, body?: unknown): Promise<T> {
   return requestJson<T>(url, { method: "POST", body: JSON.stringify(body ?? {}) });
 }
 
+async function postJsonNoContent(url: string, body?: unknown): Promise<void> {
+  await request(url, { method: "POST", body: JSON.stringify(body ?? {}) });
+}
+
 async function requestBlob(url: string, init?: RequestInit): Promise<Blob> {
-  const response = await fetch(url, {
-    ...init,
-    headers: init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers }
-  });
-  if (!response.ok) {
-    const payload = await response.json().catch(() => null);
-    throw new Error(payload?.error || `${response.status} ${response.statusText}`);
-  }
+  const response = await request(url, init);
   return response.blob();
 }
 
@@ -144,10 +150,10 @@ export const mangaApi = {
   createImport: (request: CreateImportRequest): Promise<CreateImportResult> => postJson("/api/import/create", request),
   getLibrary: (): Promise<LibraryIndex> => requestJson("/api/library"),
   openChapter: (chapterId: string): Promise<ChapterSnapshot> => requestJson(`/api/library/chapters/${encodeURIComponent(chapterId)}`),
-  saveChapter: (chapter: ChapterSnapshot, dirtyPageIds?: string[]): Promise<ChapterSnapshot> =>
-    postJson(`/api/library/chapters/${encodeURIComponent(chapter.id)}/patch`, buildChapterPatchBody(chapter, dirtyPageIds)),
-  saveLastOpenedPage: (chapterId: string, pageId: string): Promise<ChapterSnapshot> =>
-    postJson(`/api/library/chapters/${encodeURIComponent(chapterId)}/last-opened-page`, { pageId }),
+  saveChapter: (chapter: ChapterSnapshot, dirtyPageIds?: string[]): Promise<void> =>
+    postJsonNoContent(`/api/library/chapters/${encodeURIComponent(chapter.id)}/patch`, buildChapterPatchBody(chapter, dirtyPageIds)),
+  saveLastOpenedPage: (chapterId: string, pageId: string): Promise<void> =>
+    postJsonNoContent(`/api/library/chapters/${encodeURIComponent(chapterId)}/last-opened-page`, { pageId }),
   resolveImageDataUrl,
   resolveOptionalImageDataUrl,
   pageImageUrl: (chapterId: string, pageId: string, layer: PageImageLayer): string =>

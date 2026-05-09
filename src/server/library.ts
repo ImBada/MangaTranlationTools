@@ -26,6 +26,8 @@ export {
   markChapterPagesRunning,
   openChapter,
   patchChapterSnapshot,
+  persistChapterLastOpenedPage,
+  persistChapterPatch,
   renameChapter,
   renameWork,
   reorderChapters,

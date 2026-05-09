@@ -41,6 +41,7 @@ import {
   writeIndexFile,
   writeWorkFile
 } from "./libraryStore";
+import type { ChapterFile } from "./libraryStore";
 
 export type ChapterRunPaths = {
   chapterDir: string;
@@ -89,8 +90,8 @@ export async function openChapter(chapterId: string): Promise<ChapterSnapshot> {
   return hydrateChapter(chapter);
 }
 
-export async function saveChapterLastOpenedPage(chapterId: string, pageId: string): Promise<ChapterSnapshot> {
-  const saved = await enqueueChapterMutation(chapterId, async () => {
+async function writeChapterLastOpenedPage(chapterId: string, pageId: string): Promise<ChapterFile> {
+  return enqueueChapterMutation(chapterId, async () => {
     const locator = await findChapterLocation(chapterId);
     if (!locator) {
       throw new Error("화를 찾지 못했습니다.");
@@ -113,7 +114,15 @@ export async function saveChapterLastOpenedPage(chapterId: string, pageId: strin
     await writeChapterFile(next);
     return next;
   });
+}
+
+export async function saveChapterLastOpenedPage(chapterId: string, pageId: string): Promise<ChapterSnapshot> {
+  const saved = await writeChapterLastOpenedPage(chapterId, pageId);
   return hydrateChapter(saved);
+}
+
+export async function persistChapterLastOpenedPage(chapterId: string, pageId: string): Promise<void> {
+  await writeChapterLastOpenedPage(chapterId, pageId);
 }
 
 export async function saveChapterSnapshot(snapshot: ChapterSnapshot, options: SaveChapterSnapshotOptions = {}): Promise<ChapterSnapshot> {
@@ -127,50 +136,56 @@ export async function saveChapterSnapshot(snapshot: ChapterSnapshot, options: Sa
   return hydrateChapter(saved);
 }
 
-export async function patchChapterSnapshot(chapterId: string, request: SaveChapterPatchRequest): Promise<ChapterSnapshot> {
-  const saved = await mutateExistingChapterFile(chapterId, (current) => {
-    if (request.chapter.id && request.chapter.id !== current.id) {
-      throw new Error("저장할 화 정보가 일치하지 않습니다.");
-    }
-    if (request.chapter.workId && request.chapter.workId !== current.workId) {
-      throw new Error("저장할 작품 정보가 일치하지 않습니다.");
-    }
+function applyChapterPatch(current: ChapterFile, request: SaveChapterPatchRequest): ChapterFile {
+  if (request.chapter.id && request.chapter.id !== current.id) {
+    throw new Error("저장할 화 정보가 일치하지 않습니다.");
+  }
+  if (request.chapter.workId && request.chapter.workId !== current.workId) {
+    throw new Error("저장할 작품 정보가 일치하지 않습니다.");
+  }
 
-    const pagePatches = new Map((request.pages ?? []).map((page) => [page.id, toStoredPagePatch(page)]));
-    const pages = current.pages.map((page) => {
-      const patch = pagePatches.get(page.id);
-      if (!patch) {
-        return page;
-      }
-      return {
-        ...page,
-        ...patch,
-        id: page.id,
-        imagePath: page.imagePath,
-        createdAt: page.createdAt,
-        blocks: patch.blocks ? patch.blocks.map(normalizeStoredBlock) : page.blocks
-      };
-    });
-    const pageOrder = request.chapter.pageOrder ? reorderIds(current.pageOrder, request.chapter.pageOrder) : current.pageOrder;
-    const updatedAt = maxIsoTimestamp(
-      request.chapter.updatedAt ?? current.updatedAt,
-      current.updatedAt,
-      ...pages.map((page) => page.updatedAt)
-    );
-
+  const pagePatches = new Map((request.pages ?? []).map((page) => [page.id, toStoredPagePatch(page)]));
+  const pages = current.pages.map((page) => {
+    const patch = pagePatches.get(page.id);
+    if (!patch) {
+      return page;
+    }
     return {
-      ...current,
-      title: request.chapter.title ?? current.title,
-      favoriteFontPresetIds: request.chapter.favoriteFontPresetIds ?? current.favoriteFontPresetIds,
-      fontPresets: request.chapter.fontPresets ?? current.fontPresets,
-      fontSizePresets: request.chapter.fontSizePresets ?? current.fontSizePresets,
-      pageOrder,
-      pages: reorderRecords(pages, pageOrder),
-      status: resolveChapterStatus(pages),
-      updatedAt
+      ...page,
+      ...patch,
+      id: page.id,
+      imagePath: page.imagePath,
+      createdAt: page.createdAt,
+      blocks: patch.blocks ? patch.blocks.map(normalizeStoredBlock) : page.blocks
     };
   });
+  const pageOrder = request.chapter.pageOrder ? reorderIds(current.pageOrder, request.chapter.pageOrder) : current.pageOrder;
+  const updatedAt = maxIsoTimestamp(
+    request.chapter.updatedAt ?? current.updatedAt,
+    current.updatedAt,
+    ...pages.map((page) => page.updatedAt)
+  );
+
+  return {
+    ...current,
+    title: request.chapter.title ?? current.title,
+    favoriteFontPresetIds: request.chapter.favoriteFontPresetIds ?? current.favoriteFontPresetIds,
+    fontPresets: request.chapter.fontPresets ?? current.fontPresets,
+    fontSizePresets: request.chapter.fontSizePresets ?? current.fontSizePresets,
+    pageOrder,
+    pages: reorderRecords(pages, pageOrder),
+    status: resolveChapterStatus(pages),
+    updatedAt
+  };
+}
+
+export async function patchChapterSnapshot(chapterId: string, request: SaveChapterPatchRequest): Promise<ChapterSnapshot> {
+  const saved = await mutateExistingChapterFile(chapterId, (current) => applyChapterPatch(current, request));
   return hydrateChapter(saved);
+}
+
+export async function persistChapterPatch(chapterId: string, request: SaveChapterPatchRequest): Promise<void> {
+  await mutateExistingChapterFile(chapterId, (current) => applyChapterPatch(current, request));
 }
 
 export async function renameWork(workId: string, title: string): Promise<LibraryIndex> {
