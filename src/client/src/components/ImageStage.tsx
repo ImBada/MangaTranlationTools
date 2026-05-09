@@ -228,6 +228,7 @@ export function ImageStage({
     pageSize,
     stagePanDisabled: Boolean(activeInpaintBrushCursorTool),
     temporaryPanActive,
+    viewSubjectKey: page.id,
     viewResetKey,
     viewScale,
     zoomToolActive

@@ -35,6 +35,7 @@ type UseImageStageViewOptions = {
   pageSize: ViewportSize;
   stagePanDisabled?: boolean;
   temporaryPanActive: boolean;
+  viewSubjectKey: string;
   viewResetKey: number;
   viewScale: number | null;
   zoomToolActive: boolean;
@@ -62,6 +63,7 @@ export function useImageStageView({
   pageSize,
   stagePanDisabled = false,
   temporaryPanActive,
+  viewSubjectKey,
   viewResetKey,
   viewScale,
   zoomToolActive
@@ -127,11 +129,11 @@ export function useImageStageView({
     };
   }, [pageSize, viewScale]);
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     applyPanOffset({ x: 0, y: 0 });
     panRef.current = null;
     setPanning(false);
-  }, [applyPanOffset, viewResetKey]);
+  }, [applyPanOffset, pageSize.height, pageSize.width, viewResetKey, viewSubjectKey]);
 
   React.useEffect(() => {
     if (!zoomToolActive || temporaryPanActive) {
