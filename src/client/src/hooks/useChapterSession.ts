@@ -2,6 +2,7 @@ import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
 import { mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "../lib/chapterSync";
 import { normalizeChapterTranslatedText } from "../lib/editorUtils";
+import { summarizeDataUrl, writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type ChapterSessionOptions = {
@@ -291,14 +292,30 @@ export function useChapterSession({
   const mergeLiveChapter = React.useCallback((chapter: ChapterSnapshot) => {
     const current = currentChapterRef.current;
     if (current && current.id !== chapter.id) {
+      writeInpaintDebugLog("chapter-merge:skip", {
+        currentChapterId: current.id,
+        incomingChapterId: chapter.id,
+        reason: "chapter-mismatch"
+      });
       return;
     }
 
+    writeInpaintDebugLog("chapter-merge:start", () => ({
+      dirtyAllPages: dirtyAllPagesRef.current,
+      dirtyPageIds: [...dirtyPageIdsRef.current],
+      incomingChapterId: chapter.id,
+      inpaintDiffs: summarizeChapterInpaintDiffs(current, chapter)
+    }));
     const mergeResult = mergeLiveChapterPreservingDirtyCompletedPages(chapter, current, dirtyPageIdsRef.current, {
       preserveLocalChapterPresets: dirtyChapterPresetsRef.current
     });
     dirtyPageIdsRef.current = new Set(mergeResult.preservedDirtyPageIds);
     currentChapterRef.current = mergeResult.chapter;
+    writeInpaintDebugLog("chapter-merge:applied", () => ({
+      chapterId: mergeResult.chapter.id,
+      inpaintDiffsAfterMerge: summarizeChapterInpaintDiffs(current, mergeResult.chapter),
+      preservedDirtyPageIds: mergeResult.preservedDirtyPageIds
+    }));
 
     setCurrentChapterState((currentChapter) => {
       if (currentChapter && currentChapter.id !== mergeResult.chapter.id) {
@@ -537,4 +554,60 @@ export function useChapterSession({
     setSelectedPageId,
     updateCurrentChapter
   };
+}
+
+function summarizeChapterInpaintDiffs(
+  current: ChapterSnapshot | null,
+  incoming: ChapterSnapshot
+): {
+  current?: ReturnType<typeof summarizeChapterInpaintPage>;
+  incoming: ReturnType<typeof summarizeChapterInpaintPage>;
+  pageId: string;
+}[] {
+  const currentPages = new Map((current?.pages ?? []).map((page) => [page.id, page]));
+  return incoming.pages
+    .map((incomingPage) => {
+      const currentPage = currentPages.get(incomingPage.id);
+      return {
+        current: currentPage ? summarizeChapterInpaintPage(currentPage) : undefined,
+        incoming: summarizeChapterInpaintPage(incomingPage),
+        pageId: incomingPage.id
+      };
+    })
+    .filter((entry) => !entry.current || !isChapterInpaintPageSummaryEqual(entry.current, entry.incoming));
+}
+
+function summarizeChapterInpaintPage(page: ChapterSnapshot["pages"][number]): {
+  inpaintMaskDataUrl: ReturnType<typeof summarizeDataUrl>;
+  inpaintMaskPath?: string;
+  inpaintResultDataUrl: ReturnType<typeof summarizeDataUrl>;
+  inpaintResultPath?: string;
+  inpaintStatus?: string;
+  updatedAt: string;
+} {
+  return {
+    inpaintMaskDataUrl: summarizeDataUrl(page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl),
+    inpaintMaskPath: page.inpaintMaskPath,
+    inpaintResultDataUrl: summarizeDataUrl(page.inpaintResultDataUrl),
+    inpaintResultPath: page.inpaintResultPath,
+    inpaintStatus: page.inpaintStatus,
+    updatedAt: page.updatedAt
+  };
+}
+
+function isChapterInpaintPageSummaryEqual(
+  left: ReturnType<typeof summarizeChapterInpaintPage>,
+  right: ReturnType<typeof summarizeChapterInpaintPage>
+): boolean {
+  return (
+    left.inpaintMaskDataUrl.fingerprint === right.inpaintMaskDataUrl.fingerprint &&
+    left.inpaintMaskDataUrl.length === right.inpaintMaskDataUrl.length &&
+    left.inpaintMaskDataUrl.present === right.inpaintMaskDataUrl.present &&
+    left.inpaintMaskPath === right.inpaintMaskPath &&
+    left.inpaintResultDataUrl.fingerprint === right.inpaintResultDataUrl.fingerprint &&
+    left.inpaintResultDataUrl.length === right.inpaintResultDataUrl.length &&
+    left.inpaintResultDataUrl.present === right.inpaintResultDataUrl.present &&
+    left.inpaintResultPath === right.inpaintResultPath &&
+    left.inpaintStatus === right.inpaintStatus
+  );
 }

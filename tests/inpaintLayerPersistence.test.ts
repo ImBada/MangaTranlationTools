@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   isExpectedPreviousInpaintMask,
-  resolveInpaintLayerUndoSnapshotSequence,
+  isExpectedPreviousInpaintResult,
   resolveInpaintUndoDataUrlSequence
 } from "../src/client/src/hooks/useInpaintLayerPersistence";
 
@@ -11,6 +11,14 @@ describe("inpaint layer persistence helpers", () => {
       "/api/library/chapters/chapter/pages/page/images/inpaint-mask",
       "data:image/png;base64,previous-canvas-mask",
       "/api/library/chapters/chapter/pages/page/images/inpaint-mask"
+    )).toBe(true);
+  });
+
+  it("accepts a saved result image URL as the previous source for canvas data URL edits", () => {
+    expect(isExpectedPreviousInpaintResult(
+      "/api/library/chapters/chapter/pages/page/images/inpaint-result",
+      "data:image/png;base64,previous-canvas-result",
+      "/api/library/chapters/chapter/pages/page/images/inpaint-result"
     )).toBe(true);
   });
 
@@ -46,50 +54,4 @@ describe("inpaint layer persistence helpers", () => {
     )).toEqual(["before", "mid-a"]);
   });
 
-  it("keeps paired mask/result undo snapshots for mixed layer updates", () => {
-    expect(resolveInpaintLayerUndoSnapshotSequence(
-      { maskDataUrl: "mask-before", resultDataUrl: "result-before" },
-      [
-        { maskDataUrl: "mask-smart", resultDataUrl: "result-smart" },
-        { maskDataUrl: "mask-smart", resultDataUrl: "result-smart" },
-        { maskDataUrl: "mask-smart", resultDataUrl: "result-after" }
-      ],
-      { maskDataUrl: "mask-after", resultDataUrl: "result-after" }
-    )).toEqual([
-      { maskDataUrl: "mask-before", resultDataUrl: "result-before" },
-      { maskDataUrl: "mask-smart", resultDataUrl: "result-smart" },
-      { maskDataUrl: "mask-smart", resultDataUrl: "result-after" }
-    ]);
-  });
-
-  it("removes layer duplicates that become adjacent after final-state snapshots are dropped", () => {
-    expect(resolveInpaintLayerUndoSnapshotSequence(
-      { maskDataUrl: "mask-before", resultDataUrl: "result-before" },
-      [
-        { maskDataUrl: "mask-after", resultDataUrl: "result-after" },
-        { maskDataUrl: "mask-before", resultDataUrl: "result-before" },
-        { maskDataUrl: "mask-mid", resultDataUrl: "result-mid" },
-        { maskDataUrl: "mask-after", resultDataUrl: "result-after" },
-        { maskDataUrl: "mask-mid", resultDataUrl: "result-mid" }
-      ],
-      { maskDataUrl: "mask-after", resultDataUrl: "result-after" }
-    )).toEqual([
-      { maskDataUrl: "mask-before", resultDataUrl: "result-before" },
-      { maskDataUrl: "mask-mid", resultDataUrl: "result-mid" }
-    ]);
-  });
-
-  it("drops layer undo snapshots that are identical to the final state", () => {
-    expect(resolveInpaintLayerUndoSnapshotSequence(
-      { maskDataUrl: undefined, resultDataUrl: undefined },
-      [
-        { maskDataUrl: "mask-a", resultDataUrl: "result-a" },
-        { maskDataUrl: "mask-final", resultDataUrl: "result-final" }
-      ],
-      { maskDataUrl: "mask-final", resultDataUrl: "result-final" }
-    )).toEqual([
-      { maskDataUrl: undefined, resultDataUrl: undefined },
-      { maskDataUrl: "mask-a", resultDataUrl: "result-a" }
-    ]);
-  });
 });

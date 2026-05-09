@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
+import type { ChapterSnapshot, MangaPage } from "../src/shared/types";
 import {
   coalescePendingInpaintLayerSaves,
+  preservePendingInpaintSaveDataUrls,
   requeueFailedInpaintLayerSave,
   type PendingInpaintLayerSave
 } from "../src/client/src/hooks/useInpaintLayerSaveQueue";
@@ -44,6 +46,102 @@ describe("inpaint layer save queue helpers", () => {
       pending
     ]);
   });
+
+  it("keeps local result data URLs when merging saved result responses", () => {
+    const current = chapterSnapshot({
+      pages: [
+        mangaPage({
+          inpaintMaskDataUrl: "data:image/png;base64,current-mask",
+          inpaintMaskPath: "mask.png",
+          inpaintResultDataUrl: "data:image/png;base64,current-result",
+          inpaintResultPath: "result.png"
+        })
+      ]
+    });
+    const saved = chapterSnapshot({
+      pages: [
+        mangaPage({
+          inpaintMaskDataUrl: "/api/pages/page-a/inpaint-mask",
+          inpaintMaskPath: "mask.png",
+          inpaintResultDataUrl: "/api/pages/page-a/inpaint-result",
+          inpaintResultPath: "result.png"
+        })
+      ]
+    });
+
+    const merged = preservePendingInpaintSaveDataUrls(
+      saved,
+      resultSave({ dataUrl: "data:image/png;base64,pending-result" }),
+      current
+    );
+
+    expect(merged.pages[0]).toMatchObject({
+      inpaintMaskDataUrl: "data:image/png;base64,current-mask",
+      inpaintMaskPath: "mask.png",
+      inpaintResultDataUrl: "data:image/png;base64,pending-result",
+      inpaintResultPath: "result.png"
+    });
+  });
+
+  it("falls back to saved mask URLs when no current chapter is available", () => {
+    const saved = chapterSnapshot({
+      pages: [
+        mangaPage({
+          inpaintMaskDataUrl: "/api/pages/page-a/inpaint-mask",
+          inpaintMaskPath: "mask.png",
+          inpaintResultDataUrl: "/api/pages/page-a/inpaint-result",
+          inpaintResultPath: "result.png"
+        })
+      ]
+    });
+
+    const merged = preservePendingInpaintSaveDataUrls(
+      saved,
+      resultSave({ dataUrl: "data:image/png;base64,pending-result" }),
+      null
+    );
+
+    expect(merged.pages[0]).toMatchObject({
+      inpaintMaskDataUrl: "/api/pages/page-a/inpaint-mask",
+      inpaintResultDataUrl: "data:image/png;base64,pending-result"
+    });
+  });
+
+  it("keeps local mask and result data URLs when merging saved mask responses", () => {
+    const current = chapterSnapshot({
+      pages: [
+        mangaPage({
+          inpaintMaskDataUrl: "data:image/png;base64,current-mask",
+          inpaintMaskPath: "mask.png",
+          inpaintResultDataUrl: "data:image/png;base64,current-result",
+          inpaintResultPath: "result.png"
+        })
+      ]
+    });
+    const saved = chapterSnapshot({
+      pages: [
+        mangaPage({
+          inpaintMaskDataUrl: "/api/pages/page-a/inpaint-mask",
+          inpaintMaskPath: "mask.png",
+          inpaintResultDataUrl: "/api/pages/page-a/inpaint-result",
+          inpaintResultPath: "result.png"
+        })
+      ]
+    });
+
+    const merged = preservePendingInpaintSaveDataUrls(
+      saved,
+      maskSave({ dataUrl: "data:image/png;base64,pending-mask" }),
+      current
+    );
+
+    expect(merged.pages[0]).toMatchObject({
+      inpaintMaskDataUrl: "data:image/png;base64,pending-mask",
+      inpaintMaskPath: "mask.png",
+      inpaintResultDataUrl: "data:image/png;base64,current-result",
+      inpaintResultPath: "result.png"
+    });
+  });
 });
 
 function maskSave(overrides: Partial<PendingMaskSave> = {}): PendingMaskSave {
@@ -73,6 +171,37 @@ function layersSave(overrides: Partial<PendingLayersSave> = {}): PendingLayersSa
     pageId: "page-a",
     maskDataUrl: "mask",
     resultDataUrl: "result",
+    ...overrides
+  };
+}
+
+function chapterSnapshot(overrides: Partial<ChapterSnapshot> = {}): ChapterSnapshot {
+  return {
+    id: "chapter-a",
+    workId: "work-a",
+    title: "Chapter A",
+    sourceKind: "images",
+    status: "idle",
+    pageOrder: ["page-a"],
+    pages: [mangaPage()],
+    createdAt: "2026-05-09T00:00:00.000Z",
+    updatedAt: "2026-05-09T00:00:00.000Z",
+    ...overrides
+  };
+}
+
+function mangaPage(overrides: Partial<MangaPage> = {}): MangaPage {
+  return {
+    id: "page-a",
+    name: "Page A",
+    imagePath: "page.png",
+    dataUrl: "data:image/png;base64,page",
+    width: 100,
+    height: 100,
+    blocks: [],
+    analysisStatus: "idle",
+    createdAt: "2026-05-09T00:00:00.000Z",
+    updatedAt: "2026-05-09T00:00:00.000Z",
     ...overrides
   };
 }

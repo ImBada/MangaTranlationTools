@@ -1,5 +1,6 @@
 import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
+import { summarizeDataUrl, summarizeError, writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 const INPAINT_LAYER_SAVE_IDLE_DELAY_MS = 1000;
@@ -80,20 +81,36 @@ export function useInpaintLayerSaveQueue({
     if (inpaintLayerSaveTimerRef.current !== null) {
       window.clearTimeout(inpaintLayerSaveTimerRef.current);
       inpaintLayerSaveTimerRef.current = null;
+      writeInpaintDebugLog("inpaint-save:timer-cleared", {
+        queueLength: inpaintLayerSaveStateRef.current.length
+      });
     }
   }, []);
 
   const clearPendingInpaintSaves = React.useCallback(() => {
     clearPendingInpaintSaveTimers();
+    writeInpaintDebugLog("inpaint-save:queue-cleared", {
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
     inpaintLayerSaveStateRef.current = [];
   }, [clearPendingInpaintSaveTimers]);
 
   const queueLatestInpaintLayerSave = React.useCallback((pending: PendingInpaintLayerSave) => {
     const latest = resolveLatestInpaintLayerSave?.(pending.chapterId, pending.pageId);
     if (!latest || latest.commitRevision === pending.commitRevision) {
+      writeInpaintDebugLog("inpaint-save:queue-latest-skip", {
+        latest: latest ? summarizePendingInpaintLayerSave(latest) : null,
+        pending: summarizePendingInpaintLayerSave(pending),
+        reason: latest ? "same-revision" : "missing-latest"
+      });
       return;
     }
     inpaintLayerSaveStateRef.current = coalescePendingInpaintLayerSaves(inpaintLayerSaveStateRef.current, latest);
+    writeInpaintDebugLog("inpaint-save:queue-latest", {
+      latest: summarizePendingInpaintLayerSave(latest),
+      pending: summarizePendingInpaintLayerSave(pending),
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
   }, [resolveLatestInpaintLayerSave]);
 
   const flushInpaintLayerSave = React.useCallback((): Promise<void> => {
@@ -104,16 +121,37 @@ export function useInpaintLayerSaveQueue({
 
     clearPendingInpaintSaveTimers();
     const flushPromise = Promise.resolve().then(async () => {
+      writeInpaintDebugLog("inpaint-save:flush-start", {
+        queueLength: inpaintLayerSaveStateRef.current.length
+      });
       try {
         while (true) {
           const [pending, ...remaining] = inpaintLayerSaveStateRef.current;
           if (!pending) {
+            writeInpaintDebugLog("inpaint-save:flush-empty");
             return;
           }
 
           inpaintLayerSaveStateRef.current = remaining;
+          writeInpaintDebugLog("inpaint-save:dequeue", {
+            pending: summarizePendingInpaintLayerSave(pending),
+            remainingQueueLength: remaining.length
+          });
+          if (shouldSkipNonInlineInpaintLayerSave(pending)) {
+            writeInpaintDebugLog("inpaint-save:skip-non-inline-url", {
+              pending: summarizePendingInpaintLayerSave(pending),
+              reason: "pending-points-at-existing-image-url"
+            });
+            if (inpaintLayerSaveStateRef.current.length === 0) {
+              signalSaveComplete();
+            }
+            continue;
+          }
           try {
             if (dirty && currentChapterRef.current?.id === pending.chapterId) {
+              writeInpaintDebugLog("inpaint-save:save-now-before-layer-save", {
+                pending: summarizePendingInpaintLayerSave(pending)
+              });
               await saveNow();
             }
             const result = pending.kind === "mask"
@@ -130,13 +168,24 @@ export function useInpaintLayerSaveQueue({
                   })
                 : await saveInpaintLayersState(pending);
             const saveCurrent = isInpaintLayerSaveCurrent?.(pending.commitRevision) ?? true;
+            writeInpaintDebugLog("inpaint-save:save-complete", {
+              pending: summarizePendingInpaintLayerSave(pending),
+              resultPage: summarizeSavedChapterPage(result.chapter, pending.pageId),
+              saveCurrent
+            });
 
             if (!saveCurrent) {
               queueLatestInpaintLayerSave(pending);
             }
 
             if (inpaintLayerSaveStateRef.current.length === 0 && saveCurrent) {
-              mergeLiveChapter(result.chapter);
+              const chapterToMerge = preservePendingInpaintSaveDataUrls(result.chapter, pending, currentChapterRef.current);
+              writeInpaintDebugLog("inpaint-save:merge-live-chapter", {
+                mergedPage: summarizeSavedChapterPage(chapterToMerge, pending.pageId),
+                pending: summarizePendingInpaintLayerSave(pending),
+                resultPage: summarizeSavedChapterPage(result.chapter, pending.pageId)
+              });
+              mergeLiveChapter(chapterToMerge);
               signalSaveComplete();
               if (pending.kind === "mask" || pending.kind === "layers") {
                 clearRecoverableFailure?.("inpaint-mask-save");
@@ -150,12 +199,21 @@ export function useInpaintLayerSaveQueue({
             console.error(error);
             const saveCurrent = isInpaintLayerSaveCurrent?.(pending.commitRevision) ?? true;
             if (!saveCurrent) {
+              writeInpaintDebugLog("inpaint-save:error-superseded", {
+                error: summarizeError(error),
+                pending: summarizePendingInpaintLayerSave(pending)
+              });
               queueLatestInpaintLayerSave(pending);
               continue;
             }
 
             const nextQueue = requeueFailedInpaintLayerSave(pending, inpaintLayerSaveStateRef.current);
             inpaintLayerSaveStateRef.current = nextQueue;
+            writeInpaintDebugLog("inpaint-save:error-requeue", {
+              error: summarizeError(error),
+              nextQueueLength: nextQueue.length,
+              pending: summarizePendingInpaintLayerSave(pending)
+            });
             const message = error instanceof Error ? error.message : resolveInpaintLayerSaveFailureMessage(pending);
             const failure = resolveInpaintLayerSaveFailure(pending);
             pushStatus(message);
@@ -166,6 +224,9 @@ export function useInpaintLayerSaveQueue({
           }
         }
       } finally {
+        writeInpaintDebugLog("inpaint-save:flush-end", {
+          queueLength: inpaintLayerSaveStateRef.current.length
+        });
         inpaintLayerFlushPromiseRef.current = null;
       }
     });
@@ -197,16 +258,39 @@ export function useInpaintLayerSaveQueue({
       inpaintLayerSaveTimerRef.current = null;
       const idleForMs = Date.now() - inpaintLayerLastInteractionAtRef.current;
       if (inpaintLayerInteractionDepthRef.current > 0 || idleForMs < INPAINT_LAYER_SAVE_IDLE_DELAY_MS) {
+        writeInpaintDebugLog("inpaint-save:flush-deferred", {
+          idleForMs,
+          interactionDepth: inpaintLayerInteractionDepthRef.current,
+          queueLength: inpaintLayerSaveStateRef.current.length
+        });
         scheduleInpaintLayerFlush(Math.max(50, INPAINT_LAYER_SAVE_IDLE_DELAY_MS - idleForMs));
         return;
       }
+      writeInpaintDebugLog("inpaint-save:flush-timer-fired", {
+        idleForMs,
+        queueLength: inpaintLayerSaveStateRef.current.length
+      });
       void flushInpaintLayerSave();
     }, delayMs);
+    writeInpaintDebugLog("inpaint-save:flush-scheduled", {
+      delayMs,
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
   }, [flushInpaintLayerSave]);
 
   const scheduleInpaintLayerSave = React.useCallback((pending: PendingInpaintLayerSave) => {
+    const previousQueueLength = inpaintLayerSaveStateRef.current.length;
     inpaintLayerSaveStateRef.current = coalescePendingInpaintLayerSaves(inpaintLayerSaveStateRef.current, pending);
+    writeInpaintDebugLog("inpaint-save:enqueue", {
+      pending: summarizePendingInpaintLayerSave(pending),
+      previousQueueLength,
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
     if (inpaintLayerFlushPromiseRef.current) {
+      writeInpaintDebugLog("inpaint-save:enqueue-during-flush", {
+        pending: summarizePendingInpaintLayerSave(pending),
+        queueLength: inpaintLayerSaveStateRef.current.length
+      });
       return;
     }
     scheduleInpaintLayerFlush();
@@ -215,6 +299,10 @@ export function useInpaintLayerSaveQueue({
   const beginInpaintLayerInteraction = React.useCallback(() => {
     inpaintLayerInteractionDepthRef.current += 1;
     inpaintLayerLastInteractionAtRef.current = Date.now();
+    writeInpaintDebugLog("inpaint-save:interaction-begin", {
+      interactionDepth: inpaintLayerInteractionDepthRef.current,
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
     if (inpaintLayerSaveTimerRef.current !== null) {
       window.clearTimeout(inpaintLayerSaveTimerRef.current);
       inpaintLayerSaveTimerRef.current = null;
@@ -224,6 +312,10 @@ export function useInpaintLayerSaveQueue({
   const endInpaintLayerInteraction = React.useCallback(() => {
     inpaintLayerInteractionDepthRef.current = Math.max(0, inpaintLayerInteractionDepthRef.current - 1);
     inpaintLayerLastInteractionAtRef.current = Date.now();
+    writeInpaintDebugLog("inpaint-save:interaction-end", {
+      interactionDepth: inpaintLayerInteractionDepthRef.current,
+      queueLength: inpaintLayerSaveStateRef.current.length
+    });
     if (
       inpaintLayerInteractionDepthRef.current === 0 &&
       inpaintLayerSaveStateRef.current.length > 0 &&
@@ -367,4 +459,122 @@ async function saveInpaintLayersState(pending: PendingInpaintLayersSave): Promis
     pageId: pending.pageId,
     resultDataUrl: await window.mangaApi.resolveImageDataUrl(pending.resultDataUrl)
   });
+}
+
+function summarizePendingInpaintLayerSave(pending: PendingInpaintLayerSave): {
+  chapterId: string;
+  commitRevision?: number;
+  kind: PendingInpaintLayerSave["kind"];
+  maskDataUrl?: ReturnType<typeof summarizeDataUrl>;
+  pageId: string;
+  resultDataUrl?: ReturnType<typeof summarizeDataUrl>;
+} {
+  if (pending.kind === "mask") {
+    return {
+      chapterId: pending.chapterId,
+      commitRevision: pending.commitRevision,
+      kind: pending.kind,
+      maskDataUrl: summarizeDataUrl(pending.dataUrl),
+      pageId: pending.pageId
+    };
+  }
+  if (pending.kind === "result") {
+    return {
+      chapterId: pending.chapterId,
+      commitRevision: pending.commitRevision,
+      kind: pending.kind,
+      pageId: pending.pageId,
+      resultDataUrl: summarizeDataUrl(pending.dataUrl)
+    };
+  }
+  return {
+    chapterId: pending.chapterId,
+    commitRevision: pending.commitRevision,
+    kind: pending.kind,
+    maskDataUrl: summarizeDataUrl(pending.maskDataUrl),
+    pageId: pending.pageId,
+    resultDataUrl: summarizeDataUrl(pending.resultDataUrl)
+  };
+}
+
+function summarizeSavedChapterPage(chapter: ChapterSnapshot, pageId: string): {
+  inpaintMaskDataUrl?: ReturnType<typeof summarizeDataUrl>;
+  inpaintMaskPath?: string;
+  inpaintResultDataUrl?: ReturnType<typeof summarizeDataUrl>;
+  inpaintResultPath?: string;
+  inpaintStatus?: string;
+  pageFound: boolean;
+  updatedAt?: string;
+} {
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    return { pageFound: false };
+  }
+  return {
+    inpaintMaskDataUrl: summarizeDataUrl(page.inpaintMaskDataUrl ?? page.inpaintLayerDataUrl),
+    inpaintMaskPath: page.inpaintMaskPath,
+    inpaintResultDataUrl: summarizeDataUrl(page.inpaintResultDataUrl),
+    inpaintResultPath: page.inpaintResultPath,
+    inpaintStatus: page.inpaintStatus,
+    pageFound: true,
+    updatedAt: page.updatedAt
+  };
+}
+
+export function preservePendingInpaintSaveDataUrls(
+  chapter: ChapterSnapshot,
+  pending: PendingInpaintLayerSave,
+  currentChapter: ChapterSnapshot | null
+): ChapterSnapshot {
+  const currentPage = currentChapter?.id === chapter.id
+    ? currentChapter.pages.find((page) => page.id === pending.pageId)
+    : undefined;
+
+  return {
+    ...chapter,
+    pages: chapter.pages.map((page) => {
+      if (page.id !== pending.pageId) {
+        return page;
+      }
+
+      const currentMaskDataUrl = currentPage?.inpaintMaskDataUrl ??
+        currentPage?.inpaintLayerDataUrl ??
+        page.inpaintMaskDataUrl ??
+        page.inpaintLayerDataUrl;
+      const currentResultDataUrl = currentPage?.inpaintResultDataUrl ?? page.inpaintResultDataUrl;
+      if (pending.kind === "mask") {
+        return {
+          ...page,
+          inpaintMaskDataUrl: pending.dataUrl,
+          inpaintResultDataUrl: page.inpaintResultPath ? currentResultDataUrl : undefined
+        };
+      }
+      if (pending.kind === "result") {
+        return {
+          ...page,
+          inpaintMaskDataUrl: currentMaskDataUrl,
+          inpaintResultDataUrl: pending.dataUrl
+        };
+      }
+      return {
+        ...page,
+        inpaintMaskDataUrl: pending.maskDataUrl,
+        inpaintResultDataUrl: pending.resultDataUrl
+      };
+    })
+  };
+}
+
+function shouldSkipNonInlineInpaintLayerSave(pending: PendingInpaintLayerSave): boolean {
+  if (pending.kind === "mask") {
+    return isExistingImageUrl(pending.dataUrl);
+  }
+  if (pending.kind === "result") {
+    return isExistingImageUrl(pending.dataUrl);
+  }
+  return isExistingImageUrl(pending.maskDataUrl) || isExistingImageUrl(pending.resultDataUrl);
+}
+
+function isExistingImageUrl(dataUrl: string | undefined): boolean {
+  return Boolean(dataUrl && !dataUrl.startsWith("data:"));
 }

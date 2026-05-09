@@ -4,6 +4,7 @@ import {
   type GlobalUndoHistoryEntry,
   type GlobalUndoKind
 } from "../lib/editorUndoHistory";
+import { writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
 import type { GlobalUndoAction } from "../lib/globalUndo";
 
 type ResolveGlobalUndoActionsOptions = {
@@ -34,6 +35,9 @@ export function useGlobalUndoHistory(): UseGlobalUndoHistoryState {
   const clearInpaintUndoStacksRef = React.useRef<() => void>(() => undefined);
 
   const clearUndoStacks = React.useCallback(() => {
+    writeInpaintDebugLog("global-undo:clear", {
+      historyLength: globalUndoHistoryRef.current.length
+    });
     globalUndoHistoryRef.current = [];
     clearTranslationUndoStackRef.current();
     clearInpaintUndoStacksRef.current();
@@ -42,6 +46,10 @@ export function useGlobalUndoHistory(): UseGlobalUndoHistoryState {
 
   const recordGlobalUndoEntry = React.useCallback((entry: GlobalUndoHistoryEntry) => {
     globalUndoHistoryRef.current = [...globalUndoHistoryRef.current, entry].slice(-GLOBAL_UNDO_HISTORY_LIMIT);
+    writeInpaintDebugLog("global-undo:record", {
+      entry,
+      historyLength: globalUndoHistoryRef.current.length
+    });
     setUndoVersion((current) => current + 1);
   }, []);
 
@@ -52,10 +60,22 @@ export function useGlobalUndoHistory(): UseGlobalUndoHistoryState {
       if (entry?.kind === kind && entry.pageId === pageId) {
         next.splice(index, 1);
         globalUndoHistoryRef.current = next;
+        writeInpaintDebugLog("global-undo:consume", {
+          consumedEntry: entry,
+          historyLength: globalUndoHistoryRef.current.length,
+          kind,
+          pageId
+        });
         setUndoVersion((current) => current + 1);
         return;
       }
     }
+    writeInpaintDebugLog("global-undo:consume-skip", {
+      historyLength: globalUndoHistoryRef.current.length,
+      kind,
+      pageId,
+      reason: "entry-not-found"
+    });
   }, []);
 
   const registerTranslationUndoClearer = React.useCallback((clearer: () => void) => {

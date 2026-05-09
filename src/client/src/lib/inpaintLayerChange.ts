@@ -1,8 +1,4 @@
 export type InpaintLayerChangeOptions = {
-  intermediateLayerUndoSnapshots?: {
-    maskDataUrl: string | undefined;
-    resultDataUrl: string | undefined;
-  }[];
   intermediateUndoDataUrls?: (string | undefined)[];
   maskDataUrl?: string;
   maskDataUrlMode?: "full" | "patch";
@@ -10,5 +6,6 @@ export type InpaintLayerChangeOptions = {
   previousMaskDataUrl?: string;
   previousMaskSourceDataUrl?: string;
   previousDataUrl?: string;
+  previousResultSourceDataUrl?: string;
   recordUndo?: boolean;
 };

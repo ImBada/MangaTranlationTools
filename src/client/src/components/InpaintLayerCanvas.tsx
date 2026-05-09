@@ -2,6 +2,7 @@ import React, { useRef, useState } from "react";
 import type { ImageRect } from "../../../shared/types";
 import { useCanvasImageSync, type CanvasImageSyncState } from "../hooks/useCanvasImageSync";
 import { encodeCanvasSnapshotDataUrl } from "../lib/canvasSnapshotEncoding";
+import { createUndoCanvasSnapshot, isInlineDataUrl } from "../lib/inpaintCanvasUndo";
 import {
   createMaskIslandSelection,
   drawMaskSegment,
@@ -15,6 +16,13 @@ import {
   type MaskIslandSelection,
   type SelectionDragState
 } from "../lib/inpaintLayerCanvas";
+import {
+  createInpaintDebugId,
+  summarizeCanvasSyncState,
+  summarizeDataUrl,
+  summarizeError,
+  writeInpaintDebugLog
+} from "../lib/inpaintDiagnostics";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { renderInpaintMaskCanvasForDisplay } from "../lib/inpaintMaskImages";
 
@@ -37,11 +45,14 @@ type InpaintLayerCanvasProps = {
 };
 
 type PendingMaskCanvasCommit = {
+  brushSize: number;
+  commitId: string;
   nextDataUrl: string | undefined;
   onChange: InpaintLayerCanvasProps["onChange"];
   previousDataUrl: string | undefined;
   resolved: boolean;
   sourceState: CanvasImageSyncState;
+  tool: InpaintTool;
 };
 
 export function InpaintLayerCanvas({
@@ -75,10 +86,10 @@ export function InpaintLayerCanvas({
   const autoEraseSelectionRef = useRef<MaskIslandSelection | null>(null);
   const selectionDragRef = useRef<SelectionDragState | null>(null);
   const undoDataUrlRef = useRef<string | undefined>(undefined);
+  const undoCanvasSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const editSessionActiveRef = useRef(false);
   const activePointerIdRef = useRef<number | null>(null);
   const pendingCommitsRef = useRef<PendingMaskCanvasCommit[]>([]);
-  const intermediateUndoDataUrlsRef = useRef<(string | undefined)[]>([]);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
 
   const pointerEnabled = !disabled && tool !== "select";
@@ -123,53 +134,94 @@ export function InpaintLayerCanvas({
     };
   }, [endEditSession]);
 
-  const appendIntermediateUndoDataUrl = (dataUrl: string | undefined) => {
-    const undoDataUrls = intermediateUndoDataUrlsRef.current;
-    if (undoDataUrls.length === 0 || undoDataUrls[undoDataUrls.length - 1] !== dataUrl) {
-      undoDataUrls.push(dataUrl);
-    }
-  };
-
   const flushResolvedMaskCommits = React.useCallback(() => {
     const queue = pendingCommitsRef.current;
+    writeInpaintDebugLog("inpaint-mask:commit-flush-start", {
+      queueLength: queue.length,
+      ready: queue.filter((commit) => commit.resolved).length
+    });
     while (queue.length > 0 && queue[0].resolved) {
       const commit = queue[0];
       queue.shift();
-      if (queue.length > 0) {
-        appendIntermediateUndoDataUrl(commit.nextDataUrl);
-        continue;
-      }
-
-      const intermediateUndoDataUrls = [...intermediateUndoDataUrlsRef.current];
-      intermediateUndoDataUrlsRef.current = [];
-      markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
+      const marked = markCanvasCommitted(commit.nextDataUrl, commit.sourceState);
+      writeInpaintDebugLog("inpaint-mask:commit-apply", {
+        brushSize: commit.brushSize,
+        commitId: commit.commitId,
+        marked,
+        nextDataUrl: summarizeDataUrl(commit.nextDataUrl),
+        previousDataUrl: summarizeDataUrl(commit.previousDataUrl),
+        queueRemaining: queue.length,
+        sourceState: summarizeCanvasSyncState(commit.sourceState),
+        tool: commit.tool
+      });
       commit.onChange(commit.nextDataUrl, {
         previousDataUrl: commit.previousDataUrl,
-        previousMaskSourceDataUrl: commit.sourceState.dataUrl,
-        intermediateUndoDataUrls
+        previousMaskSourceDataUrl: commit.sourceState.dataUrl
       });
+
+      if (queue.length > 0) {
+        queue[0].previousDataUrl = commit.nextDataUrl;
+        writeInpaintDebugLog("inpaint-mask:commit-carry-forward", {
+          fromCommitId: commit.commitId,
+          nextCommitId: queue[0].commitId,
+          nextPreviousDataUrl: summarizeDataUrl(queue[0].previousDataUrl)
+        });
+      }
     }
   }, [markCanvasCommitted]);
 
   const commitMaskCanvasSnapshot = (canvas: HTMLCanvasElement, previousDataUrl: string | undefined) => {
+    const sourceState = readCanvasSourceState();
+    const commitId = createInpaintDebugId("mask-commit");
+    const previousSnapshot = undoCanvasSnapshotRef.current;
+    undoCanvasSnapshotRef.current = null;
+    const previousDataUrlPromise = previousSnapshot
+      ? encodeCanvasSnapshotDataUrl(previousSnapshot, { mode: "mask" })
+      : Promise.resolve(previousDataUrl);
     const commit: PendingMaskCanvasCommit = {
+      brushSize,
+      commitId,
       nextDataUrl: undefined,
       onChange,
       previousDataUrl,
       resolved: false,
-      sourceState: readCanvasSourceState()
+      sourceState,
+      tool
     };
     pendingCommitsRef.current.push(commit);
-    void encodeCanvasSnapshotDataUrl(canvas, { mode: "mask" })
-      .then((nextDataUrl) => {
+    writeInpaintDebugLog("inpaint-mask:commit-enqueue", {
+      brushSize,
+      commitId,
+      previousDataUrl: summarizeDataUrl(previousDataUrl),
+      queueLength: pendingCommitsRef.current.length,
+      sourceState: summarizeCanvasSyncState(sourceState),
+      tool
+    });
+    void Promise.all([previousDataUrlPromise, encodeCanvasSnapshotDataUrl(canvas, { mode: "mask" })])
+      .then(([resolvedPreviousDataUrl, nextDataUrl]) => {
+        commit.previousDataUrl = resolvedPreviousDataUrl;
         commit.nextDataUrl = nextDataUrl;
         commit.resolved = true;
+        writeInpaintDebugLog("inpaint-mask:commit-encoded", {
+          commitId,
+          nextDataUrl: summarizeDataUrl(nextDataUrl),
+          previousDataUrl: summarizeDataUrl(resolvedPreviousDataUrl),
+          queueLength: pendingCommitsRef.current.length
+        });
         flushResolvedMaskCommits();
       })
       .catch((error) => {
         console.error(error);
-        commit.nextDataUrl = commit.previousDataUrl;
+        const fallbackDataUrl = isInlineDataUrl(previousDataUrl) ? previousDataUrl : undefined;
+        commit.previousDataUrl = fallbackDataUrl;
+        commit.nextDataUrl = fallbackDataUrl;
         commit.resolved = true;
+        writeInpaintDebugLog("inpaint-mask:commit-encode-error", {
+          commitId,
+          error: summarizeError(error),
+          fallbackDataUrl: summarizeDataUrl(fallbackDataUrl),
+          queueLength: pendingCommitsRef.current.length
+        });
         flushResolvedMaskCommits();
       });
   };
@@ -191,12 +243,24 @@ export function InpaintLayerCanvas({
   const commitChange = () => {
     const canvas = canvasRef.current;
     if (!canvas || !changedRef.current) {
+      undoCanvasSnapshotRef.current = null;
+      writeInpaintDebugLog("inpaint-mask:commit-skip", {
+        changed: changedRef.current,
+        hasCanvas: Boolean(canvas),
+        pendingQueueLength: pendingCommitsRef.current.length,
+        tool
+      });
       return;
     }
 
     const previousDataUrl = undoDataUrlRef.current;
     undoDataUrlRef.current = undefined;
     changedRef.current = false;
+    writeInpaintDebugLog("inpaint-mask:commit-request", {
+      brushSize,
+      previousDataUrl: summarizeDataUrl(previousDataUrl),
+      tool
+    });
     commitMaskCanvasSnapshot(canvas, previousDataUrl);
   };
 
@@ -226,29 +290,44 @@ export function InpaintLayerCanvas({
     const selection = autoEraseSelectionRef.current;
     autoEraseSelectionRef.current = null;
     const previousDataUrl = undoDataUrlRef.current;
+    undoCanvasSnapshotRef.current = null;
     if (selection) {
       restoreMaskIslandSelection(canvas, selection);
     }
     undoDataUrlRef.current = undefined;
     drawingRef.current = false;
     lastPointRef.current = null;
-    markCanvasCommitted(previousDataUrl);
+    const marked = markCanvasCommitted(previousDataUrl);
+    writeInpaintDebugLog("inpaint-mask:auto-eraser-cancel", {
+      marked,
+      previousDataUrl: summarizeDataUrl(previousDataUrl),
+      restoredSelection: Boolean(selection)
+    });
   };
 
   const commitAutoEraseSelection = (canvas: HTMLCanvasElement) => {
     const selection = autoEraseSelectionRef.current;
     if (!selection) {
+      writeInpaintDebugLog("inpaint-mask:auto-eraser-commit-skip", {
+        reason: "missing-selection"
+      });
       return;
     }
 
     autoEraseSelectionRef.current = null;
     if (!eraseSelectedMaskIslands(canvas, selection)) {
       const previousDataUrl = undoDataUrlRef.current;
+      undoCanvasSnapshotRef.current = null;
       restoreMaskIslandSelection(canvas, selection);
       undoDataUrlRef.current = undefined;
       drawingRef.current = false;
       lastPointRef.current = null;
-      markCanvasCommitted(previousDataUrl);
+      const marked = markCanvasCommitted(previousDataUrl);
+      writeInpaintDebugLog("inpaint-mask:auto-eraser-commit-skip", {
+        marked,
+        previousDataUrl: summarizeDataUrl(previousDataUrl),
+        reason: "no-selected-island-erased"
+      });
       return;
     }
 
@@ -256,6 +335,10 @@ export function InpaintLayerCanvas({
     undoDataUrlRef.current = undefined;
     drawingRef.current = false;
     lastPointRef.current = null;
+    writeInpaintDebugLog("inpaint-mask:auto-eraser-commit-request", {
+      brushSize,
+      previousDataUrl: summarizeDataUrl(previousDataUrl)
+    });
     commitMaskCanvasSnapshot(canvas, previousDataUrl);
   };
 
@@ -263,10 +346,26 @@ export function InpaintLayerCanvas({
     if (autoEraseEnabled) {
       const selection = createMaskIslandSelection(canvas);
       if (!selection) {
+        writeInpaintDebugLog("inpaint-mask:stroke-start-skip", {
+          brushSize,
+          point: summarizePoint(point),
+          reason: "missing-auto-erase-selection",
+          tool
+        });
         return;
       }
       captureCanvasPointer(canvas, pointerId);
       undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+      undoCanvasSnapshotRef.current = createUndoCanvasSnapshot(canvas, undoDataUrlRef.current);
+      writeInpaintDebugLog("inpaint-mask:stroke-start", {
+        brushSize,
+        mode: "auto-eraser",
+        point: summarizePoint(point),
+        pointerId,
+        previousDataUrl: summarizeDataUrl(undoDataUrlRef.current),
+        queueLength: pendingCommitsRef.current.length,
+        tool
+      });
       startEditSession();
       autoEraseSelectionRef.current = selection;
       markCanvasEdited();
@@ -279,6 +378,16 @@ export function InpaintLayerCanvas({
 
     captureCanvasPointer(canvas, pointerId);
     undoDataUrlRef.current = readCommittedCanvasState()?.dataUrl ?? dataUrl;
+    undoCanvasSnapshotRef.current = createUndoCanvasSnapshot(canvas, undoDataUrlRef.current);
+    writeInpaintDebugLog("inpaint-mask:stroke-start", {
+      brushSize,
+      mode: "draw",
+      point: summarizePoint(point),
+      pointerId,
+      previousDataUrl: summarizeDataUrl(undoDataUrlRef.current),
+      queueLength: pendingCommitsRef.current.length,
+      tool
+    });
     startEditSession();
     markCanvasEdited();
     drawingRef.current = true;
@@ -289,10 +398,21 @@ export function InpaintLayerCanvas({
 
   const finishMaskStroke = (pointerId: number | null = null, point: DrawPoint | null = null) => {
     if (!drawingRef.current) {
+      writeInpaintDebugLog("inpaint-mask:stroke-finish-skip", {
+        pointerId,
+        reason: "not-drawing",
+        tool
+      });
       return;
     }
     const activePointerId = activePointerIdRef.current;
     if (activePointerId !== null && pointerId !== null && activePointerId !== pointerId) {
+      writeInpaintDebugLog("inpaint-mask:stroke-finish-skip", {
+        activePointerId,
+        pointerId,
+        reason: "pointer-mismatch",
+        tool
+      });
       return;
     }
 
@@ -304,6 +424,12 @@ export function InpaintLayerCanvas({
       if (point) {
         updateAutoEraseSelection(canvas, lastPointRef.current ?? point, point);
       }
+      writeInpaintDebugLog("inpaint-mask:stroke-finish", {
+        activePointerId,
+        mode: "auto-eraser",
+        point: summarizePoint(point),
+        tool
+      });
       commitAutoEraseSelection(canvas);
       activePointerIdRef.current = null;
       endEditSession();
@@ -313,16 +439,33 @@ export function InpaintLayerCanvas({
     drawingRef.current = false;
     activePointerIdRef.current = null;
     lastPointRef.current = null;
+    writeInpaintDebugLog("inpaint-mask:stroke-finish", {
+      activePointerId,
+      mode: "draw",
+      point: summarizePoint(point),
+      tool
+    });
     commitChange();
     endEditSession();
   };
 
   const cancelMaskStroke = (pointerId: number | null = null) => {
     if (!drawingRef.current) {
+      writeInpaintDebugLog("inpaint-mask:stroke-cancel-skip", {
+        pointerId,
+        reason: "not-drawing",
+        tool
+      });
       return;
     }
     const activePointerId = activePointerIdRef.current;
     if (activePointerId !== null && pointerId !== null && activePointerId !== pointerId) {
+      writeInpaintDebugLog("inpaint-mask:stroke-cancel-skip", {
+        activePointerId,
+        pointerId,
+        reason: "pointer-mismatch",
+        tool
+      });
       return;
     }
 
@@ -332,6 +475,11 @@ export function InpaintLayerCanvas({
     }
     activePointerIdRef.current = null;
     if (canvas && autoEraseSelectionRef.current) {
+      writeInpaintDebugLog("inpaint-mask:stroke-cancel", {
+        activePointerId,
+        mode: "auto-eraser",
+        tool
+      });
       cancelAutoEraseSelection(canvas);
       endEditSession();
       return;
@@ -339,6 +487,11 @@ export function InpaintLayerCanvas({
 
     drawingRef.current = false;
     lastPointRef.current = null;
+    writeInpaintDebugLog("inpaint-mask:stroke-cancel", {
+      activePointerId,
+      mode: "draw",
+      tool
+    });
     commitChange();
     endEditSession();
   };
@@ -483,4 +636,14 @@ export function InpaintLayerCanvas({
       ) : null}
     </>
   );
+}
+
+function summarizePoint(point: DrawPoint | null): { x: number; y: number } | null {
+  if (!point) {
+    return null;
+  }
+  return {
+    x: Math.round(point.x * 100) / 100,
+    y: Math.round(point.y * 100) / 100
+  };
 }

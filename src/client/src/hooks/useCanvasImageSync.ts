@@ -6,6 +6,12 @@ import {
   resizeCanvasToSize,
   type CanvasImageDrawSize
 } from "../lib/canvasImageDrawing";
+import {
+  summarizeCanvasSyncState,
+  summarizeDataUrl,
+  summarizeError,
+  writeInpaintDebugLog
+} from "../lib/inpaintDiagnostics";
 
 export type CanvasImageSyncState = CanvasImageDrawSize & {
   dataUrl: string | undefined;
@@ -69,6 +75,14 @@ export function useCanvasImageSync({
     }
 
     if (isCanvasImageSyncStateCurrent(appliedCanvasStateRef.current, dataUrl, pageSize) || drawingRef.current) {
+      writeInpaintDebugLog("inpaint-canvas-sync:effect-skip", {
+        appliedState: summarizeCanvasSyncState(appliedCanvasStateRef.current),
+        dataUrl: summarizeDataUrl(dataUrl),
+        drawing: drawingRef.current,
+        loadErrorMessage,
+        pageSize,
+        reason: drawingRef.current ? "drawing" : "already-current"
+      });
       return;
     }
 
@@ -77,22 +91,58 @@ export function useCanvasImageSync({
     if (!dataUrl) {
       clearCanvasToSize(canvas, context, pageSize);
       appliedCanvasStateRef.current = createCanvasImageSyncState(undefined, pageSize);
+      writeInpaintDebugLog("inpaint-canvas-sync:clear", {
+        loadErrorMessage,
+        pageSize
+      });
       return;
     }
 
     let cancelled = false;
     const loadRevision = canvasEditRevisionRef.current;
+    writeInpaintDebugLog("inpaint-canvas-sync:load-start", {
+      dataUrl: summarizeDataUrl(dataUrl),
+      loadErrorMessage,
+      loadRevision,
+      pageSize
+    });
     void loadCanvasImage(dataUrl, loadErrorMessage)
       .then((image) => {
         if (!cancelled && loadRevision === canvasEditRevisionRef.current && !drawingRef.current) {
           drawImageToCanvas(canvas, context, image, pageSize);
           afterDraw?.(canvas, context);
           appliedCanvasStateRef.current = createCanvasImageSyncState(dataUrl, pageSize);
+          writeInpaintDebugLog("inpaint-canvas-sync:load-apply", {
+            dataUrl: summarizeDataUrl(dataUrl),
+            loadErrorMessage,
+            loadRevision,
+            pageSize
+          });
+          return;
         }
+        writeInpaintDebugLog("inpaint-canvas-sync:load-skip", {
+          cancelled,
+          dataUrl: summarizeDataUrl(dataUrl),
+          drawing: drawingRef.current,
+          loadErrorMessage,
+          loadRevision,
+          currentRevision: canvasEditRevisionRef.current,
+          reason: cancelled
+            ? "cancelled"
+            : loadRevision !== canvasEditRevisionRef.current
+              ? "revision-mismatch"
+              : "drawing"
+        });
       })
       .catch((error) => {
         if (!cancelled) {
           console.error(error);
+          writeInpaintDebugLog("inpaint-canvas-sync:load-error", {
+            dataUrl: summarizeDataUrl(dataUrl),
+            error: summarizeError(error),
+            loadErrorMessage,
+            loadRevision
+          });
         }
       });
 
@@ -103,6 +153,9 @@ export function useCanvasImageSync({
 
   const markCanvasEdited = React.useCallback(() => {
     canvasEditRevisionRef.current += 1;
+    writeInpaintDebugLog("inpaint-canvas-sync:mark-edited", {
+      nextRevision: canvasEditRevisionRef.current
+    });
   }, []);
 
   const markCanvasCommitted = React.useCallback((nextDataUrl: string | undefined, expectedSourceState?: CanvasImageSyncState) => {
@@ -111,10 +164,21 @@ export function useCanvasImageSync({
       expectedSourceState &&
       !isCanvasImageSyncStateCurrent(expectedSourceState, sourceState.dataUrl, sourceState)
     ) {
+      writeInpaintDebugLog("inpaint-canvas-sync:mark-committed-skip", {
+        expectedSourceState: summarizeCanvasSyncState(expectedSourceState),
+        nextDataUrl: summarizeDataUrl(nextDataUrl),
+        reason: "source-mismatch",
+        sourceState: summarizeCanvasSyncState(sourceState)
+      });
       return false;
     }
     canvasEditRevisionRef.current += 1;
     appliedCanvasStateRef.current = createCanvasImageSyncState(nextDataUrl, sourceState);
+    writeInpaintDebugLog("inpaint-canvas-sync:mark-committed", {
+      nextDataUrl: summarizeDataUrl(nextDataUrl),
+      nextRevision: canvasEditRevisionRef.current,
+      sourceState: summarizeCanvasSyncState(sourceState)
+    });
     return true;
   }, []);
 

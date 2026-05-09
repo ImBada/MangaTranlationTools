@@ -16,6 +16,7 @@ import {
 } from "../lib/editorShortcuts";
 import { isEditableTarget } from "../lib/editorUtils";
 import { isPlatformUndoShortcut, resolveGlobalUndoAction, type GlobalUndoAction } from "../lib/globalUndo";
+import { writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
 import type { ActiveLayer, LayerVisibility } from "../lib/layerState";
 import { resolveAdjacentPageId, resolveKeyboardPageNavigation } from "../lib/pageNavigation";
 
@@ -185,6 +186,21 @@ export function useWorkspaceShortcuts({
       if (!modalOpen && !editableTarget && isPlatformUndoShortcut(event, undoShortcutPlatform)) {
         event.preventDefault();
         const undoAction = resolveGlobalUndoAction(globalUndoActions);
+        writeInpaintDebugLog("global-undo:shortcut", {
+          action: undoAction
+            ? {
+                canUndo: undoAction.canUndo,
+                id: undoAction.id,
+                label: undoAction.label
+              }
+            : null,
+          availableActions: globalUndoActions.map((action) => ({
+            canUndo: action.canUndo,
+            id: action.id,
+            label: action.label
+          })),
+          platform: undoShortcutPlatform
+        });
         if (undoAction) {
           undoAction.run();
         }
