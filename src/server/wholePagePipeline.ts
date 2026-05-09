@@ -281,7 +281,6 @@ export async function runWholePagePipeline({
       });
       const failedPage: MangaPage = {
         ...page,
-        blocks: [],
         analysisStatus: "failed",
         lastError: lastErrorMessage,
         updatedAt: new Date().toISOString()

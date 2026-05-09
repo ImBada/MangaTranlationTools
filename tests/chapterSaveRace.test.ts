@@ -112,6 +112,40 @@ describe("chapter save conflict handling", () => {
     expect(chapterJson.pages[1]?.blocks[0]?.translatedText).toBe("번역 완료");
     expect(chapterJson.pages[1]?.analysisStatus).toBe("completed");
   });
+
+  it("preserves existing blocks when a failed analysis update carries empty blocks", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "manga-analysis-failed-page-"));
+    tempDirs.push(dataDir);
+    process.env.MANGA_TRANSLATOR_DATA_DIR = dataDir;
+    vi.resetModules();
+
+    const { saveChapterSnapshot, updatePageAfterAnalysis } = await import("../src/server/library");
+    const pagePath = join(dataDir, "page.png");
+    await writeFile(pagePath, await pngBuffer());
+    await seedLibraryIndex(dataDir);
+
+    const initial = makeChapterSnapshot(pagePath);
+    await saveChapterSnapshot(initial);
+
+    await updatePageAfterAnalysis(
+      initial.id,
+      {
+        ...initial.pages[0],
+        blocks: [],
+        analysisStatus: "failed",
+        lastError: "모델 응답 파싱 실패"
+      },
+      ["모델 응답 파싱 실패"],
+      "failed"
+    );
+
+    const chapterJson = JSON.parse(
+      await readFile(join(dataDir, "library", "works", "work-1", "chapters", "chapter-1", "chapter.json"), "utf8")
+    ) as ChapterSnapshot;
+    expect(chapterJson.pages[0]?.blocks[0]?.translatedText).toBe("원래 번역 1");
+    expect(chapterJson.pages[0]?.analysisStatus).toBe("failed");
+    expect(chapterJson.pages[0]?.lastError).toBe("모델 응답 파싱 실패");
+  });
 });
 
 function makeChapterSnapshot(imagePath: string): ChapterSnapshot {

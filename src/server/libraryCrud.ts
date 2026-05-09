@@ -340,23 +340,32 @@ export async function markChapterPagesRunning(chapterId: string, pageIds: string
   return hydrateChapter(chapter);
 }
 
-export async function updatePageAfterAnalysis(chapterId: string, page: MangaPage, warnings: string[], status: "completed" | "failed"): Promise<void> {
+export async function updatePageAfterAnalysis(
+  chapterId: string,
+  page: MangaPage,
+  warnings: string[],
+  status: "completed" | "failed"
+): Promise<void> {
   await mutateExistingChapterFile(chapterId, (chapter) => {
     const now = new Date().toISOString();
-    const fontPresets = ensureBlockTypeFontPresets(chapter.fontPresets);
-    const blocks = applyAnalysisFontPresetsToBlocks(page.blocks, fontPresets);
-    chapter.pages = chapter.pages.map((record) =>
-      record.id === page.id
-        ? {
-            ...record,
-            blocks,
-            analysisStatus: status,
-            lastError: status === "failed" ? warnings[warnings.length - 1] : undefined,
-            updatedAt: now
-          }
-        : record
-    );
-    chapter.fontPresets = fontPresets;
+    const fontPresets = status === "completed" ? ensureBlockTypeFontPresets(chapter.fontPresets) : null;
+    chapter.pages = chapter.pages.map((record) => {
+      if (record.id !== page.id) {
+        return record;
+      }
+
+      const blocks = fontPresets ? applyAnalysisFontPresetsToBlocks(page.blocks, fontPresets) : record.blocks;
+      return {
+        ...record,
+        blocks,
+        analysisStatus: status,
+        lastError: status === "failed" ? warnings[warnings.length - 1] : undefined,
+        updatedAt: now
+      };
+    });
+    if (fontPresets) {
+      chapter.fontPresets = fontPresets;
+    }
     chapter.updatedAt = now;
     chapter.status = resolveChapterStatus(chapter.pages);
     return chapter;
