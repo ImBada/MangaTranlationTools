@@ -25,6 +25,7 @@ type OverlayRenderCanvasProps = {
 
 const OVERLAY_CANVAS_DEBUG_SLOW_DRAW_MS = 16;
 const OVERLAY_CANVAS_DEBUG_SUMMARY_INTERVAL_MS = 500;
+const OVERLAY_CANVAS_RENDER_CACHE_MAX_ENTRIES = 2;
 
 export function OverlayRenderCanvas({
   canvasRef: externalCanvasRef,
@@ -39,6 +40,8 @@ export function OverlayRenderCanvas({
   const lastRenderedBlocksRef = useRef<Map<string, TranslationBlock>>(new Map());
   const lastRenderedBlockSummariesRef = useRef<Map<string, Record<string, unknown>>>(new Map());
   const lastHiddenBlockIdRef = useRef<string | null>(null);
+  const renderCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
+  const warmingRenderCacheKeysRef = useRef<Set<string>>(new Set());
   const renderKey = React.useMemo(
     () => createOverlayRenderKey(page, editingEnabled, fontWeightAvailability, hiddenBlockId, lastRenderedBlockSummariesRef.current),
     [editingEnabled, hiddenBlockId, fontWeightAvailability, page]
@@ -87,30 +90,74 @@ export function OverlayRenderCanvas({
     } = renderStateRef.current;
     const width = Math.max(1, currentPage.width);
     const height = Math.max(1, currentPage.height);
-    canvas.width = width;
-    canvas.height = height;
-
-    context.setTransform(1, 0, 0, 1, 0, 0);
-    context.clearRect(0, 0, width, height);
     const debugEnabled = isInpaintDebugLogEnabled();
     const drawStartMs = debugEnabled ? nowInpaintDebugMs() : 0;
-    const includedBlockIds = currentHiddenBlockId
-      ? new Set(
-          currentPage.blocks
-            .filter((block) => block.id !== currentHiddenBlockId)
-            .map((block) => block.id)
-        )
-      : undefined;
-    drawOverlayBlocks(context, currentPage, {
-      renderSize: { width: currentPage.width, height: currentPage.height },
-      editingEnabled: currentEditingEnabled,
-      includedBlockIds,
-      fontWeightAvailability: currentFontWeightAvailability
-    });
-    lastRenderedBlocksRef.current = new Map(currentPage.blocks.map((block) => [block.id, block]));
-    lastRenderedBlockSummariesRef.current = new Map(
-      currentPage.blocks.map((block) => [block.id, summarizeBlockRenderState(block)])
+    const hiddenDirtyBlock = currentHiddenBlockId
+      ? lastRenderedBlocksRef.current.get(currentHiddenBlockId) ??
+        currentPage.blocks.find((block) => block.id === currentHiddenBlockId) ??
+        null
+      : null;
+    const cachedCanvas = renderCacheRef.current.get(renderKey);
+    const renderCacheHit = Boolean(cachedCanvas && cachedCanvas.width === width && cachedCanvas.height === height);
+    if (cachedCanvas && renderCacheHit) {
+      copyOverlayCanvas(canvas, context, cachedCanvas, width, height);
+    } else {
+      canvas.width = width;
+      canvas.height = height;
+      context.setTransform(1, 0, 0, 1, 0, 0);
+      context.clearRect(0, 0, width, height);
+      const includedBlockIds = currentHiddenBlockId
+        ? new Set(
+            currentPage.blocks
+              .filter((block) => block.id !== currentHiddenBlockId)
+              .map((block) => block.id)
+          )
+        : undefined;
+      drawOverlayBlocks(context, currentPage, {
+        renderSize: { width: currentPage.width, height: currentPage.height },
+        editingEnabled: currentEditingEnabled,
+        includedBlockIds,
+        fontWeightAvailability: currentFontWeightAvailability
+      });
+      if (!currentHiddenBlockId) {
+        storeOverlayRenderCache(renderCacheRef.current, renderKey, canvas, width, height);
+      }
+    }
+    if (currentHiddenBlockId && hiddenDirtyBlock) {
+      refreshOverlayBlockDirtyRect(context, currentPage, {
+        blockForDirtyRect: hiddenDirtyBlock,
+        editingEnabled: currentEditingEnabled,
+        excludedBlockId: currentHiddenBlockId,
+        fontWeightAvailability: currentFontWeightAvailability
+      });
+    }
+
+    const nextRenderedBlocks = createRenderedBlockMap(
+      currentPage,
+      currentHiddenBlockId,
+      lastRenderedBlocksRef.current
     );
+    const nextRenderedBlockSummaries = createRenderedBlockSummaryMap(
+      currentPage,
+      currentHiddenBlockId,
+      lastRenderedBlockSummariesRef.current
+    );
+    lastRenderedBlocksRef.current = nextRenderedBlocks;
+    lastRenderedBlockSummariesRef.current = nextRenderedBlockSummaries;
+    if (!currentHiddenBlockId) {
+      scheduleOverlayRenderCacheWarm(renderCacheRef.current, warmingRenderCacheKeysRef.current, {
+        editingEnabled: !currentEditingEnabled,
+        fontWeightAvailability: currentFontWeightAvailability,
+        page: currentPage,
+        renderKey: createOverlayRenderKey(
+          currentPage,
+          !currentEditingEnabled,
+          currentFontWeightAvailability,
+          null,
+          nextRenderedBlockSummaries
+        )
+      });
+    }
     if (!debugEnabled) {
       return;
     }
@@ -142,6 +189,8 @@ export function OverlayRenderCanvas({
       drawCount: stats.drawCount,
       drawMs: roundInpaintDebugMs(drawMs),
       editingEnabled: currentEditingEnabled,
+      cacheHit: renderCacheHit,
+      cacheSize: renderCacheRef.current.size,
       maxDrawMs: roundInpaintDebugMs(stats.maxDrawMs),
       pageId: currentPage.id,
       slowDrawCount: stats.slowDrawCount,
@@ -171,36 +220,186 @@ export function OverlayRenderCanvas({
       return;
     }
 
-    const dirtyRect = resolveBlockCanvasDirtyRect(blockForDirtyRect, currentPage);
-    if (!dirtyRect) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
-      return;
-    }
-
-    context.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-    const intersectingBlockIds = currentPage.blocks
-      .filter((block) => block.id !== hiddenBlockId && doesBlockIntersectCanvasRect(block, currentPage, dirtyRect))
-      .map((block) => block.id);
-    if (intersectingBlockIds.length === 0) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
-      return;
-    }
-
-    context.save();
-    context.beginPath();
-    context.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-    context.clip();
-    drawOverlayBlocks(context, currentPage, {
-      renderSize: { width: currentPage.width, height: currentPage.height },
+    refreshOverlayBlockDirtyRect(context, currentPage, {
+      blockForDirtyRect,
       editingEnabled: currentEditingEnabled,
-      includedBlockIds: new Set(intersectingBlockIds),
+      excludedBlockId: hiddenBlockId ?? null,
       fontWeightAvailability: currentFontWeightAvailability
     });
-    context.restore();
     lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
   }, [canvasRef, hiddenBlockId]);
 
   return <canvas ref={canvasRef} className="overlay-render-canvas" aria-hidden="true" />;
+}
+
+function copyOverlayCanvas(
+  targetCanvas: HTMLCanvasElement,
+  targetContext: CanvasRenderingContext2D,
+  sourceCanvas: HTMLCanvasElement,
+  width: number,
+  height: number
+): void {
+  if (targetCanvas.width !== width) {
+    targetCanvas.width = width;
+  }
+  if (targetCanvas.height !== height) {
+    targetCanvas.height = height;
+  }
+  targetContext.setTransform(1, 0, 0, 1, 0, 0);
+  targetContext.clearRect(0, 0, width, height);
+  targetContext.drawImage(sourceCanvas, 0, 0);
+}
+
+function storeOverlayRenderCache(
+  cache: Map<string, HTMLCanvasElement>,
+  renderKey: string,
+  sourceCanvas: HTMLCanvasElement,
+  width: number,
+  height: number
+): void {
+  const cachedCanvas = document.createElement("canvas");
+  cachedCanvas.width = width;
+  cachedCanvas.height = height;
+  const cachedContext = cachedCanvas.getContext("2d", { willReadFrequently: true });
+  if (!cachedContext) {
+    return;
+  }
+  cachedContext.drawImage(sourceCanvas, 0, 0);
+  rememberOverlayRenderCache(cache, renderKey, cachedCanvas);
+}
+
+function rememberOverlayRenderCache(
+  cache: Map<string, HTMLCanvasElement>,
+  renderKey: string,
+  cachedCanvas: HTMLCanvasElement
+): void {
+  cache.delete(renderKey);
+  cache.set(renderKey, cachedCanvas);
+  while (cache.size > OVERLAY_CANVAS_RENDER_CACHE_MAX_ENTRIES) {
+    const oldestKey = cache.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    cache.delete(oldestKey);
+  }
+}
+
+function scheduleOverlayRenderCacheWarm(
+  cache: Map<string, HTMLCanvasElement>,
+  warmingKeys: Set<string>,
+  options: {
+    editingEnabled: boolean;
+    fontWeightAvailability: readonly FontWeightAvailability[];
+    page: MangaPage;
+    renderKey: string;
+  }
+): void {
+  if (cache.has(options.renderKey) || warmingKeys.has(options.renderKey)) {
+    return;
+  }
+
+  warmingKeys.add(options.renderKey);
+  const warmCache = (): void => {
+    try {
+      if (cache.has(options.renderKey)) {
+        return;
+      }
+
+      const width = Math.max(1, options.page.width);
+      const height = Math.max(1, options.page.height);
+      const cachedCanvas = document.createElement("canvas");
+      cachedCanvas.width = width;
+      cachedCanvas.height = height;
+      const cachedContext = cachedCanvas.getContext("2d", { willReadFrequently: true });
+      if (!cachedContext) {
+        return;
+      }
+
+      drawOverlayBlocks(cachedContext, options.page, {
+        renderSize: { width: options.page.width, height: options.page.height },
+        editingEnabled: options.editingEnabled,
+        fontWeightAvailability: options.fontWeightAvailability
+      });
+      rememberOverlayRenderCache(cache, options.renderKey, cachedCanvas);
+    } finally {
+      warmingKeys.delete(options.renderKey);
+    }
+  };
+
+  const idleWindow = window as Window & {
+    requestIdleCallback?: (callback: () => void, options?: { timeout?: number }) => number;
+  };
+  if (idleWindow.requestIdleCallback) {
+    idleWindow.requestIdleCallback(warmCache);
+    return;
+  }
+  window.setTimeout(warmCache, 200);
+}
+
+function refreshOverlayBlockDirtyRect(
+  context: CanvasRenderingContext2D,
+  page: MangaPage,
+  options: {
+    blockForDirtyRect: TranslationBlock;
+    editingEnabled: boolean;
+    excludedBlockId?: string | null;
+    fontWeightAvailability: readonly FontWeightAvailability[];
+  }
+): void {
+  const dirtyRect = resolveBlockCanvasDirtyRect(options.blockForDirtyRect, page);
+  if (!dirtyRect) {
+    return;
+  }
+
+  context.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+  const intersectingBlockIds = page.blocks
+    .filter((block) => block.id !== options.excludedBlockId && doesBlockIntersectCanvasRect(block, page, dirtyRect))
+    .map((block) => block.id);
+  if (intersectingBlockIds.length === 0) {
+    return;
+  }
+
+  context.save();
+  context.beginPath();
+  context.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+  context.clip();
+  drawOverlayBlocks(context, page, {
+    renderSize: { width: page.width, height: page.height },
+    editingEnabled: options.editingEnabled,
+    includedBlockIds: new Set(intersectingBlockIds),
+    fontWeightAvailability: options.fontWeightAvailability
+  });
+  context.restore();
+}
+
+function createRenderedBlockMap(
+  page: MangaPage,
+  hiddenBlockId: string | null | undefined,
+  previousBlocks: ReadonlyMap<string, TranslationBlock>
+): Map<string, TranslationBlock> {
+  return new Map(
+    page.blocks.map((block) => [
+      block.id,
+      block.id === hiddenBlockId
+        ? previousBlocks.get(block.id) ?? block
+        : block
+    ])
+  );
+}
+
+function createRenderedBlockSummaryMap(
+  page: MangaPage,
+  hiddenBlockId: string | null | undefined,
+  previousBlockSummaries: ReadonlyMap<string, Record<string, unknown>>
+): Map<string, Record<string, unknown>> {
+  return new Map(
+    page.blocks.map((block) => [
+      block.id,
+      block.id === hiddenBlockId
+        ? previousBlockSummaries.get(block.id) ?? summarizeBlockRenderState(block)
+        : summarizeBlockRenderState(block)
+    ])
+  );
 }
 
 function createOverlayRenderKey(
