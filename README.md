@@ -63,7 +63,7 @@ npm run app:build
 
 ### 인페인트 디버그 로그
 
-인페인트 브러시, 지우개, 되돌리기, 저장 큐 문제를 추적할 때는 브라우저 개발자 도구 콘솔에서 아래 값을 켜고 새로고침하세요.
+인페인트 브러시, 지우개, 되돌리기, 저장 큐, 글자 블록 드래그 버벅임 문제를 추적할 때는 브라우저 개발자 도구 콘솔에서 아래 값을 켜고 새로고침하세요.
 
 ```js
 localStorage.setItem("mangaTranslationTools.inpaintDebugLogs", "1")
@@ -76,6 +76,8 @@ localStorage.removeItem("mangaTranslationTools.inpaintDebugLogs")
 ```
 
 임시로 한 번만 켜려면 URL에 `?inpaintDebug=1`을 붙여도 됩니다.
+
+글자 블록을 움직일 때는 `translation-block-drag:*`, `overlay-layer:*`, `overlay-render-canvas:*`, `chapter-autosave:*` 로그가 같은 드래그 `debugId`로 묶여 기록됩니다.
 
 ## 설정
 

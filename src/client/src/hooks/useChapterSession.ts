@@ -2,7 +2,14 @@ import React from "react";
 import type { ChapterSnapshot } from "../../../shared/types";
 import { mergeLiveChapterPreservingDirtyCompletedPages, resolveSelectionAfterChapterSync } from "../lib/chapterSync";
 import { normalizeChapterTranslatedText } from "../lib/editorUtils";
-import { summarizeDataUrl, writeInpaintDebugLog } from "../lib/inpaintDiagnostics";
+import {
+  getActiveTranslationBlockDragDebugId,
+  nowInpaintDebugMs,
+  roundInpaintDebugMs,
+  summarizeDataUrl,
+  summarizeError,
+  writeInpaintDebugLog
+} from "../lib/inpaintDiagnostics";
 import type { RecoverableFailureId } from "./useRecoverableFailures";
 
 type ChapterSessionOptions = {
@@ -74,6 +81,11 @@ type ImmediateMetadataSaveState = {
   pending: ImmediateMetadataSaveRequest | null;
 };
 
+type AutosaveDebugState = {
+  lastScheduleLogAtMs: number;
+  scheduleCount: number;
+};
+
 function resolveStateAction<T>(action: React.SetStateAction<T>, current: T): T {
   return typeof action === "function" ? (action as (current: T) => T)(current) : action;
 }
@@ -128,6 +140,10 @@ export function useChapterSession({
     inFlight: false,
     inFlightVersion: null,
     pending: null
+  });
+  const autosaveDebugRef = React.useRef<AutosaveDebugState>({
+    lastScheduleLogAtMs: 0,
+    scheduleCount: 0
   });
   const lastOpenedPageSaveRef = React.useRef<LastOpenedPageSaveState>({
     inFlight: false,
@@ -349,7 +365,40 @@ export function useChapterSession({
 
     const saveAllPages = dirtyAllPagesRef.current;
     const dirtyPageIds = saveAllPages ? currentChapter.pages.map((page) => page.id) : [...dirtyPageIdsRef.current];
+    const scheduledAtMs = nowInpaintDebugMs();
+    const scheduledDragDebugId = getActiveTranslationBlockDragDebugId();
+    if (scheduledDragDebugId) {
+      const autosaveDebug = autosaveDebugRef.current;
+      autosaveDebug.scheduleCount += 1;
+      if (scheduledAtMs - autosaveDebug.lastScheduleLogAtMs >= 500) {
+        const scheduleCount = autosaveDebug.scheduleCount;
+        autosaveDebug.scheduleCount = 0;
+        autosaveDebug.lastScheduleLogAtMs = scheduledAtMs;
+        writeInpaintDebugLog("chapter-autosave:scheduled", () => ({
+          activeDragDebugId: scheduledDragDebugId,
+          delayMs: 400,
+          dirtyAllPages: saveAllPages,
+          dirtyChapterPresets: dirtyChapterPresetsRef.current,
+          dirtyPageCount: dirtyPageIds.length,
+          dirtyPageIds,
+          dirtyVersion: version,
+          pageCount: currentChapter.pages.length,
+          scheduleCount
+        }));
+      }
+    }
     saveTimerRef.current = window.setTimeout(async () => {
+      const saveStartMs = nowInpaintDebugMs();
+      if (scheduledDragDebugId) {
+        writeInpaintDebugLog("chapter-autosave:start", () => ({
+          activeDragDebugId: scheduledDragDebugId,
+          dirtyAllPages: saveAllPages,
+          dirtyPageCount: dirtyPageIds.length,
+          dirtyPageIds,
+          dirtyVersion: version,
+          waitMs: roundInpaintDebugMs(saveStartMs - scheduledAtMs)
+        }));
+      }
       try {
         const normalized = normalizeChapterTranslatedText(currentChapter);
         const chapterToSave = normalized.chapter;
@@ -357,6 +406,16 @@ export function useChapterSession({
           ? chapterToSave.pages.map((page) => page.id)
           : [...new Set([...dirtyPageIds, ...normalized.dirtyPageIds])];
         await window.mangaApi.saveChapter(chapterToSave, pageIdsToSave);
+        if (scheduledDragDebugId) {
+          writeInpaintDebugLog("chapter-autosave:complete", () => ({
+            activeDragDebugId: scheduledDragDebugId,
+            dirtyVersion: version,
+            durationMs: roundInpaintDebugMs(nowInpaintDebugMs() - saveStartMs),
+            normalizedDirtyPageIds: normalized.dirtyPageIds,
+            pageIdsToSave,
+            savedCurrentVersion: dirtyVersionRef.current === version
+          }));
+        }
         if (dirtyVersionRef.current === version) {
           if (chapterToSave !== currentChapter) {
             currentChapterRef.current = chapterToSave;
@@ -368,6 +427,14 @@ export function useChapterSession({
         }
       } catch (error) {
         console.error(error);
+        if (scheduledDragDebugId) {
+          writeInpaintDebugLog("chapter-autosave:error", () => ({
+            activeDragDebugId: scheduledDragDebugId,
+            dirtyVersion: version,
+            durationMs: roundInpaintDebugMs(nowInpaintDebugMs() - saveStartMs),
+            error: summarizeError(error)
+          }));
+        }
         const message = error instanceof Error ? error.message : "자동 저장에 실패했습니다.";
         pushStatus(message);
         reportRecoverableFailure?.({

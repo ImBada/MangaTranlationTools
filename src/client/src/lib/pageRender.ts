@@ -46,7 +46,15 @@ export type OverlayRenderOptions = {
     height: number;
   };
   editingEnabled: boolean;
+  includedBlockIds?: ReadonlySet<string>;
   fontWeightAvailability?: readonly FontWeightAvailability[];
+};
+
+export type OverlayCanvasDirtyRect = {
+  height: number;
+  width: number;
+  x: number;
+  y: number;
 };
 
 const CANVAS_TEXT_RENDER_FONT_SIZE_RATIO = 0.985;
@@ -137,11 +145,70 @@ export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPag
 
 export function drawOverlayBlocks(context: CanvasRenderingContext2D, page: MangaPage, options: OverlayRenderOptions): void {
   for (const block of page.blocks) {
-    if (block.renderDirection === "hidden") {
+    if (
+      block.renderDirection === "hidden" ||
+      (options.includedBlockIds && !options.includedBlockIds.has(block.id))
+    ) {
       continue;
     }
     drawRenderedBlock(context, page, block, options);
   }
+}
+
+export function doesBlockIntersectCanvasRect(
+  block: TranslationBlock,
+  page: Pick<MangaPage, "height" | "width">,
+  rect: OverlayCanvasDirtyRect
+): boolean {
+  const blockRect = resolveBlockCanvasDirtyRect(block, page);
+  if (!blockRect) {
+    return false;
+  }
+  return (
+    blockRect.x < rect.x + rect.width &&
+    blockRect.x + blockRect.width > rect.x &&
+    blockRect.y < rect.y + rect.height &&
+    blockRect.y + blockRect.height > rect.y
+  );
+}
+
+export function resolveBlockCanvasDirtyRect(
+  block: TranslationBlock,
+  page: Pick<MangaPage, "height" | "width">
+): OverlayCanvasDirtyRect | null {
+  const text = block.translatedText || block.sourceText || "...";
+  const pageSize = { width: page.width, height: page.height };
+  const layout = resolveBlockTextLayout(block, text, pageSize, pageSize);
+  const outlinePx = Math.max(0, block.outlineWidthPx ?? 0);
+  const secondaryOutlinePx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
+  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
+  const margin = Math.ceil(Math.max(24, layout.fontSizePx * 0.45 + outlinePx * 3 + secondaryOutlinePx * 4 + shadowDistancePx + 8));
+  const expanded = {
+    x: layout.rect.left - margin,
+    y: layout.rect.top - margin,
+    width: layout.rect.width + margin * 2,
+    height: layout.rect.height + margin * 2
+  };
+  const rotationDeg = resolveBlockRotationDeg(block);
+  const rotated = rotationDeg === 0
+    ? expanded
+    : resolveRotatedRectBounds(expanded, {
+        x: layout.rect.left + layout.rect.width / 2,
+        y: layout.rect.top + layout.rect.height / 2
+      }, rotationDeg);
+  const x = Math.max(0, Math.floor(rotated.x));
+  const y = Math.max(0, Math.floor(rotated.y));
+  const right = Math.min(page.width, Math.ceil(rotated.x + rotated.width));
+  const bottom = Math.min(page.height, Math.ceil(rotated.y + rotated.height));
+  if (right <= x || bottom <= y) {
+    return null;
+  }
+  return {
+    x,
+    y,
+    width: right - x,
+    height: bottom - y
+  };
 }
 
 function drawImageLayer(
@@ -263,6 +330,39 @@ function drawRenderedBlock(
   }
 
   context.restore();
+}
+
+function resolveRotatedRectBounds(
+  rect: OverlayCanvasDirtyRect,
+  center: { x: number; y: number },
+  rotationDeg: number
+): OverlayCanvasDirtyRect {
+  const angle = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  const corners = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height }
+  ].map((point) => {
+    const dx = point.x - center.x;
+    const dy = point.y - center.y;
+    return {
+      x: center.x + dx * cos - dy * sin,
+      y: center.y + dx * sin + dy * cos
+    };
+  });
+  const minX = Math.min(...corners.map((point) => point.x));
+  const maxX = Math.max(...corners.map((point) => point.x));
+  const minY = Math.min(...corners.map((point) => point.y));
+  const maxY = Math.max(...corners.map((point) => point.y));
+  return {
+    x: minX,
+    y: minY,
+    width: maxX - minX,
+    height: maxY - minY
+  };
 }
 
 function resolveTextRenderStyle(block: TranslationBlock, fontSize: number, options: OverlayRenderOptions): TextRenderStyle {

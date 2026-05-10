@@ -3,8 +3,15 @@ import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../.
 import { isBlockDuplicateModifier, isBlockInlineEditShortcut } from "../lib/editorShortcuts";
 import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
 import { isEditableTarget } from "../lib/editorUtils";
+import {
+  getActiveTranslationBlockDragDebugId,
+  isInpaintDebugLogEnabled,
+  roundInpaintDebugMs,
+  writeInpaintDebugLog
+} from "../lib/inpaintDiagnostics";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
+import { drawOverlayBlocks, resolveBlockCanvasDirtyRect } from "../lib/pageRender";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
 import { OverlayBlock } from "./OverlayBlock";
@@ -28,7 +35,11 @@ export type ImageStageLayerOpacity = {
   overlay: number;
 };
 
+const OVERLAY_REACT_DEBUG_SLOW_RENDER_MS = 16;
+const OVERLAY_REACT_DEBUG_SUMMARY_INTERVAL_MS = 500;
+
 type ImageStageLayersProps = {
+  activeBlockDragId: string | null;
   activeLayer: ImageStageActiveLayer;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   finalOutputPreviewActive: boolean;
@@ -80,6 +91,7 @@ type ImageStageLayersProps = {
 };
 
 export function ImageStageLayers({
+  activeBlockDragId,
   activeLayer,
   imageRef,
   finalOutputPreviewActive,
@@ -130,6 +142,13 @@ export function ImageStageLayers({
   const inlineEditorRef = React.useRef<HTMLTextAreaElement | null>(null);
   const overlayRenderCanvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const suppressInlineCommitBlockIdRef = React.useRef<string | null>(null);
+  const overlayReactDebugStatsRef = React.useRef({
+    lastSummaryAtMs: 0,
+    maxRenderMs: 0,
+    renderCount: 0,
+    slowRenderCount: 0,
+    totalRenderMs: 0
+  });
   const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
   const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
@@ -148,6 +167,60 @@ export function ImageStageLayers({
   const inpaintEditingEnabled = !temporaryPanActive || inpaintStrokeActive;
   const inpaintMaskEditingEnabled = activeLayer === "inpaintMask" && inpaintEditingEnabled;
   const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
+  const debugLogEnabled = isInpaintDebugLogEnabled();
+  const activeDragBlock = React.useMemo(
+    () => activeBlockDragId ? page.blocks.find((block) => block.id === activeBlockDragId) ?? null : null,
+    [activeBlockDragId, page.blocks]
+  );
+
+  const handleOverlayProfilerRender = React.useCallback((
+    id: string,
+    phase: "mount" | "update" | "nested-update",
+    actualDuration: number,
+    baseDuration: number,
+    startTime: number,
+    commitTime: number
+  ) => {
+    if (!debugLogEnabled) {
+      return;
+    }
+
+    const stats = overlayReactDebugStatsRef.current;
+    stats.renderCount += 1;
+    stats.totalRenderMs += actualDuration;
+    stats.maxRenderMs = Math.max(stats.maxRenderMs, actualDuration);
+
+    const activeDragDebugId = getActiveTranslationBlockDragDebugId();
+    const shouldLogSlowRender = actualDuration >= OVERLAY_REACT_DEBUG_SLOW_RENDER_MS;
+    if (shouldLogSlowRender) {
+      stats.slowRenderCount += 1;
+    }
+    const shouldWriteSlowRender = shouldLogSlowRender && (stats.slowRenderCount <= 8 || stats.slowRenderCount % 10 === 0);
+    const shouldLogSummary = activeDragDebugId && commitTime - stats.lastSummaryAtMs >= OVERLAY_REACT_DEBUG_SUMMARY_INTERVAL_MS;
+    if (!shouldWriteSlowRender && !shouldLogSummary) {
+      return;
+    }
+
+    stats.lastSummaryAtMs = commitTime;
+    writeInpaintDebugLog(shouldWriteSlowRender ? "overlay-layer:react-render-slow" : "overlay-layer:react-render-summary", {
+      activeDragDebugId,
+      actualDurationMs: roundInpaintDebugMs(actualDuration),
+      activeLayer,
+      averageRenderMs: roundInpaintDebugMs(stats.totalRenderMs / Math.max(1, stats.renderCount)),
+      baseDurationMs: roundInpaintDebugMs(baseDuration),
+      blockCount: page.blocks.length,
+      commitOffsetMs: roundInpaintDebugMs(commitTime - startTime),
+      editingEnabled: overlayEditingEnabled,
+      maxRenderMs: roundInpaintDebugMs(stats.maxRenderMs),
+      pageId: page.id,
+      phase,
+      profilerId: id,
+      renderCount: stats.renderCount,
+      selectedBlockCount: selectedBlockIds.length,
+      selectedBlockId,
+      slowRenderCount: stats.slowRenderCount
+    });
+  }, [activeLayer, debugLogEnabled, overlayEditingEnabled, page.blocks.length, page.id, selectedBlockId, selectedBlockIds.length]);
 
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
@@ -289,6 +362,63 @@ export function ImageStageLayers({
     };
   }, [resolveDuplicateModifierState]);
 
+  const renderOverlayLayerContent = () => (
+    <>
+      <OverlayRenderCanvas
+        canvasRef={overlayRenderCanvasRef}
+        page={page}
+        stageSize={resolvedStageSize}
+        editingEnabled={overlayEditingEnabled}
+        hiddenBlockId={activeBlockDragId}
+        fontWeightAvailability={fontWeightAvailability}
+      />
+      {page.blocks.map((block) => (
+        <OverlayBlock
+          key={block.id}
+          block={block}
+          pageSize={pageSize}
+          stageSize={resolvedStageSize}
+          selected={selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId)}
+          editingEnabled={overlayEditingEnabled}
+          widgetsVisible={!blockRangeSelectionActive && !multiBlockSelectionActive}
+          inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
+          inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}
+          visualContentVisible={false}
+          favoriteFontPresets={favoriteFontPresets}
+          onPointerDown={(event) => handleMovePointerDown(event, block)}
+          onStartInlineEdit={
+            multiBlockSelectionActive
+              ? undefined
+              : (event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  startInlineEdit(block);
+                }
+          }
+          onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
+          onInlineEditCancel={() => setInlineEdit(null)}
+          onInlineEditCommit={commitInlineEdit}
+          onFontStyleCopy={onBlockFontStyleCopy}
+          onFontSizeChange={onBlockFontSizeChange}
+          onAutoFitDisable={onBlockAutoFitDisable}
+          onTextAlignChange={onBlockTextAlignChange}
+          onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
+          onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}
+          onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
+        />
+      ))}
+      {activeDragBlock ? (
+        <OverlayBlockDragPreviewCanvas
+          block={activeDragBlock}
+          editingEnabled={overlayEditingEnabled}
+          fontWeightAvailability={fontWeightAvailability}
+          page={page}
+          stageSize={resolvedStageSize}
+        />
+      ) : null}
+    </>
+  );
+
   return (
     <>
       <SourceImageCanvas
@@ -370,48 +500,11 @@ export function ImageStageLayers({
               onPointerMove={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
               onPointerLeave={() => setDuplicateBlockMode(false)}
             >
-              <OverlayRenderCanvas
-                canvasRef={overlayRenderCanvasRef}
-                page={page}
-                stageSize={resolvedStageSize}
-                editingEnabled={overlayEditingEnabled}
-                fontWeightAvailability={fontWeightAvailability}
-              />
-              {page.blocks.map((block) => (
-                <OverlayBlock
-                  key={block.id}
-                  block={block}
-                  pageSize={pageSize}
-                  stageSize={resolvedStageSize}
-                  selected={selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId)}
-                  editingEnabled={overlayEditingEnabled}
-                  widgetsVisible={!blockRangeSelectionActive && !multiBlockSelectionActive}
-                  inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
-                  inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}
-                  visualContentVisible={false}
-                  favoriteFontPresets={favoriteFontPresets}
-                  onPointerDown={(event) => handleMovePointerDown(event, block)}
-                  onStartInlineEdit={
-                    multiBlockSelectionActive
-                      ? undefined
-                      : (event) => {
-                          event.preventDefault();
-                          event.stopPropagation();
-                          startInlineEdit(block);
-                        }
-                  }
-                  onInlineEditChange={(draft) => setInlineEdit({ blockId: block.id, draft })}
-                  onInlineEditCancel={() => setInlineEdit(null)}
-                  onInlineEditCommit={commitInlineEdit}
-                  onFontStyleCopy={onBlockFontStyleCopy}
-                  onFontSizeChange={onBlockFontSizeChange}
-                  onAutoFitDisable={onBlockAutoFitDisable}
-                  onTextAlignChange={onBlockTextAlignChange}
-                  onFavoriteFontPresetSelect={onFavoriteFontPresetSelect}
-                  onResizePointerDown={(event) => onBlockPointerDown(event, block, "resize")}
-                  onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
-                />
-              ))}
+              {debugLogEnabled ? (
+                <React.Profiler id="overlay-layer" onRender={handleOverlayProfilerRender}>
+                  {renderOverlayLayerContent()}
+                </React.Profiler>
+              ) : renderOverlayLayerContent()}
             </div>
           )
         : null}
@@ -477,4 +570,59 @@ function SourceImageCanvas({
   }, [canvasRef, dataUrl, pageSize.height, pageSize.width]);
 
   return <canvas ref={canvasRef} className={className} style={style} role="img" aria-label={label} />;
+}
+
+type OverlayBlockDragPreviewCanvasProps = {
+  block: TranslationBlock;
+  editingEnabled: boolean;
+  fontWeightAvailability: readonly FontWeightAvailability[];
+  page: MangaPage;
+  stageSize: ViewportSize;
+};
+
+function OverlayBlockDragPreviewCanvas({
+  block,
+  editingEnabled,
+  fontWeightAvailability,
+  page,
+  stageSize
+}: OverlayBlockDragPreviewCanvasProps): React.JSX.Element | null {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+  const dirtyRect = React.useMemo(() => resolveBlockCanvasDirtyRect(block, page), [block, page]);
+
+  React.useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !context || !dirtyRect) {
+      return;
+    }
+
+    canvas.width = dirtyRect.width;
+    canvas.height = dirtyRect.height;
+    context.setTransform(1, 0, 0, 1, 0, 0);
+    context.clearRect(0, 0, dirtyRect.width, dirtyRect.height);
+    context.setTransform(1, 0, 0, 1, -dirtyRect.x, -dirtyRect.y);
+    drawOverlayBlocks(context, page, {
+      renderSize: { width: page.width, height: page.height },
+      editingEnabled,
+      includedBlockIds: new Set([block.id]),
+      fontWeightAvailability
+    });
+  }, [block.id, dirtyRect, editingEnabled, fontWeightAvailability, page]);
+
+  if (!dirtyRect) {
+    return null;
+  }
+
+  const style: React.CSSProperties = {
+    left: (dirtyRect.x / Math.max(1, page.width)) * stageSize.width,
+    top: (dirtyRect.y / Math.max(1, page.height)) * stageSize.height,
+    width: (dirtyRect.width / Math.max(1, page.width)) * stageSize.width,
+    height: (dirtyRect.height / Math.max(1, page.height)) * stageSize.height,
+    pointerEvents: "none",
+    position: "absolute",
+    zIndex: 80
+  };
+
+  return <canvas ref={canvasRef} className="overlay-block-drag-preview-canvas" style={style} aria-hidden="true" />;
 }

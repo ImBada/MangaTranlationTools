@@ -57,6 +57,7 @@ type ImageStageProps = {
   blockRangeSelectionDisabled: boolean;
   temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
+  activeBlockDragId: string | null;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintLayerEditEnd: () => void;
   onInpaintLayerEditStart: () => void;
@@ -116,6 +117,7 @@ export function ImageStage({
   blockRangeSelectionDisabled,
   temporaryPanActive,
   inpaintSelectionRect,
+  activeBlockDragId,
   onInpaintLayerChange,
   onInpaintLayerEditEnd,
   onInpaintLayerEditStart,
@@ -398,6 +400,7 @@ export function ImageStage({
           selectedBlockIds={selectedBlockIds}
           stageSize={stageSize}
           temporaryPanActive={temporaryPanActive}
+          activeBlockDragId={activeBlockDragId}
           onBlockPointerDown={onBlockPointerDown}
           onBlockFontStyleCopy={onBlockFontStyleCopy}
           onBlockFontSizeChange={onBlockFontSizeChange}

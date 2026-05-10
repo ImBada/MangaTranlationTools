@@ -513,6 +513,7 @@ export default function App(): React.JSX.Element {
   });
   registerTranslationUndoClearer(clearTranslationUndoStack);
   const {
+    activeBlockDragId,
     fitStageToWorkspace,
     handleZoomToolDrag,
     imageRef,
@@ -937,6 +938,7 @@ export default function App(): React.JSX.Element {
           onSelectZoomTool={selectZoomTool}
           onSetLamaNoticePlatform={setLamaNoticePlatform}
           onSetStatusWidgetOpen={setStatusWidgetOpen}
+          activeBlockDragId={activeBlockDragId}
           onStagePointerMove={onStagePointerMove}
           onStagePointerUp={onStagePointerUp}
           onZoomInStage={zoomInStage}

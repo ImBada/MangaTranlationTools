@@ -10,6 +10,10 @@ const INPAINT_DEBUG_STORAGE_KEY = "mangaTranslationTools.inpaintDebugLogs";
 const ENABLED_DEBUG_VALUES = new Set(["1", "true", "yes", "on"]);
 let nextInpaintDebugId = 1;
 
+type TranslationBlockDragDebugWindow = Window & {
+  __MANGA_TRANSLATION_BLOCK_DRAG_DEBUG_ID__?: string;
+};
+
 export function writeInpaintDebugLog(message: string, detail?: unknown | (() => unknown)): void {
   try {
     if (typeof window === "undefined" || !window.mangaApi?.writeLog || !isInpaintDebugLogEnabled()) {
@@ -59,6 +63,46 @@ export function createInpaintDebugId(prefix: string): string {
   const id = nextInpaintDebugId;
   nextInpaintDebugId += 1;
   return `${prefix}-${id}`;
+}
+
+export function getActiveTranslationBlockDragDebugId(): string | null {
+  try {
+    if (typeof window === "undefined") {
+      return null;
+    }
+    const debugWindow = window as TranslationBlockDragDebugWindow;
+    return debugWindow.__MANGA_TRANSLATION_BLOCK_DRAG_DEBUG_ID__ ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function nowInpaintDebugMs(): number {
+  try {
+    return typeof performance === "undefined" ? Date.now() : performance.now();
+  } catch {
+    return Date.now();
+  }
+}
+
+export function roundInpaintDebugMs(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function setActiveTranslationBlockDragDebugId(debugId: string | null): void {
+  try {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const debugWindow = window as TranslationBlockDragDebugWindow;
+    if (debugId) {
+      debugWindow.__MANGA_TRANSLATION_BLOCK_DRAG_DEBUG_ID__ = debugId;
+    } else {
+      delete debugWindow.__MANGA_TRANSLATION_BLOCK_DRAG_DEBUG_ID__;
+    }
+  } catch {
+    // Diagnostics should never interrupt editing.
+  }
 }
 
 export function summarizeCanvasSyncState(
