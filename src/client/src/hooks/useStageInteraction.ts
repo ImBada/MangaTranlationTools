@@ -27,6 +27,7 @@ type DragState = {
   mode: DragMode;
   blockId: string;
   pointerId: number;
+  previewActive: boolean;
   captureElement: Element | null;
   startX: number;
   startY: number;
@@ -319,33 +320,6 @@ export function useStageInteraction({
     setStageViewScale(1);
   }, []);
 
-  const bringBlockToFront = React.useCallback((blockId: string): boolean => {
-    if (!selectedPage || bringTranslationBlockToFront(selectedPage.blocks, blockId) === selectedPage.blocks) {
-      return false;
-    }
-
-    const updatedAt = new Date().toISOString();
-    const undoRecorded = recordTranslationUndoSnapshot("번역 블록 순서 변경");
-    updateCurrentChapter(selectedPage.id, (chapter) => ({
-      ...chapter,
-      pages: chapter.pages.map((page) => {
-        if (page.id !== selectedPage.id) {
-          return page;
-        }
-
-        const blocks = bringTranslationBlockToFront(page.blocks, blockId);
-        return blocks === page.blocks
-          ? page
-          : {
-              ...page,
-              updatedAt,
-              blocks
-            };
-      })
-    }));
-    return undoRecorded;
-  }, [recordTranslationUndoSnapshot, selectedPage, updateCurrentChapter]);
-
   const onBlockPointerDown = React.useCallback((event: React.PointerEvent, block: TranslationBlock, mode: DragMode) => {
     const debugEnabled = isInpaintDebugLogEnabled();
     if (!stageRef.current || selectedPageEditLocked || activeLayer !== "overlay") {
@@ -375,10 +349,6 @@ export function useStageInteraction({
       return;
     }
     setSelectedBlockId(block.id);
-    setActiveBlockDragId(block.id);
-    const bringToFrontStartMs = debugEnabled ? nowInpaintDebugMs() : 0;
-    const orderUndoRecorded = bringBlockToFront(block.id);
-    const bringToFrontMs = bringToFrontStartMs > 0 ? nowInpaintDebugMs() - bringToFrontStartMs : 0;
     const target = resolveEditableBlockBbox(block);
     const stageRect = stageRef.current.getBoundingClientRect();
     const centerX = stageRect.left + ((target.bbox.x + target.bbox.w / 2) / 1000) * stageRect.width;
@@ -409,10 +379,10 @@ export function useStageInteraction({
       writeInpaintDebugLog("translation-block-drag:start", {
         blockCount: debug.blockCount,
         blockId: block.id,
-        bringToFrontMs: roundInpaintDebugMs(bringToFrontMs),
+        bringToFrontDeferred: true,
         debugId: debug.id,
         mode,
-        orderUndoRecorded,
+        orderUndoRecorded: false,
         pageId: debug.pageId,
         pointerId: event.pointerId,
         shiftKey: event.shiftKey,
@@ -427,6 +397,7 @@ export function useStageInteraction({
       mode,
       blockId: block.id,
       pointerId: event.pointerId,
+      previewActive: false,
       captureElement: event.currentTarget,
       startX: event.clientX,
       startY: event.clientY,
@@ -435,11 +406,11 @@ export function useStageInteraction({
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
       centerY,
-      undoRecorded: orderUndoRecorded,
+      undoRecorded: false,
       debug
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
-  }, [activeLayer, bringBlockToFront, duplicateBlock, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
+  }, [activeLayer, duplicateBlock, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;
@@ -479,6 +450,11 @@ export function useStageInteraction({
         ? clampRotationDeg(drag.startRotationDeg + angleBetweenPointsDeg(drag.centerX, drag.centerY, event.clientX, event.clientY) - drag.startAngleDeg)
         : null;
 
+    if (!drag.previewActive) {
+      setActiveBlockDragId(drag.blockId);
+      drag.previewActive = true;
+    }
+
     if (!drag.undoRecorded) {
       recordTranslationUndoSnapshot("번역 블록 위치 변경");
       drag.undoRecorded = true;
@@ -495,7 +471,7 @@ export function useStageInteraction({
           : {
               ...candidate,
               updatedAt: new Date().toISOString(),
-              blocks: candidate.blocks.map((block) => {
+              blocks: bringTranslationBlockToFront(candidate.blocks, drag.blockId).map((block) => {
                 if (block.id !== drag.blockId) {
                   return block;
                 }
