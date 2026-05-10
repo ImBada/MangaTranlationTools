@@ -47,10 +47,11 @@ type CachedZip = {
 };
 
 type ImportMaterializeContext = {
-  createdChapterDirs: string[];
   current: number;
   emit?: (event: JobEvent) => void;
   jobId?: string;
+  rollbackChapterDirs: string[];
+  rollbackChapterIds: string[];
   signal?: AbortSignal;
   total: number;
   zipCache: Map<string, CachedZip>;
@@ -262,12 +263,13 @@ export async function previewUploadedFiles(kind: ImportSourceKind, files: Upload
 export async function createImport(request: CreateImportRequest, options: CreateImportOptions = {}): Promise<CreateImportResult> {
   const target = request.target.mode === "new" ? await createWork(request.target.title || request.preview.suggestedWorkTitle) : await ensureExistingWork(request.target.workId);
   const selections = new Map(request.selections.map((selection) => [selection.draftId, selection]));
-  const createdChapterIds: string[] = [];
+  const importedChapterIds: string[] = [];
   const context: ImportMaterializeContext = {
-    createdChapterDirs: [],
     current: 0,
     emit: options.emit,
     jobId: options.jobId,
+    rollbackChapterDirs: [],
+    rollbackChapterIds: [],
     signal: options.signal,
     total: countSelectedImportPages(request),
     zipCache: new Map()
@@ -285,13 +287,13 @@ export async function createImport(request: CreateImportRequest, options: Create
       }
 
       const chapter = await createChapterFromDraft(target.id, draft, selection.title, context);
-      createdChapterIds.push(chapter.id);
+      importedChapterIds.push(chapter.id);
       if (!openedChapter) {
         openedChapter = await hydrateChapter(chapter);
       }
     }
 
-    if (createdChapterIds.length === 0) {
+    if (importedChapterIds.length === 0) {
       throw new Error("생성할 화가 없습니다.");
     }
 
@@ -299,13 +301,11 @@ export async function createImport(request: CreateImportRequest, options: Create
 
     return {
       workId: target.id,
-      chapterIds: createdChapterIds,
+      chapterIds: importedChapterIds,
       openedChapter
     };
   } catch (error) {
-    if (isAbortError(error) || options.signal?.aborted) {
-      await cleanupAbortedImport(target.id, request.target.mode === "new", createdChapterIds, context.createdChapterDirs);
-    }
+    await cleanupFailedImport(target.id, request.target.mode === "new", context.rollbackChapterIds, context.rollbackChapterDirs).catch(() => undefined);
     throw error;
   }
 }
@@ -326,7 +326,8 @@ async function createChapterFromDraft(
   const title = await makeUniqueChapterTitle(workId, sanitizeTitle(requestedTitle || draft.title, "제목없음"));
   const chapterDir = join(WORKS_ROOT, workId, "chapters", chapterId);
   const pagesDir = join(chapterDir, "pages");
-  context.createdChapterDirs.push(chapterDir);
+  context.rollbackChapterIds.push(chapterId);
+  context.rollbackChapterDirs.push(chapterDir);
   await mkdir(pagesDir, { recursive: true });
 
   const pages = await mapWithConcurrency(draft.pages, IMPORT_PAGE_CONCURRENCY, (pageDraft, index) =>
@@ -530,17 +531,33 @@ function emitImportProgress(
 async function mapWithConcurrency<T, R>(items: T[], concurrency: number, mapper: (item: T, index: number) => Promise<R>): Promise<R[]> {
   const results: R[] = new Array(items.length);
   let nextIndex = 0;
+  let firstError: unknown;
+  let hasError = false;
   const workerCount = Math.min(Math.max(1, concurrency), items.length);
 
   async function worker(): Promise<void> {
     while (nextIndex < items.length) {
+      if (hasError) {
+        return;
+      }
       const index = nextIndex;
       nextIndex += 1;
-      results[index] = await mapper(items[index], index);
+      try {
+        results[index] = await mapper(items[index], index);
+      } catch (error) {
+        if (!hasError) {
+          firstError = error;
+          hasError = true;
+        }
+        return;
+      }
     }
   }
 
   await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  if (hasError) {
+    throw firstError;
+  }
   return results;
 }
 
@@ -550,11 +567,7 @@ function throwIfAborted(signal: AbortSignal | undefined): void {
   }
 }
 
-function isAbortError(error: unknown): boolean {
-  return error instanceof DOMException && error.name === "AbortError";
-}
-
-async function cleanupAbortedImport(workId: string, removeWork: boolean, createdChapterIds: string[], createdChapterDirs: string[]): Promise<void> {
+async function cleanupFailedImport(workId: string, removeWork: boolean, createdChapterIds: string[], createdChapterDirs: string[]): Promise<void> {
   if (removeWork) {
     const index = await readIndexFile();
     index.workOrder = index.workOrder.filter((id) => id !== workId);
@@ -564,10 +577,13 @@ async function cleanupAbortedImport(workId: string, removeWork: boolean, created
   }
 
   const work = await readWorkFile(workId);
-  if (work) {
-    work.chapterOrder = work.chapterOrder.filter((id) => !createdChapterIds.includes(id));
-    work.updatedAt = new Date().toISOString();
-    await writeWorkFile(work);
+  if (work && createdChapterIds.length > 0) {
+    const nextChapterOrder = work.chapterOrder.filter((id) => !createdChapterIds.includes(id));
+    if (nextChapterOrder.length !== work.chapterOrder.length) {
+      work.chapterOrder = nextChapterOrder;
+      work.updatedAt = new Date().toISOString();
+      await writeWorkFile(work);
+    }
   }
 
   await Promise.all(createdChapterDirs.map((chapterDir) => rm(chapterDir, { recursive: true, force: true }).catch(() => undefined)));
