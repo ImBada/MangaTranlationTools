@@ -519,13 +519,13 @@ function drawTextRunGlyphs(
   if (letterSpacingPx === 0) {
     for (const segment of splitTextRunSegments(block, text)) {
       applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
-      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode);
+      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode, segment.centerEllipsis);
       cursorX += context.measureText(segment.text).width;
     }
   } else {
     for (const segment of splitTextRunSegments(block, text, true)) {
       applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
-      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode);
+      drawTextGlyph(context, segment.text, cursorX, y, fontSize, mode, segment.centerEllipsis);
       cursorX += context.measureText(segment.text).width + letterSpacingPx;
     }
   }
@@ -536,6 +536,7 @@ function drawTextRunGlyphs(
 type TextRunSegment = {
   text: string;
   fontFamily?: string;
+  centerEllipsis: boolean;
 };
 
 function splitTextRunSegments(block: TranslationBlock, text: string, forceSingleGlyph = false): TextRunSegment[] {
@@ -545,13 +546,13 @@ function splitTextRunSegments(block: TranslationBlock, text: string, forceSingle
   for (const run of runs) {
     if (forceSingleGlyph) {
       for (const char of [...run.text]) {
-        segments.push({ text: char, fontFamily: run.fontFamily });
+        segments.push({ text: char, fontFamily: run.fontFamily, centerEllipsis: char === CENTERED_ELLIPSIS });
       }
       continue;
     }
 
     for (const segment of splitTextRunByCenteredEllipsis([...run.text])) {
-      segments.push({ text: segment, fontFamily: run.fontFamily });
+      segments.push({ text: segment, fontFamily: run.fontFamily, centerEllipsis: segment === CENTERED_ELLIPSIS });
     }
   }
 
@@ -601,9 +602,10 @@ function drawTextGlyph(
   x: number,
   y: number,
   fontSize: number,
-  mode: "fill" | "stroke"
+  mode: "fill" | "stroke",
+  centerEllipsis = false
 ): void {
-  const glyphY = y + resolveCenteredEllipsisYOffset(context, text, fontSize);
+  const glyphY = y + resolveCenteredEllipsisYOffset(context, text, fontSize, centerEllipsis);
   if (mode === "stroke") {
     context.strokeText(text, x, glyphY);
   } else {
@@ -614,9 +616,10 @@ function drawTextGlyph(
 export function resolveCenteredEllipsisYOffset(
   context: Pick<CanvasRenderingContext2D, "measureText">,
   text: string,
-  fontSize: number
+  fontSize: number,
+  centerEllipsis = false
 ): number {
-  if (text !== CENTERED_ELLIPSIS) {
+  if (!centerEllipsis && text !== CENTERED_ELLIPSIS) {
     return 0;
   }
 
