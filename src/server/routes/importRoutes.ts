@@ -2,12 +2,17 @@ import express from "express";
 import multer from "multer";
 import { randomUUID } from "node:crypto";
 import { createImport, previewUploadedFiles, type UploadedImportFile } from "../library";
+import {
+  cleanupUnreferencedUploadedImportFiles,
+  cleanupUploadedImportFiles,
+  collectImportPreviewSourcePaths
+} from "../importUploads";
 import { getActiveJob, recordJobEvent, setActiveJob, emitJobEvent } from "../jobState";
 import { logError } from "../logger";
 import { asyncHandler, isAbortError } from "../serverUtils";
-import type { CreateImportRequest, ImportSourceKind, JobEvent } from "../../shared/types";
+import type { CreateImportRequest, ImportPreviewResult, ImportSourceKind, JobEvent } from "../../shared/types";
 
-export function createImportRoutes(upload: multer.Multer): express.Router {
+export function createImportRoutes(upload: multer.Multer, uploadDir: string): express.Router {
   const router = express.Router();
 
   router.post("/api/import/preview/:kind", upload.array("files"), asyncHandler(async (req, res) => {
@@ -18,8 +23,19 @@ export function createImportRoutes(upload: multer.Multer): express.Router {
       name: file.originalname,
       relativePath: relativePaths[index] || file.originalname
     }));
-    const preview = await previewUploadedFiles(kind, files);
-    res.json(preview.chapters.length ? preview : null);
+    let preview: ImportPreviewResult | undefined;
+    try {
+      preview = await previewUploadedFiles(kind, files);
+      res.json(preview.chapters.length ? preview : null);
+    } finally {
+      await cleanupUnreferencedUploadedImportFiles(uploadDir, files.map((file) => file.path), preview?.chapters.length ? preview : undefined);
+    }
+  }));
+
+  router.post("/api/import/discard", asyncHandler(async (req, res) => {
+    const preview = (req.body?.preview ?? req.body) as ImportPreviewResult | undefined;
+    await cleanupUploadedImportFiles(uploadDir, collectImportPreviewSourcePaths(preview));
+    res.sendStatus(204);
   }));
 
   router.post("/api/import/create", asyncHandler(async (req, res) => {
@@ -36,13 +52,16 @@ export function createImportRoutes(upload: multer.Multer): express.Router {
       recordJobEvent(id, event);
       emitJobEvent(event);
     };
+    let shouldCleanupUploadedSources = false;
 
     try {
       const result = await createImport(request, { jobId: id, signal: abortController.signal, emit });
+      shouldCleanupUploadedSources = true;
       res.json(result);
     } catch (error) {
       const lastEvent = getActiveJob()?.id === id ? getActiveJob()?.lastEvent : undefined;
       if (isAbortError(error) || abortController.signal.aborted) {
+        shouldCleanupUploadedSources = true;
         emit({
           id,
           kind: "library-import",
@@ -71,6 +90,9 @@ export function createImportRoutes(upload: multer.Multer): express.Router {
       res.status(500).json({ error: message });
     } finally {
       setActiveJob(null);
+      if (shouldCleanupUploadedSources) {
+        await cleanupUploadedImportFiles(uploadDir, collectImportPreviewSourcePaths(request.preview));
+      }
     }
   }));
 

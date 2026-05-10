@@ -37,6 +37,7 @@ type UseLibraryActionsState = {
   importBusy: boolean;
   importPreview: ImportPreviewResult | null;
   library: LibraryIndex;
+  closeImportPreview: () => void;
   refreshLibrary: () => Promise<void>;
   removePage: (pageId: string) => Promise<void>;
   renameBusy: boolean;
@@ -46,7 +47,6 @@ type UseLibraryActionsState = {
   reorderChapters: (workId: string, sourceChapterId: string, targetChapterId: string) => Promise<void>;
   reorderPages: (sourcePageId: string, targetPageId: string) => Promise<void>;
   selectImportFiles: (mode: ImportMode) => void;
-  setImportPreview: React.Dispatch<React.SetStateAction<ImportPreviewResult | null>>;
   setRenameTarget: React.Dispatch<React.SetStateAction<RenameTarget | null>>;
   submitImport: (payload: ImportModalSubmit) => Promise<void>;
   submitRename: (title: string) => Promise<void>;
@@ -64,10 +64,11 @@ export function useLibraryActions({
   setSelectedPageId
 }: UseLibraryActionsOptions): UseLibraryActionsState {
   const [library, setLibrary] = React.useState<LibraryIndex>({ workOrder: [], works: [] });
-  const [importPreview, setImportPreview] = React.useState<ImportPreviewResult | null>(null);
+  const [importPreview, setImportPreviewState] = React.useState<ImportPreviewResult | null>(null);
   const [importBusy, setImportBusy] = React.useState(false);
   const [renameTarget, setRenameTarget] = React.useState<RenameTarget | null>(null);
   const [renameBusy, setRenameBusy] = React.useState(false);
+  const importPreviewRef = React.useRef<ImportPreviewResult | null>(null);
   const imageImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const folderImportInputRef = React.useRef<HTMLInputElement | null>(null);
   const zipImportInputRef = React.useRef<HTMLInputElement | null>(null);
@@ -77,6 +78,25 @@ export function useLibraryActions({
     const next = await window.mangaApi.getLibrary();
     setLibrary(next);
   }, []);
+
+  const setImportPreview = React.useCallback((preview: ImportPreviewResult | null) => {
+    importPreviewRef.current = preview;
+    setImportPreviewState(preview);
+  }, []);
+
+  const discardImportPreview = React.useCallback((preview: ImportPreviewResult) => {
+    window.mangaApi.discardImportPreview(preview).catch((error) => {
+      console.error(error);
+    });
+  }, []);
+
+  const closeImportPreview = React.useCallback(() => {
+    const preview = importPreviewRef.current;
+    setImportPreview(null);
+    if (preview) {
+      discardImportPreview(preview);
+    }
+  }, [discardImportPreview, setImportPreview]);
 
   const openImportPreview = React.useCallback(async (mode: ImportMode, files: File[]) => {
     const preview =
@@ -90,8 +110,12 @@ export function useLibraryActions({
     if (!preview) {
       return;
     }
+    const previousPreview = importPreviewRef.current;
     setImportPreview(preview);
-  }, []);
+    if (previousPreview) {
+      discardImportPreview(previousPreview);
+    }
+  }, [discardImportPreview, setImportPreview]);
 
   const selectImportFiles = React.useCallback((mode: ImportMode) => {
     const input =
@@ -146,12 +170,15 @@ export function useLibraryActions({
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
+        if (message === "가져오기가 취소되었습니다.") {
+          setImportPreview(null);
+        }
         pushStatus(message);
       } finally {
         setImportBusy(false);
       }
     },
-    [applyChapter, importPreview, openChapter, pushStatus, refreshLibrary]
+    [applyChapter, importPreview, openChapter, pushStatus, refreshLibrary, setImportPreview]
   );
 
   const renameWork = React.useCallback((workId: string) => {
@@ -300,6 +327,7 @@ export function useLibraryActions({
     importBusy,
     importPreview,
     library,
+    closeImportPreview,
     refreshLibrary,
     removePage,
     renameBusy,
@@ -309,7 +337,6 @@ export function useLibraryActions({
     reorderChapters,
     reorderPages,
     selectImportFiles,
-    setImportPreview,
     setRenameTarget,
     submitImport,
     submitRename,

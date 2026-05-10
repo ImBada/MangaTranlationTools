@@ -215,6 +215,7 @@ export default function App(): React.JSX.Element {
     importBusy,
     importPreview,
     library,
+    closeImportPreview,
     refreshLibrary,
     removePage,
     renameBusy,
@@ -224,7 +225,6 @@ export default function App(): React.JSX.Element {
     reorderChapters,
     reorderPages,
     selectImportFiles,
-    setImportPreview,
     setRenameTarget,
     submitImport,
     submitRename,
@@ -923,7 +923,7 @@ export default function App(): React.JSX.Element {
             settings={settings}
             settingsBusy={settingsBusy}
             settingsOpen={settingsOpen}
-            onCloseImport={() => setImportPreview(null)}
+            onCloseImport={closeImportPreview}
             onCloseRename={() => setRenameTarget(null)}
             onCloseSettings={() => setSettingsOpen(false)}
             onDeleteRenameTarget={deleteRenameTarget}

@@ -147,6 +147,7 @@ export const mangaApi = {
   previewFolderImport: (files: File[]): Promise<ImportPreviewResult | null> => previewImport("folder", files),
   previewZipImport: (files: File[]): Promise<ImportPreviewResult | null> => previewImport("zip", files),
   previewZipFolderImport: (files: File[]): Promise<ImportPreviewResult | null> => previewImport("zip-folder", files),
+  discardImportPreview: (preview: ImportPreviewResult): Promise<void> => postJsonNoContent("/api/import/discard", { preview }),
   createImport: (request: CreateImportRequest): Promise<CreateImportResult> => postJson("/api/import/create", request),
   getLibrary: (): Promise<LibraryIndex> => requestJson("/api/library"),
   openChapter: (chapterId: string): Promise<ChapterSnapshot> => requestJson(`/api/library/chapters/${encodeURIComponent(chapterId)}`),

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { ensureWritableAppDirectories } from "./appPaths";
 import { configureLamaEnvironment } from "./lamaRuntime";
 import { cleanupLegacyLogs, getLibraryRoot } from "./library";
+import { cleanupUploadDirectory } from "./importUploads";
 import { abortActiveJobForShutdown } from "./jobState";
 import { getLogPath, logError, logInfo, resetAppLog } from "./logger";
 import { createImportRoutes } from "./routes/importRoutes";
@@ -67,7 +68,7 @@ app.use(createLibraryRoutes());
 app.use(createRenderRoutes());
 app.use(createInpaintRoutes(upload));
 app.use(createRuntimeRoutes(appPaths));
-app.use(createImportRoutes(upload));
+app.use(createImportRoutes(upload, uploadDir));
 app.use(createJobRoutes());
 
 app.use(express.static(join(appPaths.repoRoot, "out", "client")));
@@ -79,10 +80,21 @@ app.use((error: unknown, _req: express.Request, res: express.Response, _next: ex
 });
 
 const httpServer = createServer(app);
-httpServer.listen(serverPort, "127.0.0.1", async () => {
-  await cleanupLegacyLogs();
-  logInfo("Manga translator web app ready", { url: `http://127.0.0.1:${serverPort}` });
+startServer().catch((error) => {
+  logError("Failed to start web server", error);
+  process.exit(1);
 });
+
+async function startServer(): Promise<void> {
+  await cleanupLegacyLogs();
+  const removedUploadFiles = await cleanupUploadDirectory(uploadDir);
+  if (removedUploadFiles.length > 0) {
+    logInfo("Cleaned stale upload files", { count: removedUploadFiles.length });
+  }
+  httpServer.listen(serverPort, "127.0.0.1", () => {
+    logInfo("Manga translator web app ready", { url: `http://127.0.0.1:${serverPort}` });
+  });
+}
 
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
