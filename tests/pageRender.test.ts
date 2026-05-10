@@ -9,6 +9,7 @@ describe("page render glyph positioning", () => {
     });
 
     expect(resolveCenteredEllipsisYOffset(context, "…", 100)).toBe(-25);
+    expect(resolveCenteredEllipsisYOffset(context, "...", 100)).toBe(-25);
   });
 
   it("leaves already centered ellipsis glyphs and other text unchanged", () => {

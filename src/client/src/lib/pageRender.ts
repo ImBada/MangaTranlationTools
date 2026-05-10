@@ -53,13 +53,27 @@ const CANVAS_TEXT_RENDER_FONT_SIZE_RATIO = 0.985;
 const OVERLAY_BLOCK_BORDER_PX = 1;
 const CANVAS_TEXT_RENDER_Y_OFFSET_RATIO = 0.04;
 const CENTERED_ELLIPSIS = "…";
+const CENTERED_PERIOD_ELLIPSIS = "...";
 const DEFAULT_TEXT_OUTLINE_COLOR = "#000000";
+const CENTERED_ELLIPSIS_DOT_RADIUS_RATIO = 0.065;
+const CENTERED_ELLIPSIS_DOT_SPACING_RATIO = 0.26;
 type CanvasPaint = CanvasRenderingContext2D["strokeStyle"];
 
 type TextRenderStyle = {
   fontWeightAvailability: readonly FontWeightAvailability[];
   syntheticBoldWidthPx: number;
   syntheticItalicSkewX: number;
+};
+
+type PositionedTextRunSegment = TextRunSegment & {
+  advance: number;
+  x: number;
+};
+
+type CenteredEllipsisDotGeometry = {
+  centers: [number, number, number];
+  centerY: number;
+  radius: number;
 };
 
 export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPageOptions): Promise<string> {
@@ -359,7 +373,39 @@ function drawOutlinedText(
   textRenderStyle: TextRenderStyle
 ): void {
   drawTextShadow(context, block, text, x, y, fontSize, textRenderStyle);
+  drawTextBodyAndOutlines(context, block, text, x, y, fontSize, textRenderStyle);
+}
+
+function drawTextBodyAndOutlines(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): void {
   strokeTextOutlines(context, block, text, x, y, fontSize, textRenderStyle);
+
+  if (block.screentoneFillEnabled ?? false) {
+    context.save();
+    context.fillStyle = "#ffffff";
+    drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
+    const pattern = createScreentonePattern(
+      context,
+      block.textColor,
+      block.screentoneFillIntensity,
+      block.screentoneFillDensity,
+      block.screentoneFillAntialias,
+      fontSize
+    );
+    context.fillStyle = pattern ?? block.textColor;
+    strokeSyntheticBoldText(context, block, text, x, y, fontSize, context.fillStyle, textRenderStyle);
+    drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
+    context.restore();
+    return;
+  }
+
   strokeSyntheticBoldText(context, block, text, x, y, fontSize, context.fillStyle, textRenderStyle);
   drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
 }
@@ -373,29 +419,236 @@ function drawFilledText(
   fontSize: number,
   textRenderStyle: TextRenderStyle
 ): void {
-  if (!(block.screentoneFillEnabled ?? false)) {
-    drawOutlinedText(context, block, text, x, y, fontSize, textRenderStyle);
+  if (drawCenteredEllipsisStyledSegments(context, block, text, x, y, fontSize, textRenderStyle)) {
     return;
   }
 
-  drawTextShadow(context, block, text, x, y, fontSize, textRenderStyle);
-  strokeTextOutlines(context, block, text, x, y, fontSize, textRenderStyle);
+  drawOutlinedText(context, block, text, x, y, fontSize, textRenderStyle);
+}
+
+function drawCenteredEllipsisStyledSegments(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): boolean {
+  if (!containsCenteredEllipsis(text)) {
+    return false;
+  }
+
+  const positionedSegments = resolveTextRunSegmentPositions(context, block, text, x, fontSize, textRenderStyle);
+  if (!positionedSegments.some((segment) => segment.centerEllipsis)) {
+    return false;
+  }
 
   context.save();
-  context.fillStyle = "#ffffff";
-  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
-  const pattern = createScreentonePattern(
-    context,
-    block.textColor,
-    block.screentoneFillIntensity,
-    block.screentoneFillDensity,
-    block.screentoneFillAntialias,
-    fontSize
-  );
-  context.fillStyle = pattern ?? block.textColor;
-  strokeSyntheticBoldText(context, block, text, x, y, fontSize, context.fillStyle, textRenderStyle);
-  drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
+  context.textAlign = "left";
+  const originalFont = context.font;
+  for (const segment of positionedSegments) {
+    applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+    if (segment.centerEllipsis) {
+      drawCenteredEllipsisShadow(context, block, segment.x, y, fontSize, segment.advance, textRenderStyle);
+    } else {
+      drawTextShadow(context, block, segment.text, segment.x, y, fontSize, textRenderStyle);
+    }
+  }
+  for (const segment of positionedSegments) {
+    applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+    if (segment.centerEllipsis) {
+      drawCenteredEllipsisBody(context, block, segment.x, y, fontSize, segment.advance, textRenderStyle);
+    } else {
+      drawTextBodyAndOutlines(context, block, segment.text, segment.x, y, fontSize, textRenderStyle);
+    }
+  }
+  context.font = originalFont;
   context.restore();
+  return true;
+}
+
+function drawCenteredEllipsisShadow(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  x: number,
+  y: number,
+  fontSize: number,
+  advance: number,
+  textRenderStyle: TextRenderStyle
+): void {
+  if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0))) {
+    return;
+  }
+
+  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
+  if (shadowDistancePx === 0) {
+    return;
+  }
+
+  const geometry = resolveCenteredEllipsisDotGeometry(context, x, y, fontSize, advance);
+  const angleRad = ((block.shadowAngleDeg ?? 45) * Math.PI) / 180;
+  const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
+  const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
+  const outlineRadiusPx = secondaryOutlineWidthPx > 0 ? outlineWidthPx / 2 + secondaryOutlineWidthPx : outlineWidthPx / 2;
+  const shadowRadius = geometry.radius + textRenderStyle.syntheticBoldWidthPx / 2 + outlineRadiusPx;
+
+  context.save();
+  context.translate(Math.cos(angleRad) * shadowDistancePx, Math.sin(angleRad) * shadowDistancePx);
+  withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
+    drawCenteredEllipsisDots(context, geometry, shadowRadius, block.shadowColor ?? "#000000");
+  });
+  context.restore();
+}
+
+function drawCenteredEllipsisBody(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  x: number,
+  y: number,
+  fontSize: number,
+  advance: number,
+  textRenderStyle: TextRenderStyle
+): void {
+  const geometry = resolveCenteredEllipsisDotGeometry(context, x, y, fontSize, advance);
+  const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
+  const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
+  const syntheticBoldRadiusPx = textRenderStyle.syntheticBoldWidthPx / 2;
+  const collapseKnockoutOutline = shouldCollapseCenteredEllipsisKnockoutOutline(block, fontSize);
+
+  withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
+    if (secondaryOutlineWidthPx > 0) {
+      drawCenteredEllipsisDots(
+        context,
+        geometry,
+        geometry.radius + outlineWidthPx / 2 + secondaryOutlineWidthPx + syntheticBoldRadiusPx,
+        block.secondaryOutlineColor ?? "#ffffff"
+      );
+    }
+
+    if (outlineWidthPx > 0 && !collapseKnockoutOutline) {
+      drawCenteredEllipsisDots(
+        context,
+        geometry,
+        geometry.radius + outlineWidthPx / 2 + syntheticBoldRadiusPx,
+        block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR
+      );
+    }
+
+    const fillRadius = geometry.radius + syntheticBoldRadiusPx;
+    if (block.screentoneFillEnabled ?? false) {
+      drawCenteredEllipsisDots(context, geometry, fillRadius, "#ffffff");
+      const pattern = createScreentonePattern(
+        context,
+        block.textColor,
+        block.screentoneFillIntensity,
+        block.screentoneFillDensity,
+        block.screentoneFillAntialias,
+        fontSize
+      );
+      drawCenteredEllipsisDots(context, geometry, fillRadius, pattern ?? block.textColor);
+      return;
+    }
+
+    drawCenteredEllipsisDots(context, geometry, fillRadius, block.textColor);
+  });
+}
+
+function resolveCenteredEllipsisDotGeometry(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  fontSize: number,
+  advance: number
+): CenteredEllipsisDotGeometry {
+  const ellipsisAdvance = Math.max(fontSize * 0.45, advance);
+  const dotMetrics = context.measureText(".");
+  const measuredDotHeight = dotMetrics.actualBoundingBoxAscent + dotMetrics.actualBoundingBoxDescent;
+  const measuredRadius =
+    Number.isFinite(measuredDotHeight) && measuredDotHeight > 0 && measuredDotHeight < fontSize * 0.4
+      ? measuredDotHeight / 2
+      : fontSize * CENTERED_ELLIPSIS_DOT_RADIUS_RATIO;
+  const radius = Math.max(fontSize * 0.045, Math.min(fontSize * 0.09, measuredRadius));
+  const spacing = Math.max(radius * 2.8, Math.min(fontSize * CENTERED_ELLIPSIS_DOT_SPACING_RATIO, ellipsisAdvance / 3));
+  const centerX = x + ellipsisAdvance / 2;
+
+  return {
+    centers: [centerX - spacing, centerX, centerX + spacing],
+    centerY: y + fontSize / 2,
+    radius
+  };
+}
+
+function drawCenteredEllipsisDots(
+  context: CanvasRenderingContext2D,
+  geometry: CenteredEllipsisDotGeometry,
+  radius: number,
+  paint: CanvasPaint
+): void {
+  if (radius <= 0) {
+    return;
+  }
+
+  context.save();
+  context.fillStyle = paint;
+  context.beginPath();
+  for (const centerX of geometry.centers) {
+    context.moveTo(centerX + radius, geometry.centerY);
+    context.arc(centerX, geometry.centerY, radius, 0, Math.PI * 2);
+  }
+  context.fill();
+  context.restore();
+}
+
+function shouldCollapseCenteredEllipsisKnockoutOutline(block: TranslationBlock, fontSize: number): boolean {
+  return (
+    resolveRenderedOutlineWidthPx(block, fontSize) > 0 &&
+    resolveRenderedSecondaryOutlineWidthPx(block, fontSize) > 0 &&
+    colorsMatch(block.outlineColor, block.backgroundColor)
+  );
+}
+
+function resolveTextRunSegmentPositions(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  text: string,
+  x: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle
+): PositionedTextRunSegment[] {
+  const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
+  const segments = splitTextRunSegments(block, text, letterSpacingPx !== 0);
+  const originalFont = context.font;
+  const segmentMetrics = segments.map((segment) => {
+    applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+    return {
+      ...segment,
+      advance: measureTextSegmentAdvance(context, segment.text, letterSpacingPx)
+    };
+  });
+  const runWidth = segmentMetrics.reduce(
+    (total, segment, index) => total + segment.advance + resolveInterSegmentSpacingPx(letterSpacingPx, index, segmentMetrics.length),
+    0
+  );
+
+  let cursorX = context.textAlign === "right" ? x - runWidth : context.textAlign === "center" ? x - runWidth / 2 : x;
+  const positionedSegments: PositionedTextRunSegment[] = [];
+  for (const [index, segment] of segmentMetrics.entries()) {
+    positionedSegments.push({ ...segment, x: cursorX });
+    cursorX += segment.advance + resolveInterSegmentSpacingPx(letterSpacingPx, index, segmentMetrics.length);
+  }
+
+  context.font = originalFont;
+  return positionedSegments;
+}
+
+function measureTextSegmentAdvance(context: Pick<CanvasRenderingContext2D, "measureText">, text: string, letterSpacingPx: number): number {
+  const glyphCount = [...text].length;
+  return context.measureText(text).width + (glyphCount > 1 ? letterSpacingPx * (glyphCount - 1) : 0);
+}
+
+function resolveInterSegmentSpacingPx(letterSpacingPx: number, segmentIndex: number, segmentCount: number): number {
+  return letterSpacingPx !== 0 && segmentIndex < segmentCount - 1 ? letterSpacingPx : 0;
 }
 
 function drawTextShadow(
@@ -479,18 +732,31 @@ function drawTextRun(
   mode: "fill" | "stroke",
   textRenderStyle: TextRenderStyle
 ): void {
-  if (textRenderStyle.syntheticItalicSkewX !== 0) {
-    context.save();
-    const pivotY = y + fontSize / 2;
-    context.translate(x, pivotY);
-    context.transform(1, 0, textRenderStyle.syntheticItalicSkewX, 1, 0, 0);
-    context.translate(-x, -pivotY);
+  withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
     drawTextRunGlyphs(context, block, text, x, y, fontSize, mode, textRenderStyle);
-    context.restore();
+  });
+}
+
+function withSyntheticItalicTransform(
+  context: CanvasRenderingContext2D,
+  x: number,
+  y: number,
+  fontSize: number,
+  textRenderStyle: TextRenderStyle,
+  draw: () => void
+): void {
+  if (textRenderStyle.syntheticItalicSkewX === 0) {
+    draw();
     return;
   }
 
-  drawTextRunGlyphs(context, block, text, x, y, fontSize, mode, textRenderStyle);
+  context.save();
+  const pivotY = y + fontSize / 2;
+  context.translate(x, pivotY);
+  context.transform(1, 0, textRenderStyle.syntheticItalicSkewX, 1, 0, 0);
+  context.translate(-x, -pivotY);
+  draw();
+  context.restore();
 }
 
 function drawTextRunGlyphs(
@@ -504,7 +770,7 @@ function drawTextRunGlyphs(
   textRenderStyle: TextRenderStyle
 ): void {
   const letterSpacingPx = resolveTextLetterSpacingPx(block, fontSize);
-  const hasCenteredEllipsis = text.includes(CENTERED_ELLIPSIS);
+  const hasCenteredEllipsis = containsCenteredEllipsis(text);
   const hasCharacterFontOverrides = (block.characterFontOverrides?.length ?? 0) > 0;
   if (letterSpacingPx === 0 && !hasCenteredEllipsis && !hasCharacterFontOverrides) {
     drawTextGlyph(context, text, x, y, fontSize, mode);
@@ -544,41 +810,31 @@ function splitTextRunSegments(block: TranslationBlock, text: string, forceSingle
   const runs = resolveCharacterFontRuns(block, text);
 
   for (const run of runs) {
-    if (forceSingleGlyph) {
-      for (const char of [...run.text]) {
-        segments.push({ text: char, fontFamily: run.fontFamily, centerEllipsis: char === CENTERED_ELLIPSIS });
+    for (const segment of splitTextRunByCenteredEllipsis(run.text)) {
+      if (!forceSingleGlyph || isCenteredEllipsisSegment(segment)) {
+        segments.push({ text: segment, fontFamily: run.fontFamily, centerEllipsis: isCenteredEllipsisSegment(segment) });
+        continue;
       }
-      continue;
-    }
 
-    for (const segment of splitTextRunByCenteredEllipsis([...run.text])) {
-      segments.push({ text: segment, fontFamily: run.fontFamily, centerEllipsis: segment === CENTERED_ELLIPSIS });
+      for (const char of [...segment]) {
+        segments.push({ text: char, fontFamily: run.fontFamily, centerEllipsis: false });
+      }
     }
   }
 
   return segments;
 }
 
-function splitTextRunByCenteredEllipsis(chars: readonly string[]): string[] {
-  const segments: string[] = [];
-  let run = "";
+function splitTextRunByCenteredEllipsis(text: string): string[] {
+  return text.split(/(…|\.{3})/u).filter(Boolean);
+}
 
-  for (const char of chars) {
-    if (char !== CENTERED_ELLIPSIS) {
-      run += char;
-      continue;
-    }
-    if (run) {
-      segments.push(run);
-      run = "";
-    }
-    segments.push(char);
-  }
+function containsCenteredEllipsis(text: string): boolean {
+  return text.includes(CENTERED_ELLIPSIS) || text.includes(CENTERED_PERIOD_ELLIPSIS);
+}
 
-  if (run) {
-    segments.push(run);
-  }
-  return segments;
+function isCenteredEllipsisSegment(text: string): boolean {
+  return text === CENTERED_ELLIPSIS || text === CENTERED_PERIOD_ELLIPSIS;
 }
 
 function applySegmentFont(
@@ -619,7 +875,7 @@ export function resolveCenteredEllipsisYOffset(
   fontSize: number,
   centerEllipsis = false
 ): number {
-  if (!centerEllipsis && text !== CENTERED_ELLIPSIS) {
+  if (!centerEllipsis && !isCenteredEllipsisSegment(text)) {
     return 0;
   }
 
@@ -702,6 +958,23 @@ function parseHexColor(hex: string): { r: number; g: number; b: number } {
     g: Number.parseInt(normalized.slice(2, 4), 16),
     b: Number.parseInt(normalized.slice(4, 6), 16)
   };
+}
+
+function colorsMatch(left: string | undefined, right: string | undefined): boolean {
+  const leftColor = parseOptionalHexColor(left);
+  const rightColor = parseOptionalHexColor(right);
+  return Boolean(leftColor && rightColor && leftColor.r === rightColor.r && leftColor.g === rightColor.g && leftColor.b === rightColor.b);
+}
+
+function parseOptionalHexColor(hex: string | undefined): { r: number; g: number; b: number } | null {
+  if (!hex || !/^#[0-9a-f]{6}$/iu.test(hex)) {
+    return null;
+  }
+  const color = parseHexColor(hex);
+  if (!Number.isFinite(color.r) || !Number.isFinite(color.g) || !Number.isFinite(color.b)) {
+    return null;
+  }
+  return color;
 }
 
 function resolveRenderedOutlineWidthPx(block: TranslationBlock, fontSize: number): number {
