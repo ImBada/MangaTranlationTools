@@ -20,6 +20,7 @@ import { useInpaintActions } from "./hooks/useInpaintActions";
 import { useLibraryActions } from "./hooks/useLibraryActions";
 import { usePageRendering } from "./hooks/usePageRendering";
 import { useRecoverableFailures } from "./hooks/useRecoverableFailures";
+import { useResultReport } from "./hooks/useResultReport";
 import { useRuntimeSettings } from "./hooks/useRuntimeSettings";
 import { useStageInteraction } from "./hooks/useStageInteraction";
 import { useStatusFeedback } from "./hooks/useStatusFeedback";
@@ -28,6 +29,7 @@ import { useWorkspaceShortcuts } from "./hooks/useWorkspaceShortcuts";
 import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
 import { resolveSelectedTranslationBlocks, resolveShiftSelectedTranslationBlockIds } from "./lib/blockSelection";
 import type { ActiveLayer } from "./lib/layerState";
+import { RESULT_REPORT_FOCUS_BLOCK_MESSAGE } from "./lib/resultReport";
 import "./styles.css";
 
 export default function App(): React.JSX.Element {
@@ -275,6 +277,58 @@ export default function App(): React.JSX.Element {
     saveNow,
     setCurrentChapter
   });
+  const {
+    canOpenLastResultReport,
+    generateResultReport,
+    openLastResultReport,
+    reportProgress,
+    reportBusy
+  } = useResultReport({
+    currentChapterRef,
+    dirty,
+    fontWeightAvailability: systemFonts,
+    jobActive,
+    pushStatus,
+    renderBusy,
+    saveNow
+  });
+  const focusResultReportBlock = useCallback((pageId: string, blockId: string) => {
+    const chapter = currentChapterRef.current;
+    const page = chapter?.pages.find((candidate) => candidate.id === pageId);
+    const blockIndex = page?.blocks.findIndex((block) => block.id === blockId) ?? -1;
+    if (!page || blockIndex < 0) {
+      pushStatus("보고서의 블록을 현재 챕터에서 찾을 수 없습니다.");
+      return;
+    }
+
+    selectLayer("overlay");
+    setSelectedPageId(pageId);
+    setSingleSelectedBlockId(blockId);
+    pushStatus(`${page.name} 블록 ${blockIndex + 1}로 이동했습니다.`);
+  }, [currentChapterRef, pushStatus, selectLayer, setSelectedPageId, setSingleSelectedBlockId]);
+
+  useEffect(() => {
+    const handleReportMessage = (event: MessageEvent) => {
+      const data: unknown = event.data;
+      if (!data || typeof data !== "object") {
+        return;
+      }
+      const message = data as { blockId?: unknown; pageId?: unknown; type?: unknown };
+      if (
+        message.type !== RESULT_REPORT_FOCUS_BLOCK_MESSAGE ||
+        typeof message.pageId !== "string" ||
+        typeof message.blockId !== "string"
+      ) {
+        return;
+      }
+      focusResultReportBlock(message.pageId, message.blockId);
+    };
+
+    window.addEventListener("message", handleReportMessage);
+    return () => {
+      window.removeEventListener("message", handleReportMessage);
+    };
+  }, [focusResultReportBlock]);
 
   const {
     currentChapterId,
@@ -661,6 +715,7 @@ export default function App(): React.JSX.Element {
       currentChapter={currentChapter}
       editingFontPresetId={editingFontPresetId}
       activeFontSizePresetId={activeFontSizePresetId}
+      canOpenLastResultReport={canOpenLastResultReport}
       fontControlValues={multiSelectedBlockCount > 1 ? null : fontControlValues}
       fontFamilyOptions={fontFamilyOptions}
       fontPresetName={fontPresetName}
@@ -677,10 +732,14 @@ export default function App(): React.JSX.Element {
       inpaintResultToolStrength={inpaintResultToolStrength}
       inpaintSelectionRect={inpaintSelectionRect}
       inpaintTool={inpaintTool}
+      jobActive={jobActive}
       lastImportedInpaintPsdAt={lastImportedInpaintPsdAt}
       lastImportedInpaintPsdLabel={lastImportedInpaintPsdLabel}
       layerVisibility={layerVisibility}
       rangeToolActive={rangeToolActive}
+      reportBusy={reportBusy}
+      reportProgress={reportProgress}
+      renderBusy={renderBusy}
       renderFontPresetLinkButton={renderFontPresetLinkButton}
       renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
       selectedBlock={multiSelectedBlockCount > 1 ? null : selectedBlock}
@@ -703,6 +762,8 @@ export default function App(): React.JSX.Element {
       onFontPresetRename={renameFontPreset}
       onFavoriteFontPresetToggle={toggleFavoriteFontPreset}
       onFontSettingChange={updateSelectedBlockFontSetting}
+      onGenerateResultReport={generateResultReport}
+      onOpenLastResultReport={openLastResultReport}
       onInpaintBrushSizeChange={setInpaintBrushSize}
       onInpaintResultBrushColorChange={setInpaintResultBrushColor}
       onInpaintResultBrushHardnessChange={setInpaintResultBrushHardness}

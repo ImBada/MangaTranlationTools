@@ -1,7 +1,8 @@
 import React from "react";
 import type { ChapterSnapshot, MangaPage } from "../../../shared/types";
 import type { FontWeightAvailability } from "../lib/overlayLayout";
-import { renderPageToPngDataUrl, type RenderPageOptions } from "../lib/pageRender";
+import { OUTPUT_RENDER_OPTIONS } from "../lib/outputRenderOptions";
+import { renderPageToPngDataUrl } from "../lib/pageRender";
 
 type RenderProgress = {
   mode: "page" | "all";
@@ -24,24 +25,6 @@ type UsePageRenderingState = {
   renderBusy: boolean;
   renderProgress: RenderProgress | null;
   renderSelectedPage: () => Promise<void>;
-};
-
-const OUTPUT_RENDER_OPTIONS: RenderPageOptions = {
-  layerVisibility: {
-    image: true,
-    inpaint: true,
-    inpaintResult: true,
-    inpaintMask: false,
-    overlay: true
-  },
-  layerOpacity: {
-    image: 1,
-    inpaint: 1,
-    inpaintResult: 1,
-    inpaintMask: 1,
-    overlay: 1
-  },
-  activeLayer: "output"
 };
 
 async function renderPageOutput(chapterId: string, page: MangaPage, fontWeightAvailability: readonly FontWeightAvailability[]): Promise<string> {

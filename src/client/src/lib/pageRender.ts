@@ -76,6 +76,12 @@ type CenteredEllipsisDotGeometry = {
   radius: number;
 };
 
+export function resolveInpaintMaskCoverageAlpha(pixels: Uint8ClampedArray, offset: number): number {
+  const maskAlpha = pixels[offset + 3] / 255;
+  const maskLuma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
+  return maskAlpha * maskLuma;
+}
+
 export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPageOptions): Promise<string> {
   const pageSize = { width: page.width, height: page.height };
   const canvas = document.createElement("canvas");
@@ -173,9 +179,34 @@ function drawImageLayerMasked(
   }
 
   layerContext.drawImage(image, 0, 0, width, height);
-  layerContext.globalCompositeOperation = "destination-in";
-  layerContext.drawImage(mask, 0, 0, width, height);
+  applyInpaintMaskToLayer(layerContext, mask, width, height);
   drawImageLayer(context, layer, width, height, opacity);
+}
+
+function applyInpaintMaskToLayer(
+  layerContext: CanvasRenderingContext2D,
+  mask: HTMLImageElement,
+  width: number,
+  height: number
+): void {
+  const maskCanvas = document.createElement("canvas");
+  maskCanvas.width = width;
+  maskCanvas.height = height;
+  const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
+  if (!maskContext) {
+    layerContext.globalCompositeOperation = "destination-in";
+    layerContext.drawImage(mask, 0, 0, width, height);
+    layerContext.globalCompositeOperation = "source-over";
+    return;
+  }
+
+  maskContext.drawImage(mask, 0, 0, width, height);
+  const layerPixels = layerContext.getImageData(0, 0, width, height);
+  const maskPixels = maskContext.getImageData(0, 0, width, height).data;
+  for (let offset = 0; offset + 3 < layerPixels.data.length; offset += 4) {
+    layerPixels.data[offset + 3] = Math.round(layerPixels.data[offset + 3] * resolveInpaintMaskCoverageAlpha(maskPixels, offset));
+  }
+  layerContext.putImageData(layerPixels, 0, 0);
 }
 
 function drawRenderedBlock(

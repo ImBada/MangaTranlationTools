@@ -986,6 +986,14 @@ input[type="checkbox"] {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.output-action-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.output-action-grid button:nth-child(n) {
+  grid-column: auto;
+}
+
 .psd-action-grid button:nth-child(n) {
   grid-column: auto;
 }
@@ -1001,6 +1009,7 @@ input[type="checkbox"] {
   width: 100%;
 }
 
+.tool-helper-line,
 .psd-helper-line {
   margin: 0;
   color: #9f998f;

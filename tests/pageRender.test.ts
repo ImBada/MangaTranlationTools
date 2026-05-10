@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveCenteredEllipsisYOffset } from "../src/client/src/lib/pageRender";
+import { resolveCenteredEllipsisYOffset, resolveInpaintMaskCoverageAlpha } from "../src/client/src/lib/pageRender";
 
 describe("page render glyph positioning", () => {
   it("moves low ellipsis glyphs up to the center of the font box", () => {
@@ -29,6 +29,20 @@ describe("page render glyph positioning", () => {
     });
 
     expect(resolveCenteredEllipsisYOffset(context, "…", 100)).toBe(0);
+  });
+});
+
+describe("page render mask compositing", () => {
+  it("uses mask luminance as well as alpha when compositing inpaint results", () => {
+    const pixels = new Uint8ClampedArray([
+      0, 0, 0, 255,
+      255, 255, 255, 255,
+      255, 255, 255, 128
+    ]);
+
+    expect(resolveInpaintMaskCoverageAlpha(pixels, 0)).toBe(0);
+    expect(resolveInpaintMaskCoverageAlpha(pixels, 4)).toBe(1);
+    expect(resolveInpaintMaskCoverageAlpha(pixels, 8)).toBeCloseTo(128 / 255);
   });
 });
 

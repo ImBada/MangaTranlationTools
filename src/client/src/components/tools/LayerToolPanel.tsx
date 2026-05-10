@@ -20,6 +20,8 @@ import { FontToolSection } from "./FontToolSection";
 import { InpaintMaskToolSection } from "./InpaintMaskToolSection";
 import { InpaintPsdToolSection } from "./InpaintPsdToolSection";
 import { InpaintResultToolSection } from "./InpaintResultToolSection";
+import { OutputToolSection } from "./OutputToolSection";
+import type { ResultReportProgress } from "../../hooks/useResultReport";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
 export type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
@@ -27,6 +29,7 @@ export type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 type LayerToolPanelProps = {
   activeLayer: ActiveLayer;
   activeFontSizePresetId: string | null;
+  canOpenLastResultReport: boolean;
   currentChapter: ChapterSnapshot | null;
   editingFontPresetId: string | null;
   favoriteFontPresetIds: string[];
@@ -45,10 +48,14 @@ type LayerToolPanelProps = {
   inpaintResultToolStrength: number;
   inpaintSelectionRect: ImageRect | null;
   inpaintTool: InpaintTool;
+  jobActive: boolean;
   lastImportedInpaintPsdAt: string | null;
   lastImportedInpaintPsdLabel: string | null;
   layerVisibility: LayerVisibility;
   rangeToolActive: boolean;
+  reportBusy: boolean;
+  reportProgress: ResultReportProgress | null;
+  renderBusy: boolean;
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
@@ -71,6 +78,8 @@ type LayerToolPanelProps = {
   onFontPresetNameChange: (value: string) => void;
   onFontPresetRename: (presetId: string, name: string) => void;
   onFontSettingChange: (patch: BlockFontPatch) => void;
+  onGenerateResultReport: () => void | Promise<void>;
+  onOpenLastResultReport: () => void;
   onInpaintBrushSizeChange: (value: number) => void;
   onInpaintResultBrushColorChange: (value: string) => void;
   onInpaintResultBrushHardnessChange: (value: number) => void;
@@ -91,6 +100,7 @@ type LayerToolPanelProps = {
 export function LayerToolPanel({
   activeLayer,
   activeFontSizePresetId,
+  canOpenLastResultReport,
   currentChapter,
   editingFontPresetId,
   favoriteFontPresetIds,
@@ -109,10 +119,14 @@ export function LayerToolPanel({
   inpaintResultToolStrength,
   inpaintSelectionRect,
   inpaintTool,
+  jobActive,
   lastImportedInpaintPsdAt,
   lastImportedInpaintPsdLabel,
   layerVisibility,
   rangeToolActive,
+  reportBusy,
+  reportProgress,
+  renderBusy,
   renderFontPresetLinkButton,
   renderFontPresetLinkGroupButton,
   selectedBlock,
@@ -135,6 +149,8 @@ export function LayerToolPanel({
   onFontPresetNameChange,
   onFontPresetRename,
   onFontSettingChange,
+  onGenerateResultReport,
+  onOpenLastResultReport,
   onInpaintBrushSizeChange,
   onInpaintResultBrushColorChange,
   onInpaintResultBrushHardnessChange,
@@ -272,7 +288,16 @@ export function LayerToolPanel({
           onSelectSharedInpaintTool={onSelectSharedInpaintTool}
         />
       ) : (
-        <p className="muted-line">최종 아웃풋 레이어에는 사용할 도구가 없습니다.</p>
+        <OutputToolSection
+          currentChapter={currentChapter}
+          jobActive={jobActive}
+          canOpenLastResultReport={canOpenLastResultReport}
+          reportBusy={reportBusy}
+          reportProgress={reportProgress}
+          renderBusy={renderBusy}
+          onGenerateResultReport={onGenerateResultReport}
+          onOpenLastResultReport={onOpenLastResultReport}
+        />
       )}
       {characterOverrideModalOpen && fontControlValues ? (
         <FontCharacterOverrideModal
@@ -299,5 +324,7 @@ function resolveLayerToolTitle(activeLayer: ActiveLayer): string {
       ? "마스크 도구"
       : activeLayer === "inpaintResult"
         ? "결과 레이어 도구"
-        : "도구";
+        : activeLayer === "output"
+          ? "최종 아웃풋 도구"
+          : "도구";
 }

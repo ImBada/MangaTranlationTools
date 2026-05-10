@@ -999,6 +999,38 @@
   animation: progress-slide 1.4s ease-in-out infinite;
 }
 
+.output-report-progress {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid #303640;
+  border-radius: 8px;
+  background: #15181d;
+}
+
+.output-report-progress-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  gap: 8px;
+  color: #cbd5e1;
+  font-size: 11px;
+}
+
+.output-report-progress-meta span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.output-report-progress-meta strong {
+  flex: 0 0 auto;
+  color: #f1f5f9;
+  font-size: 11px;
+}
+
 @keyframes progress-slide {
   0% {
     transform: translateX(-120%);
