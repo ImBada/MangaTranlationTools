@@ -1,6 +1,7 @@
 import React from "react";
-import type { JobState } from "../../../../shared/types";
+import type { JobState, MangaPage, TranslationBlock } from "../../../../shared/types";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
+import { resolveShiftSelectedTranslationBlockIds } from "../../lib/blockSelection";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { ActiveLayer } from "../../lib/layerState";
 
@@ -54,6 +55,23 @@ type StageToolOverlayProps = {
   onSelectResultColorPicker: () => void;
   onSelectRangeTool: () => void;
   onSelectZoomTool: () => void;
+};
+
+type StageTextBlockListProps = {
+  collapsed: boolean;
+  onBlockSelectionChange: (blockIds: string[]) => void;
+  onSelectBlock: (blockId: string) => void;
+  onToggleCollapsed: () => void;
+  page: MangaPage;
+  selectedBlockId: string | null;
+  selectedBlockIds: string[];
+};
+
+const BLOCK_TYPE_LABELS: Record<TranslationBlock["type"], string> = {
+  caption: "자막",
+  other: "기타",
+  sfx: "효과음",
+  speech: "말풍선"
 };
 
 export function NotificationDock({
@@ -112,6 +130,91 @@ export function NotificationDock({
   );
 }
 
+export function StageTextBlockList({
+  collapsed,
+  onBlockSelectionChange,
+  onSelectBlock,
+  onToggleCollapsed,
+  page,
+  selectedBlockId,
+  selectedBlockIds
+}: StageTextBlockListProps): React.JSX.Element {
+  const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
+  const activeRowRef = React.useRef<HTMLButtonElement | null>(null);
+  const listId = React.useId();
+
+  React.useEffect(() => {
+    if (collapsed) {
+      return;
+    }
+    activeRowRef.current?.scrollIntoView({ block: "nearest" });
+  }, [collapsed, page.id, selectedBlockId, selectedBlockIds]);
+
+  const selectBlock = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, blockId: string) => {
+    if (event.shiftKey) {
+      const nextBlockIds = resolveShiftSelectedTranslationBlockIds(selectedBlockId, selectedBlockIds, blockId);
+      if (nextBlockIds) {
+        onBlockSelectionChange(nextBlockIds);
+        return;
+      }
+    }
+
+    onSelectBlock(blockId);
+  }, [onBlockSelectionChange, onSelectBlock, selectedBlockId, selectedBlockIds]);
+
+  return (
+    <section className={`stage-text-block-list${collapsed ? " collapsed" : ""}`} aria-label={`${page.name} 텍스트 블록 목록`}>
+      <div className="stage-text-block-list-header">
+        <h2>텍스트 블록</h2>
+        <div className="stage-text-block-list-header-actions">
+          <span>{page.blocks.length}</span>
+          <button
+            type="button"
+            className="stage-text-block-list-toggle"
+            aria-controls={listId}
+            aria-expanded={!collapsed}
+            aria-label={`텍스트 블록 목록 ${collapsed ? "펼치기" : "접기"}`}
+            title={collapsed ? "펼치기" : "접기"}
+            onClick={onToggleCollapsed}
+          >
+            <svg className="stage-text-block-list-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M6 15l6-6 6 6" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div id={listId} className="stage-text-block-list-scroll" hidden={collapsed}>
+        {page.blocks.length ? (
+          page.blocks.map((block, index) => {
+            const selected = block.id === selectedBlockId || selectedBlockIdSet.has(block.id);
+            return (
+              <button
+                key={block.id}
+                ref={block.id === selectedBlockId ? activeRowRef : undefined}
+                type="button"
+                className={`stage-text-block-list-row${selected ? " selected" : ""}${block.renderDirection === "hidden" ? " hidden" : ""}`}
+                aria-pressed={selected}
+                onClick={(event) => selectBlock(event, block.id)}
+              >
+                <span className="stage-text-block-list-index">{index + 1}</span>
+                <span className="stage-text-block-list-copy">
+                  <span className="stage-text-block-list-meta">
+                    <span>{BLOCK_TYPE_LABELS[block.type]}</span>
+                    {block.renderDirection === "hidden" ? <span>숨김</span> : null}
+                  </span>
+                  <span className="stage-text-block-list-text">{resolveBlockPreviewText(block)}</span>
+                </span>
+              </button>
+            );
+          })
+        ) : (
+          <p className="stage-text-block-list-empty">텍스트 블록 없음</p>
+        )}
+      </div>
+    </section>
+  );
+}
+
 export function StatusHistoryPanel({
   jobState,
   onClose,
@@ -136,6 +239,11 @@ export function StatusHistoryPanel({
       </div>
     </section>
   );
+}
+
+function resolveBlockPreviewText(block: TranslationBlock): string {
+  const text = (block.translatedText || block.sourceText).replace(/\s+/g, " ").trim();
+  return text || "빈 블록";
 }
 
 export function StageZoomOverlay({

@@ -25,6 +25,7 @@ import {
   NotificationDock,
   type PageInpaintNotice,
   StageToolOverlay,
+  StageTextBlockList,
   StageZoomOverlay,
   StatusHistoryPanel
 } from "./WorkspaceOverlays";
@@ -202,6 +203,7 @@ export function WorkspacePanel({
   onZoomOutStage
 }: WorkspacePanelProps): React.JSX.Element {
   const [blockInlineEditActive, setBlockInlineEditActive] = React.useState(false);
+  const [textBlockListCollapsed, setTextBlockListCollapsed] = React.useState(false);
   const findReplaceShortcutLabel = React.useMemo(() => (
     isMacLikePlatform(typeof navigator === "undefined" ? "" : navigator.platform) ? "⌘F" : "CtrlF"
   ), []);
@@ -256,7 +258,7 @@ export function WorkspacePanel({
   return (
     <section
       ref={workspacePanelRef}
-      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-find-replace has-layer-glow layer-${activeLayer}` : ""}`}
+      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-block-list${textBlockListCollapsed ? " has-stage-block-list-collapsed" : ""} has-layer-glow layer-${activeLayer}` : ""}`}
       tabIndex={0}
       aria-label="읽기 영역"
       onMouseDown={() => workspacePanelRef.current?.focus()}
@@ -309,6 +311,17 @@ export function WorkspacePanel({
           </svg>
           <span className="stage-tool-shortcut" aria-hidden="true">{findReplaceShortcutLabel}</span>
         </button>
+      ) : null}
+      {selectedPage ? (
+        <StageTextBlockList
+          collapsed={textBlockListCollapsed}
+          page={selectedPage}
+          selectedBlockId={selectedBlockId}
+          selectedBlockIds={selectedBlockIds}
+          onSelectBlock={onSelectBlock}
+          onBlockSelectionChange={onBlockSelectionChange}
+          onToggleCollapsed={() => setTextBlockListCollapsed((current) => !current)}
+        />
       ) : null}
       <NotificationDock
         inpaintNotice={selectedPageInpaintNotice}

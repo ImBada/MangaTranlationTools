@@ -87,6 +87,14 @@
     flex: 1 1 100%;
   }
 
+  .workspace.has-stage-block-list {
+    --stage-text-block-list-max-height: min(220px, calc(100% - 128px));
+  }
+
+  .stage-text-block-list {
+    width: min(260px, calc(100vw - 24px));
+  }
+
   .library-panel-header {
     flex-wrap: wrap;
   }
