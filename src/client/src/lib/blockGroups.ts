@@ -133,6 +133,73 @@ export function resolveTranslationBlockGroupsAfterUngrouping(
   return nextGroups.length > 0 ? nextGroups : undefined;
 }
 
+export function resolveTranslationBlockGroupsAfterReordering(
+  page: Pick<MangaPage, "blocks" | "blockGroups">,
+  groupId: string,
+  blockIds: readonly string[],
+  now: string
+): TranslationBlockGroup[] | null {
+  const groups = resolveValidTranslationBlockGroups(page);
+  const targetGroup = groups.find((group) => group.id === groupId);
+  if (!targetGroup) {
+    return null;
+  }
+
+  const validBlockIdSet = new Set(targetGroup.blockIds);
+  const seenBlockIds = new Set<string>();
+  const nextBlockIds = blockIds.filter((blockId) => {
+    if (!validBlockIdSet.has(blockId) || seenBlockIds.has(blockId)) {
+      return false;
+    }
+    seenBlockIds.add(blockId);
+    return true;
+  });
+
+  if (!blockIdSetsMatch(targetGroup.blockIds, nextBlockIds) || blockIdArraysMatch(targetGroup.blockIds, nextBlockIds)) {
+    return null;
+  }
+
+  return groups.map((group) =>
+    group.id === groupId
+      ? {
+          ...group,
+          blockIds: nextBlockIds,
+          updatedAt: now
+        }
+      : group
+  );
+}
+
+export function resolveTranslationBlocksAfterGroupReordering(
+  blocks: readonly TranslationBlock[],
+  blockIds: readonly string[]
+): TranslationBlock[] | null {
+  const blockById = new Map(blocks.map((block) => [block.id, block]));
+  const seenBlockIds = new Set<string>();
+  const reorderedBlocks = blockIds.flatMap((blockId) => {
+    if (seenBlockIds.has(blockId)) {
+      return [];
+    }
+    seenBlockIds.add(blockId);
+    const block = blockById.get(blockId);
+    return block ? [block] : [];
+  });
+
+  if (reorderedBlocks.length !== seenBlockIds.size || reorderedBlocks.length < 2) {
+    return null;
+  }
+
+  const reorderedBlockIdSet = new Set(reorderedBlocks.map((block) => block.id));
+  let reorderedBlockIndex = 0;
+  const nextBlocks = blocks.map((block) =>
+    reorderedBlockIdSet.has(block.id)
+      ? reorderedBlocks[reorderedBlockIndex++] ?? block
+      : block
+  );
+
+  return nextBlocks.every((block, index) => block === blocks[index]) ? null : nextBlocks;
+}
+
 export function resolveTranslationBlockGroupBlockIds(
   page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
   blockId: string
@@ -249,18 +316,16 @@ export function translationBlockGroupsEqual(
 function resolveValidTranslationBlockGroups(
   page: Pick<MangaPage, "blocks" | "blockGroups">
 ): TranslationBlockGroup[] {
-  const blockIndexById = new Map(page.blocks.map((block, index) => [block.id, index]));
+  const blockIdSet = new Set(page.blocks.map((block) => block.id));
   return (page.blockGroups ?? []).flatMap((group) => {
     const seenBlockIds = new Set<string>();
-    const blockIds = group.blockIds
-      .filter((blockId) => {
-        if (!blockIndexById.has(blockId) || seenBlockIds.has(blockId)) {
-          return false;
-        }
-        seenBlockIds.add(blockId);
-        return true;
-      })
-      .sort((left, right) => (blockIndexById.get(left) ?? 0) - (blockIndexById.get(right) ?? 0));
+    const blockIds = group.blockIds.filter((blockId) => {
+      if (!blockIdSet.has(blockId) || seenBlockIds.has(blockId)) {
+        return false;
+      }
+      seenBlockIds.add(blockId);
+      return true;
+    });
 
     return blockIds.length >= 2
       ? [{ ...cloneTranslationBlockGroup(group), blockIds }]

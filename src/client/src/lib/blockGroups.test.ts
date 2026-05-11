@@ -4,10 +4,12 @@ import {
   isExistingTranslationBlockGroupSelection,
   resolveExpandedTranslationBlockSelection,
   resolveSelectedTranslationBlockGroup,
+  resolveTranslationBlocksAfterGroupReordering,
   resolveTranslationBlockGroupBlockIds,
   resolveTranslationBlockListItems,
   resolveTranslationBlockGroupsAfterBlockRemoval,
   resolveTranslationBlockGroupsAfterGrouping,
+  resolveTranslationBlockGroupsAfterReordering,
   resolveTranslationBlockGroupsAfterUngrouping
 } from "./blockGroups";
 
@@ -132,7 +134,63 @@ describe("blockGroups", () => {
     expect(resolveTranslationBlockGroupsAfterUngrouping(page, ["b1", "b2"])).toBeNull();
   });
 
-  it("expands selection and list items by valid groups", () => {
+  it("reorders a group while preserving its block membership", () => {
+    const now = "2026-05-11T10:00:00.000Z";
+    const page = {
+      blocks: [block("b1"), block("b2"), block("b3"), block("b4"), block("b5")],
+      blockGroups: [
+        {
+          id: "group-1",
+          blockIds: ["b1", "b2", "b3"],
+          effects: [{ id: "effect-1", type: "sample", enabled: true, settings: { strength: 1 } }],
+          createdAt: "2026-05-10T10:00:00.000Z",
+          updatedAt: "2026-05-10T10:00:00.000Z"
+        },
+        {
+          id: "group-2",
+          blockIds: ["b4", "b5"],
+          effects: [],
+          createdAt: "2026-05-10T10:00:00.000Z",
+          updatedAt: "2026-05-10T10:00:00.000Z"
+        }
+      ]
+    };
+
+    expect(resolveTranslationBlockGroupsAfterReordering(page, "group-1", ["b3", "b1", "b2"], now)).toEqual([
+      {
+        id: "group-1",
+        blockIds: ["b3", "b1", "b2"],
+        effects: [{ id: "effect-1", type: "sample", enabled: true, settings: { strength: 1 } }],
+        createdAt: "2026-05-10T10:00:00.000Z",
+        updatedAt: now
+      },
+      {
+        id: "group-2",
+        blockIds: ["b4", "b5"],
+        effects: [],
+        createdAt: "2026-05-10T10:00:00.000Z",
+        updatedAt: "2026-05-10T10:00:00.000Z"
+      }
+    ]);
+    expect(resolveTranslationBlockGroupsAfterReordering(page, "group-1", ["b3", "b1"], now)).toBeNull();
+    expect(resolveTranslationBlockGroupsAfterReordering(page, "group-1", ["b1", "b2", "b3"], now)).toBeNull();
+  });
+
+  it("reorders page blocks in the same group slots for output stacking", () => {
+    const blocks = [block("b1"), block("outside-1"), block("b2"), block("outside-2"), block("b3")];
+
+    expect(resolveTranslationBlocksAfterGroupReordering(blocks, ["b3", "b1", "b2"])?.map((candidate) => candidate.id)).toEqual([
+      "b3",
+      "outside-1",
+      "b1",
+      "outside-2",
+      "b2"
+    ]);
+    expect(resolveTranslationBlocksAfterGroupReordering(blocks, ["b1", "b2", "b3"])).toBeNull();
+    expect(resolveTranslationBlocksAfterGroupReordering(blocks, ["b1", "missing"])).toBeNull();
+  });
+
+  it("expands selection and list items by valid groups while preserving group order", () => {
     const page = {
       blocks: [block("b1"), block("b2"), block("b3"), block("b4")],
       blockGroups: [
@@ -146,21 +204,21 @@ describe("blockGroups", () => {
       ]
     };
 
-    expect(resolveTranslationBlockGroupBlockIds(page, "b3")).toEqual(["b1", "b3"]);
+    expect(resolveTranslationBlockGroupBlockIds(page, "b3")).toEqual(["b3", "b1"]);
     expect(resolveExpandedTranslationBlockSelection(page, ["b3", "b4"])).toEqual(["b1", "b3", "b4"]);
     expect(resolveTranslationBlockListItems(page)).toEqual([
       {
         kind: "group",
         group: {
           id: "group-1",
-          blockIds: ["b1", "b3"],
+          blockIds: ["b3", "b1"],
           effects: [],
           createdAt: "2026-05-10T10:00:00.000Z",
           updatedAt: "2026-05-10T10:00:00.000Z"
         },
         blocks: [
-          { block: block("b1"), blockIndex: 0 },
-          { block: block("b3"), blockIndex: 2 }
+          { block: block("b3"), blockIndex: 2 },
+          { block: block("b1"), blockIndex: 0 }
         ]
       },
       { kind: "block", block: block("b2"), blockIndex: 1 },
@@ -169,7 +227,7 @@ describe("blockGroups", () => {
     expect(isExistingTranslationBlockGroupSelection(page, ["b3", "b1"])).toBe(true);
     expect(resolveSelectedTranslationBlockGroup(page, ["b3", "b1"])).toMatchObject({
       id: "group-1",
-      blockIds: ["b1", "b3"]
+      blockIds: ["b3", "b1"]
     });
     expect(isExistingTranslationBlockGroupSelection(page, ["b1", "b2", "b3"])).toBe(false);
   });

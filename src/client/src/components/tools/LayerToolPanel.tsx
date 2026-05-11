@@ -101,6 +101,7 @@ type LayerToolPanelProps = {
   onSelectInpaintResultEditTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectSharedInpaintTool: (tool: InpaintTool) => void;
   onSelectedBlockGroupEffectsChange: (effects: TranslationBlockGroupEffect[]) => void;
+  onSelectedBlockGroupOrderChange: (blockIds: string[]) => void;
 };
 
 export function LayerToolPanel({
@@ -174,7 +175,8 @@ export function LayerToolPanel({
   onSelectInpaintPsdFile,
   onSelectInpaintResultEditTool,
   onSelectSharedInpaintTool,
-  onSelectedBlockGroupEffectsChange
+  onSelectedBlockGroupEffectsChange,
+  onSelectedBlockGroupOrderChange
 }: LayerToolPanelProps): React.JSX.Element {
   const [characterOverrideModalOpen, setCharacterOverrideModalOpen] = React.useState(false);
   const groupSelectionActive = activeLayer === "overlay" && selectedBlockGroup !== null;
@@ -215,6 +217,7 @@ export function LayerToolPanel({
           selectedPage={selectedPage}
           selectedPageEditLocked={selectedPageEditLocked}
           onEffectsChange={onSelectedBlockGroupEffectsChange}
+          onBlockOrderChange={onSelectedBlockGroupOrderChange}
           onSelectBlock={onSelectBlockFromGroup}
         />
       ) : activeLayer === "overlay" ? (

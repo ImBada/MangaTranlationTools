@@ -31,7 +31,9 @@ import {
   createTranslationBlockGroupId,
   resolveExpandedTranslationBlockSelection,
   resolveSelectedTranslationBlockGroup,
+  resolveTranslationBlocksAfterGroupReordering,
   resolveTranslationBlockGroupsAfterGrouping,
+  resolveTranslationBlockGroupsAfterReordering,
   resolveTranslationBlockGroupsAfterUngrouping,
   translationBlockGroupsEqual
 } from "./lib/blockGroups";
@@ -670,6 +672,43 @@ export default function App(): React.JSX.Element {
     selectedPageEditLocked,
     updateSelectedPageBlockGroups
   ]);
+  const updateSelectedBlockGroupOrder = useCallback((blockIds: string[]) => {
+    if (!selectedPage || !selectedBlockGroup || selectedPageEditLocked) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const nextBlockGroups = resolveTranslationBlockGroupsAfterReordering(selectedPage, selectedBlockGroup.id, blockIds, updatedAt);
+    if (!nextBlockGroups || translationBlockGroupsEqual(selectedPage.blockGroups, nextBlockGroups)) {
+      return;
+    }
+
+    const reorderedBlockIds = nextBlockGroups.find((group) => group.id === selectedBlockGroup.id)?.blockIds ?? blockIds;
+    recordTranslationUndoSnapshot("텍스트 블록 그룹 순서 변경");
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) => {
+        if (page.id !== selectedPage.id) {
+          return page;
+        }
+
+        return {
+          ...page,
+          updatedAt,
+          blockGroups: nextBlockGroups,
+          blocks: resolveTranslationBlocksAfterGroupReordering(page.blocks, reorderedBlockIds) ?? page.blocks
+        };
+      })
+    }));
+    pushStatus("그룹 블록 순서를 변경했습니다.");
+  }, [
+    pushStatus,
+    recordTranslationUndoSnapshot,
+    selectedBlockGroup,
+    selectedPage,
+    selectedPageEditLocked,
+    updateCurrentChapter
+  ]);
   const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
     if (!selectedPage || selectedPageEditLocked) {
       return;
@@ -914,6 +953,7 @@ export default function App(): React.JSX.Element {
       onSelectInpaintResultEditTool={selectInpaintResultEditTool}
       onSelectSharedInpaintTool={selectSharedInpaintTool}
       onSelectedBlockGroupEffectsChange={updateSelectedBlockGroupEffects}
+      onSelectedBlockGroupOrderChange={updateSelectedBlockGroupOrder}
     />
   );
 

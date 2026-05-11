@@ -40,6 +40,58 @@
   min-width: 0;
 }
 
+.group-block-list .stage-text-block-list-row {
+  grid-template-columns: 16px 28px minmax(0, 1fr);
+  position: relative;
+}
+
+.group-block-list .stage-text-block-list-row.reorderable {
+  cursor: grab;
+}
+
+.group-block-list .stage-text-block-list-row.reorderable:active {
+  cursor: grabbing;
+}
+
+.group-block-list .stage-text-block-list-row.dragging {
+  opacity: 0.48;
+}
+
+.group-block-list .stage-text-block-list-row.drag-over-before::before,
+.group-block-list .stage-text-block-list-row.drag-over-after::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: #77b7ff;
+  box-shadow: 0 0 0 1px rgba(119, 183, 255, 0.22);
+}
+
+.group-block-list .stage-text-block-list-row.drag-over-before::before {
+  top: -3px;
+}
+
+.group-block-list .stage-text-block-list-row.drag-over-after::after {
+  bottom: -3px;
+}
+
+.group-block-list .stage-text-block-list-drag-handle {
+  display: grid;
+  width: 16px;
+  height: 24px;
+  place-items: center;
+  color: #8fa4bd;
+}
+
+.group-block-list .stage-text-block-list-drag-handle svg {
+  display: block;
+  width: 12px;
+  height: 18px;
+  fill: currentColor;
+}
+
 .group-effect-section .font-shadow-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
