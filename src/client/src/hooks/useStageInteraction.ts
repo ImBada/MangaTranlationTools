@@ -67,6 +67,7 @@ type UseStageInteractionOptions = {
   currentChapter: ChapterSnapshot | null;
   duplicateBlock: (block: TranslationBlock) => void;
   recordTranslationUndoSnapshot: (label: string) => boolean;
+  selectedBlockId: string | null;
   selectedBlockIds: string[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -272,6 +273,7 @@ export function useStageInteraction({
   currentChapter,
   duplicateBlock,
   recordTranslationUndoSnapshot,
+  selectedBlockId,
   selectedBlockIds,
   selectedPage,
   selectedPageEditLocked,
@@ -356,7 +358,7 @@ export function useStageInteraction({
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
     const dragBlockIds = mode === "move" && selectedPage
-      ? resolveTranslationBlockDragBlockIds(selectedPage, block.id, selectedBlockIds)
+      ? resolveTranslationBlockDragBlockIds(selectedPage, block.id, selectedBlockId, selectedBlockIds)
       : [block.id];
     const startBboxesByBlockId = new Map<string, BBox>(
       dragBlockIds.flatMap((blockId) => {
@@ -429,7 +431,7 @@ export function useStageInteraction({
       debug
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
-  }, [activeLayer, duplicateBlock, selectedBlockIds, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
+  }, [activeLayer, duplicateBlock, selectedBlockId, selectedBlockIds, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;

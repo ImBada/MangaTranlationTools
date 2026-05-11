@@ -241,6 +241,7 @@ export function resolveTranslationBlockGroupBlockIds(
 export function resolveTranslationBlockDragBlockIds(
   page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
   blockId: string,
+  selectedBlockId: string | null,
   selectedBlockIds: readonly string[]
 ): string[] {
   if (!page) {
@@ -248,7 +249,15 @@ export function resolveTranslationBlockDragBlockIds(
   }
 
   const selectedGroup = resolveSelectedTranslationBlockGroup(page, selectedBlockIds);
-  return selectedGroup?.blockIds.includes(blockId) ? selectedGroup.blockIds : [blockId];
+  if (selectedGroup?.blockIds.includes(blockId)) {
+    return selectedGroup.blockIds;
+  }
+
+  if (selectedBlockIds.length === 0 && selectedBlockId === blockId) {
+    return [blockId];
+  }
+
+  return resolveTranslationBlockGroupBlockIds(page, blockId) ?? [blockId];
 }
 
 export function resolveExpandedTranslationBlockSelection(

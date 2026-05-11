@@ -247,7 +247,7 @@ describe("blockGroups", () => {
     expect(isExistingTranslationBlockGroupSelection(page, ["b1", "b2", "b3"])).toBe(false);
   });
 
-  it("moves a full group only while that group is selected", () => {
+  it("resolves drag targets for selected groups and unselected group members", () => {
     const page = {
       blocks: [block("b1"), block("b2"), block("b3")],
       blockGroups: [
@@ -261,9 +261,9 @@ describe("blockGroups", () => {
       ]
     };
 
-    expect(resolveTranslationBlockDragBlockIds(page, "b1", ["b1", "b3"])).toEqual(["b1", "b3"]);
-    expect(resolveTranslationBlockDragBlockIds(page, "b1", [])).toEqual(["b1"]);
-    expect(resolveTranslationBlockDragBlockIds(page, "b1", ["b1"])).toEqual(["b1"]);
-    expect(resolveTranslationBlockDragBlockIds(page, "b1", ["b1", "b2"])).toEqual(["b1"]);
+    expect(resolveTranslationBlockDragBlockIds(page, "b1", null, ["b1", "b3"])).toEqual(["b1", "b3"]);
+    expect(resolveTranslationBlockDragBlockIds(page, "b1", null, [])).toEqual(["b1", "b3"]);
+    expect(resolveTranslationBlockDragBlockIds(page, "b1", "b1", [])).toEqual(["b1"]);
+    expect(resolveTranslationBlockDragBlockIds(page, "b1", null, ["b1", "b2"])).toEqual(["b1", "b3"]);
   });
 });

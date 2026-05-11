@@ -575,6 +575,7 @@ export default function App(): React.JSX.Element {
     currentChapter,
     duplicateBlock,
     recordTranslationUndoSnapshot,
+    selectedBlockId,
     selectedBlockIds,
     selectedPage,
     selectedPageEditLocked,
