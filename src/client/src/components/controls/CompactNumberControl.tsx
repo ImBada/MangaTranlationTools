@@ -12,6 +12,14 @@ type CompactNumberControlProps = {
   value: number;
 };
 
+function handleNumberInputKeyDown(event: React.KeyboardEvent<HTMLInputElement>): void {
+  if (event.key !== "Enter") {
+    return;
+  }
+  event.preventDefault();
+  event.currentTarget.blur();
+}
+
 export function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, step, suffix, value }: CompactNumberControlProps): React.JSX.Element {
   const stepControl = useRepeatingStepControl({ disabled, max, min, onChange, step, value });
 
@@ -38,6 +46,7 @@ export function CompactNumberControl({ ariaLabel, disabled, max, min, onChange, 
         disabled={disabled}
         aria-label={ariaLabel}
         onChange={(event) => stepControl.setValue(Number(event.target.value))}
+        onKeyDown={handleNumberInputKeyDown}
       />
       <button
         type="button"
