@@ -13,6 +13,7 @@ import {
   splitTextBySelection
 } from "../lib/editorUtils";
 import type { TranslationBlockFontStylePatch } from "../lib/editorUtils";
+import { resolveTranslationBlockGroupsAfterBlockRemoval } from "../lib/blockGroups";
 import type { ActiveLayer } from "../lib/layerState";
 
 type UseTranslationBlockActionsOptions = {
@@ -70,6 +71,7 @@ export function useTranslationBlockActions({
       return;
     }
     const selectedIdSet = new Set(selectedIds);
+    const updatedAt = new Date().toISOString();
     recordTranslationUndoSnapshot(selectedIds.length > 1 ? "번역 블록 여러 개 삭제" : "번역 블록 삭제");
     updateCurrentChapter(selectedPage.id, (current) => ({
       ...current,
@@ -77,8 +79,9 @@ export function useTranslationBlockActions({
         page.id === selectedPage.id
           ? {
               ...page,
-              updatedAt: new Date().toISOString(),
-              blocks: page.blocks.filter((block) => !selectedIdSet.has(block.id))
+              updatedAt,
+              blocks: page.blocks.filter((block) => !selectedIdSet.has(block.id)),
+              blockGroups: resolveTranslationBlockGroupsAfterBlockRemoval(page.blockGroups, selectedIds, updatedAt)
             }
           : page
       )

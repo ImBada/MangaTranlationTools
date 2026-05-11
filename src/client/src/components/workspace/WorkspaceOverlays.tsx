@@ -6,6 +6,10 @@ import {
   resolveToggledTranslationBlockIds,
   resolveTranslationBlockRangeSelection
 } from "../../lib/blockSelection";
+import {
+  resolveTranslationBlockGroupBlockIds,
+  resolveTranslationBlockListItems
+} from "../../lib/blockGroups";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { ActiveLayer } from "../../lib/layerState";
 
@@ -63,7 +67,10 @@ type StageToolOverlayProps = {
 
 type StageTextBlockListProps = {
   collapsed: boolean;
+  groupDisabled: boolean;
+  groupActionVisible: boolean;
   onBlockSelectionChange: (blockIds: string[]) => void;
+  onGroupSelectedBlocks: () => void;
   onSelectBlock: (blockId: string) => void;
   onToggleCollapsed: () => void;
   page: MangaPage;
@@ -136,7 +143,10 @@ export function NotificationDock({
 
 export function StageTextBlockList({
   collapsed,
+  groupDisabled,
+  groupActionVisible,
   onBlockSelectionChange,
+  onGroupSelectedBlocks,
   onSelectBlock,
   onToggleCollapsed,
   page,
@@ -144,6 +154,7 @@ export function StageTextBlockList({
   selectedBlockIds
 }: StageTextBlockListProps): React.JSX.Element {
   const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
+  const blockListItems = React.useMemo(() => resolveTranslationBlockListItems(page), [page]);
   const activeRowRef = React.useRef<HTMLButtonElement | null>(null);
   const listId = React.useId();
   const selectionAnchorIdRef = React.useRef<string | null>(null);
@@ -164,6 +175,8 @@ export function StageTextBlockList({
 
   const selectBlock = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, blockId: string) => {
     const blockIdsInOrder = page.blocks.map((block) => block.id);
+    const groupBlockIds = resolveTranslationBlockGroupBlockIds(page, blockId);
+    const selectedUnitBlockIds = groupBlockIds ?? [blockId];
     const anchorBlockId =
       selectionAnchorIdRef.current && blockIdsInOrder.includes(selectionAnchorIdRef.current)
         ? selectionAnchorIdRef.current
@@ -186,64 +199,108 @@ export function StageTextBlockList({
 
     if (event.ctrlKey || event.metaKey) {
       selectionAnchorIdRef.current = blockId;
-      onBlockSelectionChange(resolveToggledTranslationBlockIds(selectedBlockId, selectedBlockIds, [blockId]));
+      onBlockSelectionChange(resolveToggledTranslationBlockIds(selectedBlockId, selectedBlockIds, selectedUnitBlockIds));
       return;
     }
 
     selectionAnchorIdRef.current = blockId;
     onSelectBlock(blockId);
-  }, [onBlockSelectionChange, onSelectBlock, page.blocks, selectedBlockId, selectedBlockIds]);
+  }, [onBlockSelectionChange, onSelectBlock, page, selectedBlockId, selectedBlockIds]);
+
+  const renderBlockRow = React.useCallback((block: TranslationBlock, index: number, grouped = false) => {
+    const selected = block.id === selectedBlockId || selectedBlockIdSet.has(block.id);
+    return (
+      <button
+        key={block.id}
+        ref={block.id === selectedBlockId ? activeRowRef : undefined}
+        type="button"
+        className={`stage-text-block-list-row${grouped ? " grouped" : ""}${selected ? " selected" : ""}${block.renderDirection === "hidden" ? " hidden" : ""}`}
+        aria-pressed={selected}
+        onClick={(event) => selectBlock(event, block.id)}
+      >
+        <span className="stage-text-block-list-index">{index + 1}</span>
+        <span className="stage-text-block-list-copy">
+          <span className="stage-text-block-list-meta">
+            <span>{BLOCK_TYPE_LABELS[block.type]}</span>
+            {block.renderDirection === "hidden" ? <span>숨김</span> : null}
+          </span>
+          <span className="stage-text-block-list-text">{resolveBlockPreviewText(block)}</span>
+        </span>
+      </button>
+    );
+  }, [selectBlock, selectedBlockId, selectedBlockIdSet]);
 
   return (
-    <section className={`stage-text-block-list${collapsed ? " collapsed" : ""}`} aria-label={`${page.name} 텍스트 블록 목록`}>
-      <div className="stage-text-block-list-header">
-        <h2>텍스트 블록</h2>
-        <div className="stage-text-block-list-header-actions">
-          <span>{page.blocks.length}</span>
-          <button
-            type="button"
-            className="stage-text-block-list-toggle"
-            aria-controls={listId}
-            aria-expanded={!collapsed}
-            aria-label={`텍스트 블록 목록 ${collapsed ? "펼치기" : "접기"}`}
-            title={collapsed ? "펼치기" : "접기"}
-            onClick={onToggleCollapsed}
-          >
-            <svg className="stage-text-block-list-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-              <path d="M6 15l6-6 6 6" />
-            </svg>
-          </button>
+    <>
+      {groupActionVisible ? (
+        <button
+          type="button"
+          className="stage-text-block-group-button"
+          aria-label="선택한 텍스트 블록 그룹화"
+          title={groupDisabled ? "잠긴 페이지에서는 그룹화할 수 없음" : "선택한 텍스트 블록 그룹화"}
+          disabled={groupDisabled}
+          onClick={onGroupSelectedBlocks}
+        >
+          <svg className="stage-text-block-group-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <rect x="4" y="5" width="7" height="7" rx="1.5" />
+            <rect x="13" y="12" width="7" height="7" rx="1.5" />
+            <path d="M11 8.5h2.5a3 3 0 0 1 3 3v.5" />
+            <path d="M13 15.5h-2.5a3 3 0 0 1-3-3V12" />
+          </svg>
+        </button>
+      ) : null}
+      <section className={`stage-text-block-list${collapsed ? " collapsed" : ""}`} aria-label={`${page.name} 텍스트 블록 목록`}>
+        <div className="stage-text-block-list-header">
+          <h2>텍스트 블록</h2>
+          <div className="stage-text-block-list-header-actions">
+            <span>{page.blocks.length}</span>
+            <button
+              type="button"
+              className="stage-text-block-list-toggle"
+              aria-controls={listId}
+              aria-expanded={!collapsed}
+              aria-label={`텍스트 블록 목록 ${collapsed ? "펼치기" : "접기"}`}
+              title={collapsed ? "펼치기" : "접기"}
+              onClick={onToggleCollapsed}
+            >
+              <svg className="stage-text-block-list-toggle-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <path d="M6 15l6-6 6 6" />
+              </svg>
+            </button>
+          </div>
         </div>
-      </div>
-      <div id={listId} className="stage-text-block-list-scroll" hidden={collapsed}>
-        {page.blocks.length ? (
-          page.blocks.map((block, index) => {
-            const selected = block.id === selectedBlockId || selectedBlockIdSet.has(block.id);
-            return (
-              <button
-                key={block.id}
-                ref={block.id === selectedBlockId ? activeRowRef : undefined}
-                type="button"
-                className={`stage-text-block-list-row${selected ? " selected" : ""}${block.renderDirection === "hidden" ? " hidden" : ""}`}
-                aria-pressed={selected}
-                onClick={(event) => selectBlock(event, block.id)}
-              >
-                <span className="stage-text-block-list-index">{index + 1}</span>
-                <span className="stage-text-block-list-copy">
-                  <span className="stage-text-block-list-meta">
-                    <span>{BLOCK_TYPE_LABELS[block.type]}</span>
-                    {block.renderDirection === "hidden" ? <span>숨김</span> : null}
-                  </span>
-                  <span className="stage-text-block-list-text">{resolveBlockPreviewText(block)}</span>
-                </span>
-              </button>
-            );
-          })
-        ) : (
-          <p className="stage-text-block-list-empty">텍스트 블록 없음</p>
-        )}
-      </div>
-    </section>
+        <div id={listId} className="stage-text-block-list-scroll" hidden={collapsed}>
+          {blockListItems.length ? (
+            blockListItems.map((item) => {
+              if (item.kind === "block") {
+                return renderBlockRow(item.block, item.blockIndex);
+              }
+
+              const groupSelected = item.blocks.some(({ block }) => block.id === selectedBlockId || selectedBlockIdSet.has(block.id));
+              const firstBlockId = item.blocks[0]?.block.id;
+              return (
+                <div key={item.group.id} className={`stage-text-block-list-group${groupSelected ? " selected" : ""}`}>
+                  <button
+                    type="button"
+                    className="stage-text-block-list-group-header"
+                    aria-pressed={groupSelected}
+                    onClick={(event) => firstBlockId ? selectBlock(event, firstBlockId) : undefined}
+                  >
+                    <span className="stage-text-block-list-group-title">그룹</span>
+                    <span className="stage-text-block-list-group-count">{item.blocks.length}</span>
+                  </button>
+                  <div className="stage-text-block-list-group-items">
+                    {item.blocks.map(({ block, blockIndex }) => renderBlockRow(block, blockIndex, true))}
+                  </div>
+                </div>
+              );
+            })
+          ) : (
+            <p className="stage-text-block-list-empty">텍스트 블록 없음</p>
+          )}
+        </div>
+      </section>
+    </>
   );
 }
 

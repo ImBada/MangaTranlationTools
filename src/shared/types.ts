@@ -162,6 +162,21 @@ export type TranslationBlock = {
   inpainted?: boolean;
 };
 
+export type TranslationBlockGroupEffect = {
+  id: string;
+  type: string;
+  enabled: boolean;
+  settings?: Record<string, unknown>;
+};
+
+export type TranslationBlockGroup = {
+  id: string;
+  blockIds: string[];
+  effects: TranslationBlockGroupEffect[];
+  createdAt: string;
+  updatedAt: string;
+};
+
 export type FontPreset = {
   id: string;
   name: string;
@@ -240,6 +255,7 @@ export type MangaPage = {
   width: number;
   height: number;
   blocks: TranslationBlock[];
+  blockGroups?: TranslationBlockGroup[];
   analysisStatus: PageAnalysisStatus;
   lastError?: string;
   progressCompleted?: boolean;

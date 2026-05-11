@@ -27,6 +27,12 @@ import { useStatusFeedback } from "./hooks/useStatusFeedback";
 import { useTranslationEditing } from "./hooks/useTranslationEditing";
 import { useWorkspaceShortcuts } from "./hooks/useWorkspaceShortcuts";
 import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
+import {
+  createTranslationBlockGroupId,
+  resolveExpandedTranslationBlockSelection,
+  resolveTranslationBlockGroupsAfterGrouping,
+  translationBlockGroupsEqual
+} from "./lib/blockGroups";
 import { resolveSelectedTranslationBlocks, resolveShiftSelectedTranslationBlockIds } from "./lib/blockSelection";
 import type { ActiveLayer } from "./lib/layerState";
 import { RESULT_REPORT_FOCUS_BLOCK_MESSAGE } from "./lib/resultReport";
@@ -126,15 +132,34 @@ export default function App(): React.JSX.Element {
     signalSaveComplete
   });
   const [selectedBlockIds, setSelectedBlockIds] = useState<string[]>([]);
+  const resolveCurrentPageBlockSelectionIds = useCallback((blockIds: readonly string[]) => {
+    const page =
+      currentChapterRef.current?.pages.find((candidate) => candidate.id === selectedPageIdRef.current) ??
+      null;
+    return resolveExpandedTranslationBlockSelection(page, blockIds);
+  }, [currentChapterRef, selectedPageIdRef]);
   const setSingleSelectedBlockId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
     setSelectedBlockIds([]);
     setSelectedBlockId(action);
   }, [setSelectedBlockId]);
   const setSelectedBlockGroupIds = useCallback((blockIds: string[]) => {
-    const uniqueBlockIds = Array.from(new Set(blockIds));
+    const rawBlockIds = Array.from(new Set(blockIds));
+    const uniqueBlockIds = resolveCurrentPageBlockSelectionIds(rawBlockIds);
     setSelectedBlockIds(uniqueBlockIds.length > 1 ? uniqueBlockIds : []);
-    setSelectedBlockId(uniqueBlockIds[0] ?? null);
-  }, [setSelectedBlockId]);
+    setSelectedBlockId(rawBlockIds.find((blockId) => uniqueBlockIds.includes(blockId)) ?? uniqueBlockIds[0] ?? null);
+  }, [resolveCurrentPageBlockSelectionIds, setSelectedBlockId]);
+  const setSelectedBlockOrGroupId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((action) => {
+    const nextBlockId = typeof action === "function" ? action(selectedBlockIdRef.current) : action;
+    if (!nextBlockId) {
+      setSelectedBlockIds([]);
+      setSelectedBlockId(null);
+      return;
+    }
+
+    const blockIds = resolveCurrentPageBlockSelectionIds([nextBlockId]);
+    setSelectedBlockIds(blockIds.length > 1 ? blockIds : []);
+    setSelectedBlockId(blockIds.includes(nextBlockId) ? nextBlockId : blockIds[0] ?? nextBlockId);
+  }, [resolveCurrentPageBlockSelectionIds, selectedBlockIdRef, setSelectedBlockId]);
   const updateBlockSelectionWithShiftClick = useCallback((blockId: string) => {
     const nextBlockIds = resolveShiftSelectedTranslationBlockIds(selectedBlockId, selectedBlockIds, blockId);
     if (!nextBlockIds) {
@@ -166,8 +191,7 @@ export default function App(): React.JSX.Element {
       selectLayer(nextLayer);
       restoreOverlaySelectionFrameRef.current = window.requestAnimationFrame(() => {
         restoreOverlaySelectionFrameRef.current = null;
-        setSelectedBlockIds([]);
-        setSelectedBlockId(
+        setSelectedBlockOrGroupId(
           restoredBlockId && currentPage?.blocks.some((block) => block.id === restoredBlockId)
             ? restoredBlockId
             : null
@@ -182,7 +206,7 @@ export default function App(): React.JSX.Element {
     selectLayer(nextLayer);
     setSelectedBlockIds([]);
     setSelectedBlockId(null);
-  }, [activeLayer, currentChapterRef, selectLayer, selectedBlockIdRef, selectedPageIdRef, setSelectedBlockId]);
+  }, [activeLayer, currentChapterRef, selectLayer, selectedBlockIdRef, selectedPageIdRef, setSelectedBlockId, setSelectedBlockOrGroupId]);
 
   useEffect(() => () => {
     if (restoreOverlaySelectionFrameRef.current !== null) {
@@ -536,9 +560,50 @@ export default function App(): React.JSX.Element {
     recordTranslationUndoSnapshot,
     selectedPage,
     selectedPageEditLocked,
-    setSelectedBlockId: setSingleSelectedBlockId,
+    setSelectedBlockId: setSelectedBlockOrGroupId,
     updateCurrentChapter
   });
+  const groupSelectedBlocks = useCallback(() => {
+    if (!selectedPage || selectedPageEditLocked || selectedBlockIds.length < 2) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const groupId = createTranslationBlockGroupId();
+    const nextBlockGroups = resolveTranslationBlockGroupsAfterGrouping(selectedPage, selectedBlockIds, groupId, updatedAt);
+    const selectedBlockIdSet = new Set(selectedBlockIds);
+    const groupedBlockCount = selectedPage.blocks.filter((block) => selectedBlockIdSet.has(block.id)).length;
+    if (!nextBlockGroups || groupedBlockCount < 2) {
+      return;
+    }
+    if (translationBlockGroupsEqual(selectedPage.blockGroups, nextBlockGroups)) {
+      return;
+    }
+
+    recordTranslationUndoSnapshot("텍스트 블록 그룹 생성");
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) => {
+        if (page.id !== selectedPage.id) {
+          return page;
+        }
+
+        return {
+          ...page,
+          updatedAt,
+          blockGroups: nextBlockGroups
+        };
+      })
+    }));
+    pushStatus(`${groupedBlockCount}개 텍스트 블록을 그룹으로 묶었습니다.`);
+  }, [
+    pushStatus,
+    recordTranslationUndoSnapshot,
+    selectedBlockIds,
+    selectedPage,
+    selectedPageEditLocked,
+    updateCurrentChapter
+  ]);
   const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
     if (!selectedPage || selectedPageEditLocked) {
       return;
@@ -929,8 +994,9 @@ export default function App(): React.JSX.Element {
           onRefreshLamaStatus={refreshLamaStatus}
           onDismissRecoverableFailure={clearRecoverableFailure}
           onRetryRecoverableFailure={retryRecoverableFailure}
-          onSelectBlock={setSingleSelectedBlockId}
+          onSelectBlock={setSelectedBlockOrGroupId}
           onBlockSelectionChange={setSelectedBlockGroupIds}
+          onGroupSelectedBlocks={groupSelectedBlocks}
           onSelectImportFiles={selectImportFiles}
           onSelectInpaintResultTool={selectInpaintResultEditTool}
           onSelectPointerTool={selectPointerTool}

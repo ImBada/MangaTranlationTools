@@ -16,6 +16,7 @@ import { FORCE_INCOMPLETE_LAMA_NOTICE, type LamaNoticePlatform } from "../../lib
 import type { ActiveLayer, LayerOpacity, LayerVisibility } from "../../lib/layerState";
 import { resolveStageLayerPreviewState } from "../../lib/layerPreviewState";
 import { isMacLikePlatform } from "../../lib/globalUndo";
+import { isExistingTranslationBlockGroupSelection } from "../../lib/blockGroups";
 import type { FontWeightAvailability, ViewportSize } from "../../lib/overlayLayout";
 import { ImageStage } from "../ImageStage";
 import type { InpaintTool } from "../InpaintLayerCanvas";
@@ -103,6 +104,7 @@ type WorkspacePanelProps = {
   onDismissRecoverableFailure: (id: RecoverableFailureId) => void;
   onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   onSelectBlock: React.Dispatch<React.SetStateAction<string | null>>;
+  onGroupSelectedBlocks: () => void;
   onSelectImportFiles: (mode: ImportSourceKind) => void;
   onSelectInpaintResultTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectPointerTool: () => void;
@@ -186,6 +188,7 @@ export function WorkspacePanel({
   onDismissRecoverableFailure,
   onRetryRecoverableFailure,
   onSelectBlock,
+  onGroupSelectedBlocks,
   onSelectImportFiles,
   onSelectInpaintResultTool,
   onSelectPointerTool,
@@ -248,6 +251,11 @@ export function WorkspacePanel({
   ]);
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const multiBlockSelectionActive = selectedBlockIds.length > 1;
+  const groupActionVisible = Boolean(
+    selectedPage &&
+    multiBlockSelectionActive &&
+    !isExistingTranslationBlockGroupSelection(selectedPage, selectedBlockIds)
+  );
   const blockInlineEditShortcutVisible =
     activeLayer === "overlay" &&
     !temporaryPanActive &&
@@ -258,7 +266,7 @@ export function WorkspacePanel({
   return (
     <section
       ref={workspacePanelRef}
-      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-block-list${textBlockListCollapsed ? " has-stage-block-list-collapsed" : ""} has-layer-glow layer-${activeLayer}` : ""}`}
+      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-block-list${textBlockListCollapsed ? " has-stage-block-list-collapsed" : ""}${groupActionVisible ? " has-stage-block-list-actions" : ""} has-layer-glow layer-${activeLayer}` : ""}`}
       tabIndex={0}
       aria-label="읽기 영역"
       onMouseDown={() => workspacePanelRef.current?.focus()}
@@ -315,11 +323,14 @@ export function WorkspacePanel({
       {selectedPage ? (
         <StageTextBlockList
           collapsed={textBlockListCollapsed}
+          groupActionVisible={groupActionVisible}
+          groupDisabled={selectedPageEditLocked}
           page={selectedPage}
           selectedBlockId={selectedBlockId}
           selectedBlockIds={selectedBlockIds}
           onSelectBlock={onSelectBlock}
           onBlockSelectionChange={onBlockSelectionChange}
+          onGroupSelectedBlocks={onGroupSelectedBlocks}
           onToggleCollapsed={() => setTextBlockListCollapsed((current) => !current)}
         />
       ) : null}

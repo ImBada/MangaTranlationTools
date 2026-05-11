@@ -904,7 +904,13 @@
   --stage-text-block-list-collapsed-height: 42px;
   --stage-text-block-list-current-height: var(--stage-text-block-list-max-height);
   --stage-text-block-list-top: 58px;
+  --stage-text-block-list-width: min(300px, calc(100vw - 36px));
   --stage-text-block-list-max-height: min(280px, calc(100% - 132px));
+  --stage-text-block-list-action-gap: 8px;
+}
+
+.workspace.has-stage-block-list-actions {
+  --stage-text-block-list-width: min(300px, calc(100vw - 78px));
 }
 
 .workspace.has-stage-block-list-collapsed {
@@ -955,7 +961,7 @@
   z-index: 71;
   display: grid;
   grid-template-rows: auto minmax(0, 1fr);
-  width: min(300px, calc(100vw - 36px));
+  width: var(--stage-text-block-list-width, min(300px, calc(100vw - 36px)));
   max-height: var(--stage-text-block-list-max-height, 280px);
   min-height: 0;
   overflow: hidden;
@@ -964,6 +970,45 @@
   background: rgba(20, 23, 27, 0.92);
   box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
   pointer-events: auto;
+}
+
+.stage-text-block-group-button {
+  position: absolute;
+  top: var(--stage-text-block-list-top, 58px);
+  right: calc(12px + var(--stage-text-block-list-width, min(300px, calc(100vw - 36px))) + var(--stage-text-block-list-action-gap, 8px));
+  z-index: 72;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  place-items: center;
+  padding: 0;
+  border-color: rgba(148, 163, 184, 0.28);
+  border-radius: 8px;
+  background: rgba(20, 23, 27, 0.92);
+  color: #dbeafe;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.38);
+  pointer-events: auto;
+}
+
+.stage-text-block-group-button:hover:not(:disabled) {
+  border-color: rgba(106, 169, 255, 0.65);
+  background: rgba(77, 144, 230, 0.18);
+  color: #f8fafc;
+}
+
+.stage-text-block-group-button:disabled {
+  opacity: 0.46;
+}
+
+.stage-text-block-group-icon {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.9;
+  stroke-linecap: round;
+  stroke-linejoin: round;
 }
 
 .stage-text-block-list.collapsed {
@@ -1080,6 +1125,77 @@
 }
 
 .stage-text-block-list-row.selected {
+  border-color: rgba(119, 183, 255, 0.9);
+  background: rgba(77, 144, 230, 0.26);
+  box-shadow: inset 0 0 0 1px rgba(119, 183, 255, 0.24);
+}
+
+.stage-text-block-list-group {
+  display: grid;
+  gap: 5px;
+  padding: 5px;
+  border: 1px solid rgba(77, 144, 230, 0.24);
+  border-radius: 8px;
+  background: rgba(77, 144, 230, 0.07);
+}
+
+.stage-text-block-list-group.selected {
+  border-color: rgba(119, 183, 255, 0.72);
+  background: rgba(77, 144, 230, 0.14);
+}
+
+.stage-text-block-list-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 28px;
+  padding: 4px 7px;
+  border-color: rgba(106, 169, 255, 0.32);
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.22);
+  color: #dbeafe;
+}
+
+.stage-text-block-list-group-header:hover:not(:disabled) {
+  border-color: rgba(106, 169, 255, 0.72);
+  background: rgba(77, 144, 230, 0.18);
+  color: #f8fafc;
+}
+
+.stage-text-block-list-group-title {
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1.2;
+}
+
+.stage-text-block-list-group-count {
+  display: grid;
+  min-width: 20px;
+  height: 18px;
+  place-items: center;
+  padding: 0 6px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  color: #cbd5e1;
+  font-size: 10px;
+  font-weight: 850;
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.stage-text-block-list-group-items {
+  display: grid;
+  gap: 4px;
+}
+
+.stage-text-block-list-row.grouped {
+  min-height: 44px;
+  border-color: rgba(63, 72, 84, 0.64);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.stage-text-block-list-row.grouped.selected {
   border-color: rgba(119, 183, 255, 0.9);
   background: rgba(77, 144, 230, 0.26);
   box-shadow: inset 0 0 0 1px rgba(119, 183, 255, 0.24);

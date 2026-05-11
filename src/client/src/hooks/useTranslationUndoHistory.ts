@@ -5,6 +5,7 @@ import {
   createTranslationUndoSnapshot,
   type TranslationUndoSnapshot
 } from "../lib/editorUtils";
+import { cloneTranslationBlockGroup } from "../lib/blockGroups";
 import {
   TRANSLATION_UNDO_COALESCE_MS,
   TRANSLATION_UNDO_LIMIT,
@@ -147,7 +148,8 @@ export function useTranslationUndoHistory({
             ? {
                 ...page,
                 updatedAt,
-                blocks: pageSnapshot.blocks.map(cloneTranslationBlock)
+                blocks: pageSnapshot.blocks.map(cloneTranslationBlock),
+                blockGroups: pageSnapshot.blockGroups?.map(cloneTranslationBlockGroup)
               }
             : page;
         })

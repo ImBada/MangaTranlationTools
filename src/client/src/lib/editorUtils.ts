@@ -1,4 +1,5 @@
-import type { ChapterSnapshot, MangaPage, TranslationBlock } from "../../../shared/types";
+import type { ChapterSnapshot, MangaPage, TranslationBlock, TranslationBlockGroup } from "../../../shared/types";
+import { cloneTranslationBlockGroup } from "./blockGroups";
 import { FONT_PRESET_LINK_FIELDS } from "./fontPresets";
 import { normalizeKoreanText } from "./textNormalization";
 
@@ -79,6 +80,7 @@ export type TranslationUndoSnapshot = {
     pageId: string;
     updatedAt: string;
     blocks: TranslationBlock[];
+    blockGroups?: TranslationBlockGroup[];
   }[];
 };
 
@@ -234,7 +236,8 @@ export function createTranslationUndoSnapshot(
     pages: chapter.pages.map((page) => ({
       pageId: page.id,
       updatedAt: page.updatedAt,
-      blocks: page.blocks.map(cloneTranslationBlock)
+      blocks: page.blocks.map(cloneTranslationBlock),
+      blockGroups: page.blockGroups?.map(cloneTranslationBlockGroup)
     }))
   };
 }
