@@ -20,6 +20,11 @@ import {
 import type { ActiveLayer } from "../lib/layerState";
 import type { ViewportSize } from "../lib/overlayLayout";
 import { clampStageViewScale } from "../lib/stageFit";
+import {
+  clearTranslationBlockDragPreviewOffset,
+  resetTranslationBlockDragPreviewOffset,
+  setTranslationBlockDragPreviewOffset
+} from "../lib/translationBlockDragPreview";
 import { useStageSize } from "./useStageSize";
 
 type DragMode = "move" | "resize" | "rotate";
@@ -28,6 +33,7 @@ type DragState = {
   mode: DragMode;
   blockId: string;
   blockIds: string[];
+  pageId: string;
   pointerId: number;
   previewActive: boolean;
   captureElement: Element | null;
@@ -39,6 +45,8 @@ type DragState = {
   startAngleDeg: number;
   centerX: number;
   centerY: number;
+  lastDx: number;
+  lastMoveDy: number;
   undoRecorded: boolean;
   debug: TranslationBlockDragDebugState | null;
 };
@@ -76,7 +84,8 @@ type UseStageInteractionOptions = {
 };
 
 type UseStageInteractionState = {
-  activeBlockDragId: string | null;
+  activeBlockDragIds: string[];
+  activeBlockDragMode: DragMode | null;
   fitStageToWorkspace: () => void;
   handleZoomToolDrag: (scale: number) => void;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
@@ -282,7 +291,8 @@ export function useStageInteraction({
 }: UseStageInteractionOptions): UseStageInteractionState {
   const [stageViewScale, setStageViewScale] = React.useState<number | null>(null);
   const [stageViewResetKey, setStageViewResetKey] = React.useState(0);
-  const [activeBlockDragId, setActiveBlockDragId] = React.useState<string | null>(null);
+  const [activeBlockDragIds, setActiveBlockDragIds] = React.useState<string[]>([]);
+  const [activeBlockDragMode, setActiveBlockDragMode] = React.useState<DragMode | null>(null);
   const stageRef = React.useRef<HTMLDivElement | null>(null);
   const imageRef = React.useRef<HTMLCanvasElement | null>(null);
   const dragRef = React.useRef<DragState | null>(null);
@@ -416,6 +426,7 @@ export function useStageInteraction({
       mode,
       blockId: block.id,
       blockIds: [...startBboxesByBlockId.keys()],
+      pageId: selectedPage?.id ?? "",
       pointerId: event.pointerId,
       previewActive: false,
       captureElement: event.currentTarget,
@@ -427,9 +438,12 @@ export function useStageInteraction({
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
       centerY,
+      lastDx: 0,
+      lastMoveDy: 0,
       undoRecorded: false,
       debug
     };
+    resetTranslationBlockDragPreviewOffset();
     trySetPointerCapture(event.currentTarget, event.pointerId);
   }, [activeLayer, duplicateBlock, selectedBlockId, selectedBlockIds, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
 
@@ -472,7 +486,8 @@ export function useStageInteraction({
         : null;
 
     if (!drag.previewActive) {
-      setActiveBlockDragId(drag.blockId);
+      setActiveBlockDragIds(drag.blockIds);
+      setActiveBlockDragMode(drag.mode);
       drag.previewActive = true;
     }
 
@@ -483,6 +498,37 @@ export function useStageInteraction({
 
     const targetBlockIndex = page.blocks.findIndex((block) => block.id === drag.blockId);
     const blockFound = targetBlockIndex >= 0;
+    if (drag.mode === "move") {
+      const updateStartMs = debug ? nowInpaintDebugMs() : 0;
+      drag.lastDx = dx;
+      drag.lastMoveDy = moveDy;
+      setTranslationBlockDragPreviewOffset({
+        offsetX: event.clientX - drag.startX,
+        offsetY: event.shiftKey ? 0 : event.clientY - drag.startY
+      });
+      if (debug) {
+        const updateMs = nowInpaintDebugMs() - updateStartMs;
+        const handlerMs = nowInpaintDebugMs() - handlerStartMs;
+        recordTranslationBlockDragMoveDebug(debug, {
+          blockFound,
+          dx,
+          dy,
+          handlerMs,
+          inputGapMs,
+          nextBbox: next,
+          nextRotationDeg,
+          pointerId: event.pointerId,
+          rectHeight: rect.height,
+          rectReadMs,
+          rectWidth: rect.width,
+          shiftKey: event.shiftKey,
+          targetBlockIndex,
+          updateMs
+        });
+      }
+      return;
+    }
+
     const updateStartMs = debug ? nowInpaintDebugMs() : 0;
     updateCurrentChapter(page.id, (chapter) => ({
       ...chapter,
@@ -492,20 +538,7 @@ export function useStageInteraction({
           : {
               ...candidate,
               updatedAt: new Date().toISOString(),
-              blocks: (drag.mode === "move" && drag.blockIds.length > 1
-                ? bringTranslationBlocksToFront(candidate.blocks, drag.blockIds)
-                : bringTranslationBlockToFront(candidate.blocks, drag.blockId)
-              ).map((block) => {
-                if (drag.mode === "move") {
-                  const startBbox = drag.startBboxesByBlockId.get(block.id);
-                  return startBbox
-                    ? applyEditableBlockBbox(block, {
-                        ...startBbox,
-                        x: startBbox.x + dx,
-                        y: startBbox.y + moveDy
-                      })
-                    : block;
-                }
+              blocks: bringTranslationBlockToFront(candidate.blocks, drag.blockId).map((block) => {
                 if (block.id !== drag.blockId) {
                   return block;
                 }
@@ -538,14 +571,49 @@ export function useStageInteraction({
     }
   }, [currentChapter, recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, updateCurrentChapter]);
 
+  const commitMoveDrag = React.useCallback((drag: DragState | null) => {
+    if (!drag || drag.mode !== "move" || !drag.undoRecorded || !drag.pageId) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    updateCurrentChapter(drag.pageId, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((candidate) =>
+        candidate.id !== drag.pageId
+          ? candidate
+          : {
+              ...candidate,
+              updatedAt,
+              blocks: (drag.blockIds.length > 1
+                ? bringTranslationBlocksToFront(candidate.blocks, drag.blockIds)
+                : bringTranslationBlockToFront(candidate.blocks, drag.blockId)
+              ).map((block) => {
+                const startBbox = drag.startBboxesByBlockId.get(block.id);
+                return startBbox
+                  ? applyEditableBlockBbox(block, {
+                      ...startBbox,
+                      x: startBbox.x + drag.lastDx,
+                      y: startBbox.y + drag.lastMoveDy
+                    })
+                  : block;
+              })
+            }
+      )
+    }));
+  }, [updateCurrentChapter]);
+
   const onStagePointerUp = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;
     if (drag && event.pointerId !== drag.pointerId) {
       return;
     }
     tryReleasePointerCapture(drag?.captureElement ?? null, event.pointerId);
+    commitMoveDrag(drag);
     dragRef.current = null;
-    setActiveBlockDragId(null);
+    setActiveBlockDragIds([]);
+    setActiveBlockDragMode(null);
+    clearTranslationBlockDragPreviewOffset();
     if (drag?.debug) {
       writeInpaintDebugLog("translation-block-drag:end", {
         ...summarizeTranslationBlockDragDebug(drag.debug),
@@ -554,7 +622,7 @@ export function useStageInteraction({
       });
       setActiveTranslationBlockDragDebugId(null);
     }
-  }, []);
+  }, [commitMoveDrag]);
 
   const onSelectedBlockRangeChange = React.useCallback((blockId: string, selectionRect: ImageRect) => {
     const page = selectedPage;
@@ -587,7 +655,8 @@ export function useStageInteraction({
   }, [currentChapter, recordTranslationUndoSnapshot, selectedPage, selectedPageEditLocked, setSelectedBlockId, updateCurrentChapter]);
 
   return {
-    activeBlockDragId,
+    activeBlockDragIds,
+    activeBlockDragMode,
     fitStageToWorkspace,
     handleZoomToolDrag,
     imageRef,

@@ -115,7 +115,8 @@ type WorkspacePanelProps = {
   onSelectZoomTool: () => void;
   onSetLamaNoticePlatform: (platform: LamaNoticePlatform) => void;
   onSetStatusWidgetOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  activeBlockDragId: string | null;
+  activeBlockDragIds: string[];
+  activeBlockDragMode: BlockDragMode | null;
   onStagePointerMove: (event: React.PointerEvent) => void;
   onStagePointerUp: (event: React.PointerEvent) => void;
   onBlockSelectionChange: (blockIds: string[]) => void;
@@ -202,7 +203,8 @@ export function WorkspacePanel({
   onSelectZoomTool,
   onSetLamaNoticePlatform,
   onSetStatusWidgetOpen,
-  activeBlockDragId,
+  activeBlockDragIds,
+  activeBlockDragMode,
   onStagePointerMove,
   onStagePointerUp,
   onBlockSelectionChange,
@@ -404,7 +406,8 @@ export function WorkspacePanel({
             blockRangeSelectionDisabled={selectedPageEditLocked}
             temporaryPanActive={temporaryPanActive}
             inpaintSelectionRect={inpaintSelectionRect}
-            activeBlockDragId={activeBlockDragId}
+            activeBlockDragIds={activeBlockDragIds}
+            activeBlockDragMode={activeBlockDragMode}
             onInpaintLayerChange={onInpaintLayerChange}
             onInpaintLayerEditEnd={onInpaintLayerEditEnd}
             onInpaintLayerEditStart={onInpaintLayerEditStart}

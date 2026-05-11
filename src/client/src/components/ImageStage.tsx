@@ -25,6 +25,7 @@ type ZoomToolDragState = {
   startScale: number;
   startX: number;
 };
+type BlockDragMode = "move" | "resize" | "rotate";
 
 type ImageStageProps = {
   page: MangaPage;
@@ -57,7 +58,8 @@ type ImageStageProps = {
   blockRangeSelectionDisabled: boolean;
   temporaryPanActive: boolean;
   inpaintSelectionRect: ImageRect | null;
-  activeBlockDragId: string | null;
+  activeBlockDragIds: string[];
+  activeBlockDragMode: BlockDragMode | null;
   onInpaintLayerChange: (dataUrl: string | undefined, options?: InpaintLayerChangeOptions) => void;
   onInpaintLayerEditEnd: () => void;
   onInpaintLayerEditStart: () => void;
@@ -69,7 +71,7 @@ type ImageStageProps = {
   onStagePointerUp: (event: React.PointerEvent) => void;
   onStagePointerDown: (event: React.PointerEvent) => void;
   onBlockSelectionChange: (blockIds: string[]) => void;
-  onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
   onBlockFontStyleCopy: () => void | Promise<void>;
   onBlockFontSizeChange: (fontSizePx: number) => void;
   onBlockAutoFitDisable: () => void;
@@ -117,7 +119,8 @@ export function ImageStage({
   blockRangeSelectionDisabled,
   temporaryPanActive,
   inpaintSelectionRect,
-  activeBlockDragId,
+  activeBlockDragIds,
+  activeBlockDragMode,
   onInpaintLayerChange,
   onInpaintLayerEditEnd,
   onInpaintLayerEditStart,
@@ -400,7 +403,8 @@ export function ImageStage({
           selectedBlockIds={selectedBlockIds}
           stageSize={stageSize}
           temporaryPanActive={temporaryPanActive}
-          activeBlockDragId={activeBlockDragId}
+          activeBlockDragIds={activeBlockDragIds}
+          activeBlockDragMode={activeBlockDragMode}
           onBlockPointerDown={onBlockPointerDown}
           onBlockFontStyleCopy={onBlockFontStyleCopy}
           onBlockFontSizeChange={onBlockFontSizeChange}

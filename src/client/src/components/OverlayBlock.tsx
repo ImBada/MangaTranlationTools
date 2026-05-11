@@ -28,6 +28,7 @@ type OverlayBlockProps = {
   widgetsVisible?: boolean;
   inlineEditDraft?: string;
   favoriteFontPresets?: FontPreset[];
+  dragPreviewHidden?: boolean;
   visualContentVisible?: boolean;
   onInlineEditCancel?: () => void;
   onInlineEditChange?: (value: string) => void;
@@ -67,6 +68,7 @@ export function OverlayBlock({
   widgetsVisible = true,
   inlineEditDraft,
   favoriteFontPresets = [],
+  dragPreviewHidden = false,
   visualContentVisible = true,
   onInlineEditCancel,
   onInlineEditChange,
@@ -165,6 +167,7 @@ export function OverlayBlock({
     letterSpacing: `${letterSpacingPx}px`,
     textAlign: block.textAlign,
     pointerEvents: editingEnabled ? undefined : "none",
+    opacity: dragPreviewHidden ? 0 : undefined,
     transform: rotationDeg !== 0 ? `rotate(${rotationDeg}deg)` : undefined,
     transformOrigin: "center center",
     zIndex: inlineEditDraft !== undefined ? 70 : selectedHighlightVisible ? 50 : undefined,

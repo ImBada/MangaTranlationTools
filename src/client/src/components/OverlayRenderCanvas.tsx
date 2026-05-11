@@ -17,7 +17,7 @@ import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout"
 
 type OverlayRenderCanvasProps = {
   canvasRef?: React.RefObject<HTMLCanvasElement | null>;
-  hiddenBlockId?: string | null;
+  hiddenBlockIds?: readonly string[] | null;
   page: MangaPage;
   stageSize: ViewportSize;
   editingEnabled: boolean;
@@ -30,7 +30,7 @@ const OVERLAY_CANVAS_RENDER_CACHE_MAX_ENTRIES = 2;
 
 export function OverlayRenderCanvas({
   canvasRef: externalCanvasRef,
-  hiddenBlockId,
+  hiddenBlockIds,
   page,
   stageSize,
   editingEnabled,
@@ -40,22 +40,24 @@ export function OverlayRenderCanvas({
   const canvasRef = externalCanvasRef ?? internalCanvasRef;
   const lastRenderedBlocksRef = useRef<Map<string, TranslationBlock>>(new Map());
   const lastRenderedBlockSummariesRef = useRef<Map<string, Record<string, unknown>>>(new Map());
-  const lastHiddenBlockIdRef = useRef<string | null>(null);
+  const lastHiddenBlockIdsRef = useRef<readonly string[]>([]);
   const renderCacheRef = useRef<Map<string, HTMLCanvasElement>>(new Map());
   const warmingRenderCacheKeysRef = useRef<Set<string>>(new Set());
+  const hiddenBlockIdSet = React.useMemo(() => new Set(hiddenBlockIds ?? []), [hiddenBlockIds]);
+  const hiddenBlockKey = React.useMemo(() => [...hiddenBlockIdSet].join("\u0000"), [hiddenBlockIdSet]);
   const renderKey = React.useMemo(
-    () => createOverlayRenderKey(page, editingEnabled, fontWeightAvailability, hiddenBlockId, lastRenderedBlockSummariesRef.current),
-    [editingEnabled, hiddenBlockId, fontWeightAvailability, page]
+    () => createOverlayRenderKey(page, editingEnabled, fontWeightAvailability, hiddenBlockIdSet, lastRenderedBlockSummariesRef.current),
+    [editingEnabled, fontWeightAvailability, hiddenBlockIdSet, page]
   );
   const renderStateRef = useRef({
     editingEnabled,
-    hiddenBlockId,
+    hiddenBlockIds: hiddenBlockIds ?? [],
     fontWeightAvailability,
     page
   });
   renderStateRef.current = {
     editingEnabled,
-    hiddenBlockId,
+    hiddenBlockIds: hiddenBlockIds ?? [],
     fontWeightAvailability,
     page
   };
@@ -85,21 +87,22 @@ export function OverlayRenderCanvas({
 
     const {
       editingEnabled: currentEditingEnabled,
-      hiddenBlockId: currentHiddenBlockId,
+      hiddenBlockIds: currentHiddenBlockIds,
       fontWeightAvailability: currentFontWeightAvailability,
       page: currentPage
     } = renderStateRef.current;
+    const currentHiddenBlockIdSet = new Set(currentHiddenBlockIds);
     const width = Math.max(1, currentPage.width);
     const height = Math.max(1, currentPage.height);
     const debugEnabled = isInpaintDebugLogEnabled();
     const drawStartMs = debugEnabled ? nowInpaintDebugMs() : 0;
-    const hiddenDirtyBlock = currentHiddenBlockId
-      ? lastRenderedBlocksRef.current.get(currentHiddenBlockId) ??
-        currentPage.blocks.find((block) => block.id === currentHiddenBlockId) ??
-        null
-      : null;
+    const hiddenDirtyBlocks = resolveHiddenDirtyBlocks(
+      currentHiddenBlockIds,
+      currentPage,
+      lastRenderedBlocksRef.current
+    );
     const hiddenGroupEffectRedrawRequired =
-      Boolean(currentHiddenBlockId) &&
+      currentHiddenBlockIdSet.size > 0 &&
       Boolean(currentPage.blockGroups?.some(hasEnabledTranslationBlockGroupEffects));
     const cachedCanvas = hiddenGroupEffectRedrawRequired ? undefined : renderCacheRef.current.get(renderKey);
     const renderCacheHit = Boolean(cachedCanvas && cachedCanvas.width === width && cachedCanvas.height === height);
@@ -110,39 +113,39 @@ export function OverlayRenderCanvas({
       canvas.height = height;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, width, height);
-      const includedBlockIds = resolveIncludedOverlayBlockIds(currentPage, currentHiddenBlockId);
+      const includedBlockIds = resolveIncludedOverlayBlockIds(currentPage, currentHiddenBlockIdSet);
       drawOverlayBlocks(context, currentPage, {
         renderSize: { width: currentPage.width, height: currentPage.height },
         editingEnabled: currentEditingEnabled,
         includedBlockIds,
         fontWeightAvailability: currentFontWeightAvailability
       });
-      if (!currentHiddenBlockId) {
+      if (currentHiddenBlockIdSet.size === 0) {
         storeOverlayRenderCache(renderCacheRef.current, renderKey, canvas, width, height);
       }
     }
-    if (currentHiddenBlockId && hiddenDirtyBlock && !hiddenGroupEffectRedrawRequired) {
-      refreshOverlayBlockDirtyRect(context, currentPage, {
-        blockForDirtyRect: hiddenDirtyBlock,
+    if (hiddenDirtyBlocks.length > 0 && !hiddenGroupEffectRedrawRequired) {
+      refreshOverlayBlockDirtyRects(context, currentPage, {
+        blocksForDirtyRect: hiddenDirtyBlocks,
         editingEnabled: currentEditingEnabled,
-        excludedBlockId: currentHiddenBlockId,
+        excludedBlockIds: currentHiddenBlockIdSet,
         fontWeightAvailability: currentFontWeightAvailability
       });
     }
 
     const nextRenderedBlocks = createRenderedBlockMap(
       currentPage,
-      currentHiddenBlockId,
+      currentHiddenBlockIdSet,
       lastRenderedBlocksRef.current
     );
     const nextRenderedBlockSummaries = createRenderedBlockSummaryMap(
       currentPage,
-      currentHiddenBlockId,
+      currentHiddenBlockIdSet,
       lastRenderedBlockSummariesRef.current
     );
     lastRenderedBlocksRef.current = nextRenderedBlocks;
     lastRenderedBlockSummariesRef.current = nextRenderedBlockSummaries;
-    if (!currentHiddenBlockId) {
+    if (currentHiddenBlockIdSet.size === 0) {
       scheduleOverlayRenderCacheWarm(renderCacheRef.current, warmingRenderCacheKeysRef.current, {
         editingEnabled: !currentEditingEnabled,
         fontWeightAvailability: currentFontWeightAvailability,
@@ -192,64 +195,80 @@ export function OverlayRenderCanvas({
       maxDrawMs: roundInpaintDebugMs(stats.maxDrawMs),
       pageId: currentPage.id,
       slowDrawCount: stats.slowDrawCount,
-      hiddenBlockId: currentHiddenBlockId ?? null,
+      hiddenBlockIds: currentHiddenBlockIds,
       totalTextLength: currentPage.blocks.reduce((total, block) => total + (block.translatedText || block.sourceText || "").length, 0),
       visibleBlockCount: currentPage.blocks.filter((block) => block.renderDirection !== "hidden").length
     }));
-  }, [canvasRef, renderKey]);
+  }, [canvasRef, hiddenBlockKey, renderKey]);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const context = canvas?.getContext("2d", { willReadFrequently: true });
-    const blockIdToRefresh = hiddenBlockId ?? lastHiddenBlockIdRef.current;
+    const blockIdsToRefresh = new Set([...(hiddenBlockIds ?? []), ...lastHiddenBlockIdsRef.current]);
     const {
       editingEnabled: currentEditingEnabled,
       fontWeightAvailability: currentFontWeightAvailability,
       page: currentPage
     } = renderStateRef.current;
     if (!canvas || !context) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+      lastHiddenBlockIdsRef.current = hiddenBlockIds ?? [];
       return;
     }
-    if (!blockIdToRefresh) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+    if (blockIdsToRefresh.size === 0) {
+      lastHiddenBlockIdsRef.current = hiddenBlockIds ?? [];
       return;
     }
     if (currentPage.blockGroups?.some(hasEnabledTranslationBlockGroupEffects)) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+      lastHiddenBlockIdsRef.current = hiddenBlockIds ?? [];
       return;
     }
-    const currentBlock = blockIdToRefresh
-      ? currentPage.blocks.find((block) => block.id === blockIdToRefresh) ?? null
-      : null;
-    const blockForDirtyRect = hiddenBlockId && blockIdToRefresh
-      ? lastRenderedBlocksRef.current.get(blockIdToRefresh) ?? currentBlock
-      : currentBlock;
-    if (!blockForDirtyRect) {
-      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+    const currentHiddenBlockIdSet = new Set(hiddenBlockIds ?? []);
+    const blocksForDirtyRect = [...blockIdsToRefresh].flatMap((blockId) => {
+      const currentBlock = currentPage.blocks.find((block) => block.id === blockId) ?? null;
+      const blockForDirtyRect = currentHiddenBlockIdSet.has(blockId)
+        ? lastRenderedBlocksRef.current.get(blockId) ?? currentBlock
+        : currentBlock;
+      return blockForDirtyRect ? [blockForDirtyRect] : [];
+    });
+    if (blocksForDirtyRect.length === 0) {
+      lastHiddenBlockIdsRef.current = hiddenBlockIds ?? [];
       return;
     }
 
-    refreshOverlayBlockDirtyRect(context, currentPage, {
-      blockForDirtyRect,
+    refreshOverlayBlockDirtyRects(context, currentPage, {
+      blocksForDirtyRect,
       editingEnabled: currentEditingEnabled,
-      excludedBlockId: hiddenBlockId ?? null,
+      excludedBlockIds: currentHiddenBlockIdSet,
       fontWeightAvailability: currentFontWeightAvailability
     });
-    lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
-  }, [canvasRef, hiddenBlockId]);
+    lastHiddenBlockIdsRef.current = hiddenBlockIds ?? [];
+  }, [canvasRef, hiddenBlockIds]);
 
   return <canvas ref={canvasRef} className="overlay-render-canvas" aria-hidden="true" />;
 }
 
-function resolveIncludedOverlayBlockIds(page: MangaPage, hiddenBlockId: string | null | undefined): Set<string> | undefined {
-  return hiddenBlockId
+function resolveIncludedOverlayBlockIds(page: MangaPage, hiddenBlockIds: ReadonlySet<string>): Set<string> | undefined {
+  return hiddenBlockIds.size > 0
     ? new Set(
         page.blocks
-          .filter((block) => block.id !== hiddenBlockId)
+          .filter((block) => !hiddenBlockIds.has(block.id))
           .map((block) => block.id)
       )
     : undefined;
+}
+
+function resolveHiddenDirtyBlocks(
+  hiddenBlockIds: readonly string[],
+  page: MangaPage,
+  previousBlocks: ReadonlyMap<string, TranslationBlock>
+): TranslationBlock[] {
+  return hiddenBlockIds.flatMap((blockId) => {
+    const block =
+      previousBlocks.get(blockId) ??
+      page.blocks.find((candidate) => candidate.id === blockId) ??
+      null;
+    return block ? [block] : [];
+  });
 }
 
 function copyOverlayCanvas(
@@ -356,51 +375,53 @@ function scheduleOverlayRenderCacheWarm(
   window.setTimeout(warmCache, 200);
 }
 
-function refreshOverlayBlockDirtyRect(
+function refreshOverlayBlockDirtyRects(
   context: CanvasRenderingContext2D,
   page: MangaPage,
   options: {
-    blockForDirtyRect: TranslationBlock;
+    blocksForDirtyRect: readonly TranslationBlock[];
     editingEnabled: boolean;
-    excludedBlockId?: string | null;
+    excludedBlockIds?: ReadonlySet<string>;
     fontWeightAvailability: readonly FontWeightAvailability[];
   }
 ): void {
-  const dirtyRect = resolveBlockCanvasDirtyRect(options.blockForDirtyRect, page);
-  if (!dirtyRect) {
-    return;
-  }
+  for (const blockForDirtyRect of options.blocksForDirtyRect) {
+    const dirtyRect = resolveBlockCanvasDirtyRect(blockForDirtyRect, page);
+    if (!dirtyRect) {
+      continue;
+    }
 
-  context.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-  const intersectingBlockIds = page.blocks
-    .filter((block) => block.id !== options.excludedBlockId && doesBlockIntersectCanvasRect(block, page, dirtyRect))
-    .map((block) => block.id);
-  if (intersectingBlockIds.length === 0) {
-    return;
-  }
+    context.clearRect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+    const intersectingBlockIds = page.blocks
+      .filter((block) => !options.excludedBlockIds?.has(block.id) && doesBlockIntersectCanvasRect(block, page, dirtyRect))
+      .map((block) => block.id);
+    if (intersectingBlockIds.length === 0) {
+      continue;
+    }
 
-  context.save();
-  context.beginPath();
-  context.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
-  context.clip();
-  drawOverlayBlocks(context, page, {
-    renderSize: { width: page.width, height: page.height },
-    editingEnabled: options.editingEnabled,
-    includedBlockIds: new Set(intersectingBlockIds),
-    fontWeightAvailability: options.fontWeightAvailability
-  });
-  context.restore();
+    context.save();
+    context.beginPath();
+    context.rect(dirtyRect.x, dirtyRect.y, dirtyRect.width, dirtyRect.height);
+    context.clip();
+    drawOverlayBlocks(context, page, {
+      renderSize: { width: page.width, height: page.height },
+      editingEnabled: options.editingEnabled,
+      includedBlockIds: new Set(intersectingBlockIds),
+      fontWeightAvailability: options.fontWeightAvailability
+    });
+    context.restore();
+  }
 }
 
 function createRenderedBlockMap(
   page: MangaPage,
-  hiddenBlockId: string | null | undefined,
+  hiddenBlockIds: ReadonlySet<string>,
   previousBlocks: ReadonlyMap<string, TranslationBlock>
 ): Map<string, TranslationBlock> {
   return new Map(
     page.blocks.map((block) => [
       block.id,
-      block.id === hiddenBlockId
+      hiddenBlockIds.has(block.id)
         ? previousBlocks.get(block.id) ?? block
         : block
     ])
@@ -409,13 +430,13 @@ function createRenderedBlockMap(
 
 function createRenderedBlockSummaryMap(
   page: MangaPage,
-  hiddenBlockId: string | null | undefined,
+  hiddenBlockIds: ReadonlySet<string>,
   previousBlockSummaries: ReadonlyMap<string, Record<string, unknown>>
 ): Map<string, Record<string, unknown>> {
   return new Map(
     page.blocks.map((block) => [
       block.id,
-      block.id === hiddenBlockId
+      hiddenBlockIds.has(block.id)
         ? previousBlockSummaries.get(block.id) ?? summarizeBlockRenderState(block)
         : summarizeBlockRenderState(block)
     ])
@@ -426,11 +447,12 @@ function createOverlayRenderKey(
   page: MangaPage,
   editingEnabled: boolean,
   fontWeightAvailability: readonly FontWeightAvailability[],
-  hiddenBlockId: string | null | undefined,
+  hiddenBlockIds: ReadonlySet<string> | null,
   lastRenderedBlockSummaries: ReadonlyMap<string, Record<string, unknown>>
 ): string {
   const currentBlocksById = new Map(page.blocks.map((block) => [block.id, block]));
-  const blockIds = hiddenBlockId
+  const hiddenBlockIdSet = hiddenBlockIds && hiddenBlockIds.size > 0 ? hiddenBlockIds : null;
+  const blockIds = hiddenBlockIdSet
     ? [
         ...lastRenderedBlockSummaries.keys(),
         ...page.blocks
@@ -450,7 +472,7 @@ function createOverlayRenderKey(
       if (!currentBlock) {
         return lastRenderedBlockSummaries.get(blockId) ?? { id: blockId, removed: true };
       }
-      return blockId === hiddenBlockId
+      return hiddenBlockIdSet?.has(blockId)
         ? lastRenderedBlockSummaries.get(blockId) ?? summarizeBlockRenderState(currentBlock)
         : summarizeBlockRenderState(currentBlock);
     })

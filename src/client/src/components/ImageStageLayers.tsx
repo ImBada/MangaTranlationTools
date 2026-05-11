@@ -9,9 +9,15 @@ import {
   roundInpaintDebugMs,
   writeInpaintDebugLog
 } from "../lib/inpaintDiagnostics";
+import { hasEnabledTranslationBlockGroupEffects } from "../lib/blockGroupEffects";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 import { drawOverlayBlocks, resolveBlockCanvasDirtyRect } from "../lib/pageRender";
+import {
+  addTranslationBlockDragPreviewOffsetListener,
+  getTranslationBlockDragPreviewOffset,
+  type TranslationBlockDragPreviewOffset
+} from "../lib/translationBlockDragPreview";
 import { InpaintLayerCanvas, type InpaintTool } from "./InpaintLayerCanvas";
 import { InpaintResultCanvas, type InpaintResultTool } from "./InpaintResultCanvas";
 import { OverlayBlock } from "./OverlayBlock";
@@ -34,12 +40,15 @@ export type ImageStageLayerOpacity = {
   inpaintMask: number;
   overlay: number;
 };
+type BlockDragMode = "move" | "resize" | "rotate";
 
 const OVERLAY_REACT_DEBUG_SLOW_RENDER_MS = 16;
 const OVERLAY_REACT_DEBUG_SUMMARY_INTERVAL_MS = 500;
+const GROUP_DRAG_PREVIEW_EFFECT_MARGIN_PX = 328;
 
 type ImageStageLayersProps = {
-  activeBlockDragId: string | null;
+  activeBlockDragIds: string[];
+  activeBlockDragMode: BlockDragMode | null;
   activeLayer: ImageStageActiveLayer;
   imageRef: React.RefObject<HTMLCanvasElement | null>;
   finalOutputPreviewActive: boolean;
@@ -68,7 +77,7 @@ type ImageStageLayersProps = {
   selectedBlockIds: string[];
   stageSize: ViewportSize | null;
   temporaryPanActive: boolean;
-  onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: "move" | "resize" | "rotate") => void;
+  onBlockPointerDown: (event: React.PointerEvent, block: TranslationBlock, mode: BlockDragMode) => void;
   onBlockFontStyleCopy: () => void | Promise<void>;
   onBlockFontSizeChange: (fontSizePx: number) => void;
   onBlockAutoFitDisable: () => void;
@@ -91,7 +100,8 @@ type ImageStageLayersProps = {
 };
 
 export function ImageStageLayers({
-  activeBlockDragId,
+  activeBlockDragIds,
+  activeBlockDragMode,
   activeLayer,
   imageRef,
   finalOutputPreviewActive,
@@ -168,10 +178,14 @@ export function ImageStageLayers({
   const inpaintMaskEditingEnabled = activeLayer === "inpaintMask" && inpaintEditingEnabled;
   const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
   const debugLogEnabled = isInpaintDebugLogEnabled();
-  const activeDragBlock = React.useMemo(
-    () => activeBlockDragId ? page.blocks.find((block) => block.id === activeBlockDragId) ?? null : null,
-    [activeBlockDragId, page.blocks]
-  );
+  const activeBlockDragIdSet = React.useMemo(() => new Set(activeBlockDragIds), [activeBlockDragIds]);
+  const activeDragBlocks = React.useMemo(() => {
+    if (activeBlockDragIdSet.size === 0) {
+      return [];
+    }
+
+    return page.blocks.filter((block) => activeBlockDragIdSet.has(block.id));
+  }, [activeBlockDragIdSet, page.blocks]);
 
   const handleOverlayProfilerRender = React.useCallback((
     id: string,
@@ -369,7 +383,7 @@ export function ImageStageLayers({
         page={page}
         stageSize={resolvedStageSize}
         editingEnabled={overlayEditingEnabled}
-        hiddenBlockId={activeBlockDragId}
+        hiddenBlockIds={activeBlockDragIds}
         fontWeightAvailability={fontWeightAvailability}
       />
       {page.blocks.map((block) => (
@@ -384,6 +398,7 @@ export function ImageStageLayers({
           inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
           inlineEditorRef={inlineEdit?.blockId === block.id ? inlineEditorRef : undefined}
           visualContentVisible={false}
+          dragPreviewHidden={activeBlockDragMode === "move" && activeBlockDragIdSet.has(block.id)}
           favoriteFontPresets={favoriteFontPresets}
           onPointerDown={(event) => handleMovePointerDown(event, block)}
           onStartInlineEdit={
@@ -407,9 +422,9 @@ export function ImageStageLayers({
           onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
         />
       ))}
-      {activeDragBlock ? (
+      {activeDragBlocks.length > 0 ? (
         <OverlayBlockDragPreviewCanvas
-          block={activeDragBlock}
+          blocks={activeDragBlocks}
           editingEnabled={overlayEditingEnabled}
           fontWeightAvailability={fontWeightAvailability}
           page={page}
@@ -573,7 +588,7 @@ function SourceImageCanvas({
 }
 
 type OverlayBlockDragPreviewCanvasProps = {
-  block: TranslationBlock;
+  blocks: TranslationBlock[];
   editingEnabled: boolean;
   fontWeightAvailability: readonly FontWeightAvailability[];
   page: MangaPage;
@@ -581,14 +596,31 @@ type OverlayBlockDragPreviewCanvasProps = {
 };
 
 function OverlayBlockDragPreviewCanvas({
-  block,
+  blocks,
   editingEnabled,
   fontWeightAvailability,
   page,
   stageSize
 }: OverlayBlockDragPreviewCanvasProps): React.JSX.Element | null {
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
-  const dirtyRect = React.useMemo(() => resolveBlockCanvasDirtyRect(block, page), [block, page]);
+  const dirtyRect = React.useMemo(() => resolveBlocksCanvasDirtyRect(blocks, page), [blocks, page]);
+  const includedBlockIds = React.useMemo(() => new Set(blocks.map((block) => block.id)), [blocks]);
+
+  React.useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) {
+      return;
+    }
+
+    const applyOffset = (offset: TranslationBlockDragPreviewOffset) => {
+      canvas.style.transform =
+        offset.offsetX !== 0 || offset.offsetY !== 0
+          ? `translate3d(${offset.offsetX}px, ${offset.offsetY}px, 0)`
+          : "";
+    };
+    applyOffset(getTranslationBlockDragPreviewOffset());
+    return addTranslationBlockDragPreviewOffsetListener(applyOffset);
+  }, []);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -605,10 +637,10 @@ function OverlayBlockDragPreviewCanvas({
     drawOverlayBlocks(context, page, {
       renderSize: { width: page.width, height: page.height },
       editingEnabled,
-      includedBlockIds: new Set([block.id]),
+      includedBlockIds,
       fontWeightAvailability
     });
-  }, [block.id, dirtyRect, editingEnabled, fontWeightAvailability, page]);
+  }, [dirtyRect, editingEnabled, fontWeightAvailability, includedBlockIds, page]);
 
   if (!dirtyRect) {
     return null;
@@ -621,8 +653,50 @@ function OverlayBlockDragPreviewCanvas({
     height: (dirtyRect.height / Math.max(1, page.height)) * stageSize.height,
     pointerEvents: "none",
     position: "absolute",
+    willChange: "transform",
     zIndex: 80
   };
 
   return <canvas ref={canvasRef} className="overlay-block-drag-preview-canvas" style={style} aria-hidden="true" />;
+}
+
+type OverlayCanvasDirtyRect = NonNullable<ReturnType<typeof resolveBlockCanvasDirtyRect>>;
+
+function resolveBlocksCanvasDirtyRect(
+  blocks: readonly TranslationBlock[],
+  page: MangaPage
+): OverlayCanvasDirtyRect | null {
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+
+  for (const block of blocks) {
+    const rect = resolveBlockCanvasDirtyRect(block, page);
+    if (!rect) {
+      continue;
+    }
+
+    left = Math.min(left, rect.x);
+    top = Math.min(top, rect.y);
+    right = Math.max(right, rect.x + rect.width);
+    bottom = Math.max(bottom, rect.y + rect.height);
+  }
+
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
+    return null;
+  }
+
+  const margin = page.blockGroups?.some(hasEnabledTranslationBlockGroupEffects)
+    ? GROUP_DRAG_PREVIEW_EFFECT_MARGIN_PX
+    : 0;
+  const x = Math.max(0, Math.floor(left - margin));
+  const y = Math.max(0, Math.floor(top - margin));
+  const width = Math.min(page.width, Math.ceil(right + margin)) - x;
+  const height = Math.min(page.height, Math.ceil(bottom + margin)) - y;
+  if (width <= 0 || height <= 0) {
+    return null;
+  }
+
+  return { x, y, width, height };
 }
