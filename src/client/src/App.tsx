@@ -907,6 +907,7 @@ export default function App(): React.JSX.Element {
       onRerunInpaintWithCurrentMask={rerunInpaintWithCurrentMask}
       onListFontPresetBackups={listFontPresetBackups}
       onRestoreFontPresetListBackup={restoreFontPresetListBackup}
+      onSelectBlockFromGroup={setSingleSelectedBlockId}
       onSelectFontPreset={selectFontPreset}
       onSelectFontSizePreset={selectFontSizePreset}
       onSelectInpaintPsdFile={selectInpaintPsdFile}

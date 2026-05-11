@@ -10,6 +10,7 @@ import {
   resolveTranslationBlockGroupBlockIds,
   resolveTranslationBlockListItems
 } from "../../lib/blockGroups";
+import { BLOCK_TYPE_LABELS, resolveBlockPreviewText } from "../../lib/blockDisplay";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { ActiveLayer } from "../../lib/layerState";
 
@@ -77,13 +78,6 @@ type StageTextBlockListProps = {
   page: MangaPage;
   selectedBlockId: string | null;
   selectedBlockIds: string[];
-};
-
-const BLOCK_TYPE_LABELS: Record<TranslationBlock["type"], string> = {
-  caption: "자막",
-  other: "기타",
-  sfx: "효과음",
-  speech: "말풍선"
 };
 
 export function NotificationDock({
@@ -357,11 +351,6 @@ export function StatusHistoryPanel({
       </div>
     </section>
   );
-}
-
-function resolveBlockPreviewText(block: TranslationBlock): string {
-  const text = (block.translatedText || block.sourceText).replace(/\s+/g, " ").trim();
-  return text || "빈 블록";
 }
 
 export function StageZoomOverlay({

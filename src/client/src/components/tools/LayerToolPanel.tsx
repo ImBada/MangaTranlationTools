@@ -94,6 +94,7 @@ type LayerToolPanelProps = {
   onRerunInpaintWithCurrentMask: () => void | Promise<void>;
   onListFontPresetBackups: () => Promise<FontPresetBackupSummary[]>;
   onRestoreFontPresetListBackup: (backupId: string) => Promise<void>;
+  onSelectBlockFromGroup: (blockId: string) => void;
   onSelectFontPreset: (presetId: string) => void;
   onSelectFontSizePreset: (presetId: string | null) => void;
   onSelectInpaintPsdFile: () => void;
@@ -167,6 +168,7 @@ export function LayerToolPanel({
   onRerunInpaintWithCurrentMask,
   onListFontPresetBackups,
   onRestoreFontPresetListBackup,
+  onSelectBlockFromGroup,
   onSelectFontPreset,
   onSelectFontSizePreset,
   onSelectInpaintPsdFile,
@@ -210,8 +212,10 @@ export function LayerToolPanel({
       {activeLayer === "overlay" && selectedBlockGroup ? (
         <TranslationBlockGroupToolSection
           selectedBlockGroup={selectedBlockGroup}
+          selectedPage={selectedPage}
           selectedPageEditLocked={selectedPageEditLocked}
           onEffectsChange={onSelectedBlockGroupEffectsChange}
+          onSelectBlock={onSelectBlockFromGroup}
         />
       ) : activeLayer === "overlay" ? (
         <FontToolSection
