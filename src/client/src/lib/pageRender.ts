@@ -1,6 +1,13 @@
 import type { MangaPage, TranslationBlock } from "../../../shared/types";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import {
+  hasEnabledTranslationBlockGroupEffects,
+  resolveTranslationBlockGroupDropShadowEffect,
+  resolveTranslationBlockGroupDropShadowSettings,
+  type TranslationBlockGroupDropShadowSettings
+} from "./blockGroupEffects";
+import { resolveTranslationBlockListItems } from "./blockGroups";
+import {
   hexToRgba,
   buildOverlayCanvasFont,
   DEFAULT_OVERLAY_TEXT_DECORATION,
@@ -144,6 +151,7 @@ export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPag
 }
 
 export function drawOverlayBlocks(context: CanvasRenderingContext2D, page: MangaPage, options: OverlayRenderOptions): void {
+  drawOverlayBlockGroupEffects(context, page, options);
   for (const block of page.blocks) {
     if (
       block.renderDirection === "hidden" ||
@@ -153,6 +161,82 @@ export function drawOverlayBlocks(context: CanvasRenderingContext2D, page: Manga
     }
     drawRenderedBlock(context, page, block, options);
   }
+}
+
+function drawOverlayBlockGroupEffects(context: CanvasRenderingContext2D, page: MangaPage, options: OverlayRenderOptions): void {
+  if (!page.blockGroups?.some(hasEnabledTranslationBlockGroupEffects)) {
+    return;
+  }
+
+  for (const item of resolveTranslationBlockListItems(page)) {
+    if (item.kind !== "group") {
+      continue;
+    }
+
+    const dropShadowEffect = resolveTranslationBlockGroupDropShadowEffect(item.group);
+    if (!dropShadowEffect?.enabled) {
+      continue;
+    }
+
+    const blocks = item.blocks
+      .map(({ block }) => block)
+      .filter((block) =>
+        block.renderDirection !== "hidden" &&
+        (!options.includedBlockIds || options.includedBlockIds.has(block.id))
+      );
+    if (blocks.length === 0) {
+      continue;
+    }
+
+    drawOverlayBlockGroupDropShadow(context, page, blocks, resolveTranslationBlockGroupDropShadowSettings(dropShadowEffect), options);
+  }
+}
+
+function drawOverlayBlockGroupDropShadow(
+  context: CanvasRenderingContext2D,
+  page: MangaPage,
+  blocks: readonly TranslationBlock[],
+  settings: TranslationBlockGroupDropShadowSettings,
+  options: OverlayRenderOptions
+): void {
+  if (settings.opacity <= 0) {
+    return;
+  }
+
+  const groupCanvas = document.createElement("canvas");
+  groupCanvas.width = page.width;
+  groupCanvas.height = page.height;
+  const groupContext = groupCanvas.getContext("2d");
+  if (!groupContext) {
+    return;
+  }
+
+  for (const block of blocks) {
+    drawRenderedBlock(groupContext, page, block, {
+      fontWeightAvailability: options.fontWeightAvailability,
+      editingEnabled: false,
+      renderSize: options.renderSize
+    });
+  }
+
+  const shadowCanvas = document.createElement("canvas");
+  shadowCanvas.width = page.width;
+  shadowCanvas.height = page.height;
+  const shadowContext = shadowCanvas.getContext("2d");
+  if (!shadowContext) {
+    return;
+  }
+
+  shadowContext.drawImage(groupCanvas, 0, 0);
+  shadowContext.globalCompositeOperation = "source-in";
+  shadowContext.fillStyle = hexToRgba(settings.color, settings.opacity);
+  shadowContext.fillRect(0, 0, page.width, page.height);
+  shadowContext.globalCompositeOperation = "source-over";
+
+  context.save();
+  context.filter = settings.blurPx > 0 ? `blur(${settings.blurPx}px)` : "none";
+  context.drawImage(shadowCanvas, settings.offsetX, settings.offsetY);
+  context.restore();
 }
 
 export function doesBlockIntersectCanvasRect(

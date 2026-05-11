@@ -10,6 +10,33 @@
   min-width: 0;
 }
 
+.group-effect-control-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.group-effect-summary-field {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 34px;
+}
+
+.group-effect-summary-field > strong {
+  color: var(--color-soft);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+.group-effect-section .font-shadow-row {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.group-effect-section .group-effect-offset-row > .font-number-field:last-child {
+  grid-column: 1 / -1;
+}
+
 .font-metrics-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

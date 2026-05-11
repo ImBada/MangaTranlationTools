@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MangaPage, TranslationBlock } from "../../shared/types";
+import type { MangaPage, TranslationBlock, TranslationBlockGroupEffect } from "../../shared/types";
 import { AppContextBarSlot } from "./components/AppContextBarSlot";
 import { AppFileInputs } from "./components/AppFileInputs";
 import { AppLayerToolPanel } from "./components/AppLayerToolPanel";
@@ -30,10 +30,12 @@ import { useWorkspaceToolState } from "./hooks/useWorkspaceToolState";
 import {
   createTranslationBlockGroupId,
   resolveExpandedTranslationBlockSelection,
+  resolveSelectedTranslationBlockGroup,
   resolveTranslationBlockGroupsAfterGrouping,
   resolveTranslationBlockGroupsAfterUngrouping,
   translationBlockGroupsEqual
 } from "./lib/blockGroups";
+import { cloneTranslationBlockGroupEffect } from "./lib/blockGroupEffects";
 import { resolveSelectedTranslationBlocks, resolveShiftSelectedTranslationBlockIds } from "./lib/blockSelection";
 import type { ActiveLayer } from "./lib/layerState";
 import { RESULT_REPORT_FOCUS_BLOCK_MESSAGE } from "./lib/resultReport";
@@ -373,6 +375,12 @@ export default function App(): React.JSX.Element {
     [selectedBlockIds, selectedPage]
   );
   const multiSelectedBlockCount = selectedBlocks.length > 1 ? selectedBlocks.length : 0;
+  const selectedBlockGroup = useMemo(
+    () => selectedPage && selectedBlockIds.length > 1
+      ? resolveSelectedTranslationBlockGroup(selectedPage, selectedBlockIds)
+      : null,
+    [selectedBlockIds, selectedPage]
+  );
 
   useEffect(() => {
     if (selectedBlockIds.length === 0) {
@@ -636,6 +644,32 @@ export default function App(): React.JSX.Element {
     selectedPageEditLocked,
     updateSelectedPageBlockGroups
   ]);
+  const updateSelectedBlockGroupEffects = useCallback((effects: TranslationBlockGroupEffect[]) => {
+    if (!selectedPage || !selectedBlockGroup || selectedPageEditLocked) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    recordTranslationUndoSnapshot("텍스트 블록 그룹 효과 변경");
+    updateSelectedPageBlockGroups(
+      (selectedPage.blockGroups ?? []).map((group) =>
+        group.id === selectedBlockGroup.id
+          ? {
+              ...group,
+              effects: effects.map(cloneTranslationBlockGroupEffect),
+              updatedAt
+            }
+          : group
+      ),
+      updatedAt
+    );
+  }, [
+    recordTranslationUndoSnapshot,
+    selectedBlockGroup,
+    selectedPage,
+    selectedPageEditLocked,
+    updateSelectedPageBlockGroups
+  ]);
   const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
     if (!selectedPage || selectedPageEditLocked) {
       return;
@@ -841,6 +875,7 @@ export default function App(): React.JSX.Element {
       renderFontPresetLinkButton={renderFontPresetLinkButton}
       renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
       selectedBlock={multiSelectedBlockCount > 1 ? null : selectedBlock}
+      selectedBlockGroup={selectedBlockGroup}
       selectedPage={selectedPage}
       selectedPageEditLocked={selectedPageEditLocked}
       onClearEditingFontPreset={() => setEditingFontPresetId(null)}
@@ -877,6 +912,7 @@ export default function App(): React.JSX.Element {
       onSelectInpaintPsdFile={selectInpaintPsdFile}
       onSelectInpaintResultEditTool={selectInpaintResultEditTool}
       onSelectSharedInpaintTool={selectSharedInpaintTool}
+      onSelectedBlockGroupEffectsChange={updateSelectedBlockGroupEffects}
     />
   );
 

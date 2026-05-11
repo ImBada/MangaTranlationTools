@@ -1,4 +1,5 @@
 import type { MangaPage, TranslationBlock, TranslationBlockGroup, TranslationBlockGroupEffect } from "../../../shared/types";
+import { cloneTranslationBlockGroupEffect } from "./blockGroupEffects";
 
 export type TranslationBlockListItem =
   | {
@@ -211,7 +212,14 @@ export function isExistingTranslationBlockGroupSelection(
   page: Pick<MangaPage, "blocks" | "blockGroups">,
   selectedBlockIds: readonly string[]
 ): boolean {
-  return resolveTranslationBlockGroupForSelection(resolveValidTranslationBlockGroups(page), selectedBlockIds) !== null;
+  return resolveSelectedTranslationBlockGroup(page, selectedBlockIds) !== null;
+}
+
+export function resolveSelectedTranslationBlockGroup(
+  page: Pick<MangaPage, "blocks" | "blockGroups">,
+  selectedBlockIds: readonly string[]
+): TranslationBlockGroup | null {
+  return resolveTranslationBlockGroupForSelection(resolveValidTranslationBlockGroups(page), selectedBlockIds);
 }
 
 function resolveTranslationBlockGroupForSelection(
@@ -258,13 +266,6 @@ function resolveValidTranslationBlockGroups(
       ? [{ ...cloneTranslationBlockGroup(group), blockIds }]
       : [];
   });
-}
-
-function cloneTranslationBlockGroupEffect(effect: TranslationBlockGroupEffect): TranslationBlockGroupEffect {
-  return {
-    ...effect,
-    settings: effect.settings ? { ...effect.settings } : undefined
-  };
 }
 
 function blockIdSetsMatch(left: readonly string[], right: readonly string[]): boolean {

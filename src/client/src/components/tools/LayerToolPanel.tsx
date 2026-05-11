@@ -7,7 +7,9 @@ import type {
   FontSizePreset,
   ImageRect,
   MangaPage,
-  TranslationBlock
+  TranslationBlock,
+  TranslationBlockGroup,
+  TranslationBlockGroupEffect
 } from "../../../../shared/types";
 import type { FontFamilyOption } from "../font/FontFamilyPicker";
 import type { InpaintTool } from "../InpaintLayerCanvas";
@@ -21,6 +23,7 @@ import { InpaintMaskToolSection } from "./InpaintMaskToolSection";
 import { InpaintPsdToolSection } from "./InpaintPsdToolSection";
 import { InpaintResultToolSection } from "./InpaintResultToolSection";
 import { OutputToolSection } from "./OutputToolSection";
+import { TranslationBlockGroupToolSection } from "./TranslationBlockGroupToolSection";
 import type { ResultReportProgress } from "../../hooks/useResultReport";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
@@ -59,6 +62,7 @@ type LayerToolPanelProps = {
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
+  selectedBlockGroup: TranslationBlockGroup | null;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   onClearEditingFontPreset: () => void;
@@ -95,6 +99,7 @@ type LayerToolPanelProps = {
   onSelectInpaintPsdFile: () => void;
   onSelectInpaintResultEditTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectSharedInpaintTool: (tool: InpaintTool) => void;
+  onSelectedBlockGroupEffectsChange: (effects: TranslationBlockGroupEffect[]) => void;
 };
 
 export function LayerToolPanel({
@@ -130,6 +135,7 @@ export function LayerToolPanel({
   renderFontPresetLinkButton,
   renderFontPresetLinkGroupButton,
   selectedBlock,
+  selectedBlockGroup,
   selectedPage,
   selectedPageEditLocked,
   onClearEditingFontPreset,
@@ -165,13 +171,15 @@ export function LayerToolPanel({
   onSelectFontSizePreset,
   onSelectInpaintPsdFile,
   onSelectInpaintResultEditTool,
-  onSelectSharedInpaintTool
+  onSelectSharedInpaintTool,
+  onSelectedBlockGroupEffectsChange
 }: LayerToolPanelProps): React.JSX.Element {
   const [characterOverrideModalOpen, setCharacterOverrideModalOpen] = React.useState(false);
-  const layerToolTitle = resolveLayerToolTitle(activeLayer);
+  const groupSelectionActive = activeLayer === "overlay" && selectedBlockGroup !== null;
+  const layerToolTitle = resolveLayerToolTitle(activeLayer, groupSelectionActive);
   const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
   const activeFontPresetName = fontPresets.find((preset) => preset.id === activeFontPresetId)?.name ?? "선택한";
-  const characterOverrideButtonEnabled = activeLayer === "overlay" && Boolean(activeFontPresetId && fontControlValues);
+  const characterOverrideButtonEnabled = activeLayer === "overlay" && !groupSelectionActive && Boolean(activeFontPresetId && fontControlValues);
 
   React.useEffect(() => {
     if (!characterOverrideButtonEnabled) {
@@ -183,7 +191,7 @@ export function LayerToolPanel({
     <section className="layer-tool-panel layer-tools-panel">
       <h2>
         <span>{layerToolTitle}</span>
-        {activeLayer === "overlay" ? (
+        {activeLayer === "overlay" && !groupSelectionActive ? (
           <button
             type="button"
             className="font-character-settings-button"
@@ -199,7 +207,13 @@ export function LayerToolPanel({
           </button>
         ) : null}
       </h2>
-      {activeLayer === "overlay" ? (
+      {activeLayer === "overlay" && selectedBlockGroup ? (
+        <TranslationBlockGroupToolSection
+          selectedBlockGroup={selectedBlockGroup}
+          selectedPageEditLocked={selectedPageEditLocked}
+          onEffectsChange={onSelectedBlockGroupEffectsChange}
+        />
+      ) : activeLayer === "overlay" ? (
         <FontToolSection
           currentChapter={currentChapter}
           editingFontPresetId={editingFontPresetId}
@@ -317,9 +331,9 @@ export function LayerToolPanel({
   );
 }
 
-function resolveLayerToolTitle(activeLayer: ActiveLayer): string {
+function resolveLayerToolTitle(activeLayer: ActiveLayer, groupSelectionActive = false): string {
   return activeLayer === "overlay"
-    ? "폰트 설정"
+    ? groupSelectionActive ? "그룹 설정" : "폰트 설정"
     : activeLayer === "inpaintMask"
       ? "마스크 도구"
       : activeLayer === "inpaintResult"

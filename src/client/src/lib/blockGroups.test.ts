@@ -3,6 +3,7 @@ import type { MangaPage } from "../../../shared/types";
 import {
   isExistingTranslationBlockGroupSelection,
   resolveExpandedTranslationBlockSelection,
+  resolveSelectedTranslationBlockGroup,
   resolveTranslationBlockGroupBlockIds,
   resolveTranslationBlockListItems,
   resolveTranslationBlockGroupsAfterBlockRemoval,
@@ -166,6 +167,10 @@ describe("blockGroups", () => {
       { kind: "block", block: block("b4"), blockIndex: 3 }
     ]);
     expect(isExistingTranslationBlockGroupSelection(page, ["b3", "b1"])).toBe(true);
+    expect(resolveSelectedTranslationBlockGroup(page, ["b3", "b1"])).toMatchObject({
+      id: "group-1",
+      blockIds: ["b1", "b3"]
+    });
     expect(isExistingTranslationBlockGroupSelection(page, ["b1", "b2", "b3"])).toBe(false);
   });
 });

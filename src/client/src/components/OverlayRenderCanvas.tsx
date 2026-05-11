@@ -12,6 +12,7 @@ import {
   drawOverlayBlocks,
   resolveBlockCanvasDirtyRect
 } from "../lib/pageRender";
+import { hasEnabledTranslationBlockGroupEffects } from "../lib/blockGroupEffects";
 import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
 
 type OverlayRenderCanvasProps = {
@@ -97,7 +98,10 @@ export function OverlayRenderCanvas({
         currentPage.blocks.find((block) => block.id === currentHiddenBlockId) ??
         null
       : null;
-    const cachedCanvas = renderCacheRef.current.get(renderKey);
+    const hiddenGroupEffectRedrawRequired =
+      Boolean(currentHiddenBlockId) &&
+      Boolean(currentPage.blockGroups?.some(hasEnabledTranslationBlockGroupEffects));
+    const cachedCanvas = hiddenGroupEffectRedrawRequired ? undefined : renderCacheRef.current.get(renderKey);
     const renderCacheHit = Boolean(cachedCanvas && cachedCanvas.width === width && cachedCanvas.height === height);
     if (cachedCanvas && renderCacheHit) {
       copyOverlayCanvas(canvas, context, cachedCanvas, width, height);
@@ -106,13 +110,7 @@ export function OverlayRenderCanvas({
       canvas.height = height;
       context.setTransform(1, 0, 0, 1, 0, 0);
       context.clearRect(0, 0, width, height);
-      const includedBlockIds = currentHiddenBlockId
-        ? new Set(
-            currentPage.blocks
-              .filter((block) => block.id !== currentHiddenBlockId)
-              .map((block) => block.id)
-          )
-        : undefined;
+      const includedBlockIds = resolveIncludedOverlayBlockIds(currentPage, currentHiddenBlockId);
       drawOverlayBlocks(context, currentPage, {
         renderSize: { width: currentPage.width, height: currentPage.height },
         editingEnabled: currentEditingEnabled,
@@ -123,7 +121,7 @@ export function OverlayRenderCanvas({
         storeOverlayRenderCache(renderCacheRef.current, renderKey, canvas, width, height);
       }
     }
-    if (currentHiddenBlockId && hiddenDirtyBlock) {
+    if (currentHiddenBlockId && hiddenDirtyBlock && !hiddenGroupEffectRedrawRequired) {
       refreshOverlayBlockDirtyRect(context, currentPage, {
         blockForDirtyRect: hiddenDirtyBlock,
         editingEnabled: currentEditingEnabled,
@@ -209,13 +207,25 @@ export function OverlayRenderCanvas({
       fontWeightAvailability: currentFontWeightAvailability,
       page: currentPage
     } = renderStateRef.current;
+    if (!canvas || !context) {
+      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+      return;
+    }
+    if (!blockIdToRefresh) {
+      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+      return;
+    }
+    if (currentPage.blockGroups?.some(hasEnabledTranslationBlockGroupEffects)) {
+      lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
+      return;
+    }
     const currentBlock = blockIdToRefresh
       ? currentPage.blocks.find((block) => block.id === blockIdToRefresh) ?? null
       : null;
     const blockForDirtyRect = hiddenBlockId && blockIdToRefresh
       ? lastRenderedBlocksRef.current.get(blockIdToRefresh) ?? currentBlock
       : currentBlock;
-    if (!canvas || !context || !blockIdToRefresh || !blockForDirtyRect) {
+    if (!blockForDirtyRect) {
       lastHiddenBlockIdRef.current = hiddenBlockId ?? null;
       return;
     }
@@ -230,6 +240,16 @@ export function OverlayRenderCanvas({
   }, [canvasRef, hiddenBlockId]);
 
   return <canvas ref={canvasRef} className="overlay-render-canvas" aria-hidden="true" />;
+}
+
+function resolveIncludedOverlayBlockIds(page: MangaPage, hiddenBlockId: string | null | undefined): Set<string> | undefined {
+  return hiddenBlockId
+    ? new Set(
+        page.blocks
+          .filter((block) => block.id !== hiddenBlockId)
+          .map((block) => block.id)
+      )
+    : undefined;
 }
 
 function copyOverlayCanvas(
@@ -424,6 +444,7 @@ function createOverlayRenderKey(
     pageHeight: page.height,
     pageId: page.id,
     pageWidth: page.width,
+    blockGroups: summarizeBlockGroupRenderState(page),
     blocks: blockIds.map((blockId) => {
       const currentBlock = currentBlocksById.get(blockId);
       if (!currentBlock) {
@@ -434,6 +455,19 @@ function createOverlayRenderKey(
         : summarizeBlockRenderState(currentBlock);
     })
   });
+}
+
+function summarizeBlockGroupRenderState(page: MangaPage): Record<string, unknown>[] {
+  return (page.blockGroups ?? []).map((group) => ({
+    blockIds: group.blockIds,
+    effects: (group.effects ?? []).map((effect) => ({
+      enabled: effect.enabled,
+      id: effect.id,
+      settings: effect.settings,
+      type: effect.type
+    })),
+    id: group.id
+  }));
 }
 
 function summarizeBlockRenderState(block: TranslationBlock): Record<string, unknown> {
