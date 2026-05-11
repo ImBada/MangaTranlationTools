@@ -3,6 +3,7 @@ import type { MangaPage, TranslationBlock } from "../src/shared/types";
 import {
   applyTranslationBlockFontStyle,
   bringTranslationBlockToFront,
+  bringTranslationBlocksToFront,
   createInpaintMaskUndoSnapshot,
   extractTranslationBlockFontStyle,
   parseTranslationBlockFontStyleFromClipboard,
@@ -197,6 +198,24 @@ describe("editor utils", () => {
     ];
 
     expect(bringTranslationBlockToFront(blocks, "front")).toBe(blocks);
+  });
+
+  it("moves multiple translation blocks to the front while preserving their relative order", () => {
+    const blocks = [
+      { ...block, id: "back" },
+      { ...block, id: "group-a" },
+      { ...block, id: "middle" },
+      { ...block, id: "group-b" },
+      { ...block, id: "front" }
+    ];
+
+    expect(bringTranslationBlocksToFront(blocks, ["group-b", "group-a"]).map((candidate) => candidate.id)).toEqual([
+      "back",
+      "middle",
+      "front",
+      "group-a",
+      "group-b"
+    ]);
   });
 
   it("allows inpaint undo snapshots to override captured layer pixels", () => {

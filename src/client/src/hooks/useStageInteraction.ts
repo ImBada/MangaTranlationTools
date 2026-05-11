@@ -7,7 +7,8 @@ import {
   resolveEditableBlockBbox
 } from "../../../shared/geometry";
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
-import { angleBetweenPointsDeg, bringTranslationBlockToFront, isEditableTarget } from "../lib/editorUtils";
+import { resolveTranslationBlockGroupBlockIds } from "../lib/blockGroups";
+import { angleBetweenPointsDeg, bringTranslationBlocksToFront, bringTranslationBlockToFront, isEditableTarget } from "../lib/editorUtils";
 import {
   createInpaintDebugId,
   isInpaintDebugLogEnabled,
@@ -26,12 +27,14 @@ type DragMode = "move" | "resize" | "rotate";
 type DragState = {
   mode: DragMode;
   blockId: string;
+  blockIds: string[];
   pointerId: number;
   previewActive: boolean;
   captureElement: Element | null;
   startX: number;
   startY: number;
   startBbox: BBox;
+  startBboxesByBlockId: Map<string, BBox>;
   startRotationDeg: number;
   startAngleDeg: number;
   centerX: number;
@@ -350,6 +353,18 @@ export function useStageInteraction({
     }
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
+    const dragBlockIds = mode === "move" && selectedPage
+      ? resolveTranslationBlockGroupBlockIds(selectedPage, block.id) ?? [block.id]
+      : [block.id];
+    const startBboxesByBlockId = new Map<string, BBox>(
+      dragBlockIds.flatMap((blockId) => {
+        const dragBlock = selectedPage?.blocks.find((candidate) => candidate.id === blockId) ?? (blockId === block.id ? block : null);
+        return dragBlock ? [[blockId, resolveEditableBlockBbox(dragBlock).bbox] as [string, BBox]] : [];
+      })
+    );
+    if (!startBboxesByBlockId.has(block.id)) {
+      startBboxesByBlockId.set(block.id, target.bbox);
+    }
     const stageRect = stageRef.current.getBoundingClientRect();
     const centerX = stageRect.left + ((target.bbox.x + target.bbox.w / 2) / 1000) * stageRect.width;
     const centerY = stageRect.top + ((target.bbox.y + target.bbox.h / 2) / 1000) * stageRect.height;
@@ -396,12 +411,14 @@ export function useStageInteraction({
     dragRef.current = {
       mode,
       blockId: block.id,
+      blockIds: [...startBboxesByBlockId.keys()],
       pointerId: event.pointerId,
       previewActive: false,
       captureElement: event.currentTarget,
       startX: event.clientX,
       startY: event.clientY,
       startBbox: target.bbox,
+      startBboxesByBlockId,
       startRotationDeg: resolveBlockRotationDeg(block),
       startAngleDeg: angleBetweenPointsDeg(centerX, centerY, event.clientX, event.clientY),
       centerX,
@@ -456,7 +473,7 @@ export function useStageInteraction({
     }
 
     if (!drag.undoRecorded) {
-      recordTranslationUndoSnapshot("번역 블록 위치 변경");
+      recordTranslationUndoSnapshot(drag.mode === "move" && drag.blockIds.length > 1 ? "번역 블록 여러 개 위치 변경" : "번역 블록 위치 변경");
       drag.undoRecorded = true;
     }
 
@@ -471,7 +488,20 @@ export function useStageInteraction({
           : {
               ...candidate,
               updatedAt: new Date().toISOString(),
-              blocks: bringTranslationBlockToFront(candidate.blocks, drag.blockId).map((block) => {
+              blocks: (drag.mode === "move" && drag.blockIds.length > 1
+                ? bringTranslationBlocksToFront(candidate.blocks, drag.blockIds)
+                : bringTranslationBlockToFront(candidate.blocks, drag.blockId)
+              ).map((block) => {
+                if (drag.mode === "move") {
+                  const startBbox = drag.startBboxesByBlockId.get(block.id);
+                  return startBbox
+                    ? applyEditableBlockBbox(block, {
+                        ...startBbox,
+                        x: startBbox.x + dx,
+                        y: startBbox.y + moveDy
+                      })
+                    : block;
+                }
                 if (block.id !== drag.blockId) {
                   return block;
                 }

@@ -305,6 +305,20 @@ export function bringTranslationBlockToFront(blocks: TranslationBlock[], blockId
   return next;
 }
 
+export function bringTranslationBlocksToFront(blocks: TranslationBlock[], blockIds: readonly string[]): TranslationBlock[] {
+  const blockIdSet = new Set(blockIds);
+  const frontBlocks = blocks.filter((block) => blockIdSet.has(block.id));
+  if (frontBlocks.length === 0) {
+    return blocks;
+  }
+
+  const next = [
+    ...blocks.filter((block) => !blockIdSet.has(block.id)),
+    ...frontBlocks
+  ];
+  return next.every((block, index) => block === blocks[index]) ? blocks : next;
+}
+
 export function isEditableTarget(target: EventTarget | null): boolean {
   if (typeof Element === "undefined" || !(target instanceof Element)) {
     return false;
