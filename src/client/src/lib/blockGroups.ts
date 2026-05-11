@@ -238,6 +238,19 @@ export function resolveTranslationBlockGroupBlockIds(
   return resolveValidTranslationBlockGroups(page).find((group) => group.blockIds.includes(blockId))?.blockIds ?? null;
 }
 
+export function resolveTranslationBlockDragBlockIds(
+  page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
+  blockId: string,
+  selectedBlockIds: readonly string[]
+): string[] {
+  if (!page) {
+    return [blockId];
+  }
+
+  const selectedGroup = resolveSelectedTranslationBlockGroup(page, selectedBlockIds);
+  return selectedGroup?.blockIds.includes(blockId) ? selectedGroup.blockIds : [blockId];
+}
+
 export function resolveExpandedTranslationBlockSelection(
   page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
   blockIds: readonly string[]

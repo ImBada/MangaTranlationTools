@@ -7,7 +7,7 @@ import {
   resolveEditableBlockBbox
 } from "../../../shared/geometry";
 import { isBlockDuplicateModifier } from "../lib/editorShortcuts";
-import { resolveTranslationBlockGroupBlockIds } from "../lib/blockGroups";
+import { resolveTranslationBlockDragBlockIds } from "../lib/blockGroups";
 import { angleBetweenPointsDeg, bringTranslationBlocksToFront, bringTranslationBlockToFront, isEditableTarget } from "../lib/editorUtils";
 import {
   createInpaintDebugId,
@@ -67,6 +67,7 @@ type UseStageInteractionOptions = {
   currentChapter: ChapterSnapshot | null;
   duplicateBlock: (block: TranslationBlock) => void;
   recordTranslationUndoSnapshot: (label: string) => boolean;
+  selectedBlockIds: string[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   setSelectedBlockId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -271,6 +272,7 @@ export function useStageInteraction({
   currentChapter,
   duplicateBlock,
   recordTranslationUndoSnapshot,
+  selectedBlockIds,
   selectedPage,
   selectedPageEditLocked,
   setSelectedBlockId,
@@ -354,7 +356,7 @@ export function useStageInteraction({
     setSelectedBlockId(block.id);
     const target = resolveEditableBlockBbox(block);
     const dragBlockIds = mode === "move" && selectedPage
-      ? resolveTranslationBlockGroupBlockIds(selectedPage, block.id) ?? [block.id]
+      ? resolveTranslationBlockDragBlockIds(selectedPage, block.id, selectedBlockIds)
       : [block.id];
     const startBboxesByBlockId = new Map<string, BBox>(
       dragBlockIds.flatMap((blockId) => {
@@ -427,7 +429,7 @@ export function useStageInteraction({
       debug
     };
     trySetPointerCapture(event.currentTarget, event.pointerId);
-  }, [activeLayer, duplicateBlock, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
+  }, [activeLayer, duplicateBlock, selectedBlockIds, selectedPage, selectedPageEditLocked, setSelectedBlockId]);
 
   const onStagePointerMove = React.useCallback((event: React.PointerEvent) => {
     const drag = dragRef.current;

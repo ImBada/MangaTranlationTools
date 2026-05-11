@@ -162,10 +162,15 @@ export default function App(): React.JSX.Element {
       return;
     }
 
+    if (selectedBlockIds.length === 0 && nextBlockId === selectedBlockIdRef.current) {
+      setSelectedBlockId(nextBlockId);
+      return;
+    }
+
     const blockIds = resolveCurrentPageBlockSelectionIds([nextBlockId]);
     setSelectedBlockIds(blockIds.length > 1 ? blockIds : []);
     setSelectedBlockId(blockIds.includes(nextBlockId) ? nextBlockId : blockIds[0] ?? nextBlockId);
-  }, [resolveCurrentPageBlockSelectionIds, selectedBlockIdRef, setSelectedBlockId]);
+  }, [resolveCurrentPageBlockSelectionIds, selectedBlockIdRef, selectedBlockIds.length, setSelectedBlockId]);
   const updateBlockSelectionWithShiftClick = useCallback((blockId: string) => {
     const nextBlockIds = resolveShiftSelectedTranslationBlockIds(selectedBlockId, selectedBlockIds, blockId);
     if (!nextBlockIds) {
@@ -570,6 +575,7 @@ export default function App(): React.JSX.Element {
     currentChapter,
     duplicateBlock,
     recordTranslationUndoSnapshot,
+    selectedBlockIds,
     selectedPage,
     selectedPageEditLocked,
     setSelectedBlockId: setSelectedBlockOrGroupId,
