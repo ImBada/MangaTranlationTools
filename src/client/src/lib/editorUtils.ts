@@ -23,6 +23,8 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "secondaryOutlineWidthPx",
   "shadowEnabled",
   "shadowColor",
+  "shadowOpacity",
+  "shadowBlurPx",
   "shadowAngleDeg",
   "shadowDistancePx",
   "autoFitText",

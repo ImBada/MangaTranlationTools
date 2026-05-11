@@ -18,9 +18,11 @@ export type LayerToolFontControlValues = {
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
   shadowAngleDeg?: number;
+  shadowBlurPx?: number;
   shadowColor?: string;
   shadowDistancePx?: number;
   shadowEnabled?: boolean;
+  shadowOpacity?: number;
   textDecoration?: TextDecoration;
   textColor?: string;
 };

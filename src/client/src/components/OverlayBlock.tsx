@@ -105,15 +105,23 @@ export function OverlayBlock({
     visualContentVisible && block.renderDirection === "horizontal"
       ? resolveWrappedTextLines(block, displayText, layout.fontSizePx, layout.fitInnerWidth)
       : [];
-  const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
-  const secondaryOutlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const renderScale = Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * renderScale;
+  const secondaryOutlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0) * renderScale;
   const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
-  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0) * Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
+  const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0) * renderScale;
+  const shadowBlurPx = Math.max(0, block.shadowBlurPx ?? 0) * renderScale;
+  const shadowOpacity = Math.max(0, Math.min(1, block.shadowOpacity ?? 1));
   const shadowAngleRad = ((block.shadowAngleDeg ?? 45) * Math.PI) / 180;
   const shadowOffsetX = Math.cos(shadowAngleRad) * shadowDistancePx;
   const shadowOffsetY = Math.sin(shadowAngleRad) * shadowDistancePx;
   const shadowStrokeWidthPx = secondaryOutlineWidthPx > 0 ? combinedSecondaryOutlineWidthPx : outlineWidthPx;
-  const shadowEnabled = visualContentVisible && (block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0)) && shadowDistancePx > 0;
+  const shadowEnabled =
+    visualContentVisible &&
+    (block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0 || (block.shadowBlurPx ?? 0) > 0)) &&
+    shadowOpacity > 0 &&
+    (shadowDistancePx > 0 || shadowBlurPx > 0);
+  const shadowColor = hexToRgba(block.shadowColor ?? "#000000", shadowOpacity);
   const rotationDeg = resolveBlockRotationDeg(block);
   const screentoneFillEnabled = visualContentVisible && (block.screentoneFillEnabled ?? false);
   const horizontalLineAlignSelf = block.textAlign === "left" ? "flex-start" : block.textAlign === "right" ? "flex-end" : "center";
@@ -212,10 +220,11 @@ export function OverlayBlock({
     inset: 0,
     zIndex: 0,
     pointerEvents: "none",
-    color: block.shadowColor ?? "#000000",
-    WebkitTextFillColor: block.shadowColor ?? "#000000",
-    WebkitTextStroke: shadowStrokeWidthPx > 0 ? `${shadowStrokeWidthPx}px ${block.shadowColor ?? "#000000"}` : undefined,
-    transform: `translate(${shadowOffsetX}px, ${shadowOffsetY}px)`
+    color: shadowColor,
+    filter: shadowBlurPx > 0 ? `blur(${shadowBlurPx}px)` : undefined,
+    WebkitTextFillColor: shadowColor,
+    WebkitTextStroke: shadowStrokeWidthPx > 0 ? `${shadowStrokeWidthPx}px ${shadowColor}` : undefined,
+    transform: shadowOffsetX !== 0 || shadowOffsetY !== 0 ? `translate(${shadowOffsetX}px, ${shadowOffsetY}px)` : undefined
   };
   const lineStyle: React.CSSProperties = {
     alignSelf: horizontalLineAlignSelf,

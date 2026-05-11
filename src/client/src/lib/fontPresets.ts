@@ -18,6 +18,8 @@ export type FontPresetPatch = Partial<
     | "secondaryOutlineWidthPx"
     | "shadowEnabled"
     | "shadowColor"
+    | "shadowOpacity"
+    | "shadowBlurPx"
     | "shadowAngleDeg"
     | "shadowDistancePx"
     | "autoFitText"
@@ -41,6 +43,8 @@ const PRESET_LINK_FIELD_BY_KEY = {
   secondaryOutlineWidthPx: "secondaryOutlineWidthLinkedToPreset",
   shadowEnabled: "shadowEnabledLinkedToPreset",
   shadowColor: "shadowColorLinkedToPreset",
+  shadowOpacity: "shadowOpacityLinkedToPreset",
+  shadowBlurPx: "shadowBlurPxLinkedToPreset",
   shadowAngleDeg: "shadowAngleDegLinkedToPreset",
   shadowDistancePx: "shadowDistancePxLinkedToPreset",
   autoFitText: "autoFitTextLinkedToPreset",
@@ -109,6 +113,8 @@ export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT
     secondaryOutlineWidthPx: source.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
     shadowEnabled: source.shadowEnabled ?? DEFAULT_FONT_PRESET.shadowEnabled,
     shadowColor: source.shadowColor ?? DEFAULT_FONT_PRESET.shadowColor,
+    shadowOpacity: source.shadowOpacity ?? DEFAULT_FONT_PRESET.shadowOpacity,
+    shadowBlurPx: source.shadowBlurPx ?? DEFAULT_FONT_PRESET.shadowBlurPx,
     shadowAngleDeg: source.shadowAngleDeg ?? DEFAULT_FONT_PRESET.shadowAngleDeg,
     shadowDistancePx: source.shadowDistancePx ?? DEFAULT_FONT_PRESET.shadowDistancePx,
     autoFitText: source.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
@@ -247,6 +253,14 @@ export function applyFontPresetPatchToBlock(
       patch.shadowColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowColor"))
         ? patch.shadowColor
         : block.shadowColor,
+    shadowOpacity:
+      patch.shadowOpacity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowOpacity"))
+        ? patch.shadowOpacity
+        : block.shadowOpacity,
+    shadowBlurPx:
+      patch.shadowBlurPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowBlurPx"))
+        ? patch.shadowBlurPx
+        : block.shadowBlurPx,
     shadowAngleDeg:
       patch.shadowAngleDeg !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowAngleDeg"))
         ? patch.shadowAngleDeg

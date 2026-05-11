@@ -4,6 +4,7 @@ export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic
 export const DEFAULT_OVERLAY_FONT_WEIGHT = 700;
 export const DEFAULT_OVERLAY_FONT_STYLE = "normal";
 export const DEFAULT_OVERLAY_TEXT_DECORATION = "none";
+export const DEFAULT_ENABLED_SHADOW_DISTANCE_PX = 4;
 
 export const DEFAULT_FONT_PRESET_VALUES: Omit<FontPreset, "id" | "name"> = {
   fontFamily: DEFAULT_OVERLAY_FONT_FAMILY,
@@ -19,6 +20,8 @@ export const DEFAULT_FONT_PRESET_VALUES: Omit<FontPreset, "id" | "name"> = {
   secondaryOutlineWidthPx: 0,
   shadowEnabled: false,
   shadowColor: "#000000",
+  shadowOpacity: 1,
+  shadowBlurPx: 0,
   shadowAngleDeg: 45,
   shadowDistancePx: 0,
   autoFitText: true,
@@ -47,6 +50,8 @@ const BLOCK_FONT_PRESET_LINK_FIELDS = [
   "secondaryOutlineWidthLinkedToPreset",
   "shadowEnabledLinkedToPreset",
   "shadowColorLinkedToPreset",
+  "shadowOpacityLinkedToPreset",
+  "shadowBlurPxLinkedToPreset",
   "shadowAngleDegLinkedToPreset",
   "shadowDistancePxLinkedToPreset",
   "autoFitTextLinkedToPreset",
@@ -115,6 +120,8 @@ export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPre
     secondaryOutlineWidthPx: preset.secondaryOutlineWidthPx,
     shadowEnabled: preset.shadowEnabled,
     shadowColor: preset.shadowColor,
+    shadowOpacity: preset.shadowOpacity,
+    shadowBlurPx: preset.shadowBlurPx,
     shadowAngleDeg: preset.shadowAngleDeg,
     shadowDistancePx: preset.shadowDistancePx,
     autoFitText: preset.autoFitText,

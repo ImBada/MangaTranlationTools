@@ -77,6 +77,8 @@ describe("editor utils", () => {
       secondaryOutlineWidthPx: 3,
       shadowEnabled: true,
       shadowColor: "#112233",
+      shadowOpacity: 0.6,
+      shadowBlurPx: 4,
       shadowAngleDeg: 120,
       shadowDistancePx: 6,
       textAlign: "right",
@@ -104,6 +106,8 @@ describe("editor utils", () => {
       lineHeight: 1.35,
       outlineWidthPx: 2,
       shadowEnabled: true,
+      shadowOpacity: 0.6,
+      shadowBlurPx: 4,
       textAlign: "right",
       textPosition: "bottom-right",
       screentoneFillAntialias: false

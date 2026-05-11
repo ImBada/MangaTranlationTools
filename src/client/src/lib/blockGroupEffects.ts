@@ -1,21 +1,22 @@
 import type { TranslationBlockGroup, TranslationBlockGroupEffect } from "../../../shared/types";
+import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX, DEFAULT_FONT_PRESET_VALUES } from "../../../shared/fontPresets";
 
 export const TRANSLATION_BLOCK_GROUP_DROP_SHADOW_EFFECT_TYPE = "drop-shadow";
 
 export type TranslationBlockGroupDropShadowSettings = {
+  angleDeg: number;
   blurPx: number;
   color: string;
-  offsetX: number;
-  offsetY: number;
+  distancePx: number;
   opacity: number;
 };
 
 export const DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS: TranslationBlockGroupDropShadowSettings = {
-  blurPx: 2,
-  color: "#000000",
-  offsetX: 4,
-  offsetY: 4,
-  opacity: 0.45
+  angleDeg: DEFAULT_FONT_PRESET_VALUES.shadowAngleDeg ?? 45,
+  blurPx: DEFAULT_FONT_PRESET_VALUES.shadowBlurPx ?? 0,
+  color: DEFAULT_FONT_PRESET_VALUES.shadowColor ?? "#000000",
+  distancePx: DEFAULT_ENABLED_SHADOW_DISTANCE_PX,
+  opacity: DEFAULT_FONT_PRESET_VALUES.shadowOpacity ?? 1
 };
 
 export function resolveTranslationBlockGroupDropShadowEffect(
@@ -28,11 +29,12 @@ export function resolveTranslationBlockGroupDropShadowSettings(
   effect: TranslationBlockGroupEffect | null | undefined
 ): TranslationBlockGroupDropShadowSettings {
   const settings = effect?.settings ?? {};
+  const legacyOffset = resolveLegacyDropShadowOffset(settings);
   return {
+    angleDeg: readFiniteNumber(settings.angleDeg, legacyOffset?.angleDeg ?? DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.angleDeg, -360, 360),
     blurPx: readFiniteNumber(settings.blurPx, DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.blurPx, 0, 80),
     color: readHexColor(settings.color, DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.color),
-    offsetX: readFiniteNumber(settings.offsetX, DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.offsetX, -160, 160),
-    offsetY: readFiniteNumber(settings.offsetY, DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.offsetY, -160, 160),
+    distancePx: readFiniteNumber(settings.distancePx, legacyOffset?.distancePx ?? DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.distancePx, 0, 80),
     opacity: readFiniteNumber(settings.opacity, DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS.opacity, 0, 1)
   };
 }
@@ -115,4 +117,24 @@ function readFiniteNumber(value: unknown, fallback: number, min: number, max: nu
 
 function readHexColor(value: unknown, fallback: string): string {
   return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+}
+
+function resolveLegacyDropShadowOffset(settings: Record<string, unknown>): Pick<TranslationBlockGroupDropShadowSettings, "angleDeg" | "distancePx"> | null {
+  const offsetX = readOptionalFiniteNumber(settings.offsetX);
+  const offsetY = readOptionalFiniteNumber(settings.offsetY);
+  if (offsetX === null && offsetY === null) {
+    return null;
+  }
+
+  const dx = offsetX ?? 0;
+  const dy = offsetY ?? 0;
+  return {
+    angleDeg: (Math.atan2(dy, dx) * 180) / Math.PI,
+    distancePx: Math.hypot(dx, dy)
+  };
+}
+
+function readOptionalFiniteNumber(value: unknown): number | null {
+  const numericValue = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(numericValue) ? numericValue : null;
 }

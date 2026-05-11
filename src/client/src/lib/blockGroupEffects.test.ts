@@ -13,7 +13,7 @@ describe("blockGroupEffects", () => {
   it("creates and updates a group drop shadow effect without dropping other effects", () => {
     const effects = updateTranslationBlockGroupDropShadowSettings(
       [{ id: "effect-other", type: "sample", enabled: true, settings: { strength: 1 } }],
-      { color: "#123abc", offsetX: 12 }
+      { color: "#123abc", distancePx: 12 }
     );
 
     expect(effects[0]).toEqual({ id: "effect-other", type: "sample", enabled: true, settings: { strength: 1 } });
@@ -23,7 +23,7 @@ describe("blockGroupEffects", () => {
       settings: {
         ...DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS,
         color: "#123abc",
-        offsetX: 12
+        distancePx: 12
       }
     });
 
@@ -40,15 +40,32 @@ describe("blockGroupEffects", () => {
       settings: {
         blurPx: -5,
         color: "black",
-        offsetX: 999,
+        angleDeg: 999,
+        distancePx: 999,
         opacity: 2
       }
     })).toEqual({
       ...DEFAULT_TRANSLATION_BLOCK_GROUP_DROP_SHADOW_SETTINGS,
+      angleDeg: 360,
       blurPx: 0,
-      offsetX: 160,
+      distancePx: 80,
       opacity: 1
     });
+  });
+
+  it("reads legacy offset shadow settings as angle and distance", () => {
+    const settings = resolveTranslationBlockGroupDropShadowSettings({
+      id: "effect-1",
+      type: TRANSLATION_BLOCK_GROUP_DROP_SHADOW_EFFECT_TYPE,
+      enabled: true,
+      settings: {
+        offsetX: 3,
+        offsetY: 4
+      }
+    });
+
+    expect(settings.angleDeg).toBeCloseTo(53.1301, 4);
+    expect(settings.distancePx).toBe(5);
   });
 
   it("treats missing legacy effect arrays as disabled", () => {

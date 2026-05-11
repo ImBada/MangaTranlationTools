@@ -8,9 +8,11 @@ import type {
   TextPosition,
   TranslationBlock
 } from "../../../../shared/types";
+import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX } from "../../../../shared/fontPresets";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
+import { FontShadowControls, type FontShadowControlKey, type FontShadowControlValues } from "../font/FontShadowControls";
 import { FontPresetBackupModal, type FontPresetBackupDialogMode } from "./FontPresetBackupModal";
 import type { BlockFontPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
 import {
@@ -83,7 +85,34 @@ const TEXT_POSITION_OPTIONS: { value: TextPosition; label: string }[] = [
   { value: "bottom", label: "하단 중앙" },
   { value: "bottom-right", label: "하단 우측" }
 ];
-const DEFAULT_SHADOW_DISTANCE_PX = 4;
+const FONT_SHADOW_LINK_KEY_BY_CONTROL_KEY = {
+  angleDeg: "shadowAngleDeg",
+  blurPx: "shadowBlurPx",
+  color: "shadowColor",
+  distancePx: "shadowDistancePx",
+  enabled: "shadowEnabled",
+  opacity: "shadowOpacity"
+} satisfies Record<FontShadowControlKey, LinkableFontPresetKey>;
+
+function buildFontShadowSettingPatch(patch: Partial<Omit<FontShadowControlValues, "enabled">>): BlockFontPatch {
+  const fontPatch: BlockFontPatch = {};
+  if (patch.angleDeg !== undefined) {
+    fontPatch.shadowAngleDeg = patch.angleDeg;
+  }
+  if (patch.blurPx !== undefined) {
+    fontPatch.shadowBlurPx = patch.blurPx;
+  }
+  if (patch.color !== undefined) {
+    fontPatch.shadowColor = patch.color;
+  }
+  if (patch.distancePx !== undefined) {
+    fontPatch.shadowDistancePx = patch.distancePx;
+  }
+  if (patch.opacity !== undefined) {
+    fontPatch.shadowOpacity = patch.opacity;
+  }
+  return fontPatch;
+}
 
 function resolvePresetTagTextMetrics(preset: FontPreset): {
   fontSizePx: number;
@@ -220,7 +249,7 @@ export function FontToolSection({
       ? selectedFontWeights
       : [...selectedFontWeights, currentFontWeight].sort((a, b) => a - b)
     : [];
-  const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0);
+  const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0 || (fontControlValues?.shadowBlurPx ?? 0) > 0);
   const screentoneFillActive = fontControlValues?.screentoneFillEnabled ?? false;
 
   React.useEffect(() => {
@@ -510,87 +539,32 @@ export function FontToolSection({
             <span>자동 맞춤</span>
             {renderFontPresetLinkButton("autoFitText", "자동 맞춤")}
           </label>
-          <div className="compact-tool-field font-outline-section font-shadow-section font-effect-section">
-            <div className="font-outline-section-header">
-              <span>그림자</span>
-              <div className="font-shadow-header-actions">
-                <div className="font-outline-mode" aria-label="그림자 사용">
-                  <button
-                    type="button"
-                    className={!shadowActive ? "active" : ""}
-                    disabled={selectedPageEditLocked}
-                    onClick={() => onFontSettingChange({ shadowEnabled: false })}
-                    aria-pressed={!shadowActive}
-                  >
-                    OFF
-                  </button>
-                  <button
-                    type="button"
-                    className={shadowActive ? "active" : ""}
-                    disabled={selectedPageEditLocked}
-                    onClick={() =>
-                      onFontSettingChange({
-                        shadowEnabled: true,
-                        shadowDistancePx: (fontControlValues.shadowDistancePx ?? 0) > 0
-                          ? fontControlValues.shadowDistancePx
-                          : DEFAULT_SHADOW_DISTANCE_PX
-                      })
-                    }
-                    aria-pressed={shadowActive}
-                  >
-                    ON
-                  </button>
-                </div>
-                {renderFontPresetLinkButton("shadowEnabled", "그림자")}
-              </div>
-            </div>
-            {shadowActive ? (
-              <div className="font-shadow-row font-tool-grid">
-                <label className="compact-tool-field font-color-field">
-                  <span>그림자 색</span>
-                  <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.shadowColor ?? "#000000" }}>
-                    <input
-                      type="color"
-                      {...mouseOnlyColorInputProps}
-                      className="outline-color-input"
-                      value={fontControlValues.shadowColor ?? "#000000"}
-                      disabled={selectedPageEditLocked}
-                      onChange={(event) => onFontSettingChange({ shadowColor: event.target.value })}
-                    />
-                  </span>
-                  {renderFontPresetLinkButton("shadowColor", "그림자 색")}
-                </label>
-                <label className="compact-tool-field font-number-field">
-                  <span>그림자 각도</span>
-                  <CompactNumberControl
-                    ariaLabel="그림자 각도"
-                    min={-360}
-                    max={360}
-                    step={1}
-                    value={fontControlValues.shadowAngleDeg ?? 45}
-                    suffix="도"
-                    disabled={selectedPageEditLocked}
-                    onChange={(shadowAngleDeg) => onFontSettingChange({ shadowAngleDeg })}
-                  />
-                  {renderFontPresetLinkButton("shadowAngleDeg", "그림자 각도")}
-                </label>
-                <label className="compact-tool-field font-number-field">
-                  <span>그림자 거리</span>
-                  <CompactNumberControl
-                    ariaLabel="그림자 거리"
-                    min={0}
-                    max={80}
-                    step={0.5}
-                    value={fontControlValues.shadowDistancePx ?? 0}
-                    suffix="px"
-                    disabled={selectedPageEditLocked}
-                    onChange={(shadowDistancePx) => onFontSettingChange({ shadowDistancePx })}
-                  />
-                  {renderFontPresetLinkButton("shadowDistancePx", "그림자 거리")}
-                </label>
-              </div>
-            ) : null}
-          </div>
+          <FontShadowControls
+            disabled={selectedPageEditLocked}
+            enabledAriaLabel="그림자 사용"
+            values={{
+              angleDeg: fontControlValues.shadowAngleDeg ?? 45,
+              blurPx: fontControlValues.shadowBlurPx ?? 0,
+              color: fontControlValues.shadowColor ?? "#000000",
+              distancePx: fontControlValues.shadowDistancePx ?? 0,
+              enabled: shadowActive,
+              opacity: fontControlValues.shadowOpacity ?? 1
+            }}
+            onEnabledChange={(enabled) => {
+              if (!enabled) {
+                onFontSettingChange({ shadowEnabled: false });
+                return;
+              }
+              onFontSettingChange({
+                shadowEnabled: true,
+                shadowDistancePx: (fontControlValues.shadowDistancePx ?? 0) > 0
+                  ? fontControlValues.shadowDistancePx
+                  : DEFAULT_ENABLED_SHADOW_DISTANCE_PX
+              });
+            }}
+            onChange={(patch) => onFontSettingChange(buildFontShadowSettingPatch(patch))}
+            renderLinkButton={(key, label) => renderFontPresetLinkButton(FONT_SHADOW_LINK_KEY_BY_CONTROL_KEY[key], label)}
+          />
           <div className="compact-tool-field font-screentone-field">
             <div className="font-screentone-header">
               <div className="font-screentone-title">

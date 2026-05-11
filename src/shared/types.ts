@@ -121,6 +121,8 @@ export type TranslationBlock = {
   secondaryOutlineWidthLinkedToPreset?: boolean;
   shadowEnabledLinkedToPreset?: boolean;
   shadowColorLinkedToPreset?: boolean;
+  shadowOpacityLinkedToPreset?: boolean;
+  shadowBlurPxLinkedToPreset?: boolean;
   shadowAngleDegLinkedToPreset?: boolean;
   shadowDistancePxLinkedToPreset?: boolean;
   autoFitTextLinkedToPreset?: boolean;
@@ -146,6 +148,8 @@ export type TranslationBlock = {
   secondaryOutlineWidthPx?: number;
   shadowEnabled?: boolean;
   shadowColor?: string;
+  shadowOpacity?: number;
+  shadowBlurPx?: number;
   shadowAngleDeg?: number;
   shadowDistancePx?: number;
   textPaddingPx?: number;
@@ -195,6 +199,8 @@ export type FontPreset = {
   secondaryOutlineWidthPx?: number;
   shadowEnabled?: boolean;
   shadowColor?: string;
+  shadowOpacity?: number;
+  shadowBlurPx?: number;
   shadowAngleDeg?: number;
   shadowDistancePx?: number;
   autoFitText?: boolean;

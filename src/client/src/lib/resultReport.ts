@@ -82,6 +82,8 @@ const LINK_FIELD_LABELS: readonly [keyof TranslationBlock, string][] = [
   ["secondaryOutlineWidthLinkedToPreset", "2차두께"],
   ["shadowEnabledLinkedToPreset", "그림자"],
   ["shadowColorLinkedToPreset", "그림자색"],
+  ["shadowOpacityLinkedToPreset", "그림자불투명도"],
+  ["shadowBlurPxLinkedToPreset", "그림자흐림"],
   ["shadowAngleDegLinkedToPreset", "그림자각도"],
   ["shadowDistancePxLinkedToPreset", "그림자거리"],
   ["autoFitTextLinkedToPreset", "자동맞춤"],
@@ -607,10 +609,10 @@ function formatOutline(color: string | undefined, widthPx: number | undefined): 
 }
 
 function formatShadow(block: TranslationBlock): string {
-  if (!block.shadowEnabled) {
+  if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0 || (block.shadowBlurPx ?? 0) > 0))) {
     return "꺼짐";
   }
-  return `${block.shadowColor ?? "#000000"} / ${formatNumber(block.shadowAngleDeg ?? 0)}deg / ${formatNumber(block.shadowDistancePx ?? 0)}px`;
+  return `${block.shadowColor ?? "#000000"} / ${formatNumber((block.shadowOpacity ?? 1) * 100)}% / 흐림 ${formatNumber(block.shadowBlurPx ?? 0)}px / ${formatNumber(block.shadowAngleDeg ?? 0)}deg / ${formatNumber(block.shadowDistancePx ?? 0)}px`;
 }
 
 function formatScreentone(block: TranslationBlock): string {

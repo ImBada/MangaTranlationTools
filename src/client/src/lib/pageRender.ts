@@ -235,7 +235,11 @@ function drawOverlayBlockGroupDropShadow(
 
   context.save();
   context.filter = settings.blurPx > 0 ? `blur(${settings.blurPx}px)` : "none";
-  context.drawImage(shadowCanvas, settings.offsetX, settings.offsetY);
+  context.drawImage(
+    shadowCanvas,
+    Math.cos((settings.angleDeg * Math.PI) / 180) * settings.distancePx,
+    Math.sin((settings.angleDeg * Math.PI) / 180) * settings.distancePx
+  );
   context.restore();
 }
 
@@ -266,7 +270,8 @@ export function resolveBlockCanvasDirtyRect(
   const outlinePx = Math.max(0, block.outlineWidthPx ?? 0);
   const secondaryOutlinePx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
-  const margin = Math.ceil(Math.max(24, layout.fontSizePx * 0.45 + outlinePx * 3 + secondaryOutlinePx * 4 + shadowDistancePx + 8));
+  const shadowBlurPx = resolveBlockShadowBlurPx(block);
+  const margin = Math.ceil(Math.max(24, layout.fontSizePx * 0.45 + outlinePx * 3 + secondaryOutlinePx * 4 + shadowDistancePx + shadowBlurPx * 3 + 8));
   const expanded = {
     x: layout.rect.left - margin,
     y: layout.rect.top - margin,
@@ -692,12 +697,13 @@ function drawCenteredEllipsisShadow(
   advance: number,
   textRenderStyle: TextRenderStyle
 ): void {
-  if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0))) {
+  if (!hasVisibleBlockTextShadow(block)) {
     return;
   }
 
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
-  if (shadowDistancePx === 0) {
+  const shadowBlurPx = resolveBlockShadowBlurPx(block);
+  if (shadowDistancePx === 0 && shadowBlurPx === 0) {
     return;
   }
 
@@ -710,8 +716,9 @@ function drawCenteredEllipsisShadow(
 
   context.save();
   context.translate(Math.cos(angleRad) * shadowDistancePx, Math.sin(angleRad) * shadowDistancePx);
+  context.filter = shadowBlurPx > 0 ? `blur(${shadowBlurPx}px)` : "none";
   withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
-    drawCenteredEllipsisDots(context, geometry, shadowRadius, block.shadowColor ?? "#000000");
+    drawCenteredEllipsisDots(context, geometry, shadowRadius, resolveBlockShadowColor(block));
   });
   context.restore();
 }
@@ -875,12 +882,13 @@ function drawTextShadow(
   fontSize: number,
   textRenderStyle: TextRenderStyle
 ): void {
-  if (!(block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0))) {
+  if (!hasVisibleBlockTextShadow(block)) {
     return;
   }
 
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
-  if (shadowDistancePx === 0) {
+  const shadowBlurPx = resolveBlockShadowBlurPx(block);
+  if (shadowDistancePx === 0 && shadowBlurPx === 0) {
     return;
   }
 
@@ -889,10 +897,11 @@ function drawTextShadow(
   const dy = Math.sin(angleRad) * shadowDistancePx;
   const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
   const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
-  const shadowColor = block.shadowColor ?? "#000000";
+  const shadowColor = resolveBlockShadowColor(block);
 
   context.save();
   context.translate(dx, dy);
+  context.filter = shadowBlurPx > 0 ? `blur(${shadowBlurPx}px)` : "none";
 
   if (secondaryOutlineWidthPx > 0) {
     context.save();
@@ -914,6 +923,25 @@ function drawTextShadow(
   strokeSyntheticBoldText(context, block, text, x, y, fontSize, shadowColor, textRenderStyle);
   drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
   context.restore();
+}
+
+function hasVisibleBlockTextShadow(block: Pick<TranslationBlock, "shadowBlurPx" | "shadowDistancePx" | "shadowEnabled" | "shadowOpacity">): boolean {
+  const shadowEnabled = block.shadowEnabled ?? ((block.shadowDistancePx ?? 0) > 0 || (block.shadowBlurPx ?? 0) > 0);
+  return shadowEnabled && resolveBlockShadowOpacity(block) > 0;
+}
+
+function resolveBlockShadowColor(block: Pick<TranslationBlock, "shadowColor" | "shadowOpacity">): string {
+  return hexToRgba(block.shadowColor ?? "#000000", resolveBlockShadowOpacity(block));
+}
+
+function resolveBlockShadowOpacity(block: Pick<TranslationBlock, "shadowOpacity">): number {
+  const opacity = block.shadowOpacity ?? 1;
+  return Number.isFinite(opacity) ? Math.max(0, Math.min(1, opacity)) : 1;
+}
+
+function resolveBlockShadowBlurPx(block: Pick<TranslationBlock, "shadowBlurPx">): number {
+  const blurPx = block.shadowBlurPx ?? 0;
+  return Number.isFinite(blurPx) ? Math.max(0, Math.min(80, blurPx)) : 0;
 }
 
 function strokeSyntheticBoldText(
