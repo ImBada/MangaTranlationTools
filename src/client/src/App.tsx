@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { TranslationBlock } from "../../shared/types";
+import type { MangaPage, TranslationBlock } from "../../shared/types";
 import { AppContextBarSlot } from "./components/AppContextBarSlot";
 import { AppFileInputs } from "./components/AppFileInputs";
 import { AppLayerToolPanel } from "./components/AppLayerToolPanel";
@@ -31,6 +31,7 @@ import {
   createTranslationBlockGroupId,
   resolveExpandedTranslationBlockSelection,
   resolveTranslationBlockGroupsAfterGrouping,
+  resolveTranslationBlockGroupsAfterUngrouping,
   translationBlockGroupsEqual
 } from "./lib/blockGroups";
 import { resolveSelectedTranslationBlocks, resolveShiftSelectedTranslationBlockIds } from "./lib/blockSelection";
@@ -563,6 +564,26 @@ export default function App(): React.JSX.Element {
     setSelectedBlockId: setSelectedBlockOrGroupId,
     updateCurrentChapter
   });
+  const updateSelectedPageBlockGroups = useCallback((blockGroups: MangaPage["blockGroups"], updatedAt: string) => {
+    if (!selectedPage) {
+      return;
+    }
+
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) => {
+        if (page.id !== selectedPage.id) {
+          return page;
+        }
+
+        return {
+          ...page,
+          updatedAt,
+          blockGroups
+        };
+      })
+    }));
+  }, [selectedPage, updateCurrentChapter]);
   const groupSelectedBlocks = useCallback(() => {
     if (!selectedPage || selectedPageEditLocked || selectedBlockIds.length < 2) {
       return;
@@ -581,20 +602,7 @@ export default function App(): React.JSX.Element {
     }
 
     recordTranslationUndoSnapshot("텍스트 블록 그룹 생성");
-    updateCurrentChapter(selectedPage.id, (chapter) => ({
-      ...chapter,
-      pages: chapter.pages.map((page) => {
-        if (page.id !== selectedPage.id) {
-          return page;
-        }
-
-        return {
-          ...page,
-          updatedAt,
-          blockGroups: nextBlockGroups
-        };
-      })
-    }));
+    updateSelectedPageBlockGroups(nextBlockGroups, updatedAt);
     pushStatus(`${groupedBlockCount}개 텍스트 블록을 그룹으로 묶었습니다.`);
   }, [
     pushStatus,
@@ -602,7 +610,31 @@ export default function App(): React.JSX.Element {
     selectedBlockIds,
     selectedPage,
     selectedPageEditLocked,
-    updateCurrentChapter
+    updateSelectedPageBlockGroups
+  ]);
+  const ungroupSelectedBlocks = useCallback(() => {
+    if (!selectedPage || selectedPageEditLocked || selectedBlockIds.length < 2) {
+      return;
+    }
+
+    const nextBlockGroups = resolveTranslationBlockGroupsAfterUngrouping(selectedPage, selectedBlockIds);
+    if (nextBlockGroups === null) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    const selectedBlockIdSet = new Set(selectedBlockIds);
+    const ungroupedBlockCount = selectedPage.blocks.filter((block) => selectedBlockIdSet.has(block.id)).length;
+    recordTranslationUndoSnapshot("텍스트 블록 그룹 해제");
+    updateSelectedPageBlockGroups(nextBlockGroups, updatedAt);
+    pushStatus(`${ungroupedBlockCount}개 텍스트 블록의 그룹을 해제했습니다.`);
+  }, [
+    pushStatus,
+    recordTranslationUndoSnapshot,
+    selectedBlockIds,
+    selectedPage,
+    selectedPageEditLocked,
+    updateSelectedPageBlockGroups
   ]);
   const updateInlineBlockText = useCallback((block: TranslationBlock, translatedText: string) => {
     if (!selectedPage || selectedPageEditLocked) {
@@ -997,6 +1029,7 @@ export default function App(): React.JSX.Element {
           onSelectBlock={setSelectedBlockOrGroupId}
           onBlockSelectionChange={setSelectedBlockGroupIds}
           onGroupSelectedBlocks={groupSelectedBlocks}
+          onUngroupSelectedBlocks={ungroupSelectedBlocks}
           onSelectImportFiles={selectImportFiles}
           onSelectInpaintResultTool={selectInpaintResultEditTool}
           onSelectPointerTool={selectPointerTool}

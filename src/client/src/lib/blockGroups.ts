@@ -114,6 +114,24 @@ export function resolveTranslationBlockGroupsAfterBlockRemoval(
   return nextGroups.length > 0 ? nextGroups : undefined;
 }
 
+export function resolveTranslationBlockGroupsAfterUngrouping(
+  page: Pick<MangaPage, "blocks" | "blockGroups">,
+  selectedBlockIds: readonly string[]
+): TranslationBlockGroup[] | undefined | null {
+  if (selectedBlockIds.length < 2) {
+    return null;
+  }
+
+  const groups = resolveValidTranslationBlockGroups(page);
+  const selectedGroup = resolveTranslationBlockGroupForSelection(groups, selectedBlockIds);
+  if (!selectedGroup) {
+    return null;
+  }
+
+  const nextGroups = groups.filter((group) => group.id !== selectedGroup.id);
+  return nextGroups.length > 0 ? nextGroups : undefined;
+}
+
 export function resolveTranslationBlockGroupBlockIds(
   page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
   blockId: string
@@ -193,11 +211,18 @@ export function isExistingTranslationBlockGroupSelection(
   page: Pick<MangaPage, "blocks" | "blockGroups">,
   selectedBlockIds: readonly string[]
 ): boolean {
+  return resolveTranslationBlockGroupForSelection(resolveValidTranslationBlockGroups(page), selectedBlockIds) !== null;
+}
+
+function resolveTranslationBlockGroupForSelection(
+  groups: readonly TranslationBlockGroup[],
+  selectedBlockIds: readonly string[]
+): TranslationBlockGroup | null {
   if (selectedBlockIds.length < 2) {
-    return false;
+    return null;
   }
 
-  return resolveValidTranslationBlockGroups(page).some((group) => blockIdSetsMatch(group.blockIds, selectedBlockIds));
+  return groups.find((group) => blockIdSetsMatch(group.blockIds, selectedBlockIds)) ?? null;
 }
 
 export function translationBlockGroupsEqual(

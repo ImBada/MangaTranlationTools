@@ -6,7 +6,8 @@ import {
   resolveTranslationBlockGroupBlockIds,
   resolveTranslationBlockListItems,
   resolveTranslationBlockGroupsAfterBlockRemoval,
-  resolveTranslationBlockGroupsAfterGrouping
+  resolveTranslationBlockGroupsAfterGrouping,
+  resolveTranslationBlockGroupsAfterUngrouping
 } from "./blockGroups";
 
 function block(id: string): MangaPage["blocks"][number] {
@@ -95,6 +96,39 @@ describe("blockGroups", () => {
         updatedAt: now
       }
     ]);
+  });
+
+  it("removes the selected existing group when ungrouping", () => {
+    const page = {
+      blocks: [block("b1"), block("b2"), block("b3"), block("b4")],
+      blockGroups: [
+        {
+          id: "remove",
+          blockIds: ["b3", "b1"],
+          effects: [],
+          createdAt: "2026-05-10T10:00:00.000Z",
+          updatedAt: "2026-05-10T10:00:00.000Z"
+        },
+        {
+          id: "keep",
+          blockIds: ["b2", "b4"],
+          effects: [],
+          createdAt: "2026-05-10T10:00:00.000Z",
+          updatedAt: "2026-05-10T10:00:00.000Z"
+        }
+      ]
+    };
+
+    expect(resolveTranslationBlockGroupsAfterUngrouping(page, ["b1", "b3"])).toEqual([
+      {
+        id: "keep",
+        blockIds: ["b2", "b4"],
+        effects: [],
+        createdAt: "2026-05-10T10:00:00.000Z",
+        updatedAt: "2026-05-10T10:00:00.000Z"
+      }
+    ]);
+    expect(resolveTranslationBlockGroupsAfterUngrouping(page, ["b1", "b2"])).toBeNull();
   });
 
   it("expands selection and list items by valid groups", () => {

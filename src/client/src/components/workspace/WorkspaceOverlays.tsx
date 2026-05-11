@@ -67,12 +67,13 @@ type StageToolOverlayProps = {
 
 type StageTextBlockListProps = {
   collapsed: boolean;
+  groupAction: "group" | "ungroup" | null;
   groupDisabled: boolean;
-  groupActionVisible: boolean;
   onBlockSelectionChange: (blockIds: string[]) => void;
   onGroupSelectedBlocks: () => void;
   onSelectBlock: (blockId: string) => void;
   onToggleCollapsed: () => void;
+  onUngroupSelectedBlocks: () => void;
   page: MangaPage;
   selectedBlockId: string | null;
   selectedBlockIds: string[];
@@ -143,12 +144,13 @@ export function NotificationDock({
 
 export function StageTextBlockList({
   collapsed,
+  groupAction,
   groupDisabled,
-  groupActionVisible,
   onBlockSelectionChange,
   onGroupSelectedBlocks,
   onSelectBlock,
   onToggleCollapsed,
+  onUngroupSelectedBlocks,
   page,
   selectedBlockId,
   selectedBlockIds
@@ -229,23 +231,50 @@ export function StageTextBlockList({
       </button>
     );
   }, [selectBlock, selectedBlockId, selectedBlockIdSet]);
+  const groupActionConfig = groupAction === "ungroup"
+    ? {
+        ariaLabel: "선택한 텍스트 블록 그룹 해제",
+        disabledTitle: "잠긴 페이지에서는 그룹을 해제할 수 없음",
+        icon: "ungroup" as const,
+        onClick: onUngroupSelectedBlocks,
+        title: "선택한 텍스트 블록 그룹 해제"
+      }
+    : groupAction === "group"
+      ? {
+          ariaLabel: "선택한 텍스트 블록 그룹화",
+          disabledTitle: "잠긴 페이지에서는 그룹화할 수 없음",
+          icon: "group" as const,
+          onClick: onGroupSelectedBlocks,
+          title: "선택한 텍스트 블록 그룹화"
+        }
+      : null;
 
   return (
     <>
-      {groupActionVisible ? (
+      {groupActionConfig ? (
         <button
           type="button"
           className="stage-text-block-group-button"
-          aria-label="선택한 텍스트 블록 그룹화"
-          title={groupDisabled ? "잠긴 페이지에서는 그룹화할 수 없음" : "선택한 텍스트 블록 그룹화"}
+          aria-label={groupActionConfig.ariaLabel}
+          title={groupDisabled ? groupActionConfig.disabledTitle : groupActionConfig.title}
           disabled={groupDisabled}
-          onClick={onGroupSelectedBlocks}
+          onClick={groupActionConfig.onClick}
         >
           <svg className="stage-text-block-group-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
             <rect x="4" y="5" width="7" height="7" rx="1.5" />
             <rect x="13" y="12" width="7" height="7" rx="1.5" />
-            <path d="M11 8.5h2.5a3 3 0 0 1 3 3v.5" />
-            <path d="M13 15.5h-2.5a3 3 0 0 1-3-3V12" />
+            {groupActionConfig.icon === "group" ? (
+              <>
+                <path d="M11 8.5h2.5a3 3 0 0 1 3 3v.5" />
+                <path d="M13 15.5h-2.5a3 3 0 0 1-3-3V12" />
+              </>
+            ) : (
+              <>
+                <path d="M12 8.5h1.5a3 3 0 0 1 2.2.96" />
+                <path d="M12 15.5h-1.5a3 3 0 0 1-2.2-.96" />
+                <path d="M6 18l12-12" />
+              </>
+            )}
           </svg>
         </button>
       ) : null}

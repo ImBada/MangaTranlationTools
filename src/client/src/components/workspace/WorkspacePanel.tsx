@@ -105,6 +105,7 @@ type WorkspacePanelProps = {
   onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   onSelectBlock: React.Dispatch<React.SetStateAction<string | null>>;
   onGroupSelectedBlocks: () => void;
+  onUngroupSelectedBlocks: () => void;
   onSelectImportFiles: (mode: ImportSourceKind) => void;
   onSelectInpaintResultTool: (tool: Exclude<InpaintResultTool, "select">) => void;
   onSelectPointerTool: () => void;
@@ -189,6 +190,7 @@ export function WorkspacePanel({
   onRetryRecoverableFailure,
   onSelectBlock,
   onGroupSelectedBlocks,
+  onUngroupSelectedBlocks,
   onSelectImportFiles,
   onSelectInpaintResultTool,
   onSelectPointerTool,
@@ -251,11 +253,11 @@ export function WorkspacePanel({
   ]);
   const selectedBlock = selectedPage?.blocks.find((block) => block.id === selectedBlockId) ?? null;
   const multiBlockSelectionActive = selectedBlockIds.length > 1;
-  const groupActionVisible = Boolean(
-    selectedPage &&
-    multiBlockSelectionActive &&
-    !isExistingTranslationBlockGroupSelection(selectedPage, selectedBlockIds)
-  );
+  const textBlockGroupAction = selectedPage && multiBlockSelectionActive
+    ? isExistingTranslationBlockGroupSelection(selectedPage, selectedBlockIds)
+      ? "ungroup"
+      : "group"
+    : null;
   const blockInlineEditShortcutVisible =
     activeLayer === "overlay" &&
     !temporaryPanActive &&
@@ -266,7 +268,7 @@ export function WorkspacePanel({
   return (
     <section
       ref={workspacePanelRef}
-      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-block-list${textBlockListCollapsed ? " has-stage-block-list-collapsed" : ""}${groupActionVisible ? " has-stage-block-list-actions" : ""} has-layer-glow layer-${activeLayer}` : ""}`}
+      className={`workspace relative grid place-items-center outline-none${selectedPage ? ` has-stage-block-list${textBlockListCollapsed ? " has-stage-block-list-collapsed" : ""}${textBlockGroupAction ? " has-stage-block-list-actions" : ""} has-layer-glow layer-${activeLayer}` : ""}`}
       tabIndex={0}
       aria-label="읽기 영역"
       onMouseDown={() => workspacePanelRef.current?.focus()}
@@ -323,7 +325,7 @@ export function WorkspacePanel({
       {selectedPage ? (
         <StageTextBlockList
           collapsed={textBlockListCollapsed}
-          groupActionVisible={groupActionVisible}
+          groupAction={textBlockGroupAction}
           groupDisabled={selectedPageEditLocked}
           page={selectedPage}
           selectedBlockId={selectedBlockId}
@@ -331,6 +333,7 @@ export function WorkspacePanel({
           onSelectBlock={onSelectBlock}
           onBlockSelectionChange={onBlockSelectionChange}
           onGroupSelectedBlocks={onGroupSelectedBlocks}
+          onUngroupSelectedBlocks={onUngroupSelectedBlocks}
           onToggleCollapsed={() => setTextBlockListCollapsed((current) => !current)}
         />
       ) : null}
