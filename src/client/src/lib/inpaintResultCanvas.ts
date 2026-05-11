@@ -47,11 +47,17 @@ export function brushMaskAlpha(x: number, y: number, center: DrawPoint, radius: 
   if (distance >= radius) {
     return 0;
   }
-  const hardRadius = radius * hardness;
+  const normalizedHardness = clamp01(hardness);
+  if (normalizedHardness >= 1) {
+    return 1;
+  }
+  const hardRadius = radius * normalizedHardness;
   if (distance <= hardRadius) {
     return 1;
   }
-  return 1 - (distance - hardRadius) / Math.max(1, radius - hardRadius);
+  const featherProgress = (distance - hardRadius) / Math.max(1, radius - hardRadius);
+  const softness = 1 - normalizedHardness;
+  return Math.pow(1 - featherProgress, 1 + softness * 2);
 }
 
 export function sampleBlur(source: Uint8ClampedArray, width: number, height: number, x: number, y: number): [number, number, number] {
@@ -86,15 +92,6 @@ export function sampleSharpen(source: Uint8ClampedArray, width: number, height: 
   ];
 }
 
-export function createBrushGradient(context: CanvasRenderingContext2D, radius: number, hardness: number): CanvasGradient {
-  const gradient = context.createRadialGradient(radius, radius, 0, radius, radius, radius);
-  const solidStop = Math.min(1, clamp01(hardness));
-  gradient.addColorStop(0, "rgba(0, 0, 0, 1)");
-  gradient.addColorStop(solidStop, "rgba(0, 0, 0, 1)");
-  gradient.addColorStop(1, "rgba(0, 0, 0, 0)");
-  return gradient;
-}
-
 export function parseHexColor(value: string): RgbaColor {
   const normalized = /^#[0-9a-f]{6}$/iu.test(value) ? value.slice(1) : "ffffff";
   return {
@@ -103,10 +100,6 @@ export function parseHexColor(value: string): RgbaColor {
     b: Number.parseInt(normalized.slice(4, 6), 16),
     a: 1
   };
-}
-
-export function rgbaToCss(color: RgbaColor, alpha: number): string {
-  return `rgba(${color.r}, ${color.g}, ${color.b}, ${clamp01(color.a * alpha)})`;
 }
 
 export function blendChannel(source: number, target: number, amount: number): number {

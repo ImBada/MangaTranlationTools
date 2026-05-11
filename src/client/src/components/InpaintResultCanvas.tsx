@@ -7,14 +7,14 @@ import {
   blendChannel,
   brushMaskAlpha,
   clamp01,
-  createBrushGradient,
+  clampByte,
   parseHexColor,
   resolveBrushBounds,
   resolveSelectionRect,
-  rgbaToCss,
   sampleBlur,
   sampleSharpen,
-  type DrawPoint
+  type DrawPoint,
+  type RgbaColor
 } from "../lib/inpaintResultCanvas";
 import {
   createInpaintDebugId,
@@ -85,8 +85,32 @@ type PendingResultCanvasCommit = {
   strokeTool: InpaintResultPaintTool | null;
 };
 
+type BrushStampCompositeMode = "paint" | "erase";
+
 function isInpaintResultPaintTool(tool: InpaintResultTool): tool is InpaintResultPaintTool {
   return tool !== "select" && tool !== "colorPicker";
+}
+
+function compositeBrushPixel(data: Uint8ClampedArray, offset: number, color: RgbaColor, maskAlpha: number): void {
+  const sourceAlpha = clamp01(color.a * maskAlpha);
+  if (sourceAlpha <= 0) {
+    return;
+  }
+
+  const targetAlpha = data[offset + 3] / 255;
+  const outputAlpha = sourceAlpha + targetAlpha * (1 - sourceAlpha);
+  if (outputAlpha <= 0) {
+    data[offset] = 0;
+    data[offset + 1] = 0;
+    data[offset + 2] = 0;
+    data[offset + 3] = 0;
+    return;
+  }
+
+  data[offset] = clampByte((color.r * sourceAlpha + data[offset] * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
+  data[offset + 1] = clampByte((color.g * sourceAlpha + data[offset + 1] * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
+  data[offset + 2] = clampByte((color.b * sourceAlpha + data[offset + 2] * targetAlpha * (1 - sourceAlpha)) / outputAlpha);
+  data[offset + 3] = clampByte(outputAlpha * 255);
 }
 
 export function InpaintResultCanvas({
@@ -193,14 +217,15 @@ export function InpaintResultCanvas({
       return;
     }
 
-    const color = parseHexColor(brushColor);
-    const centerColor = strokeTool === "eraser" ? "rgba(0, 0, 0, 1)" : rgbaToCss(color, 1);
-    const edgeColor = strokeTool === "eraser" ? "rgba(0, 0, 0, 0)" : rgbaToCss(color, edgeBrushAlpha());
-    const { gradient, radius } = createStampGradient(context, point, centerColor, edgeColor);
-
-    fillBrushStamp(context, point, radius, gradient, strokeTool === "eraser" ? "destination-out" : "source-over");
-    changedRef.current = true;
-    strokeForcesVisiblePixelsRef.current = strokeForcesVisiblePixelsRef.current || strokeTool !== "eraser";
+    const stamped = stampBrushPixels(
+      context,
+      canvas,
+      point,
+      strokeTool === "eraser" ? { r: 0, g: 0, b: 0, a: 1 } : parseHexColor(brushColor),
+      strokeTool === "eraser" ? "erase" : "paint"
+    );
+    changedRef.current = changedRef.current || stamped;
+    strokeForcesVisiblePixelsRef.current = strokeForcesVisiblePixelsRef.current || (stamped && strokeTool !== "eraser");
   };
 
   const stampSmartMaskPatch = (point: DrawPoint) => {
@@ -210,47 +235,65 @@ export function InpaintResultCanvas({
       return;
     }
 
-    const { gradient, radius } = createStampGradient(
+    stampBrushPixels(
       context,
+      canvas,
       point,
-      "rgba(255, 255, 255, 1)",
-      `rgba(255, 255, 255, ${edgeBrushAlpha()})`
+      { r: 255, g: 255, b: 255, a: 1 },
+      "paint"
     );
-    fillBrushStamp(context, point, radius, gradient, "source-over");
   };
 
-  const createStampGradient = (
+  const stampBrushPixels = (
     context: CanvasRenderingContext2D,
+    canvas: HTMLCanvasElement,
     point: DrawPoint,
-    centerColor: string,
-    edgeColor: string
-  ): { gradient: CanvasGradient; radius: number } => {
+    color: RgbaColor,
+    compositeMode: BrushStampCompositeMode
+  ): boolean => {
     const radius = Math.max(0.5, brushSize / 2);
     const hardness = clamp01(brushHardness);
-    const gradient = context.createRadialGradient(point.x, point.y, 0, point.x, point.y, radius);
-    gradient.addColorStop(0, centerColor);
-    gradient.addColorStop(Math.min(1, hardness), centerColor);
-    gradient.addColorStop(1, edgeColor);
-    return { gradient, radius };
+    const bounds = resolveBrushBounds(point, radius, canvas.width, canvas.height);
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return false;
+    }
+
+    const imageData = context.getImageData(bounds.x, bounds.y, bounds.width, bounds.height);
+    let changed = false;
+    for (let y = 0; y < bounds.height; y += 1) {
+      for (let x = 0; x < bounds.width; x += 1) {
+        const maskAlpha = brushMaskAlpha(bounds.x + x + 0.5, bounds.y + y + 0.5, point, radius, hardness);
+        if (maskAlpha <= 0) {
+          continue;
+        }
+
+        const offset = (y * bounds.width + x) * 4;
+        if (compositeMode === "erase") {
+          imageData.data[offset + 3] = clampByte(imageData.data[offset + 3] * (1 - maskAlpha));
+        } else {
+          compositeBrushPixel(imageData.data, offset, color, maskAlpha);
+        }
+        changed = true;
+      }
+    }
+
+    if (changed) {
+      context.putImageData(imageData, bounds.x, bounds.y);
+    }
+    return changed;
   };
 
-  const fillBrushStamp = (
-    context: CanvasRenderingContext2D,
-    point: DrawPoint,
-    radius: number,
-    fillStyle: CanvasGradient,
-    compositeOperation: GlobalCompositeOperation
-  ) => {
-    context.save();
-    context.globalCompositeOperation = compositeOperation;
-    context.fillStyle = fillStyle;
-    context.beginPath();
-    context.arc(point.x, point.y, radius, 0, Math.PI * 2);
-    context.fill();
-    context.restore();
+  const maskBrushPatchAlpha = (imageData: ImageData, radius: number): void => {
+    const hardness = clamp01(brushHardness);
+    const center = { x: radius, y: radius };
+    for (let y = 0; y < imageData.height; y += 1) {
+      for (let x = 0; x < imageData.width; x += 1) {
+        const offset = (y * imageData.width + x) * 4;
+        const maskAlpha = brushMaskAlpha(x + 0.5, y + 0.5, center, radius, hardness);
+        imageData.data[offset + 3] = clampByte(imageData.data[offset + 3] * maskAlpha);
+      }
+    }
   };
-
-  const edgeBrushAlpha = (): number => (clamp01(brushHardness) >= 1 ? 1 : 0);
 
   const stampFilter = (point: DrawPoint, filterTool: "blur" | "sharpen") => {
     const canvas = canvasRef.current;
@@ -272,8 +315,8 @@ export function InpaintResultCanvas({
 
     for (let y = 0; y < bounds.height; y += 1) {
       for (let x = 0; x < bounds.width; x += 1) {
-        const absoluteX = bounds.x + x;
-        const absoluteY = bounds.y + y;
+        const absoluteX = bounds.x + x + 0.5;
+        const absoluteY = bounds.y + y + 0.5;
         const maskAlpha = brushMaskAlpha(absoluteX, absoluteY, point, radius, hardness) * strength;
         if (maskAlpha <= 0) {
           continue;
@@ -310,10 +353,10 @@ export function InpaintResultCanvas({
     if (!patchContext) {
       return;
     }
-    patchContext.putImageData(patch, 0, 0);
-    patchContext.globalCompositeOperation = "destination-in";
-    patchContext.fillStyle = createBrushGradient(patchContext, radius, brushHardness);
-    patchContext.fillRect(0, 0, patch.width, patch.height);
+    const maskedPatch = patchContext.createImageData(patch.width, patch.height);
+    maskedPatch.data.set(patch.data);
+    maskBrushPatchAlpha(maskedPatch, radius);
+    patchContext.putImageData(maskedPatch, 0, 0);
 
     context.save();
     context.globalAlpha = clamp01(toolStrength);

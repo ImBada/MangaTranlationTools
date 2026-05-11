@@ -23,7 +23,6 @@ import {
   parseHexColor,
   resolveBrushBounds,
   resolveSelectionRect as resolveResultSelectionRect,
-  rgbaToCss,
   sampleBlur,
   sampleSharpen
 } from "../src/client/src/lib/inpaintResultCanvas";
@@ -284,8 +283,11 @@ describe("inpaint result canvas helpers", () => {
 
     expect(brushMaskAlpha(50, 50, center, 20, 0.5)).toBe(1);
     expect(brushMaskAlpha(60, 50, center, 20, 0.5)).toBe(1);
-    expect(brushMaskAlpha(65, 50, center, 20, 0.5)).toBeCloseTo(0.5);
+    expect(brushMaskAlpha(65, 50, center, 20, 0.5)).toBeCloseTo(0.25);
     expect(brushMaskAlpha(70, 50, center, 20, 0.5)).toBe(0);
+    expect(brushMaskAlpha(60, 50, center, 20, 0)).toBeCloseTo(0.125);
+    expect(brushMaskAlpha(65, 50, center, 20, 0)).toBeCloseTo(0.015625);
+    expect(brushMaskAlpha(69, 50, center, 20, 1)).toBe(1);
   });
 
   it("samples blur with edge clamping", () => {
@@ -313,7 +315,6 @@ describe("inpaint result canvas helpers", () => {
   it("normalizes color and channel values", () => {
     expect(parseHexColor("#0a1B2c")).toEqual({ r: 10, g: 27, b: 44, a: 1 });
     expect(parseHexColor("bad")).toEqual({ r: 255, g: 255, b: 255, a: 1 });
-    expect(rgbaToCss({ r: 10, g: 20, b: 30, a: 0.5 }, 0.4)).toBe("rgba(10, 20, 30, 0.2)");
     expect(blendChannel(10, 20, 0.25)).toBe(13);
     expect(clampByte(300.2)).toBe(255);
     expect(clampByte(-4)).toBe(0);
