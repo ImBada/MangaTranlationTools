@@ -8,7 +8,9 @@ import {
   type TranslationBlockGroupDropShadowSettings,
   updateTranslationBlockGroupDropShadowSettings
 } from "../../lib/blockGroupEffects";
+import { StageTextBlockDragHandle } from "../StageTextBlockDragHandle";
 import { BLOCK_TYPE_LABELS, resolveBlockPreviewText } from "../../lib/blockDisplay";
+import { reorderByTarget } from "../../lib/editorUtils";
 
 const GROUP_BLOCK_DRAG_DATA_TYPE = "application/x-manga-translation-group-block-id";
 
@@ -101,7 +103,7 @@ export function TranslationBlockGroupToolSection({
     }
 
     event.preventDefault();
-    const nextBlockIds = reorderBlockIds(groupBlockIds, sourceBlockId, targetBlockId, dropPosition);
+    const nextBlockIds = reorderByTarget(groupBlockIds, sourceBlockId, targetBlockId, dropPosition);
     clearDragState();
     suppressClickAfterDragRef.current = true;
     window.setTimeout(() => {
@@ -147,16 +149,7 @@ export function TranslationBlockGroupToolSection({
                 aria-label={`그룹 순서 ${orderIndex + 1}, 블록 ${blockIndex + 1} 개별 설정`}
                 title={reorderEnabled ? "드래그해서 순서 변경, 클릭해서 개별 설정" : "개별 설정"}
               >
-                <span className="stage-text-block-list-drag-handle" aria-hidden="true">
-                  <svg viewBox="0 0 12 18" focusable="false">
-                    <circle cx="4" cy="4" r="1.2" />
-                    <circle cx="8" cy="4" r="1.2" />
-                    <circle cx="4" cy="9" r="1.2" />
-                    <circle cx="8" cy="9" r="1.2" />
-                    <circle cx="4" cy="14" r="1.2" />
-                    <circle cx="8" cy="14" r="1.2" />
-                  </svg>
-                </span>
+                <StageTextBlockDragHandle />
                 <span className="stage-text-block-list-index">{blockIndex + 1}</span>
                 <span className="stage-text-block-list-copy">
                   <span className="stage-text-block-list-meta">
@@ -203,20 +196,4 @@ function resolveGroupBlocks(
     const item = blocksById.get(blockId);
     return item ? [item] : [];
   });
-}
-
-function reorderBlockIds(
-  blockIds: readonly string[],
-  sourceBlockId: string,
-  targetBlockId: string,
-  position: "before" | "after"
-): string[] {
-  const nextBlockIds = blockIds.filter((blockId) => blockId !== sourceBlockId);
-  const targetIndex = nextBlockIds.indexOf(targetBlockId);
-  if (targetIndex < 0) {
-    return [...blockIds];
-  }
-
-  nextBlockIds.splice(position === "after" ? targetIndex + 1 : targetIndex, 0, sourceBlockId);
-  return nextBlockIds;
 }

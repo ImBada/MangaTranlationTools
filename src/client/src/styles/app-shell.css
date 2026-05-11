@@ -1119,6 +1119,52 @@
   text-align: left;
 }
 
+.stage-text-block-list .stage-text-block-list-row.reorderable {
+  grid-template-columns: 16px 28px minmax(0, 1fr);
+  cursor: grab;
+}
+
+.stage-text-block-list .stage-text-block-list-row.reorderable:active,
+.stage-text-block-list-group-header.reorderable:active {
+  cursor: grabbing;
+}
+
+.stage-text-block-list .stage-text-block-list-row.dragging,
+.stage-text-block-list-group-header.dragging {
+  opacity: 0.48;
+}
+
+.stage-text-block-list .stage-text-block-list-row.drag-over-before,
+.stage-text-block-list .stage-text-block-list-row.drag-over-after,
+.stage-text-block-list-group-header.drag-over-before,
+.stage-text-block-list-group-header.drag-over-after {
+  position: relative;
+}
+
+.stage-text-block-list .stage-text-block-list-row.drag-over-before::before,
+.stage-text-block-list .stage-text-block-list-row.drag-over-after::after,
+.stage-text-block-list-group-header.drag-over-before::before,
+.stage-text-block-list-group-header.drag-over-after::after {
+  content: "";
+  position: absolute;
+  right: 8px;
+  left: 8px;
+  height: 2px;
+  border-radius: 999px;
+  background: #77b7ff;
+  box-shadow: 0 0 0 1px rgba(119, 183, 255, 0.22);
+}
+
+.stage-text-block-list .stage-text-block-list-row.drag-over-before::before,
+.stage-text-block-list-group-header.drag-over-before::before {
+  top: -3px;
+}
+
+.stage-text-block-list .stage-text-block-list-row.drag-over-after::after,
+.stage-text-block-list-group-header.drag-over-after::after {
+  bottom: -3px;
+}
+
 .stage-text-block-list-row:hover:not(:disabled) {
   border-color: rgba(106, 169, 255, 0.65);
   background: rgba(77, 144, 230, 0.14);
@@ -1154,6 +1200,17 @@
   border-radius: 6px;
   background: rgba(15, 23, 42, 0.22);
   color: #dbeafe;
+}
+
+.stage-text-block-list-group-header.reorderable {
+  cursor: grab;
+}
+
+.stage-text-block-list-group-header-copy {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
 }
 
 .stage-text-block-list-group-header:hover:not(:disabled) {
@@ -1218,6 +1275,21 @@
   font-weight: 850;
   line-height: 1;
   font-variant-numeric: tabular-nums;
+}
+
+.stage-text-block-list-drag-handle {
+  display: grid;
+  width: 16px;
+  height: 24px;
+  place-items: center;
+  color: #8fa4bd;
+}
+
+.stage-text-block-list-drag-handle svg {
+  display: block;
+  width: 12px;
+  height: 18px;
+  fill: currentColor;
 }
 
 .stage-text-block-list-copy {

@@ -32,6 +32,7 @@ import {
   resolveExpandedTranslationBlockSelection,
   resolveSelectedTranslationBlockGroup,
   resolveTranslationBlocksAfterGroupReordering,
+  resolveTranslationBlocksAfterReordering,
   resolveTranslationBlockGroupsAfterGrouping,
   resolveTranslationBlockGroupsAfterReordering,
   resolveTranslationBlockGroupsAfterUngrouping,
@@ -672,18 +673,18 @@ export default function App(): React.JSX.Element {
     selectedPageEditLocked,
     updateSelectedPageBlockGroups
   ]);
-  const updateSelectedBlockGroupOrder = useCallback((blockIds: string[]) => {
-    if (!selectedPage || !selectedBlockGroup || selectedPageEditLocked) {
+  const updateBlockGroupOrder = useCallback((groupId: string, blockIds: string[]) => {
+    if (!selectedPage || selectedPageEditLocked) {
       return;
     }
 
     const updatedAt = new Date().toISOString();
-    const nextBlockGroups = resolveTranslationBlockGroupsAfterReordering(selectedPage, selectedBlockGroup.id, blockIds, updatedAt);
+    const nextBlockGroups = resolveTranslationBlockGroupsAfterReordering(selectedPage, groupId, blockIds, updatedAt);
     if (!nextBlockGroups || translationBlockGroupsEqual(selectedPage.blockGroups, nextBlockGroups)) {
       return;
     }
 
-    const reorderedBlockIds = nextBlockGroups.find((group) => group.id === selectedBlockGroup.id)?.blockIds ?? blockIds;
+    const reorderedBlockIds = nextBlockGroups.find((group) => group.id === groupId)?.blockIds ?? blockIds;
     recordTranslationUndoSnapshot("텍스트 블록 그룹 순서 변경");
     updateCurrentChapter(selectedPage.id, (chapter) => ({
       ...chapter,
@@ -704,7 +705,44 @@ export default function App(): React.JSX.Element {
   }, [
     pushStatus,
     recordTranslationUndoSnapshot,
-    selectedBlockGroup,
+    selectedPage,
+    selectedPageEditLocked,
+    updateCurrentChapter
+  ]);
+  const updateSelectedBlockGroupOrder = useCallback((blockIds: string[]) => {
+    if (!selectedBlockGroup) {
+      return;
+    }
+    updateBlockGroupOrder(selectedBlockGroup.id, blockIds);
+  }, [selectedBlockGroup, updateBlockGroupOrder]);
+  const updateSelectedPageBlockOrder = useCallback((blockIds: string[]) => {
+    if (!selectedPage || selectedPageEditLocked) {
+      return;
+    }
+
+    const nextBlocks = resolveTranslationBlocksAfterReordering(selectedPage.blocks, blockIds);
+    if (!nextBlocks) {
+      return;
+    }
+
+    const updatedAt = new Date().toISOString();
+    recordTranslationUndoSnapshot("텍스트 블록 순서 변경");
+    updateCurrentChapter(selectedPage.id, (chapter) => ({
+      ...chapter,
+      pages: chapter.pages.map((page) =>
+        page.id === selectedPage.id
+          ? {
+              ...page,
+              updatedAt,
+              blocks: nextBlocks
+            }
+          : page
+      )
+    }));
+    pushStatus("텍스트 블록 출력 순서를 변경했습니다.");
+  }, [
+    pushStatus,
+    recordTranslationUndoSnapshot,
     selectedPage,
     selectedPageEditLocked,
     updateCurrentChapter
@@ -1105,6 +1143,8 @@ export default function App(): React.JSX.Element {
           onRetryRecoverableFailure={retryRecoverableFailure}
           onSelectBlock={setSelectedBlockOrGroupId}
           onBlockSelectionChange={setSelectedBlockGroupIds}
+          onBlockOrderChange={updateSelectedPageBlockOrder}
+          onBlockGroupOrderChange={updateBlockGroupOrder}
           onGroupSelectedBlocks={groupSelectedBlocks}
           onUngroupSelectedBlocks={ungroupSelectedBlocks}
           onSelectImportFiles={selectImportFiles}

@@ -200,6 +200,33 @@ export function resolveTranslationBlocksAfterGroupReordering(
   return nextBlocks.every((block, index) => block === blocks[index]) ? null : nextBlocks;
 }
 
+export function resolveTranslationBlocksAfterReordering(
+  blocks: readonly TranslationBlock[],
+  blockIds: readonly string[]
+): TranslationBlock[] | null {
+  const blockById = new Map(blocks.map((block) => [block.id, block]));
+  const seenBlockIds = new Set<string>();
+  const nextBlocks = blockIds.flatMap((blockId) => {
+    if (seenBlockIds.has(blockId)) {
+      return [];
+    }
+    seenBlockIds.add(blockId);
+    const block = blockById.get(blockId);
+    return block ? [block] : [];
+  });
+
+  if (nextBlocks.length !== blocks.length || nextBlocks.length !== seenBlockIds.size) {
+    return null;
+  }
+
+  const currentBlockIds = blocks.map((block) => block.id);
+  if (!blockIdSetsMatch(currentBlockIds, blockIds) || blockIdArraysMatch(currentBlockIds, blockIds)) {
+    return null;
+  }
+
+  return nextBlocks;
+}
+
 export function resolveTranslationBlockGroupBlockIds(
   page: Pick<MangaPage, "blocks" | "blockGroups"> | null,
   blockId: string

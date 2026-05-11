@@ -77,21 +77,6 @@
   bottom: -3px;
 }
 
-.group-block-list .stage-text-block-list-drag-handle {
-  display: grid;
-  width: 16px;
-  height: 24px;
-  place-items: center;
-  color: #8fa4bd;
-}
-
-.group-block-list .stage-text-block-list-drag-handle svg {
-  display: block;
-  width: 12px;
-  height: 18px;
-  fill: currentColor;
-}
-
 .group-effect-section .font-shadow-row {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }

@@ -283,15 +283,21 @@ export function normalizeChapterTranslatedText(chapter: ChapterSnapshot): { chap
   };
 }
 
-export function reorderByTarget(currentOrder: string[], sourceId: string, targetId: string): string[] {
+export function reorderByTarget(
+  currentOrder: readonly string[],
+  sourceId: string,
+  targetId: string,
+  position: "before" | "after" = "before"
+): string[] {
   const next = [...currentOrder];
   const sourceIndex = next.indexOf(sourceId);
   const targetIndex = next.indexOf(targetId);
-  if (sourceIndex < 0 || targetIndex < 0) {
-    return currentOrder;
+  if (sourceIndex < 0 || targetIndex < 0 || sourceId === targetId) {
+    return [...currentOrder];
   }
   const [item] = next.splice(sourceIndex, 1);
-  next.splice(targetIndex, 0, item);
+  const nextTargetIndex = next.indexOf(targetId);
+  next.splice(position === "after" ? nextTargetIndex + 1 : nextTargetIndex, 0, item);
   return next;
 }
 

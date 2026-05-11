@@ -8,6 +8,7 @@ import {
   extractTranslationBlockFontStyle,
   parseTranslationBlockFontStyleFromClipboard,
   parseTranslationBlockFromClipboard,
+  reorderByTarget,
   serializeTranslationBlockFontStyleForClipboard,
   serializeTranslationBlockForClipboard,
   splitTextBySelection
@@ -220,6 +221,13 @@ describe("editor utils", () => {
       "group-a",
       "group-b"
     ]);
+  });
+
+  it("reorders ids before or after a target id", () => {
+    expect(reorderByTarget(["a", "b", "c"], "a", "c")).toEqual(["b", "a", "c"]);
+    expect(reorderByTarget(["a", "b", "c"], "a", "c", "after")).toEqual(["b", "c", "a"]);
+    expect(reorderByTarget(["a", "b", "c"], "missing", "c")).toEqual(["a", "b", "c"]);
+    expect(reorderByTarget(["a", "b", "c"], "b", "b", "after")).toEqual(["a", "b", "c"]);
   });
 
   it("allows inpaint undo snapshots to override captured layer pixels", () => {

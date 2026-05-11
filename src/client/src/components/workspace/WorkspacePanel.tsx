@@ -104,6 +104,8 @@ type WorkspacePanelProps = {
   onDismissRecoverableFailure: (id: RecoverableFailureId) => void;
   onRetryRecoverableFailure: (id: RecoverableFailureId) => void | Promise<void>;
   onSelectBlock: React.Dispatch<React.SetStateAction<string | null>>;
+  onBlockGroupOrderChange: (groupId: string, blockIds: string[]) => void;
+  onBlockOrderChange: (blockIds: string[]) => void;
   onGroupSelectedBlocks: () => void;
   onUngroupSelectedBlocks: () => void;
   onSelectImportFiles: (mode: ImportSourceKind) => void;
@@ -189,6 +191,8 @@ export function WorkspacePanel({
   onDismissRecoverableFailure,
   onRetryRecoverableFailure,
   onSelectBlock,
+  onBlockGroupOrderChange,
+  onBlockOrderChange,
   onGroupSelectedBlocks,
   onUngroupSelectedBlocks,
   onSelectImportFiles,
@@ -330,8 +334,11 @@ export function WorkspacePanel({
           page={selectedPage}
           selectedBlockId={selectedBlockId}
           selectedBlockIds={selectedBlockIds}
+          selectedPageEditLocked={selectedPageEditLocked}
           onSelectBlock={onSelectBlock}
           onBlockSelectionChange={onBlockSelectionChange}
+          onBlockGroupOrderChange={onBlockGroupOrderChange}
+          onBlockOrderChange={onBlockOrderChange}
           onGroupSelectedBlocks={onGroupSelectedBlocks}
           onUngroupSelectedBlocks={onUngroupSelectedBlocks}
           onToggleCollapsed={() => setTextBlockListCollapsed((current) => !current)}

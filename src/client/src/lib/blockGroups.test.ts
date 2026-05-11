@@ -5,6 +5,7 @@ import {
   resolveExpandedTranslationBlockSelection,
   resolveSelectedTranslationBlockGroup,
   resolveTranslationBlocksAfterGroupReordering,
+  resolveTranslationBlocksAfterReordering,
   resolveTranslationBlockGroupBlockIds,
   resolveTranslationBlockListItems,
   resolveTranslationBlockGroupsAfterBlockRemoval,
@@ -188,6 +189,19 @@ describe("blockGroups", () => {
     ]);
     expect(resolveTranslationBlocksAfterGroupReordering(blocks, ["b1", "b2", "b3"])).toBeNull();
     expect(resolveTranslationBlocksAfterGroupReordering(blocks, ["b1", "missing"])).toBeNull();
+  });
+
+  it("reorders the full page block stack", () => {
+    const blocks = [block("b1"), block("b2"), block("b3")];
+
+    expect(resolveTranslationBlocksAfterReordering(blocks, ["b3", "b1", "b2"])?.map((candidate) => candidate.id)).toEqual([
+      "b3",
+      "b1",
+      "b2"
+    ]);
+    expect(resolveTranslationBlocksAfterReordering(blocks, ["b1", "b2", "b3"])).toBeNull();
+    expect(resolveTranslationBlocksAfterReordering(blocks, ["b1", "b2"])).toBeNull();
+    expect(resolveTranslationBlocksAfterReordering(blocks, ["b1", "b2", "missing"])).toBeNull();
   });
 
   it("expands selection and list items by valid groups while preserving group order", () => {

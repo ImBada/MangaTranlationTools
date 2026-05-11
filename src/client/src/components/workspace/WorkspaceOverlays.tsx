@@ -11,8 +11,28 @@ import {
   resolveTranslationBlockListItems
 } from "../../lib/blockGroups";
 import { BLOCK_TYPE_LABELS, resolveBlockPreviewText } from "../../lib/blockDisplay";
+import { reorderByTarget } from "../../lib/editorUtils";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { ActiveLayer } from "../../lib/layerState";
+import { StageTextBlockDragHandle } from "../StageTextBlockDragHandle";
+
+const STAGE_TEXT_BLOCK_DRAG_DATA_TYPE = "application/x-manga-translation-stage-text-block-drag";
+
+type StageTextBlockPageDragItem = {
+  scope: "page";
+  unitId: string;
+};
+
+type StageTextBlockGroupDragItem = {
+  scope: "group";
+  blockId: string;
+  groupId: string;
+};
+
+type StageTextBlockDragItem = StageTextBlockPageDragItem | StageTextBlockGroupDragItem;
+type StageTextBlockDropTarget =
+  | (StageTextBlockPageDragItem & { position: "before" | "after" })
+  | (StageTextBlockGroupDragItem & { position: "before" | "after" });
 
 export type PageInpaintNotice = {
   actionLabel?: string;
@@ -70,7 +90,10 @@ type StageTextBlockListProps = {
   collapsed: boolean;
   groupAction: "group" | "ungroup" | null;
   groupDisabled: boolean;
+  selectedPageEditLocked: boolean;
   onBlockSelectionChange: (blockIds: string[]) => void;
+  onBlockGroupOrderChange: (groupId: string, blockIds: string[]) => void;
+  onBlockOrderChange: (blockIds: string[]) => void;
   onGroupSelectedBlocks: () => void;
   onSelectBlock: (blockId: string) => void;
   onToggleCollapsed: () => void;
@@ -141,19 +164,42 @@ export function StageTextBlockList({
   groupAction,
   groupDisabled,
   onBlockSelectionChange,
+  onBlockGroupOrderChange,
+  onBlockOrderChange,
   onGroupSelectedBlocks,
   onSelectBlock,
   onToggleCollapsed,
   onUngroupSelectedBlocks,
   page,
   selectedBlockId,
-  selectedBlockIds
+  selectedBlockIds,
+  selectedPageEditLocked
 }: StageTextBlockListProps): React.JSX.Element {
   const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
   const blockListItems = React.useMemo(() => resolveTranslationBlockListItems(page), [page]);
+  const pageReorderUnits = React.useMemo(() => blockListItems.map((item) =>
+    item.kind === "block"
+      ? { blockIds: [item.block.id], unitId: createPageBlockUnitId(item.block.id) }
+      : { blockIds: item.blocks.map(({ block }) => block.id), unitId: createPageGroupUnitId(item.group.id) }
+  ), [blockListItems]);
+  const pageUnitById = React.useMemo(() => new Map(pageReorderUnits.map((unit) => [unit.unitId, unit])), [pageReorderUnits]);
+  const groupBlockIdsByGroupId = React.useMemo(() => {
+    const groups = new Map<string, string[]>();
+    blockListItems.forEach((item) => {
+      if (item.kind === "group") {
+        groups.set(item.group.id, item.blocks.map(({ block }) => block.id));
+      }
+    });
+    return groups;
+  }, [blockListItems]);
   const activeRowRef = React.useRef<HTMLButtonElement | null>(null);
   const listId = React.useId();
   const selectionAnchorIdRef = React.useRef<string | null>(null);
+  const draggingItemRef = React.useRef<StageTextBlockDragItem | null>(null);
+  const suppressClickAfterDragRef = React.useRef(false);
+  const [draggingItem, setDraggingItem] = React.useState<StageTextBlockDragItem | null>(null);
+  const [dragOverTarget, setDragOverTarget] = React.useState<StageTextBlockDropTarget | null>(null);
+  const pageReorderEnabled = !selectedPageEditLocked && pageReorderUnits.length > 1;
 
   React.useEffect(() => {
     if (collapsed) {
@@ -203,17 +249,133 @@ export function StageTextBlockList({
     onSelectBlock(blockId);
   }, [onBlockSelectionChange, onSelectBlock, page, selectedBlockId, selectedBlockIds]);
 
-  const renderBlockRow = React.useCallback((block: TranslationBlock, index: number, grouped = false) => {
+  const clearDragState = React.useCallback(() => {
+    draggingItemRef.current = null;
+    setDraggingItem(null);
+    setDragOverTarget(null);
+  }, []);
+
+  const suppressNextClick = React.useCallback(() => {
+    suppressClickAfterDragRef.current = true;
+    window.setTimeout(() => {
+      suppressClickAfterDragRef.current = false;
+    }, 0);
+  }, []);
+
+  const selectBlockUnlessDragEnded = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, blockId: string) => {
+    if (suppressClickAfterDragRef.current) {
+      suppressClickAfterDragRef.current = false;
+      return;
+    }
+    selectBlock(event, blockId);
+  }, [selectBlock]);
+
+  const handleDragStart = React.useCallback((
+    event: React.DragEvent<HTMLButtonElement>,
+    item: StageTextBlockDragItem,
+    enabled: boolean
+  ) => {
+    if (!enabled) {
+      event.preventDefault();
+      return;
+    }
+
+    draggingItemRef.current = item;
+    setDraggingItem(item);
+    event.dataTransfer.effectAllowed = "move";
+    event.dataTransfer.setData(STAGE_TEXT_BLOCK_DRAG_DATA_TYPE, JSON.stringify(item));
+  }, []);
+
+  const handleDragOver = React.useCallback((
+    event: React.DragEvent<HTMLButtonElement>,
+    target: StageTextBlockDragItem,
+    enabled: boolean
+  ) => {
+    const source = draggingItemRef.current ?? readStageTextBlockDragItem(event.dataTransfer);
+    if (!enabled || !source || !canDropStageTextBlockDragItem(source, target)) {
+      return;
+    }
+
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    const rect = event.currentTarget.getBoundingClientRect();
+    const position = event.clientY > rect.top + rect.height / 2 ? "after" : "before";
+    const nextTarget = createStageTextBlockDropTarget(target, position);
+    setDragOverTarget((current) => stageTextBlockDropTargetsMatch(current, nextTarget) ? current : nextTarget);
+  }, []);
+
+  const handleDrop = React.useCallback((event: React.DragEvent<HTMLButtonElement>, target: StageTextBlockDragItem) => {
+    const source = draggingItemRef.current ?? readStageTextBlockDragItem(event.dataTransfer);
+    if (!source || !dragOverTarget || !canDropStageTextBlockDragItem(source, target) || !stageTextBlockTargetsMatch(dragOverTarget, target)) {
+      clearDragState();
+      return;
+    }
+
+    event.preventDefault();
+    if (source.scope === "page" && target.scope === "page" && dragOverTarget.scope === "page") {
+      const nextUnitIds = reorderByTarget(pageReorderUnits.map((unit) => unit.unitId), source.unitId, target.unitId, dragOverTarget.position);
+      const nextBlockIds = nextUnitIds.flatMap((unitId) => pageUnitById.get(unitId)?.blockIds ?? []);
+      clearDragState();
+      suppressNextClick();
+      if (nextBlockIds.length === page.blocks.length && nextBlockIds.some((blockId, index) => blockId !== page.blocks[index]?.id)) {
+        onBlockOrderChange(nextBlockIds);
+      }
+      return;
+    }
+
+    if (source.scope === "group" && target.scope === "group" && dragOverTarget.scope === "group") {
+      const groupBlockIds = groupBlockIdsByGroupId.get(source.groupId) ?? [];
+      const nextBlockIds = reorderByTarget(groupBlockIds, source.blockId, target.blockId, dragOverTarget.position);
+      clearDragState();
+      suppressNextClick();
+      if (nextBlockIds.some((blockId, index) => blockId !== groupBlockIds[index])) {
+        onBlockGroupOrderChange(source.groupId, nextBlockIds);
+      }
+    }
+  }, [
+    clearDragState,
+    dragOverTarget,
+    groupBlockIdsByGroupId,
+    onBlockGroupOrderChange,
+    onBlockOrderChange,
+    page.blocks,
+    pageReorderUnits,
+    pageUnitById,
+    suppressNextClick
+  ]);
+
+  const handleDragEnd = React.useCallback(() => {
+    clearDragState();
+    suppressNextClick();
+  }, [clearDragState, suppressNextClick]);
+
+  const renderBlockRow = React.useCallback((block: TranslationBlock, index: number, groupId?: string) => {
+    const grouped = Boolean(groupId);
     const selected = block.id === selectedBlockId || selectedBlockIdSet.has(block.id);
+    const dragItem: StageTextBlockDragItem = groupId
+      ? { scope: "group", blockId: block.id, groupId }
+      : { scope: "page", unitId: createPageBlockUnitId(block.id) };
+    const reorderEnabled = groupId
+      ? !selectedPageEditLocked && (groupBlockIdsByGroupId.get(groupId)?.length ?? 0) > 1
+      : pageReorderEnabled;
+    const dragging = stageTextBlockTargetsMatch(draggingItem, dragItem);
+    const dragOverClass = stageTextBlockTargetsMatch(dragOverTarget, dragItem) ? ` drag-over-${dragOverTarget?.position}` : "";
     return (
       <button
         key={block.id}
         ref={block.id === selectedBlockId ? activeRowRef : undefined}
         type="button"
-        className={`stage-text-block-list-row${grouped ? " grouped" : ""}${selected ? " selected" : ""}${block.renderDirection === "hidden" ? " hidden" : ""}`}
+        className={`stage-text-block-list-row${grouped ? " grouped" : ""}${reorderEnabled ? " reorderable" : ""}${selected ? " selected" : ""}${block.renderDirection === "hidden" ? " hidden" : ""}${dragging ? " dragging" : ""}${dragOverClass}`}
+        draggable={reorderEnabled}
         aria-pressed={selected}
-        onClick={(event) => selectBlock(event, block.id)}
+        title={reorderEnabled ? "드래그해서 순서 변경" : undefined}
+        onClick={(event) => selectBlockUnlessDragEnded(event, block.id)}
+        onDragEnd={handleDragEnd}
+        onDragOver={(event) => handleDragOver(event, dragItem, reorderEnabled)}
+        onDragStart={(event) => handleDragStart(event, dragItem, reorderEnabled)}
+        onDrop={(event) => handleDrop(event, dragItem)}
       >
+        {reorderEnabled ? <StageTextBlockDragHandle /> : null}
         <span className="stage-text-block-list-index">{index + 1}</span>
         <span className="stage-text-block-list-copy">
           <span className="stage-text-block-list-meta">
@@ -224,7 +386,20 @@ export function StageTextBlockList({
         </span>
       </button>
     );
-  }, [selectBlock, selectedBlockId, selectedBlockIdSet]);
+  }, [
+    dragOverTarget,
+    draggingItem,
+    groupBlockIdsByGroupId,
+    handleDragEnd,
+    handleDragOver,
+    handleDragStart,
+    handleDrop,
+    pageReorderEnabled,
+    selectBlockUnlessDragEnded,
+    selectedBlockId,
+    selectedBlockIdSet,
+    selectedPageEditLocked
+  ]);
   const groupActionConfig = groupAction === "ungroup"
     ? {
         ariaLabel: "선택한 텍스트 블록 그룹 해제",
@@ -301,19 +476,31 @@ export function StageTextBlockList({
 
               const groupSelected = item.blocks.some(({ block }) => block.id === selectedBlockId || selectedBlockIdSet.has(block.id));
               const firstBlockId = item.blocks[0]?.block.id;
+              const groupDragItem: StageTextBlockDragItem = { scope: "page", unitId: createPageGroupUnitId(item.group.id) };
+              const groupDragging = stageTextBlockTargetsMatch(draggingItem, groupDragItem);
+              const groupDragOverClass = stageTextBlockTargetsMatch(dragOverTarget, groupDragItem) ? ` drag-over-${dragOverTarget?.position}` : "";
               return (
                 <div key={item.group.id} className={`stage-text-block-list-group${groupSelected ? " selected" : ""}`}>
                   <button
                     type="button"
-                    className="stage-text-block-list-group-header"
+                    className={`stage-text-block-list-group-header${pageReorderEnabled ? " reorderable" : ""}${groupDragging ? " dragging" : ""}${groupDragOverClass}`}
+                    draggable={pageReorderEnabled}
                     aria-pressed={groupSelected}
-                    onClick={(event) => firstBlockId ? selectBlock(event, firstBlockId) : undefined}
+                    title={pageReorderEnabled ? "드래그해서 그룹 순서 변경" : undefined}
+                    onClick={(event) => firstBlockId ? selectBlockUnlessDragEnded(event, firstBlockId) : undefined}
+                    onDragEnd={handleDragEnd}
+                    onDragOver={(event) => handleDragOver(event, groupDragItem, pageReorderEnabled)}
+                    onDragStart={(event) => handleDragStart(event, groupDragItem, pageReorderEnabled)}
+                    onDrop={(event) => handleDrop(event, groupDragItem)}
                   >
-                    <span className="stage-text-block-list-group-title">그룹</span>
+                    <span className="stage-text-block-list-group-header-copy">
+                      {pageReorderEnabled ? <StageTextBlockDragHandle /> : null}
+                      <span className="stage-text-block-list-group-title">그룹</span>
+                    </span>
                     <span className="stage-text-block-list-group-count">{item.blocks.length}</span>
                   </button>
                   <div className="stage-text-block-list-group-items">
-                    {item.blocks.map(({ block, blockIndex }) => renderBlockRow(block, blockIndex, true))}
+                    {item.blocks.map(({ block, blockIndex }) => renderBlockRow(block, blockIndex, item.group.id))}
                   </div>
                 </div>
               );
@@ -325,6 +512,78 @@ export function StageTextBlockList({
       </section>
     </>
   );
+}
+
+function createPageBlockUnitId(blockId: string): string {
+  return `block:${blockId}`;
+}
+
+function createPageGroupUnitId(groupId: string): string {
+  return `group:${groupId}`;
+}
+
+function readStageTextBlockDragItem(dataTransfer: DataTransfer): StageTextBlockDragItem | null {
+  try {
+    const parsed = JSON.parse(dataTransfer.getData(STAGE_TEXT_BLOCK_DRAG_DATA_TYPE)) as unknown;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    const item = parsed as Partial<StageTextBlockDragItem>;
+    if (item.scope === "page" && typeof item.unitId === "string") {
+      return { scope: "page", unitId: item.unitId };
+    }
+    if (item.scope === "group" && typeof item.groupId === "string" && typeof item.blockId === "string") {
+      return { scope: "group", groupId: item.groupId, blockId: item.blockId };
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+function canDropStageTextBlockDragItem(source: StageTextBlockDragItem, target: StageTextBlockDragItem): boolean {
+  if (source.scope !== target.scope) {
+    return false;
+  }
+  if (source.scope === "page" && target.scope === "page") {
+    return source.unitId !== target.unitId;
+  }
+  if (source.scope === "group" && target.scope === "group") {
+    return source.groupId === target.groupId && source.blockId !== target.blockId;
+  }
+  return false;
+}
+
+function createStageTextBlockDropTarget(
+  target: StageTextBlockDragItem,
+  position: "before" | "after"
+): StageTextBlockDropTarget {
+  return target.scope === "page"
+    ? { scope: "page", unitId: target.unitId, position }
+    : { scope: "group", groupId: target.groupId, blockId: target.blockId, position };
+}
+
+function stageTextBlockTargetsMatch(
+  left: StageTextBlockDragItem | StageTextBlockDropTarget | null,
+  right: StageTextBlockDragItem
+): boolean {
+  if (!left || left.scope !== right.scope) {
+    return false;
+  }
+  if (left.scope === "page" && right.scope === "page") {
+    return left.unitId === right.unitId;
+  }
+  if (left.scope === "group" && right.scope === "group") {
+    return left.groupId === right.groupId && left.blockId === right.blockId;
+  }
+  return false;
+}
+
+function stageTextBlockDropTargetsMatch(
+  left: StageTextBlockDropTarget | null,
+  right: StageTextBlockDropTarget
+): boolean {
+  return Boolean(left && left.position === right.position && stageTextBlockTargetsMatch(left, right));
 }
 
 export function StatusHistoryPanel({
