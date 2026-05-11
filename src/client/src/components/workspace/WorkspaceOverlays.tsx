@@ -1,7 +1,11 @@
 import React from "react";
 import type { JobState, MangaPage, TranslationBlock } from "../../../../shared/types";
 import type { RecoverableFailure, RecoverableFailureId } from "../../hooks/useRecoverableFailures";
-import { resolveShiftSelectedTranslationBlockIds } from "../../lib/blockSelection";
+import {
+  resolveCurrentTranslationBlockSelection,
+  resolveToggledTranslationBlockIds,
+  resolveTranslationBlockRangeSelection
+} from "../../lib/blockSelection";
 import type { StatusToastTone } from "../../hooks/useStatusFeedback";
 import type { ActiveLayer } from "../../lib/layerState";
 
@@ -142,6 +146,7 @@ export function StageTextBlockList({
   const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
   const activeRowRef = React.useRef<HTMLButtonElement | null>(null);
   const listId = React.useId();
+  const selectionAnchorIdRef = React.useRef<string | null>(null);
 
   React.useEffect(() => {
     if (collapsed) {
@@ -150,17 +155,44 @@ export function StageTextBlockList({
     activeRowRef.current?.scrollIntoView({ block: "nearest" });
   }, [collapsed, page.id, selectedBlockId, selectedBlockIds]);
 
+  React.useEffect(() => {
+    if (selectedBlockIds.length > 1) {
+      return;
+    }
+    selectionAnchorIdRef.current = selectedBlockId;
+  }, [selectedBlockId, selectedBlockIds.length]);
+
   const selectBlock = React.useCallback((event: React.MouseEvent<HTMLButtonElement>, blockId: string) => {
+    const blockIdsInOrder = page.blocks.map((block) => block.id);
+    const anchorBlockId =
+      selectionAnchorIdRef.current && blockIdsInOrder.includes(selectionAnchorIdRef.current)
+        ? selectionAnchorIdRef.current
+        : selectedBlockId && blockIdsInOrder.includes(selectedBlockId)
+          ? selectedBlockId
+          : null;
+
     if (event.shiftKey) {
-      const nextBlockIds = resolveShiftSelectedTranslationBlockIds(selectedBlockId, selectedBlockIds, blockId);
-      if (nextBlockIds) {
-        onBlockSelectionChange(nextBlockIds);
+      const rangeBlockIds = resolveTranslationBlockRangeSelection(blockIdsInOrder, anchorBlockId, blockId);
+      if (rangeBlockIds.length === 0) {
         return;
       }
+      const nextBlockIds = event.ctrlKey || event.metaKey
+        ? Array.from(new Set([...resolveCurrentTranslationBlockSelection(selectedBlockId, selectedBlockIds), ...rangeBlockIds]))
+        : rangeBlockIds;
+      selectionAnchorIdRef.current = anchorBlockId ?? blockId;
+      onBlockSelectionChange(nextBlockIds);
+      return;
     }
 
+    if (event.ctrlKey || event.metaKey) {
+      selectionAnchorIdRef.current = blockId;
+      onBlockSelectionChange(resolveToggledTranslationBlockIds(selectedBlockId, selectedBlockIds, [blockId]));
+      return;
+    }
+
+    selectionAnchorIdRef.current = blockId;
     onSelectBlock(blockId);
-  }, [onBlockSelectionChange, onSelectBlock, selectedBlockId, selectedBlockIds]);
+  }, [onBlockSelectionChange, onSelectBlock, page.blocks, selectedBlockId, selectedBlockIds]);
 
   return (
     <section className={`stage-text-block-list${collapsed ? " collapsed" : ""}`} aria-label={`${page.name} 텍스트 블록 목록`}>

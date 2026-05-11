@@ -36,6 +36,26 @@ export function resolveShiftSelectedTranslationBlockIds(
   return currentSelection.length > 0 || nextSelection.length > 1 ? nextSelection : null;
 }
 
+export function resolveTranslationBlockRangeSelection(
+  blockIdsInOrder: readonly string[],
+  anchorBlockId: string | null,
+  targetBlockId: string
+): string[] {
+  const targetIndex = blockIdsInOrder.indexOf(targetBlockId);
+  if (targetIndex < 0) {
+    return [];
+  }
+
+  const anchorIndex = anchorBlockId ? blockIdsInOrder.indexOf(anchorBlockId) : -1;
+  if (anchorIndex < 0) {
+    return [targetBlockId];
+  }
+
+  const startIndex = Math.min(anchorIndex, targetIndex);
+  const endIndex = Math.max(anchorIndex, targetIndex);
+  return blockIdsInOrder.slice(startIndex, endIndex + 1);
+}
+
 export function resolveToggledTranslationBlockIds(
   selectedBlockId: string | null,
   selectedBlockIds: readonly string[],
@@ -55,7 +75,7 @@ export function resolveToggledTranslationBlockIds(
   return nextSelection;
 }
 
-function resolveCurrentTranslationBlockSelection(
+export function resolveCurrentTranslationBlockSelection(
   selectedBlockId: string | null,
   selectedBlockIds: readonly string[]
 ): string[] {

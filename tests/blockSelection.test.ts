@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { MangaPage, TranslationBlock } from "../src/shared/types";
 import {
+  resolveCurrentTranslationBlockSelection,
   resolveSelectedTranslationBlocks,
   resolveShiftSelectedTranslationBlockIds,
   resolveToggledTranslationBlockIds,
+  resolveTranslationBlockRangeSelection,
   resolveTranslationBlockIdsInSelection
 } from "../src/client/src/lib/blockSelection";
 
@@ -91,5 +93,31 @@ describe("block selection", () => {
       "block-2",
       "render-box"
     ]);
+  });
+
+  it("resolves the current selection from single and grouped block state", () => {
+    expect(resolveCurrentTranslationBlockSelection("block-1", [])).toEqual(["block-1"]);
+    expect(resolveCurrentTranslationBlockSelection("block-1", ["block-1", "block-2"])).toEqual([
+      "block-1",
+      "block-2"
+    ]);
+    expect(resolveCurrentTranslationBlockSelection(null, [])).toEqual([]);
+  });
+
+  it("resolves contiguous block ranges in display order", () => {
+    const blockIdsInOrder = page.blocks.map((block) => block.id);
+
+    expect(resolveTranslationBlockRangeSelection(blockIdsInOrder, "block-1", "hidden")).toEqual([
+      "block-1",
+      "block-2",
+      "hidden"
+    ]);
+    expect(resolveTranslationBlockRangeSelection(blockIdsInOrder, "render-box", "block-2")).toEqual([
+      "block-2",
+      "hidden",
+      "render-box"
+    ]);
+    expect(resolveTranslationBlockRangeSelection(blockIdsInOrder, null, "block-2")).toEqual(["block-2"]);
+    expect(resolveTranslationBlockRangeSelection(blockIdsInOrder, "block-1", "missing")).toEqual([]);
   });
 });
