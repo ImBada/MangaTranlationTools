@@ -1,5 +1,6 @@
 import React from "react";
 import type { FontPreset, ImageRect, MangaPage, TranslationBlock } from "../../../shared/types";
+import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import { isBlockDuplicateModifier, isBlockInlineEditShortcut } from "../lib/editorShortcuts";
 import { drawImageToCanvas, loadCanvasImage, resizeCanvasToSize } from "../lib/canvasImageDrawing";
 import { isEditableTarget } from "../lib/editorUtils";
@@ -9,9 +10,10 @@ import {
   roundInpaintDebugMs,
   writeInpaintDebugLog
 } from "../lib/inpaintDiagnostics";
+import { resolveSelectedTranslationBlockGroup } from "../lib/blockGroups";
 import { hasEnabledTranslationBlockGroupEffects } from "../lib/blockGroupEffects";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
-import type { FontWeightAvailability, ViewportSize } from "../lib/overlayLayout";
+import { resolveBlockRectPx, type FontWeightAvailability, type PixelRect, type ViewportSize } from "../lib/overlayLayout";
 import { drawOverlayBlocks, resolveBlockCanvasDirtyRect } from "../lib/pageRender";
 import {
   addTranslationBlockDragPreviewOffsetListener,
@@ -179,6 +181,27 @@ export function ImageStageLayers({
   const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
   const debugLogEnabled = isInpaintDebugLogEnabled();
   const activeBlockDragIdSet = React.useMemo(() => new Set(activeBlockDragIds), [activeBlockDragIds]);
+  const selectedBlockGroup = React.useMemo(
+    () => selectedBlockIds.length > 1 ? resolveSelectedTranslationBlockGroup(page, selectedBlockIds) : null,
+    [page, selectedBlockIds]
+  );
+  const selectedGroupBlockIdSet = React.useMemo(
+    () => new Set(selectedBlockGroup?.blockIds ?? []),
+    [selectedBlockGroup]
+  );
+  const selectedGroupBlocks = React.useMemo(() => (
+    selectedBlockGroup
+      ? page.blocks.filter((block) => selectedGroupBlockIdSet.has(block.id) && block.renderDirection !== "hidden")
+      : []
+  ), [page.blocks, selectedBlockGroup, selectedGroupBlockIdSet]);
+  const selectedGroupOutlineRect = React.useMemo(
+    () => resolveBlocksSelectionOutlineRect(selectedGroupBlocks, pageSize, resolvedStageSize),
+    [pageSize, resolvedStageSize, selectedGroupBlocks]
+  );
+  const selectedGroupDragPreviewActive =
+    activeBlockDragMode === "move" &&
+    selectedGroupBlockIdSet.size > 0 &&
+    [...selectedGroupBlockIdSet].every((blockId) => activeBlockDragIdSet.has(blockId));
   const activeDragBlocks = React.useMemo(() => {
     if (activeBlockDragIdSet.size === 0) {
       return [];
@@ -392,7 +415,10 @@ export function ImageStageLayers({
           block={block}
           pageSize={pageSize}
           stageSize={resolvedStageSize}
-          selected={selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId)}
+          selected={
+            !selectedGroupBlockIdSet.has(block.id) &&
+            (selectedBlockIdSet.has(block.id) || (!multiBlockSelectionActive && block.id === selectedBlockId))
+          }
           editingEnabled={overlayEditingEnabled}
           widgetsVisible={!blockRangeSelectionActive && !multiBlockSelectionActive}
           inlineEditDraft={inlineEdit?.blockId === block.id ? inlineEdit.draft : undefined}
@@ -422,6 +448,12 @@ export function ImageStageLayers({
           onRotatePointerDown={(event) => onBlockPointerDown(event, block, "rotate")}
         />
       ))}
+      {selectedGroupOutlineRect && overlayEditingEnabled ? (
+        <OverlayBlockGroupSelectionOutline
+          dragPreviewActive={selectedGroupDragPreviewActive}
+          rect={selectedGroupOutlineRect}
+        />
+      ) : null}
       {activeDragBlocks.length > 0 ? (
         <OverlayBlockDragPreviewCanvas
           blocks={activeDragBlocks}
@@ -605,22 +637,7 @@ function OverlayBlockDragPreviewCanvas({
   const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
   const dirtyRect = React.useMemo(() => resolveBlocksCanvasDirtyRect(blocks, page), [blocks, page]);
   const includedBlockIds = React.useMemo(() => new Set(blocks.map((block) => block.id)), [blocks]);
-
-  React.useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) {
-      return;
-    }
-
-    const applyOffset = (offset: TranslationBlockDragPreviewOffset) => {
-      canvas.style.transform =
-        offset.offsetX !== 0 || offset.offsetY !== 0
-          ? `translate3d(${offset.offsetX}px, ${offset.offsetY}px, 0)`
-          : "";
-    };
-    applyOffset(getTranslationBlockDragPreviewOffset());
-    return addTranslationBlockDragPreviewOffsetListener(applyOffset);
-  }, []);
+  useTranslationBlockDragPreviewTransform(canvasRef, true);
 
   React.useLayoutEffect(() => {
     const canvas = canvasRef.current;
@@ -658,6 +675,28 @@ function OverlayBlockDragPreviewCanvas({
   };
 
   return <canvas ref={canvasRef} className="overlay-block-drag-preview-canvas" style={style} aria-hidden="true" />;
+}
+
+type OverlayBlockGroupSelectionOutlineProps = {
+  dragPreviewActive: boolean;
+  rect: PixelRect;
+};
+
+function OverlayBlockGroupSelectionOutline({
+  dragPreviewActive,
+  rect
+}: OverlayBlockGroupSelectionOutlineProps): React.JSX.Element {
+  const outlineRef = React.useRef<HTMLDivElement | null>(null);
+  useTranslationBlockDragPreviewTransform(outlineRef, dragPreviewActive);
+
+  const style: React.CSSProperties = {
+    left: rect.left,
+    top: rect.top,
+    width: rect.width,
+    height: rect.height
+  };
+
+  return <div ref={outlineRef} className="overlay-block-group-selection-outline" style={style} aria-hidden="true" />;
 }
 
 type OverlayCanvasDirtyRect = NonNullable<ReturnType<typeof resolveBlockCanvasDirtyRect>>;
@@ -699,4 +738,95 @@ function resolveBlocksCanvasDirtyRect(
   }
 
   return { x, y, width, height };
+}
+
+function useTranslationBlockDragPreviewTransform<T extends HTMLElement>(
+  ref: React.RefObject<T | null>,
+  enabled: boolean
+): void {
+  React.useLayoutEffect(() => {
+    const element = ref.current;
+    if (!element) {
+      return;
+    }
+    if (!enabled) {
+      element.style.transform = "";
+      return;
+    }
+
+    const applyOffset = (offset: TranslationBlockDragPreviewOffset) => {
+      element.style.transform =
+        offset.offsetX !== 0 || offset.offsetY !== 0
+          ? `translate3d(${offset.offsetX}px, ${offset.offsetY}px, 0)`
+          : "";
+    };
+    applyOffset(getTranslationBlockDragPreviewOffset());
+    return addTranslationBlockDragPreviewOffsetListener(applyOffset);
+  }, [enabled, ref]);
+}
+
+function resolveBlocksSelectionOutlineRect(
+  blocks: readonly TranslationBlock[],
+  pageSize: ViewportSize,
+  stageSize: ViewportSize
+): PixelRect | null {
+  let left = Number.POSITIVE_INFINITY;
+  let top = Number.POSITIVE_INFINITY;
+  let right = Number.NEGATIVE_INFINITY;
+  let bottom = Number.NEGATIVE_INFINITY;
+
+  for (const block of blocks) {
+    const rect = resolveRotatedSelectionRect(resolveBlockRectPx(block, pageSize, stageSize), resolveBlockRotationDeg(block));
+    left = Math.min(left, rect.left);
+    top = Math.min(top, rect.top);
+    right = Math.max(right, rect.left + rect.width);
+    bottom = Math.max(bottom, rect.top + rect.height);
+  }
+
+  if (!Number.isFinite(left) || !Number.isFinite(top) || !Number.isFinite(right) || !Number.isFinite(bottom)) {
+    return null;
+  }
+
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top
+  };
+}
+
+function resolveRotatedSelectionRect(rect: PixelRect, rotationDeg: number): PixelRect {
+  if (rotationDeg === 0) {
+    return rect;
+  }
+
+  const centerX = rect.left + rect.width / 2;
+  const centerY = rect.top + rect.height / 2;
+  const angleRad = (rotationDeg * Math.PI) / 180;
+  const cos = Math.cos(angleRad);
+  const sin = Math.sin(angleRad);
+  const corners = [
+    { x: rect.left, y: rect.top },
+    { x: rect.left + rect.width, y: rect.top },
+    { x: rect.left + rect.width, y: rect.top + rect.height },
+    { x: rect.left, y: rect.top + rect.height }
+  ].map((corner) => {
+    const dx = corner.x - centerX;
+    const dy = corner.y - centerY;
+    return {
+      x: centerX + dx * cos - dy * sin,
+      y: centerY + dx * sin + dy * cos
+    };
+  });
+  const left = Math.min(...corners.map((corner) => corner.x));
+  const top = Math.min(...corners.map((corner) => corner.y));
+  const right = Math.max(...corners.map((corner) => corner.x));
+  const bottom = Math.max(...corners.map((corner) => corner.y));
+
+  return {
+    left,
+    top,
+    width: right - left,
+    height: bottom - top
+  };
 }

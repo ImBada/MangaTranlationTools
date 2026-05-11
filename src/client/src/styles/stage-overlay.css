@@ -404,6 +404,19 @@
   outline: 2px solid #6aa9ff;
 }
 
+.overlay-block-group-selection-outline {
+  position: absolute;
+  z-index: 75;
+  box-sizing: border-box;
+  border: 2px solid rgba(106, 169, 255, 0.96);
+  border-radius: 3px;
+  box-shadow:
+    0 0 0 1px rgba(8, 14, 24, 0.72),
+    0 0 0 4px rgba(106, 169, 255, 0.16);
+  pointer-events: none;
+  will-change: transform;
+}
+
 .overlay-inline-editor {
   position: absolute;
   left: 0;
