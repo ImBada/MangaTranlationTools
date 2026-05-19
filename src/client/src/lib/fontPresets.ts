@@ -133,9 +133,39 @@ export function resolveFontPresetSize(preset: FontPreset, fontSizePresets: FontS
   return fontSizePresets.find((candidate) => candidate.id === preset.fontSizePresetId)?.fontSizePx ?? preset.fontSizePx;
 }
 
+export function normalizeFontPreset(preset: FontPreset): FontPreset {
+  return {
+    ...preset,
+    fontFamily: preset.fontFamily ?? DEFAULT_FONT_PRESET.fontFamily,
+    fontWeight: preset.fontWeight ?? DEFAULT_FONT_PRESET.fontWeight,
+    fontStyle: preset.fontStyle ?? DEFAULT_FONT_PRESET.fontStyle,
+    textDecoration: preset.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
+    fontSizePx: preset.fontSizePx ?? DEFAULT_FONT_PRESET.fontSizePx,
+    lineHeight: preset.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
+    letterSpacingPx: preset.letterSpacingPx ?? DEFAULT_FONT_PRESET.letterSpacingPx,
+    outlineColor: preset.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
+    outlineWidthPx: preset.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
+    secondaryOutlineColor: preset.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
+    secondaryOutlineWidthPx: preset.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
+    shadowEnabled: preset.shadowEnabled ?? DEFAULT_FONT_PRESET.shadowEnabled,
+    shadowColor: preset.shadowColor ?? DEFAULT_FONT_PRESET.shadowColor,
+    shadowOpacity: preset.shadowOpacity ?? DEFAULT_FONT_PRESET.shadowOpacity,
+    shadowBlurPx: preset.shadowBlurPx ?? DEFAULT_FONT_PRESET.shadowBlurPx,
+    shadowAngleDeg: preset.shadowAngleDeg ?? DEFAULT_FONT_PRESET.shadowAngleDeg,
+    shadowDistancePx: preset.shadowDistancePx ?? DEFAULT_FONT_PRESET.shadowDistancePx,
+    autoFitText: preset.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
+    textColor: preset.textColor ?? DEFAULT_FONT_PRESET.textColor,
+    screentoneFillEnabled: preset.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
+    screentoneFillIntensity: preset.screentoneFillIntensity ?? DEFAULT_FONT_PRESET.screentoneFillIntensity,
+    screentoneFillDensity: preset.screentoneFillDensity ?? DEFAULT_FONT_PRESET.screentoneFillDensity,
+    screentoneFillAntialias: preset.screentoneFillAntialias ?? DEFAULT_FONT_PRESET.screentoneFillAntialias
+  };
+}
+
 export function resolveFontPreset(preset: FontPreset, fontSizePresets: FontSizePreset[] = []): FontPreset {
-  const fontSizePx = resolveFontPresetSize(preset, fontSizePresets);
-  return fontSizePx === preset.fontSizePx ? preset : { ...preset, fontSizePx };
+  const normalizedPreset = normalizeFontPreset(preset);
+  const fontSizePx = resolveFontPresetSize(normalizedPreset, fontSizePresets);
+  return fontSizePx === normalizedPreset.fontSizePx ? normalizedPreset : { ...normalizedPreset, fontSizePx };
 }
 
 export function isBlockFontSizeLinkedToPreset(block: Pick<TranslationBlock, "fontSizeLinkedToPreset">): boolean {
@@ -197,101 +227,103 @@ export function applyFontPresetPatchToBlock(
   options: { forceLinkedValues?: boolean } = {}
 ): TranslationBlock {
   const forceLinkedValues = options.forceLinkedValues ?? false;
+  const normalizedPatch = isFullFontPresetPatch(patch) ? normalizeFontPreset(patch) : patch;
+  const fullFontPresetPatch = isFullFontPresetPatch(normalizedPatch);
 
   return {
     ...block,
-    fontFamily: patch.fontFamily ?? block.fontFamily,
+    fontFamily: normalizedPatch.fontFamily ?? block.fontFamily,
     characterFontOverrides:
-      patch.characterFontOverrides !== undefined || isFullFontPresetPatch(patch)
-        ? cloneCharacterFontOverrides(patch.characterFontOverrides)
+      normalizedPatch.characterFontOverrides !== undefined || fullFontPresetPatch
+        ? cloneCharacterFontOverrides(normalizedPatch.characterFontOverrides)
         : block.characterFontOverrides,
     fontWeight:
-      patch.fontWeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontWeight"))
-        ? patch.fontWeight
+      normalizedPatch.fontWeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontWeight"))
+        ? normalizedPatch.fontWeight
         : block.fontWeight,
     fontStyle:
-      patch.fontStyle !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontStyle"))
-        ? patch.fontStyle
+      normalizedPatch.fontStyle !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontStyle"))
+        ? normalizedPatch.fontStyle
         : block.fontStyle,
     textDecoration:
-      patch.textDecoration !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textDecoration"))
-        ? patch.textDecoration
+      normalizedPatch.textDecoration !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textDecoration"))
+        ? normalizedPatch.textDecoration
         : block.textDecoration,
     fontSizePx:
-      patch.fontSizePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontSizePx"))
-        ? patch.fontSizePx
+      normalizedPatch.fontSizePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "fontSizePx"))
+        ? normalizedPatch.fontSizePx
         : block.fontSizePx,
     lineHeight:
-      patch.lineHeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "lineHeight"))
-        ? patch.lineHeight
+      normalizedPatch.lineHeight !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "lineHeight"))
+        ? normalizedPatch.lineHeight
         : block.lineHeight,
     letterSpacingPx:
-      patch.letterSpacingPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "letterSpacingPx"))
-        ? patch.letterSpacingPx
+      normalizedPatch.letterSpacingPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "letterSpacingPx"))
+        ? normalizedPatch.letterSpacingPx
         : block.letterSpacingPx,
     outlineColor:
-      patch.outlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineColor"))
-        ? patch.outlineColor
+      normalizedPatch.outlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineColor"))
+        ? normalizedPatch.outlineColor
         : block.outlineColor,
     outlineWidthPx:
-      patch.outlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineWidthPx"))
-        ? patch.outlineWidthPx
+      normalizedPatch.outlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "outlineWidthPx"))
+        ? normalizedPatch.outlineWidthPx
         : block.outlineWidthPx,
     secondaryOutlineColor:
-      patch.secondaryOutlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineColor"))
-        ? patch.secondaryOutlineColor
+      normalizedPatch.secondaryOutlineColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineColor"))
+        ? normalizedPatch.secondaryOutlineColor
         : block.secondaryOutlineColor,
     secondaryOutlineWidthPx:
-      patch.secondaryOutlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineWidthPx"))
-        ? patch.secondaryOutlineWidthPx
+      normalizedPatch.secondaryOutlineWidthPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "secondaryOutlineWidthPx"))
+        ? normalizedPatch.secondaryOutlineWidthPx
         : block.secondaryOutlineWidthPx,
     shadowEnabled:
-      patch.shadowEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowEnabled"))
-        ? patch.shadowEnabled
+      normalizedPatch.shadowEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowEnabled"))
+        ? normalizedPatch.shadowEnabled
         : block.shadowEnabled,
     shadowColor:
-      patch.shadowColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowColor"))
-        ? patch.shadowColor
+      normalizedPatch.shadowColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowColor"))
+        ? normalizedPatch.shadowColor
         : block.shadowColor,
     shadowOpacity:
-      patch.shadowOpacity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowOpacity"))
-        ? patch.shadowOpacity
+      normalizedPatch.shadowOpacity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowOpacity"))
+        ? normalizedPatch.shadowOpacity
         : block.shadowOpacity,
     shadowBlurPx:
-      patch.shadowBlurPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowBlurPx"))
-        ? patch.shadowBlurPx
+      normalizedPatch.shadowBlurPx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowBlurPx"))
+        ? normalizedPatch.shadowBlurPx
         : block.shadowBlurPx,
     shadowAngleDeg:
-      patch.shadowAngleDeg !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowAngleDeg"))
-        ? patch.shadowAngleDeg
+      normalizedPatch.shadowAngleDeg !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowAngleDeg"))
+        ? normalizedPatch.shadowAngleDeg
         : block.shadowAngleDeg,
     shadowDistancePx:
-      patch.shadowDistancePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowDistancePx"))
-        ? patch.shadowDistancePx
+      normalizedPatch.shadowDistancePx !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "shadowDistancePx"))
+        ? normalizedPatch.shadowDistancePx
         : block.shadowDistancePx,
     autoFitText:
-      patch.autoFitText !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "autoFitText"))
-        ? patch.autoFitText
+      normalizedPatch.autoFitText !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "autoFitText"))
+        ? normalizedPatch.autoFitText
         : block.autoFitText,
     textColor:
-      patch.textColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textColor"))
-        ? patch.textColor
+      normalizedPatch.textColor !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "textColor"))
+        ? normalizedPatch.textColor
         : block.textColor,
     screentoneFillEnabled:
-      patch.screentoneFillEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillEnabled"))
-        ? patch.screentoneFillEnabled
+      normalizedPatch.screentoneFillEnabled !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillEnabled"))
+        ? normalizedPatch.screentoneFillEnabled
         : block.screentoneFillEnabled,
     screentoneFillIntensity:
-      patch.screentoneFillIntensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillIntensity"))
-        ? patch.screentoneFillIntensity
+      normalizedPatch.screentoneFillIntensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillIntensity"))
+        ? normalizedPatch.screentoneFillIntensity
         : block.screentoneFillIntensity,
     screentoneFillDensity:
-      patch.screentoneFillDensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillDensity"))
-        ? patch.screentoneFillDensity
+      normalizedPatch.screentoneFillDensity !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillDensity"))
+        ? normalizedPatch.screentoneFillDensity
         : block.screentoneFillDensity,
     screentoneFillAntialias:
-      patch.screentoneFillAntialias !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillAntialias"))
-        ? patch.screentoneFillAntialias
+      normalizedPatch.screentoneFillAntialias !== undefined && (forceLinkedValues || isBlockFontPresetValueLinked(block, "screentoneFillAntialias"))
+        ? normalizedPatch.screentoneFillAntialias
         : block.screentoneFillAntialias
   };
 }

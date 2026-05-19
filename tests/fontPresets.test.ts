@@ -5,6 +5,7 @@ import {
   buildNextFontSizePresetName,
   isBlockFontPresetValueLinked,
   isBlockFontSizeLinkedToPreset,
+  normalizeFontPreset,
   normalizeCharacterFontOverrides,
   resolveFontPreset
 } from "../src/client/src/lib/fontPresets";
@@ -92,6 +93,39 @@ describe("font preset block links", () => {
     const preset = createPreset();
 
     expect(applyFontPresetPatchToBlock(block, preset).characterFontOverrides).toBeUndefined();
+  });
+
+  it("clears stale shadow values when applying a legacy full preset without shadow fields", () => {
+    const block = createBlock({
+      shadowEnabled: true,
+      shadowColor: "#223344",
+      shadowOpacity: 0.5,
+      shadowBlurPx: 3,
+      shadowAngleDeg: 120,
+      shadowDistancePx: 6
+    });
+    const preset = createPreset();
+
+    expect(applyFontPresetPatchToBlock(block, preset, { forceLinkedValues: true })).toMatchObject({
+      shadowEnabled: false,
+      shadowColor: "#000000",
+      shadowOpacity: 1,
+      shadowBlurPx: 0,
+      shadowAngleDeg: 45,
+      shadowDistancePx: 0
+    });
+  });
+
+  it("normalizes missing optional values on legacy font presets", () => {
+    expect(normalizeFontPreset(createPreset())).toMatchObject({
+      letterSpacingPx: 0,
+      shadowEnabled: false,
+      shadowColor: "#000000",
+      shadowOpacity: 1,
+      shadowBlurPx: 0,
+      shadowAngleDeg: 45,
+      shadowDistancePx: 0
+    });
   });
 
   it("normalizes custom character font mappings to one character per entry", () => {
