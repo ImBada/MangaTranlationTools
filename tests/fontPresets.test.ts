@@ -3,12 +3,13 @@ import {
   applyFontPresetPatchToBlock,
   buildAlphabeticPresetName,
   buildNextFontSizePresetName,
+  createFontPreset,
   isBlockFontPresetValueLinked,
   isBlockFontSizeLinkedToPreset,
-  normalizeFontPreset,
   normalizeCharacterFontOverrides,
   resolveFontPreset
 } from "../src/client/src/lib/fontPresets";
+import { normalizeFontPreset } from "../src/shared/fontPresets";
 import type { FontPreset, TranslationBlock } from "../src/shared/types";
 
 describe("font preset block links", () => {
@@ -136,6 +137,21 @@ describe("font preset block links", () => {
         { character: "", fontFamily: "Ignored Font" }
       ])
     ).toEqual([{ character: "A", fontFamily: "Second Font" }]);
+  });
+
+  it("does not reuse the source preset id or name when creating a new preset", () => {
+    const preset = createFontPreset("New preset", createPreset({ id: "source-preset", name: "Source preset" }));
+
+    expect(preset.id).not.toBe("source-preset");
+    expect(preset.name).toBe("New preset");
+  });
+
+  it("does not copy translation block-only fields when creating a preset from a block", () => {
+    const preset = createFontPreset("Block preset", createBlock({ fontPresetId: "source-preset" }));
+
+    expect(Object.prototype.hasOwnProperty.call(preset, "bbox")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(preset, "fontPresetId")).toBe(false);
+    expect(Object.prototype.hasOwnProperty.call(preset, "sourceText")).toBe(false);
   });
 });
 

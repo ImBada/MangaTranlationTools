@@ -1,5 +1,5 @@
 import type { FontPreset, FontSizePreset, TranslationBlock } from "../../../shared/types";
-import { DEFAULT_FONT_PRESET_VALUES } from "../../../shared/fontPresets";
+import { DEFAULT_FONT_PRESET_VALUES, normalizeFontPreset } from "../../../shared/fontPresets";
 
 export type FontPresetPatch = Partial<
   Pick<
@@ -96,34 +96,34 @@ export function createFontSizePreset(name: string, fontSizePx: number): FontSize
 }
 
 export function createFontPreset(name: string, source: FontPresetPatch = DEFAULT_FONT_PRESET): FontPreset {
-  return {
+  return normalizeFontPreset({
     id: `font-preset-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     name,
-    fontFamily: source.fontFamily ?? DEFAULT_FONT_PRESET.fontFamily,
+    fontFamily: source.fontFamily,
     characterFontOverrides: cloneCharacterFontOverrides(source.characterFontOverrides ?? DEFAULT_FONT_PRESET.characterFontOverrides),
-    fontWeight: source.fontWeight ?? DEFAULT_FONT_PRESET.fontWeight,
-    fontStyle: source.fontStyle ?? DEFAULT_FONT_PRESET.fontStyle,
-    textDecoration: source.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
+    fontWeight: source.fontWeight,
+    fontStyle: source.fontStyle,
+    textDecoration: source.textDecoration,
     fontSizePx: source.fontSizePx ?? DEFAULT_FONT_PRESET.fontSizePx,
     lineHeight: source.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
-    letterSpacingPx: source.letterSpacingPx ?? DEFAULT_FONT_PRESET.letterSpacingPx,
-    outlineColor: source.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
-    outlineWidthPx: source.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
-    secondaryOutlineColor: source.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
-    secondaryOutlineWidthPx: source.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
-    shadowEnabled: source.shadowEnabled ?? DEFAULT_FONT_PRESET.shadowEnabled,
-    shadowColor: source.shadowColor ?? DEFAULT_FONT_PRESET.shadowColor,
-    shadowOpacity: source.shadowOpacity ?? DEFAULT_FONT_PRESET.shadowOpacity,
-    shadowBlurPx: source.shadowBlurPx ?? DEFAULT_FONT_PRESET.shadowBlurPx,
-    shadowAngleDeg: source.shadowAngleDeg ?? DEFAULT_FONT_PRESET.shadowAngleDeg,
-    shadowDistancePx: source.shadowDistancePx ?? DEFAULT_FONT_PRESET.shadowDistancePx,
-    autoFitText: source.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
-    textColor: source.textColor ?? DEFAULT_FONT_PRESET.textColor,
-    screentoneFillEnabled: source.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
-    screentoneFillIntensity: source.screentoneFillIntensity ?? DEFAULT_FONT_PRESET.screentoneFillIntensity,
-    screentoneFillDensity: source.screentoneFillDensity ?? DEFAULT_FONT_PRESET.screentoneFillDensity,
-    screentoneFillAntialias: source.screentoneFillAntialias ?? DEFAULT_FONT_PRESET.screentoneFillAntialias
-  };
+    letterSpacingPx: source.letterSpacingPx,
+    outlineColor: source.outlineColor,
+    outlineWidthPx: source.outlineWidthPx,
+    secondaryOutlineColor: source.secondaryOutlineColor,
+    secondaryOutlineWidthPx: source.secondaryOutlineWidthPx,
+    shadowEnabled: source.shadowEnabled,
+    shadowColor: source.shadowColor,
+    shadowOpacity: source.shadowOpacity,
+    shadowBlurPx: source.shadowBlurPx,
+    shadowAngleDeg: source.shadowAngleDeg,
+    shadowDistancePx: source.shadowDistancePx,
+    autoFitText: source.autoFitText,
+    textColor: source.textColor,
+    screentoneFillEnabled: source.screentoneFillEnabled,
+    screentoneFillIntensity: source.screentoneFillIntensity,
+    screentoneFillDensity: source.screentoneFillDensity,
+    screentoneFillAntialias: source.screentoneFillAntialias
+  });
 }
 
 export function resolveFontPresetSize(preset: FontPreset, fontSizePresets: FontSizePreset[] = []): number {
@@ -131,35 +131,6 @@ export function resolveFontPresetSize(preset: FontPreset, fontSizePresets: FontS
     return preset.fontSizePx;
   }
   return fontSizePresets.find((candidate) => candidate.id === preset.fontSizePresetId)?.fontSizePx ?? preset.fontSizePx;
-}
-
-export function normalizeFontPreset(preset: FontPreset): FontPreset {
-  return {
-    ...preset,
-    fontFamily: preset.fontFamily ?? DEFAULT_FONT_PRESET.fontFamily,
-    fontWeight: preset.fontWeight ?? DEFAULT_FONT_PRESET.fontWeight,
-    fontStyle: preset.fontStyle ?? DEFAULT_FONT_PRESET.fontStyle,
-    textDecoration: preset.textDecoration ?? DEFAULT_FONT_PRESET.textDecoration,
-    fontSizePx: preset.fontSizePx ?? DEFAULT_FONT_PRESET.fontSizePx,
-    lineHeight: preset.lineHeight ?? DEFAULT_FONT_PRESET.lineHeight,
-    letterSpacingPx: preset.letterSpacingPx ?? DEFAULT_FONT_PRESET.letterSpacingPx,
-    outlineColor: preset.outlineColor ?? DEFAULT_FONT_PRESET.outlineColor,
-    outlineWidthPx: preset.outlineWidthPx ?? DEFAULT_FONT_PRESET.outlineWidthPx,
-    secondaryOutlineColor: preset.secondaryOutlineColor ?? DEFAULT_FONT_PRESET.secondaryOutlineColor,
-    secondaryOutlineWidthPx: preset.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET.secondaryOutlineWidthPx,
-    shadowEnabled: preset.shadowEnabled ?? DEFAULT_FONT_PRESET.shadowEnabled,
-    shadowColor: preset.shadowColor ?? DEFAULT_FONT_PRESET.shadowColor,
-    shadowOpacity: preset.shadowOpacity ?? DEFAULT_FONT_PRESET.shadowOpacity,
-    shadowBlurPx: preset.shadowBlurPx ?? DEFAULT_FONT_PRESET.shadowBlurPx,
-    shadowAngleDeg: preset.shadowAngleDeg ?? DEFAULT_FONT_PRESET.shadowAngleDeg,
-    shadowDistancePx: preset.shadowDistancePx ?? DEFAULT_FONT_PRESET.shadowDistancePx,
-    autoFitText: preset.autoFitText ?? DEFAULT_FONT_PRESET.autoFitText,
-    textColor: preset.textColor ?? DEFAULT_FONT_PRESET.textColor,
-    screentoneFillEnabled: preset.screentoneFillEnabled ?? DEFAULT_FONT_PRESET.screentoneFillEnabled,
-    screentoneFillIntensity: preset.screentoneFillIntensity ?? DEFAULT_FONT_PRESET.screentoneFillIntensity,
-    screentoneFillDensity: preset.screentoneFillDensity ?? DEFAULT_FONT_PRESET.screentoneFillDensity,
-    screentoneFillAntialias: preset.screentoneFillAntialias ?? DEFAULT_FONT_PRESET.screentoneFillAntialias
-  };
 }
 
 export function resolveFontPreset(preset: FontPreset, fontSizePresets: FontSizePreset[] = []): FontPreset {

@@ -66,6 +66,35 @@ describe("block type font presets", () => {
       autoFitText: true
     });
   });
+
+  it("normalizes legacy block type presets when applying them to translated blocks", () => {
+    const preset: FontPreset = {
+      id: BLOCK_TYPE_FONT_PRESET_IDS.speech,
+      name: "대사",
+      fontSizePx: 36,
+      lineHeight: 1.4
+    };
+    const block = createBlock({
+      shadowEnabled: true,
+      shadowColor: "#334455",
+      shadowOpacity: 0.7,
+      shadowBlurPx: 2,
+      shadowAngleDeg: 30,
+      shadowDistancePx: 4
+    });
+
+    expect(applyBlockTypeFontPresetToBlock(block, [preset])).toMatchObject({
+      fontPresetId: BLOCK_TYPE_FONT_PRESET_IDS.speech,
+      fontSizePx: 36,
+      lineHeight: 1.4,
+      shadowEnabled: false,
+      shadowColor: "#000000",
+      shadowOpacity: 1,
+      shadowBlurPx: 0,
+      shadowAngleDeg: 45,
+      shadowDistancePx: 0
+    });
+  });
 });
 
 function createBlock(patch: Partial<TranslationBlock> = {}): TranslationBlock {

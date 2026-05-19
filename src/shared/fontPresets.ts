@@ -73,6 +73,35 @@ export function createDefaultFontPreset(id: string, name: BlockType): FontPreset
   };
 }
 
+export function normalizeFontPreset(preset: FontPreset): FontPreset {
+  return {
+    ...preset,
+    fontFamily: preset.fontFamily ?? DEFAULT_FONT_PRESET_VALUES.fontFamily,
+    fontWeight: preset.fontWeight ?? DEFAULT_FONT_PRESET_VALUES.fontWeight,
+    fontStyle: preset.fontStyle ?? DEFAULT_FONT_PRESET_VALUES.fontStyle,
+    textDecoration: preset.textDecoration ?? DEFAULT_FONT_PRESET_VALUES.textDecoration,
+    fontSizePx: preset.fontSizePx ?? DEFAULT_FONT_PRESET_VALUES.fontSizePx,
+    lineHeight: preset.lineHeight ?? DEFAULT_FONT_PRESET_VALUES.lineHeight,
+    letterSpacingPx: preset.letterSpacingPx ?? DEFAULT_FONT_PRESET_VALUES.letterSpacingPx,
+    outlineColor: preset.outlineColor ?? DEFAULT_FONT_PRESET_VALUES.outlineColor,
+    outlineWidthPx: preset.outlineWidthPx ?? DEFAULT_FONT_PRESET_VALUES.outlineWidthPx,
+    secondaryOutlineColor: preset.secondaryOutlineColor ?? DEFAULT_FONT_PRESET_VALUES.secondaryOutlineColor,
+    secondaryOutlineWidthPx: preset.secondaryOutlineWidthPx ?? DEFAULT_FONT_PRESET_VALUES.secondaryOutlineWidthPx,
+    shadowEnabled: preset.shadowEnabled ?? DEFAULT_FONT_PRESET_VALUES.shadowEnabled,
+    shadowColor: preset.shadowColor ?? DEFAULT_FONT_PRESET_VALUES.shadowColor,
+    shadowOpacity: preset.shadowOpacity ?? DEFAULT_FONT_PRESET_VALUES.shadowOpacity,
+    shadowBlurPx: preset.shadowBlurPx ?? DEFAULT_FONT_PRESET_VALUES.shadowBlurPx,
+    shadowAngleDeg: preset.shadowAngleDeg ?? DEFAULT_FONT_PRESET_VALUES.shadowAngleDeg,
+    shadowDistancePx: preset.shadowDistancePx ?? DEFAULT_FONT_PRESET_VALUES.shadowDistancePx,
+    autoFitText: preset.autoFitText ?? DEFAULT_FONT_PRESET_VALUES.autoFitText,
+    textColor: preset.textColor ?? DEFAULT_FONT_PRESET_VALUES.textColor,
+    screentoneFillEnabled: preset.screentoneFillEnabled ?? DEFAULT_FONT_PRESET_VALUES.screentoneFillEnabled,
+    screentoneFillIntensity: preset.screentoneFillIntensity ?? DEFAULT_FONT_PRESET_VALUES.screentoneFillIntensity,
+    screentoneFillDensity: preset.screentoneFillDensity ?? DEFAULT_FONT_PRESET_VALUES.screentoneFillDensity,
+    screentoneFillAntialias: preset.screentoneFillAntialias ?? DEFAULT_FONT_PRESET_VALUES.screentoneFillAntialias
+  };
+}
+
 export function ensureBlockTypeFontPresets(fontPresets: FontPreset[] = []): FontPreset[] {
   const next = [...fontPresets];
   const usedIds = new Set(next.map((preset) => preset.id));
@@ -101,35 +130,36 @@ export function applyBlockTypeFontPresetToBlock(block: TranslationBlock, fontPre
   if (!preset) {
     return block;
   }
+  const normalizedPreset = normalizeFontPreset(preset);
 
   return {
     ...block,
-    fontPresetId: preset.id,
+    fontPresetId: normalizedPreset.id,
     ...buildLinkedFontPresetFields(),
-    fontFamily: preset.fontFamily,
-    characterFontOverrides: preset.characterFontOverrides?.map((override) => ({ ...override })),
-    fontWeight: preset.fontWeight,
-    fontStyle: preset.fontStyle,
-    textDecoration: preset.textDecoration,
-    fontSizePx: preset.fontSizePx,
-    lineHeight: preset.lineHeight,
-    letterSpacingPx: preset.letterSpacingPx,
-    outlineColor: preset.outlineColor,
-    outlineWidthPx: preset.outlineWidthPx,
-    secondaryOutlineColor: preset.secondaryOutlineColor,
-    secondaryOutlineWidthPx: preset.secondaryOutlineWidthPx,
-    shadowEnabled: preset.shadowEnabled,
-    shadowColor: preset.shadowColor,
-    shadowOpacity: preset.shadowOpacity,
-    shadowBlurPx: preset.shadowBlurPx,
-    shadowAngleDeg: preset.shadowAngleDeg,
-    shadowDistancePx: preset.shadowDistancePx,
-    autoFitText: preset.autoFitText,
-    textColor: preset.textColor ?? block.textColor,
-    screentoneFillEnabled: preset.screentoneFillEnabled,
-    screentoneFillIntensity: preset.screentoneFillIntensity,
-    screentoneFillDensity: preset.screentoneFillDensity,
-    screentoneFillAntialias: preset.screentoneFillAntialias
+    fontFamily: normalizedPreset.fontFamily,
+    characterFontOverrides: normalizedPreset.characterFontOverrides?.map((override) => ({ ...override })),
+    fontWeight: normalizedPreset.fontWeight,
+    fontStyle: normalizedPreset.fontStyle,
+    textDecoration: normalizedPreset.textDecoration,
+    fontSizePx: normalizedPreset.fontSizePx,
+    lineHeight: normalizedPreset.lineHeight,
+    letterSpacingPx: normalizedPreset.letterSpacingPx,
+    outlineColor: normalizedPreset.outlineColor,
+    outlineWidthPx: normalizedPreset.outlineWidthPx,
+    secondaryOutlineColor: normalizedPreset.secondaryOutlineColor,
+    secondaryOutlineWidthPx: normalizedPreset.secondaryOutlineWidthPx,
+    shadowEnabled: normalizedPreset.shadowEnabled,
+    shadowColor: normalizedPreset.shadowColor,
+    shadowOpacity: normalizedPreset.shadowOpacity,
+    shadowBlurPx: normalizedPreset.shadowBlurPx,
+    shadowAngleDeg: normalizedPreset.shadowAngleDeg,
+    shadowDistancePx: normalizedPreset.shadowDistancePx,
+    autoFitText: normalizedPreset.autoFitText,
+    textColor: normalizedPreset.textColor ?? block.textColor,
+    screentoneFillEnabled: normalizedPreset.screentoneFillEnabled,
+    screentoneFillIntensity: normalizedPreset.screentoneFillIntensity,
+    screentoneFillDensity: normalizedPreset.screentoneFillDensity,
+    screentoneFillAntialias: normalizedPreset.screentoneFillAntialias
   };
 }
 
