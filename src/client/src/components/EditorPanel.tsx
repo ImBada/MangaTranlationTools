@@ -3,8 +3,8 @@ import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
 import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
-import { blurSelectAfterChange } from "../lib/selectFocus";
 import { CompactNumberControl } from "./controls/CompactNumberControl";
+import { DropdownSelect } from "./controls/DropdownSelect";
 
 type EditorPanelProps = {
   block: TranslationBlock | null;
@@ -71,12 +71,18 @@ export function EditorPanel({
       </div>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         종류
-        <select value={block.type} disabled={disabled} onChange={(event) => onUpdate({ type: blurSelectAfterChange(event) as TranslationBlock["type"] })}>
-          <option value="speech">speech</option>
-          <option value="sfx">sfx</option>
-          <option value="caption">caption</option>
-          <option value="other">other</option>
-        </select>
+        <DropdownSelect
+          value={block.type}
+          disabled={disabled}
+          ariaLabel="블록 종류"
+          options={[
+            { value: "speech", label: "speech" },
+            { value: "sfx", label: "sfx" },
+            { value: "caption", label: "caption" },
+            { value: "other", label: "other" }
+          ]}
+          onChange={(type) => onUpdate({ type: type as TranslationBlock["type"] })}
+        />
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         한국어
@@ -98,15 +104,17 @@ export function EditorPanel({
       </label>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         방향
-        <select
+        <DropdownSelect
           value={block.renderDirection}
           disabled={disabled}
-          onChange={(event) => onUpdate({ renderDirection: blurSelectAfterChange(event) as RenderTextDirection })}
-        >
-          <option value="horizontal">horizontal</option>
-          <option value="vertical">vertical</option>
-          <option value="hidden">hidden</option>
-        </select>
+          ariaLabel="블록 방향"
+          options={[
+            { value: "horizontal", label: "horizontal" },
+            { value: "vertical", label: "vertical" },
+            { value: "hidden", label: "hidden" }
+          ]}
+          onChange={(renderDirection) => onUpdate({ renderDirection: renderDirection as RenderTextDirection })}
+        />
       </label>
       <div className="rotation-control grid gap-1.5 text-xs font-semibold text-soft">
         <span>회전</span>

@@ -169,6 +169,32 @@
   font-size: 14px;
 }
 
+.dropdown-select-trigger {
+  min-height: 30px;
+  padding: 4px 22px 4px 7px;
+  line-height: 1.1;
+}
+
+.dropdown-select-trigger.font-weight-select {
+  display: grid;
+  min-height: 34px;
+  padding: 0 24px 0 8px;
+}
+
+.dropdown-select-trigger.font-size-preset-select {
+  min-height: 25px;
+  padding: 0 24px 0 8px;
+}
+
+.font-style-control .dropdown-select {
+  flex: 1 1 130px;
+}
+
+.font-rendering-mode-field .dropdown-select,
+.font-size-row-field .dropdown-select {
+  min-width: 0;
+}
+
 .font-number-field,
 .font-color-field,
 .font-range-field {

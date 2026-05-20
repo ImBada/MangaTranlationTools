@@ -16,6 +16,7 @@ import {
   type FontFilterEffectControlValues,
   type FontFilterEffectControlKey
 } from "../font/FontFilterEffectControls";
+import { DropdownSelect } from "../controls/DropdownSelect";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
 import { FontShadowControls, type FontShadowControlKey, type FontShadowControlValues } from "../font/FontShadowControls";
@@ -33,7 +34,6 @@ import {
 } from "../../lib/overlayLayout";
 import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
-import { blurSelectAfterChange } from "../../lib/selectFocus";
 import {
   FONT_FILTER_EFFECT_DEFINITIONS,
   buildEnabledFontFilterEffectSettingPatch,
@@ -407,41 +407,35 @@ export function FontToolSection({
                 </button>
               </div>
               {fontWeightOptions.length > 1 ? (
-                <select
-                  className="font-weight-select"
-                  value={currentFontWeight}
+                <DropdownSelect
+                  value={String(currentFontWeight)}
                   disabled={selectedPageEditLocked}
-                  aria-label="폰트 자체 굵기"
-                  onChange={(event) => onFontSettingChange({ fontWeight: Number(blurSelectAfterChange(event)) })}
-                >
-                  {fontWeightOptions.map((weight) => (
-                    <option key={weight} value={weight}>
-                      {FONT_WEIGHT_LABELS[weight] ?? `Weight ${weight}`}
-                    </option>
-                  ))}
-                </select>
+                  ariaLabel="폰트 자체 굵기"
+                  buttonClassName="font-weight-select"
+                  options={fontWeightOptions.map((weight) => ({
+                    value: String(weight),
+                    label: FONT_WEIGHT_LABELS[weight] ?? `Weight ${weight}`
+                  }))}
+                  onChange={(fontWeight) => onFontSettingChange({ fontWeight: Number(fontWeight) })}
+                />
               ) : null}
               <span className="font-style-link-group">
                 {renderFontPresetLinkGroupButton(["fontWeight", "fontStyle", "textDecoration"], "스타일")}
               </span>
             </div>
           </div>
-          <label className="compact-tool-field font-rendering-mode-field">
+          <div className="compact-tool-field font-rendering-mode-field">
             <span>글자 렌더링</span>
-            <select
-              className="font-weight-select"
+            <DropdownSelect
               value={fontControlValues.fontRenderingMode ?? DEFAULT_FONT_RENDERING_MODE}
               disabled={selectedPageEditLocked}
-              onChange={(event) => onFontSettingChange({ fontRenderingMode: blurSelectAfterChange(event) as FontRenderingMode })}
-            >
-              {FONT_RENDERING_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              ariaLabel="글자 렌더링"
+              buttonClassName="font-weight-select"
+              options={FONT_RENDERING_MODE_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
+              onChange={(fontRenderingMode) => onFontSettingChange({ fontRenderingMode: fontRenderingMode as FontRenderingMode })}
+            />
             {renderFontPresetLinkButton("fontRenderingMode", "글자 렌더링")}
-          </label>
+          </div>
           <div className="compact-tool-field font-size-row-field">
             <span className="font-size-row-label">크기</span>
             <CompactNumberControl
@@ -454,20 +448,20 @@ export function FontToolSection({
               onChange={(fontSizePx) => onFontSettingChange({ fontSizePx })}
             />
             <span className="font-size-row-link">{renderFontPresetLinkButton("fontSizePx", "폰트 크기")}</span>
-            <select
-              className="font-size-preset-select"
+            <DropdownSelect
               value={selectedFontSizePresetId ?? ""}
               disabled={fontSizePresetControlsDisabled}
-              aria-label="폰트 크기 프리셋"
-              onChange={(event) => onSelectFontSizePreset(blurSelectAfterChange(event) || null)}
-            >
-              <option value="">개별 지정</option>
-              {fontSizePresets.map((preset) => (
-                <option key={preset.id} value={preset.id}>
-                  {preset.name} · {preset.fontSizePx}px
-                </option>
-              ))}
-            </select>
+              ariaLabel="폰트 크기 프리셋"
+              buttonClassName="font-size-preset-select"
+              options={[
+                { value: "", label: "개별 지정" },
+                ...fontSizePresets.map((preset) => ({
+                  value: preset.id,
+                  label: `${preset.name} · ${preset.fontSizePx}px`
+                }))
+              ]}
+              onChange={(presetId) => onSelectFontSizePreset(presetId || null)}
+            />
             <button
               type="button"
               className="font-size-preset-save"

@@ -1,7 +1,7 @@
 import React from "react";
 import type { ImportCreateSelection, ImportPreviewResult, LibraryIndex } from "../../../shared/types";
 import { mouseOnlyCheckboxProps } from "../lib/mouseOnlyCheckbox";
-import { blurSelectAfterChange } from "../lib/selectFocus";
+import { DropdownSelect } from "./controls/DropdownSelect";
 
 export type ImportModalSubmit = {
   target:
@@ -78,17 +78,13 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
           </label>
           <label>
             작품 선택
-            <select
+            <DropdownSelect
               value={existingWorkId}
               disabled={busy || targetMode !== "existing" || library.works.length === 0}
-              onChange={(event) => setExistingWorkId(blurSelectAfterChange(event))}
-            >
-              {library.works.map((work) => (
-                <option key={work.id} value={work.id}>
-                  {work.title}
-                </option>
-              ))}
-            </select>
+              ariaLabel="작품 선택"
+              options={library.works.map((work) => ({ value: work.id, label: work.title }))}
+              onChange={setExistingWorkId}
+            />
           </label>
         </section>
 
