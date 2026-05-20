@@ -24,10 +24,12 @@ import {
   type FontWeightAvailability
 } from "./overlayLayout";
 import {
-  applyZigzagFilterToCanvas,
-  hasActiveFontZigzagFilter,
-  resolveFontFilterEffectMarginPx,
-  type ZigzagFilterBounds
+  hasActiveFontFilterEffects,
+  resolveFontFilterEffectMarginPx
+} from "./fontFilterEffectMetadata";
+import {
+  applyFontFilterEffectsToCanvas,
+  type FontFilterEffectBounds
 } from "./fontFilterEffects";
 
 export type RenderLayerVisibility = {
@@ -431,17 +433,17 @@ function drawRenderedBlock(
     );
   };
 
-  if (hasActiveFontZigzagFilter(block)) {
-    const zigzagBounds = resolveBlockZigzagFilterBounds(block, page, layout, renderFontSizePx);
-    const zigzagCanvasWidth = Math.max(1, Math.ceil(zigzagBounds.width));
-    const zigzagCanvasHeight = Math.max(1, Math.ceil(zigzagBounds.height));
+  if (hasActiveFontFilterEffects(block)) {
+    const filterBounds = resolveBlockFontFilterEffectBounds(block, page, layout, renderFontSizePx);
+    const filterCanvasWidth = Math.max(1, Math.ceil(filterBounds.width));
+    const filterCanvasHeight = Math.max(1, Math.ceil(filterBounds.height));
     const textCanvas = document.createElement("canvas");
-    textCanvas.width = zigzagCanvasWidth;
-    textCanvas.height = zigzagCanvasHeight;
+    textCanvas.width = filterCanvasWidth;
+    textCanvas.height = filterCanvasHeight;
     const textContext = textCanvas.getContext("2d", { willReadFrequently: true });
     if (textContext) {
       textContext.save();
-      textContext.translate(-zigzagBounds.x, -zigzagBounds.y);
+      textContext.translate(-filterBounds.x, -filterBounds.y);
       if (rotationDeg !== 0) {
         textContext.translate(centerX, centerY);
         textContext.rotate((rotationDeg * Math.PI) / 180);
@@ -449,21 +451,21 @@ function drawRenderedBlock(
       }
       drawText(textContext);
       textContext.restore();
-      applyZigzagFilterToCanvas(
+      applyFontFilterEffectsToCanvas(
         textContext,
-        zigzagCanvasWidth,
-        zigzagCanvasHeight,
+        filterCanvasWidth,
+        filterCanvasHeight,
         {
-          height: zigzagCanvasHeight,
-          width: zigzagCanvasWidth,
+          height: filterCanvasHeight,
+          width: filterCanvasWidth,
           x: 0,
           y: 0
         },
-        block.filterZigzagIntensity,
+        block,
         renderFontSizePx
       );
       context.restore();
-      context.drawImage(textCanvas, zigzagBounds.x, zigzagBounds.y);
+      context.drawImage(textCanvas, filterBounds.x, filterBounds.y);
       return;
     }
   }
@@ -472,12 +474,12 @@ function drawRenderedBlock(
   context.restore();
 }
 
-function resolveBlockZigzagFilterBounds(
+function resolveBlockFontFilterEffectBounds(
   block: TranslationBlock,
   page: Pick<MangaPage, "height" | "width">,
   layout: ReturnType<typeof resolveBlockTextLayout>,
   fontSizePx: number
-): ZigzagFilterBounds {
+): FontFilterEffectBounds {
   const dirtyRect = resolveBlockCanvasDirtyRect(block, page);
   const fallbackMargin = resolveFontFilterEffectMarginPx(block, fontSizePx) + fontSizePx;
   const fallbackLeft = Math.max(0, Math.floor(layout.rect.left - fallbackMargin));

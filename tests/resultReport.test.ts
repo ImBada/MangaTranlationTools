@@ -90,6 +90,25 @@ describe("result report helpers", () => {
       sourceCropDataUrl: "",
       sourceRect
     }).filterEffect).toBe("켜짐 / 활성 필터 없음");
+
+    expect(createResultReportRow({
+      block: {
+        ...block,
+        filterWaveEnabled: true,
+        filterWaveIntensity: 0.25,
+        filterNoiseEnabled: true,
+        filterNoiseIntensity: 0.5
+      },
+      blockIndex: 1,
+      fontPreset: undefined,
+      outputCropDataUrl: "",
+      outputRect,
+      page,
+      pageIndex: 1,
+      rowIndex: 1,
+      sourceCropDataUrl: "",
+      sourceRect
+    }).filterEffect).toBe("지그재그 강도 100%, 물결 강도 25%, 노이즈 강도 50%");
   });
 });
 

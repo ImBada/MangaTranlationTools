@@ -37,7 +37,17 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "screentoneFillAntialias",
   "filterEffectEnabled",
   "filterZigzagEnabled",
-  "filterZigzagIntensity"
+  "filterZigzagIntensity",
+  "filterWaveEnabled",
+  "filterWaveIntensity",
+  "filterGlitchEnabled",
+  "filterGlitchIntensity",
+  "filterPixelateEnabled",
+  "filterPixelateIntensity",
+  "filterBlurEnabled",
+  "filterBlurIntensity",
+  "filterNoiseEnabled",
+  "filterNoiseIntensity"
 ] satisfies readonly (keyof TranslationBlock)[];
 
 type TranslationBlockFontStyleKey = typeof TRANSLATION_BLOCK_FONT_STYLE_KEYS[number];

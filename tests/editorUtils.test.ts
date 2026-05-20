@@ -91,7 +91,17 @@ describe("editor utils", () => {
       screentoneFillAntialias: false,
       filterEffectEnabled: true,
       filterZigzagEnabled: true,
-      filterZigzagIntensity: 0.65
+      filterZigzagIntensity: 0.65,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.45,
+      filterGlitchEnabled: true,
+      filterGlitchIntensity: 0.35,
+      filterPixelateEnabled: true,
+      filterPixelateIntensity: 0.25,
+      filterBlurEnabled: true,
+      filterBlurIntensity: 0.15,
+      filterNoiseEnabled: true,
+      filterNoiseIntensity: 0.55
     };
 
     const parsed = parseTranslationBlockFontStyleFromClipboard(
@@ -117,7 +127,17 @@ describe("editor utils", () => {
       screentoneFillAntialias: false,
       filterEffectEnabled: true,
       filterZigzagEnabled: true,
-      filterZigzagIntensity: 0.65
+      filterZigzagIntensity: 0.65,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.45,
+      filterGlitchEnabled: true,
+      filterGlitchIntensity: 0.35,
+      filterPixelateEnabled: true,
+      filterPixelateIntensity: 0.25,
+      filterBlurEnabled: true,
+      filterBlurIntensity: 0.15,
+      filterNoiseEnabled: true,
+      filterNoiseIntensity: 0.55
     });
     expect(parsed).not.toBeNull();
     expect(Object.prototype.hasOwnProperty.call(parsed, "letterSpacingPx")).toBe(true);

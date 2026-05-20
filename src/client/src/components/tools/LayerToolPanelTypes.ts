@@ -5,6 +5,16 @@ export type LayerToolFontControlValues = {
   filterEffectEnabled?: boolean;
   filterZigzagEnabled?: boolean;
   filterZigzagIntensity?: number;
+  filterWaveEnabled?: boolean;
+  filterWaveIntensity?: number;
+  filterGlitchEnabled?: boolean;
+  filterGlitchIntensity?: number;
+  filterPixelateEnabled?: boolean;
+  filterPixelateIntensity?: number;
+  filterBlurEnabled?: boolean;
+  filterBlurIntensity?: number;
+  filterNoiseEnabled?: boolean;
+  filterNoiseIntensity?: number;
   fontFamily?: string;
   characterFontOverrides?: FontCharacterOverride[];
   fontStyle?: TextFontStyle;

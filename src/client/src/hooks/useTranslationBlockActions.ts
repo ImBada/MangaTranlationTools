@@ -350,6 +350,16 @@ export function useTranslationBlockActions({
       filterEffectEnabled: sourcePreset.filterEffectEnabled,
       filterZigzagEnabled: sourcePreset.filterZigzagEnabled,
       filterZigzagIntensity: sourcePreset.filterZigzagIntensity,
+      filterWaveEnabled: sourcePreset.filterWaveEnabled,
+      filterWaveIntensity: sourcePreset.filterWaveIntensity,
+      filterGlitchEnabled: sourcePreset.filterGlitchEnabled,
+      filterGlitchIntensity: sourcePreset.filterGlitchIntensity,
+      filterPixelateEnabled: sourcePreset.filterPixelateEnabled,
+      filterPixelateIntensity: sourcePreset.filterPixelateIntensity,
+      filterBlurEnabled: sourcePreset.filterBlurEnabled,
+      filterBlurIntensity: sourcePreset.filterBlurIntensity,
+      filterNoiseEnabled: sourcePreset.filterNoiseEnabled,
+      filterNoiseIntensity: sourcePreset.filterNoiseIntensity,
       backgroundColor: "#fffdf5",
       opacity: 0.88
     };

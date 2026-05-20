@@ -34,7 +34,17 @@ describe("font preset block links", () => {
       screentoneFillAntialias: false,
       filterEffectEnabled: true,
       filterZigzagEnabled: true,
-      filterZigzagIntensity: 0.65
+      filterZigzagIntensity: 0.65,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.55,
+      filterGlitchEnabled: true,
+      filterGlitchIntensity: 0.45,
+      filterPixelateEnabled: true,
+      filterPixelateIntensity: 0.35,
+      filterBlurEnabled: true,
+      filterBlurIntensity: 0.25,
+      filterNoiseEnabled: true,
+      filterNoiseIntensity: 0.15
     });
 
     expect(applyFontPresetPatchToBlock(block, preset)).toMatchObject({
@@ -56,7 +66,17 @@ describe("font preset block links", () => {
       screentoneFillAntialias: false,
       filterEffectEnabled: true,
       filterZigzagEnabled: true,
-      filterZigzagIntensity: 0.65
+      filterZigzagIntensity: 0.65,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.55,
+      filterGlitchEnabled: true,
+      filterGlitchIntensity: 0.45,
+      filterPixelateEnabled: true,
+      filterPixelateIntensity: 0.35,
+      filterBlurEnabled: true,
+      filterBlurIntensity: 0.25,
+      filterNoiseEnabled: true,
+      filterNoiseIntensity: 0.15
     });
   });
 
@@ -122,7 +142,17 @@ describe("font preset block links", () => {
       shadowDistancePx: 0,
       filterEffectEnabled: false,
       filterZigzagEnabled: false,
-      filterZigzagIntensity: 0.35
+      filterZigzagIntensity: 0.35,
+      filterWaveEnabled: false,
+      filterWaveIntensity: 0.35,
+      filterGlitchEnabled: false,
+      filterGlitchIntensity: 0.35,
+      filterPixelateEnabled: false,
+      filterPixelateIntensity: 0.35,
+      filterBlurEnabled: false,
+      filterBlurIntensity: 0.35,
+      filterNoiseEnabled: false,
+      filterNoiseIntensity: 0.35
     });
   });
 
@@ -201,6 +231,16 @@ function createBlock(patch: Partial<TranslationBlock> = {}): TranslationBlock {
     filterEffectEnabled: false,
     filterZigzagEnabled: false,
     filterZigzagIntensity: 0.35,
+    filterWaveEnabled: false,
+    filterWaveIntensity: 0.35,
+    filterGlitchEnabled: false,
+    filterGlitchIntensity: 0.35,
+    filterPixelateEnabled: false,
+    filterPixelateIntensity: 0.35,
+    filterBlurEnabled: false,
+    filterBlurIntensity: 0.35,
+    filterNoiseEnabled: false,
+    filterNoiseIntensity: 0.35,
     shadowEnabled: false,
     shadowColor: "#000000",
     shadowOpacity: 1,

@@ -8,10 +8,11 @@ import type {
   TextPosition,
   TranslationBlock
 } from "../../../../shared/types";
-import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX, DEFAULT_FILTER_ZIGZAG_INTENSITY } from "../../../../shared/fontPresets";
+import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX } from "../../../../shared/fontPresets";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import {
   FontFilterEffectControls,
+  type FontFilterEffectControlValues,
   type FontFilterEffectControlKey
 } from "../font/FontFilterEffectControls";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
@@ -30,7 +31,11 @@ import {
 } from "../../lib/overlayLayout";
 import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
-import { buildFontFilterEffectSettingPatch, resolveEnabledFontZigzagIntensity } from "../../lib/fontFilterEffects";
+import {
+  FONT_FILTER_EFFECT_DEFINITIONS,
+  buildEnabledFontFilterEffectSettingPatch,
+  buildFontFilterEffectSettingPatch
+} from "../../lib/fontFilterEffectMetadata";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
 type FontToolSectionProps = {
@@ -98,11 +103,13 @@ const FONT_SHADOW_LINK_KEY_BY_CONTROL_KEY = {
   enabled: "shadowEnabled",
   opacity: "shadowOpacity"
 } satisfies Record<FontShadowControlKey, LinkableFontPresetKey>;
-const FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY = {
-  enabled: "filterEffectEnabled",
-  zigzagEnabled: "filterZigzagEnabled",
-  zigzagIntensity: "filterZigzagIntensity"
-} satisfies Record<FontFilterEffectControlKey, LinkableFontPresetKey>;
+const FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY = Object.fromEntries([
+  ["enabled", "filterEffectEnabled"],
+  ...FONT_FILTER_EFFECT_DEFINITIONS.flatMap((definition) => [
+    [definition.enabledControlKey, definition.enabledKey],
+    [definition.intensityControlKey, definition.intensityKey]
+  ])
+]) as Record<FontFilterEffectControlKey, LinkableFontPresetKey>;
 
 function buildFontShadowSettingPatch(patch: Partial<Omit<FontShadowControlValues, "enabled">>): BlockFontPatch {
   const fontPatch: BlockFontPatch = {};
@@ -122,6 +129,20 @@ function buildFontShadowSettingPatch(patch: Partial<Omit<FontShadowControlValues
     fontPatch.shadowOpacity = patch.opacity;
   }
   return fontPatch;
+}
+
+function buildFontFilterEffectControlValues(
+  fontControlValues: LayerToolFontControlValues,
+  enabled: boolean
+): FontFilterEffectControlValues {
+  const values = { enabled } as FontFilterEffectControlValues;
+  for (const definition of FONT_FILTER_EFFECT_DEFINITIONS) {
+    Object.assign(values, {
+      [definition.enabledControlKey]: Boolean(fontControlValues[definition.enabledKey]),
+      [definition.intensityControlKey]: definition.resolveIntensity(fontControlValues[definition.intensityKey])
+    });
+  }
+  return values;
 }
 
 function resolvePresetTagTextMetrics(preset: FontPreset): {
@@ -665,21 +686,13 @@ export function FontToolSection({
           <FontFilterEffectControls
             disabled={selectedPageEditLocked}
             enabledAriaLabel="필터 효과 사용"
-            values={{
-              enabled: filterEffectActive,
-              zigzagEnabled: fontControlValues.filterZigzagEnabled ?? false,
-              zigzagIntensity: fontControlValues.filterZigzagIntensity ?? DEFAULT_FILTER_ZIGZAG_INTENSITY
-            }}
+            values={buildFontFilterEffectControlValues(fontControlValues, filterEffectActive)}
             onEnabledChange={(enabled) => {
               if (!enabled) {
                 onFontSettingChange({ filterEffectEnabled: false });
                 return;
               }
-              onFontSettingChange({
-                filterEffectEnabled: true,
-                filterZigzagEnabled: true,
-                filterZigzagIntensity: resolveEnabledFontZigzagIntensity(fontControlValues.filterZigzagIntensity)
-              });
+              onFontSettingChange(buildEnabledFontFilterEffectSettingPatch(fontControlValues));
             }}
             onChange={(patch) => onFontSettingChange(buildFontFilterEffectSettingPatch(patch))}
             renderLinkButton={(key, label) => renderFontPresetLinkButton(FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY[key], label)}

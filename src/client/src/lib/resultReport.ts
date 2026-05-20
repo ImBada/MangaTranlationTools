@@ -1,6 +1,7 @@
 import type { BBox, FontPreset, MangaPage, TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp } from "../../../shared/geometry";
-import { hasActiveFontZigzagFilter, resolveFilterZigzagIntensity } from "./fontFilterEffects";
+import { FONT_PRESET_LINK_FIELD_BY_KEY } from "../../../shared/fontPresets";
+import { FONT_FILTER_EFFECT_DEFINITIONS } from "./fontFilterEffectMetadata";
 
 export type PixelRect = {
   x: number;
@@ -95,8 +96,10 @@ const LINK_FIELD_LABELS: readonly [keyof TranslationBlock, string][] = [
   ["screentoneFillDensityLinkedToPreset", "스크린톤밀도"],
   ["screentoneFillAntialiasLinkedToPreset", "스크린톤AA"],
   ["filterEffectEnabledLinkedToPreset", "필터효과"],
-  ["filterZigzagEnabledLinkedToPreset", "지그재그"],
-  ["filterZigzagIntensityLinkedToPreset", "지그재그강도"],
+  ...FONT_FILTER_EFFECT_DEFINITIONS.flatMap((definition): [keyof TranslationBlock, string][] => [
+    [FONT_PRESET_LINK_FIELD_BY_KEY[definition.enabledKey], definition.label],
+    [FONT_PRESET_LINK_FIELD_BY_KEY[definition.intensityKey], `${definition.label}강도`]
+  ]),
   ["fontWeightLinkedToPreset", "굵기"],
   ["fontStyleLinkedToPreset", "스타일"],
   ["textDecorationLinkedToPreset", "장식"]
@@ -633,10 +636,13 @@ function formatFilterEffect(block: TranslationBlock): string {
   if (!block.filterEffectEnabled) {
     return "꺼짐";
   }
-  if (!hasActiveFontZigzagFilter(block)) {
+  const activeFilters = FONT_FILTER_EFFECT_DEFINITIONS
+    .filter((definition) => definition.hasActive(block))
+    .map((definition) => `${definition.label} 강도 ${formatNumber(definition.resolveIntensity(block[definition.intensityKey]) * 100)}%`);
+  if (activeFilters.length === 0) {
     return "켜짐 / 활성 필터 없음";
   }
-  return `지그재그 강도 ${formatNumber(resolveFilterZigzagIntensity(block.filterZigzagIntensity) * 100)}%`;
+  return activeFilters.join(", ");
 }
 
 function formatInpaintSettings(page: MangaPage): string {

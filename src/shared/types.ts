@@ -134,6 +134,16 @@ export type TranslationBlock = {
   filterEffectEnabledLinkedToPreset?: boolean;
   filterZigzagEnabledLinkedToPreset?: boolean;
   filterZigzagIntensityLinkedToPreset?: boolean;
+  filterWaveEnabledLinkedToPreset?: boolean;
+  filterWaveIntensityLinkedToPreset?: boolean;
+  filterGlitchEnabledLinkedToPreset?: boolean;
+  filterGlitchIntensityLinkedToPreset?: boolean;
+  filterPixelateEnabledLinkedToPreset?: boolean;
+  filterPixelateIntensityLinkedToPreset?: boolean;
+  filterBlurEnabledLinkedToPreset?: boolean;
+  filterBlurIntensityLinkedToPreset?: boolean;
+  filterNoiseEnabledLinkedToPreset?: boolean;
+  filterNoiseIntensityLinkedToPreset?: boolean;
   fontWeightLinkedToPreset?: boolean;
   fontStyleLinkedToPreset?: boolean;
   textDecorationLinkedToPreset?: boolean;
@@ -166,6 +176,16 @@ export type TranslationBlock = {
   filterEffectEnabled?: boolean;
   filterZigzagEnabled?: boolean;
   filterZigzagIntensity?: number;
+  filterWaveEnabled?: boolean;
+  filterWaveIntensity?: number;
+  filterGlitchEnabled?: boolean;
+  filterGlitchIntensity?: number;
+  filterPixelateEnabled?: boolean;
+  filterPixelateIntensity?: number;
+  filterBlurEnabled?: boolean;
+  filterBlurIntensity?: number;
+  filterNoiseEnabled?: boolean;
+  filterNoiseIntensity?: number;
   backgroundColor: string;
   opacity: number;
   autoFitText?: boolean;
@@ -218,6 +238,16 @@ export type FontPreset = {
   filterEffectEnabled?: boolean;
   filterZigzagEnabled?: boolean;
   filterZigzagIntensity?: number;
+  filterWaveEnabled?: boolean;
+  filterWaveIntensity?: number;
+  filterGlitchEnabled?: boolean;
+  filterGlitchIntensity?: number;
+  filterPixelateEnabled?: boolean;
+  filterPixelateIntensity?: number;
+  filterBlurEnabled?: boolean;
+  filterBlurIntensity?: number;
+  filterNoiseEnabled?: boolean;
+  filterNoiseIntensity?: number;
 };
 
 export type FontSizePreset = {

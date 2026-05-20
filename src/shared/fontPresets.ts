@@ -8,6 +8,11 @@ export const DEFAULT_OVERLAY_FONT_STYLE = "normal";
 export const DEFAULT_OVERLAY_TEXT_DECORATION = "none";
 export const DEFAULT_ENABLED_SHADOW_DISTANCE_PX = 4;
 export const DEFAULT_FILTER_ZIGZAG_INTENSITY = 0.35;
+export const DEFAULT_FILTER_WAVE_INTENSITY = 0.35;
+export const DEFAULT_FILTER_GLITCH_INTENSITY = 0.35;
+export const DEFAULT_FILTER_PIXELATE_INTENSITY = 0.35;
+export const DEFAULT_FILTER_BLUR_INTENSITY = 0.35;
+export const DEFAULT_FILTER_NOISE_INTENSITY = 0.35;
 
 export const DEFAULT_FONT_PRESET_VALUES = {
   fontFamily: DEFAULT_OVERLAY_FONT_FAMILY,
@@ -35,7 +40,17 @@ export const DEFAULT_FONT_PRESET_VALUES = {
   screentoneFillAntialias: true,
   filterEffectEnabled: false,
   filterZigzagEnabled: false,
-  filterZigzagIntensity: DEFAULT_FILTER_ZIGZAG_INTENSITY
+  filterZigzagIntensity: DEFAULT_FILTER_ZIGZAG_INTENSITY,
+  filterWaveEnabled: false,
+  filterWaveIntensity: DEFAULT_FILTER_WAVE_INTENSITY,
+  filterGlitchEnabled: false,
+  filterGlitchIntensity: DEFAULT_FILTER_GLITCH_INTENSITY,
+  filterPixelateEnabled: false,
+  filterPixelateIntensity: DEFAULT_FILTER_PIXELATE_INTENSITY,
+  filterBlurEnabled: false,
+  filterBlurIntensity: DEFAULT_FILTER_BLUR_INTENSITY,
+  filterNoiseEnabled: false,
+  filterNoiseIntensity: DEFAULT_FILTER_NOISE_INTENSITY
 } satisfies DefaultFontPresetValues;
 export type FontPresetValueKey = keyof typeof DEFAULT_FONT_PRESET_VALUES;
 export const FONT_PRESET_VALUE_KEYS = Object.keys(DEFAULT_FONT_PRESET_VALUES) as FontPresetValueKey[];
@@ -76,6 +91,16 @@ export const FONT_PRESET_LINK_FIELD_BY_KEY = {
   filterEffectEnabled: "filterEffectEnabledLinkedToPreset",
   filterZigzagEnabled: "filterZigzagEnabledLinkedToPreset",
   filterZigzagIntensity: "filterZigzagIntensityLinkedToPreset",
+  filterWaveEnabled: "filterWaveEnabledLinkedToPreset",
+  filterWaveIntensity: "filterWaveIntensityLinkedToPreset",
+  filterGlitchEnabled: "filterGlitchEnabledLinkedToPreset",
+  filterGlitchIntensity: "filterGlitchIntensityLinkedToPreset",
+  filterPixelateEnabled: "filterPixelateEnabledLinkedToPreset",
+  filterPixelateIntensity: "filterPixelateIntensityLinkedToPreset",
+  filterBlurEnabled: "filterBlurEnabledLinkedToPreset",
+  filterBlurIntensity: "filterBlurIntensityLinkedToPreset",
+  filterNoiseEnabled: "filterNoiseEnabledLinkedToPreset",
+  filterNoiseIntensity: "filterNoiseIntensityLinkedToPreset",
   fontWeight: "fontWeightLinkedToPreset",
   fontStyle: "fontStyleLinkedToPreset",
   textDecoration: "textDecorationLinkedToPreset"

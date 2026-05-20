@@ -1,27 +1,28 @@
 import React from "react";
 import {
-  FILTER_ZIGZAG_INTENSITY_MAX,
-  FILTER_ZIGZAG_INTENSITY_MIN,
-  FILTER_ZIGZAG_INTENSITY_STEP,
-  resolveEnabledFontZigzagIntensity,
-  resolveFilterZigzagIntensity
-} from "../../lib/fontFilterEffects";
+  FONT_FILTER_EFFECT_DEFINITIONS,
+  FILTER_EFFECT_INTENSITY_MAX,
+  FILTER_EFFECT_INTENSITY_MIN,
+  FILTER_EFFECT_INTENSITY_STEP,
+  type FontFilterEffectControlEnabledKey,
+  type FontFilterEffectControlIntensityKey,
+  type FontFilterEffectDefinition
+} from "../../lib/fontFilterEffectMetadata";
 import { mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 export type FontFilterEffectControlValues = {
   enabled: boolean;
-  zigzagEnabled: boolean;
-  zigzagIntensity: number;
-};
+} & Record<FontFilterEffectControlEnabledKey, boolean> & Record<FontFilterEffectControlIntensityKey, number>;
 
 export type FontFilterEffectControlKey = keyof FontFilterEffectControlValues;
+type FontFilterEffectControlPatch = Partial<Omit<FontFilterEffectControlValues, "enabled">>;
 
 type FontFilterEffectControlsProps = {
   disabled: boolean;
   enabledAriaLabel: string;
   values: FontFilterEffectControlValues;
-  onChange: (patch: Partial<Omit<FontFilterEffectControlValues, "enabled">>) => void;
+  onChange: (patch: FontFilterEffectControlPatch) => void;
   onEnabledChange: (enabled: boolean) => void;
   renderLinkButton?: (key: FontFilterEffectControlKey, label: string) => React.ReactNode;
 };
@@ -34,9 +35,61 @@ export function FontFilterEffectControls({
   onEnabledChange,
   renderLinkButton
 }: FontFilterEffectControlsProps): React.JSX.Element {
-  const zigzagIntensity = resolveFilterZigzagIntensity(values.zigzagIntensity);
   const renderOptionalLinkButton = (key: FontFilterEffectControlKey, label: string): React.ReactNode =>
     renderLinkButton?.(key, label) ?? null;
+
+  const renderFilterControl = (definition: FontFilterEffectDefinition): React.ReactNode => {
+    const filterEnabled = Boolean(values[definition.enabledControlKey]);
+    const intensity = definition.resolveIntensity(values[definition.intensityControlKey]);
+    return (
+      <React.Fragment key={definition.enabledControlKey}>
+        <div className="font-filter-option-row">
+          <button
+            type="button"
+            className={`font-inline-toggle ${filterEnabled ? "active" : ""}`}
+            disabled={disabled}
+            onClick={() => {
+              const nextEnabled = !filterEnabled;
+              const patch = { [definition.enabledControlKey]: nextEnabled } as FontFilterEffectControlPatch;
+              if (nextEnabled) {
+                Object.assign(patch, {
+                  [definition.intensityControlKey]: definition.resolveEnabledIntensity(values[definition.intensityControlKey])
+                });
+              }
+              onChange(patch);
+            }}
+            aria-pressed={filterEnabled}
+          >
+            {definition.label}
+          </button>
+          {renderOptionalLinkButton(definition.enabledControlKey, definition.label)}
+        </div>
+        {filterEnabled ? (
+          <div className="font-filter-range-row">
+            <label className="compact-tool-field font-range-field">
+              <span>
+                <span>강도</span>
+                <strong>{Math.round(intensity * 100)}%</strong>
+              </span>
+              <input
+                type="range"
+                {...mouseOnlyRangeInputProps}
+                min={FILTER_EFFECT_INTENSITY_MIN}
+                max={FILTER_EFFECT_INTENSITY_MAX}
+                step={FILTER_EFFECT_INTENSITY_STEP}
+                value={intensity}
+                style={rangeProgressStyle(intensity, FILTER_EFFECT_INTENSITY_MIN, FILTER_EFFECT_INTENSITY_MAX)}
+                aria-label={`${definition.label} 강도`}
+                disabled={disabled}
+                onChange={(event) => onChange({ [definition.intensityControlKey]: Number(event.target.value) } as FontFilterEffectControlPatch)}
+              />
+              {renderOptionalLinkButton(definition.intensityControlKey, `${definition.label} 강도`)}
+            </label>
+          </div>
+        ) : null}
+      </React.Fragment>
+    );
+  };
 
   return (
     <div className="compact-tool-field font-outline-section font-filter-section font-effect-section">
@@ -66,50 +119,7 @@ export function FontFilterEffectControls({
           {renderOptionalLinkButton("enabled", "필터 효과")}
         </div>
       </div>
-      {values.enabled ? (
-        <>
-          <div className="font-filter-option-row">
-            <button
-              type="button"
-              className={`font-inline-toggle ${values.zigzagEnabled ? "active" : ""}`}
-              disabled={disabled}
-              onClick={() => {
-                const zigzagEnabled = !values.zigzagEnabled;
-                onChange({
-                  zigzagEnabled,
-                  ...(zigzagEnabled ? { zigzagIntensity: resolveEnabledFontZigzagIntensity(values.zigzagIntensity) } : {})
-                });
-              }}
-              aria-pressed={values.zigzagEnabled}
-            >
-              지그재그
-            </button>
-            {renderOptionalLinkButton("zigzagEnabled", "지그재그")}
-          </div>
-          {values.zigzagEnabled ? (
-            <div className="font-filter-range-row">
-              <label className="compact-tool-field font-range-field">
-                <span>
-                  <span>강도</span>
-                  <strong>{Math.round(zigzagIntensity * 100)}%</strong>
-                </span>
-                <input
-                  type="range"
-                  {...mouseOnlyRangeInputProps}
-                  min={FILTER_ZIGZAG_INTENSITY_MIN}
-                  max={FILTER_ZIGZAG_INTENSITY_MAX}
-                  step={FILTER_ZIGZAG_INTENSITY_STEP}
-                  value={zigzagIntensity}
-                  style={rangeProgressStyle(zigzagIntensity, FILTER_ZIGZAG_INTENSITY_MIN, FILTER_ZIGZAG_INTENSITY_MAX)}
-                  disabled={disabled}
-                  onChange={(event) => onChange({ zigzagIntensity: Number(event.target.value) })}
-                />
-                {renderOptionalLinkButton("zigzagIntensity", "지그재그 강도")}
-              </label>
-            </div>
-          ) : null}
-        </>
-      ) : null}
+      {values.enabled ? FONT_FILTER_EFFECT_DEFINITIONS.map(renderFilterControl) : null}
     </div>
   );
 }
