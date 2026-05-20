@@ -14,6 +14,7 @@ export type TextPosition =
   | "bottom-right";
 export type TextFontStyle = "normal" | "italic";
 export type TextDecoration = "none" | "underline";
+export type FontRenderingMode = "smooth" | "hard";
 
 export type FontCharacterOverride = {
   character: string;
@@ -147,11 +148,13 @@ export type TranslationBlock = {
   fontWeightLinkedToPreset?: boolean;
   fontStyleLinkedToPreset?: boolean;
   textDecorationLinkedToPreset?: boolean;
+  fontRenderingModeLinkedToPreset?: boolean;
   fontFamily?: string;
   characterFontOverrides?: FontCharacterOverride[];
   fontWeight?: number;
   fontStyle?: TextFontStyle;
   textDecoration?: TextDecoration;
+  fontRenderingMode?: FontRenderingMode;
   fontSizePx: number;
   lineHeight: number;
   letterSpacingPx?: number;
@@ -216,6 +219,7 @@ export type FontPreset = {
   fontWeight?: number;
   fontStyle?: TextFontStyle;
   textDecoration?: TextDecoration;
+  fontRenderingMode?: FontRenderingMode;
   fontSizePx: number;
   lineHeight: number;
   letterSpacingPx?: number;

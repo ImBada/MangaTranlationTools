@@ -513,6 +513,7 @@ function summarizeBlockRenderState(block: TranslationBlock): Record<string, unkn
     filterNoiseEnabled: block.filterNoiseEnabled,
     filterNoiseIntensity: block.filterNoiseIntensity,
     fontFamily: block.fontFamily,
+    fontRenderingMode: block.fontRenderingMode,
     fontSizePx: block.fontSizePx,
     fontStyle: block.fontStyle,
     fontWeight: block.fontWeight,

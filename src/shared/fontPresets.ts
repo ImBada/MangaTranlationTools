@@ -6,6 +6,7 @@ export const DEFAULT_OVERLAY_FONT_FAMILY = "\"Malgun Gothic\", \"Apple SD Gothic
 export const DEFAULT_OVERLAY_FONT_WEIGHT = 700;
 export const DEFAULT_OVERLAY_FONT_STYLE = "normal";
 export const DEFAULT_OVERLAY_TEXT_DECORATION = "none";
+export const DEFAULT_FONT_RENDERING_MODE = "smooth";
 export const DEFAULT_ENABLED_SHADOW_DISTANCE_PX = 4;
 export const DEFAULT_FILTER_ZIGZAG_INTENSITY = 0.35;
 export const DEFAULT_FILTER_WAVE_INTENSITY = 0.35;
@@ -19,6 +20,7 @@ export const DEFAULT_FONT_PRESET_VALUES = {
   fontWeight: DEFAULT_OVERLAY_FONT_WEIGHT,
   fontStyle: DEFAULT_OVERLAY_FONT_STYLE,
   textDecoration: DEFAULT_OVERLAY_TEXT_DECORATION,
+  fontRenderingMode: DEFAULT_FONT_RENDERING_MODE,
   fontSizePx: 24,
   lineHeight: 1.18,
   letterSpacingPx: 0,
@@ -103,7 +105,8 @@ export const FONT_PRESET_LINK_FIELD_BY_KEY = {
   filterNoiseIntensity: "filterNoiseIntensityLinkedToPreset",
   fontWeight: "fontWeightLinkedToPreset",
   fontStyle: "fontStyleLinkedToPreset",
-  textDecoration: "textDecorationLinkedToPreset"
+  textDecoration: "textDecorationLinkedToPreset",
+  fontRenderingMode: "fontRenderingModeLinkedToPreset"
 } satisfies Record<LinkableFontPresetKey, keyof TranslationBlock>;
 
 export const FONT_PRESET_LINK_FIELDS = Object.values(FONT_PRESET_LINK_FIELD_BY_KEY) as (typeof FONT_PRESET_LINK_FIELD_BY_KEY)[LinkableFontPresetKey][];

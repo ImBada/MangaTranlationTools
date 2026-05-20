@@ -178,18 +178,18 @@ export function LayerToolPanel({
   onSelectedBlockGroupEffectsChange,
   onSelectedBlockGroupOrderChange
 }: LayerToolPanelProps): React.JSX.Element {
-  const [characterOverrideModalOpen, setCharacterOverrideModalOpen] = React.useState(false);
+  const [advancedFontSettingsOpen, setAdvancedFontSettingsOpen] = React.useState(false);
   const groupSelectionActive = activeLayer === "overlay" && selectedBlockGroup !== null;
   const layerToolTitle = resolveLayerToolTitle(activeLayer, groupSelectionActive);
   const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
   const activeFontPresetName = fontPresets.find((preset) => preset.id === activeFontPresetId)?.name ?? "선택한";
-  const characterOverrideButtonEnabled = activeLayer === "overlay" && !groupSelectionActive && Boolean(activeFontPresetId && fontControlValues);
+  const advancedFontSettingsEnabled = activeLayer === "overlay" && !groupSelectionActive && Boolean(activeFontPresetId && fontControlValues);
 
   React.useEffect(() => {
-    if (!characterOverrideButtonEnabled) {
-      setCharacterOverrideModalOpen(false);
+    if (!advancedFontSettingsEnabled) {
+      setAdvancedFontSettingsOpen(false);
     }
-  }, [characterOverrideButtonEnabled]);
+  }, [advancedFontSettingsEnabled]);
 
   return (
     <section className="layer-tool-panel layer-tools-panel">
@@ -199,10 +199,10 @@ export function LayerToolPanel({
           <button
             type="button"
             className="font-character-settings-button"
-            disabled={!characterOverrideButtonEnabled}
-            aria-label="커스텀 문자 설정"
-            title={characterOverrideButtonEnabled ? "커스텀 문자 설정" : "폰트 프리셋 선택 후 설정 가능"}
-            onClick={() => setCharacterOverrideModalOpen(true)}
+            disabled={!advancedFontSettingsEnabled}
+            aria-label="고급 설정"
+            title={advancedFontSettingsEnabled ? "고급 설정" : "폰트 프리셋 선택 후 설정 가능"}
+            onClick={() => setAdvancedFontSettingsOpen(true)}
           >
             <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
               <circle cx="12" cy="12" r="3.2" />
@@ -320,17 +320,17 @@ export function LayerToolPanel({
           onOpenLastResultReport={onOpenLastResultReport}
         />
       )}
-      {characterOverrideModalOpen && fontControlValues ? (
+      {advancedFontSettingsOpen && fontControlValues ? (
         <FontCharacterOverrideModal
           defaultFontFamily={fontControlValues.fontFamily ?? DEFAULT_OVERLAY_FONT_FAMILY}
           disabled={selectedPageEditLocked}
           fontFamilyOptions={fontFamilyOptions}
           overrides={fontControlValues.characterFontOverrides ?? []}
           presetName={activeFontPresetName}
-          onCancel={() => setCharacterOverrideModalOpen(false)}
+          onCancel={() => setAdvancedFontSettingsOpen(false)}
           onSubmit={(characterFontOverrides) => {
             onFontSettingChange({ characterFontOverrides });
-            setCharacterOverrideModalOpen(false);
+            setAdvancedFontSettingsOpen(false);
           }}
         />
       ) : null}

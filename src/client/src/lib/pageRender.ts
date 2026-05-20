@@ -21,6 +21,7 @@ import {
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
+  DEFAULT_FONT_RENDERING_MODE,
   type FontWeightAvailability
 } from "./overlayLayout";
 import {
@@ -31,6 +32,7 @@ import {
   applyFontFilterEffectsToCanvas,
   type FontFilterEffectBounds
 } from "./fontFilterEffects";
+import { hardenCanvasTextPixels } from "./hardTextRendering";
 
 export type RenderLayerVisibility = {
   image: boolean;
@@ -270,11 +272,12 @@ export function doesBlockIntersectCanvasRect(
 
 export function resolveBlockCanvasDirtyRect(
   block: TranslationBlock,
-  page: Pick<MangaPage, "height" | "width">
+  page: Pick<MangaPage, "height" | "width">,
+  resolvedLayout?: ReturnType<typeof resolveBlockTextLayout>
 ): OverlayCanvasDirtyRect | null {
   const text = block.translatedText || block.sourceText || "...";
   const pageSize = { width: page.width, height: page.height };
-  const layout = resolveBlockTextLayout(block, text, pageSize, pageSize);
+  const layout = resolvedLayout ?? resolveBlockTextLayout(block, text, pageSize, pageSize);
   const outlinePx = Math.max(0, block.outlineWidthPx ?? 0);
   const secondaryOutlinePx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
@@ -433,6 +436,8 @@ function drawRenderedBlock(
     );
   };
 
+  const hardRenderingEnabled = (block.fontRenderingMode ?? DEFAULT_FONT_RENDERING_MODE) === "hard";
+
   if (hasActiveFontFilterEffects(block)) {
     const filterBounds = resolveBlockFontFilterEffectBounds(block, page, layout, renderFontSizePx);
     const filterCanvasWidth = Math.max(1, Math.ceil(filterBounds.width));
@@ -464,8 +469,39 @@ function drawRenderedBlock(
         block,
         renderFontSizePx
       );
+      if (hardRenderingEnabled) {
+        hardenCanvasTextPixels(textContext, filterCanvasWidth, filterCanvasHeight, block);
+      }
       context.restore();
+      context.save();
+      context.imageSmoothingEnabled = !hardRenderingEnabled;
       context.drawImage(textCanvas, filterBounds.x, filterBounds.y);
+      context.restore();
+      return;
+    }
+  }
+
+  if (hardRenderingEnabled) {
+    const hardTextBounds = resolveBlockHardTextBounds(block, page, layout, renderFontSizePx);
+    const textCanvas = document.createElement("canvas");
+    textCanvas.width = hardTextBounds.width;
+    textCanvas.height = hardTextBounds.height;
+    const textContext = textCanvas.getContext("2d", { willReadFrequently: true });
+    if (textContext) {
+      textContext.translate(-hardTextBounds.x, -hardTextBounds.y);
+      if (rotationDeg !== 0) {
+        textContext.translate(centerX, centerY);
+        textContext.rotate((rotationDeg * Math.PI) / 180);
+        textContext.translate(-centerX, -centerY);
+      }
+      drawText(textContext);
+      textContext.setTransform(1, 0, 0, 1, 0, 0);
+      hardenCanvasTextPixels(textContext, hardTextBounds.width, hardTextBounds.height, block);
+      context.restore();
+      context.save();
+      context.imageSmoothingEnabled = false;
+      context.drawImage(textCanvas, hardTextBounds.x, hardTextBounds.y);
+      context.restore();
       return;
     }
   }
@@ -474,30 +510,55 @@ function drawRenderedBlock(
   context.restore();
 }
 
+function resolveBlockHardTextBounds(
+  block: TranslationBlock,
+  page: Pick<MangaPage, "height" | "width">,
+  layout: ReturnType<typeof resolveBlockTextLayout>,
+  fontSizePx: number
+): FontFilterEffectBounds {
+  return resolveBlockTextEffectBounds(block, page, layout, fontSizePx + 8);
+}
+
 function resolveBlockFontFilterEffectBounds(
   block: TranslationBlock,
   page: Pick<MangaPage, "height" | "width">,
   layout: ReturnType<typeof resolveBlockTextLayout>,
   fontSizePx: number
 ): FontFilterEffectBounds {
-  const dirtyRect = resolveBlockCanvasDirtyRect(block, page);
   const fallbackMargin = resolveFontFilterEffectMarginPx(block, fontSizePx) + fontSizePx;
-  const fallbackLeft = Math.max(0, Math.floor(layout.rect.left - fallbackMargin));
-  const fallbackTop = Math.max(0, Math.floor(layout.rect.top - fallbackMargin));
-  const fallbackRight = Math.min(page.width, Math.ceil(layout.rect.left + layout.rect.width + fallbackMargin));
-  const fallbackBottom = Math.min(page.height, Math.ceil(layout.rect.top + layout.rect.height + fallbackMargin));
-  const fallbackRect = {
-    x: fallbackLeft,
-    y: fallbackTop,
-    width: Math.max(1, fallbackRight - fallbackLeft),
-    height: Math.max(1, fallbackBottom - fallbackTop)
-  };
-  const rect = dirtyRect ?? fallbackRect;
+  return resolveBlockTextEffectBounds(block, page, layout, fallbackMargin);
+}
+
+function resolveBlockTextEffectBounds(
+  block: TranslationBlock,
+  page: Pick<MangaPage, "height" | "width">,
+  layout: ReturnType<typeof resolveBlockTextLayout>,
+  fallbackMargin: number
+): FontFilterEffectBounds {
+  const dirtyRect = resolveBlockCanvasDirtyRect(block, page, layout);
+  const rect = dirtyRect ?? resolveExpandedLayoutRect(page, layout, fallbackMargin);
   return {
-    height: rect.height,
-    width: rect.width,
+    height: Math.max(1, rect.height),
+    width: Math.max(1, rect.width),
     x: rect.x,
     y: rect.y
+  };
+}
+
+function resolveExpandedLayoutRect(
+  page: Pick<MangaPage, "height" | "width">,
+  layout: ReturnType<typeof resolveBlockTextLayout>,
+  margin: number
+): OverlayCanvasDirtyRect {
+  const left = Math.max(0, Math.floor(layout.rect.left - margin));
+  const top = Math.max(0, Math.floor(layout.rect.top - margin));
+  const right = Math.min(page.width, Math.ceil(layout.rect.left + layout.rect.width + margin));
+  const bottom = Math.min(page.height, Math.ceil(layout.rect.top + layout.rect.height + margin));
+  return {
+    height: Math.max(1, bottom - top),
+    width: Math.max(1, right - left),
+    x: left,
+    y: top
   };
 }
 
@@ -659,6 +720,8 @@ function strokeTextOutlines(
     context.strokeStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
     context.lineWidth = outlineWidthPx + textRenderStyle.syntheticBoldWidthPx;
     drawTextRun(context, block, text, x, y, fontSize, "stroke", textRenderStyle);
+    context.fillStyle = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
+    drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
     context.restore();
   }
 }
@@ -816,6 +879,7 @@ function drawCenteredEllipsisBody(
   const outlineWidthPx = resolveRenderedOutlineWidthPx(block, fontSize);
   const secondaryOutlineWidthPx = resolveRenderedSecondaryOutlineWidthPx(block, fontSize);
   const syntheticBoldRadiusPx = textRenderStyle.syntheticBoldWidthPx / 2;
+  const fillRadius = geometry.radius + syntheticBoldRadiusPx;
   const collapseKnockoutOutline = shouldCollapseCenteredEllipsisKnockoutOutline(block, fontSize);
 
   withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
@@ -829,15 +893,16 @@ function drawCenteredEllipsisBody(
     }
 
     if (outlineWidthPx > 0 && !collapseKnockoutOutline) {
+      const primaryOutlinePaint = block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR;
       drawCenteredEllipsisDots(
         context,
         geometry,
         geometry.radius + outlineWidthPx / 2 + syntheticBoldRadiusPx,
-        block.outlineColor ?? DEFAULT_TEXT_OUTLINE_COLOR
+        primaryOutlinePaint
       );
+      drawCenteredEllipsisDots(context, geometry, fillRadius, primaryOutlinePaint);
     }
 
-    const fillRadius = geometry.radius + syntheticBoldRadiusPx;
     if (block.screentoneFillEnabled ?? false) {
       drawCenteredEllipsisDots(context, geometry, fillRadius, "#ffffff");
       const pattern = createScreentonePattern(

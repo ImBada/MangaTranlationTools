@@ -792,6 +792,21 @@
   white-space: nowrap;
 }
 
+.font-rendering-mode-field {
+  align-items: center;
+  grid-template-columns: 96px minmax(0, 1fr) auto;
+}
+
+.font-rendering-mode-field select {
+  width: 100%;
+}
+
+.font-character-section-title {
+  color: #d6cbbb;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .font-character-add-row,
 .font-character-row {
   display: grid;

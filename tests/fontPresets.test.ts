@@ -91,6 +91,16 @@ describe("font preset block links", () => {
     expect(applyFontPresetPatchToBlock(unlinkedBlock, preset, { forceLinkedValues: true }).fontSizePx).toBe(32);
   });
 
+  it("keeps font rendering mode as a linkable preset value", () => {
+    const block = createBlock({ fontRenderingMode: "smooth" });
+    const unlinkedBlock = createBlock({ fontRenderingMode: "smooth", fontRenderingModeLinkedToPreset: false });
+    const preset = createPreset({ fontRenderingMode: "hard" });
+
+    expect(isBlockFontPresetValueLinked(block, "fontRenderingMode")).toBe(true);
+    expect(applyFontPresetPatchToBlock(block, preset).fontRenderingMode).toBe("hard");
+    expect(applyFontPresetPatchToBlock(unlinkedBlock, preset).fontRenderingMode).toBe("smooth");
+  });
+
   it("resolves font preset sizes from document size presets", () => {
     const preset = createPreset({ fontSizePx: 24, fontSizePresetId: "size-large" });
 
@@ -158,6 +168,7 @@ describe("font preset block links", () => {
 
   it("normalizes missing optional values on legacy font presets", () => {
     expect(normalizeFontPreset(createPreset())).toMatchObject({
+      fontRenderingMode: "smooth",
       letterSpacingPx: 0,
       shadowEnabled: false,
       shadowColor: "#000000",

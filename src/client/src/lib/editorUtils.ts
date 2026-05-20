@@ -14,6 +14,7 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "fontWeight",
   "fontStyle",
   "textDecoration",
+  "fontRenderingMode",
   "fontSizePx",
   "lineHeight",
   "letterSpacingPx",

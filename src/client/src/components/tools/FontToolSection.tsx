@@ -5,6 +5,7 @@ import type {
   FontPresetBackupSnapshot,
   FontPresetBackupSummary,
   FontSizePreset,
+  FontRenderingMode,
   TextPosition,
   TranslationBlock
 } from "../../../../shared/types";
@@ -25,6 +26,7 @@ import {
   DEFAULT_OVERLAY_FONT_STYLE,
   DEFAULT_OVERLAY_FONT_WEIGHT,
   DEFAULT_OVERLAY_TEXT_DECORATION,
+  DEFAULT_FONT_RENDERING_MODE,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize,
   resolveTextPosition
@@ -94,6 +96,10 @@ const TEXT_POSITION_OPTIONS: { value: TextPosition; label: string }[] = [
   { value: "bottom-left", label: "하단 좌측" },
   { value: "bottom", label: "하단 중앙" },
   { value: "bottom-right", label: "하단 우측" }
+];
+const FONT_RENDERING_MODE_OPTIONS: { value: FontRenderingMode; label: string }[] = [
+  { value: "smooth", label: "부드럽게" },
+  { value: "hard", label: "최단입점(하드 가장자리 유지)" }
 ];
 const FONT_SHADOW_LINK_KEY_BY_CONTROL_KEY = {
   angleDeg: "shadowAngleDeg",
@@ -419,6 +425,21 @@ export function FontToolSection({
               </span>
             </div>
           </div>
+          <label className="compact-tool-field font-rendering-mode-field">
+            <span>글자 렌더링</span>
+            <select
+              value={fontControlValues.fontRenderingMode ?? DEFAULT_FONT_RENDERING_MODE}
+              disabled={selectedPageEditLocked}
+              onChange={(event) => onFontSettingChange({ fontRenderingMode: event.target.value as FontRenderingMode })}
+            >
+              {FONT_RENDERING_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+            {renderFontPresetLinkButton("fontRenderingMode", "글자 렌더링")}
+          </label>
           <div className="compact-tool-field font-size-row-field">
             <span className="font-size-row-label">크기</span>
             <CompactNumberControl

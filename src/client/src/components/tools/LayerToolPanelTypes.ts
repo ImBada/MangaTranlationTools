@@ -1,4 +1,4 @@
-import type { FontCharacterOverride, TextDecoration, TextFontStyle } from "../../../../shared/types";
+import type { FontCharacterOverride, FontRenderingMode, TextDecoration, TextFontStyle } from "../../../../shared/types";
 
 export type LayerToolFontControlValues = {
   autoFitText?: boolean;
@@ -18,6 +18,7 @@ export type LayerToolFontControlValues = {
   fontFamily?: string;
   characterFontOverrides?: FontCharacterOverride[];
   fontStyle?: TextFontStyle;
+  fontRenderingMode?: FontRenderingMode;
   fontWeight?: number;
   fontSizePx: number;
   lineHeight: number;

@@ -84,7 +84,7 @@ export function FontCharacterOverrideModal({
     <div className="modal-backdrop">
       <div className="modal-card font-character-modal">
         <div className="modal-header">
-          <h2>커스텀 문자</h2>
+          <h2>고급 설정</h2>
           <button type="button" className="ghost-button font-character-close" onClick={onCancel} aria-label="닫기">
             ×
           </button>
@@ -94,6 +94,7 @@ export function FontCharacterOverrideModal({
             <span>프리셋</span>
             <strong>{presetName}</strong>
           </div>
+          <div className="font-character-section-title">커스텀 문자</div>
           <div className="font-character-add-row">
             <label className="font-character-field">
               <span>문자</span>
