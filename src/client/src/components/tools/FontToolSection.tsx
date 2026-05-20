@@ -429,6 +429,7 @@ export function FontToolSection({
           <label className="compact-tool-field font-rendering-mode-field">
             <span>글자 렌더링</span>
             <select
+              className="font-weight-select"
               value={fontControlValues.fontRenderingMode ?? DEFAULT_FONT_RENDERING_MODE}
               disabled={selectedPageEditLocked}
               onChange={(event) => onFontSettingChange({ fontRenderingMode: blurSelectAfterChange(event) as FontRenderingMode })}

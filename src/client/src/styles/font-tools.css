@@ -797,8 +797,9 @@
   grid-template-columns: 96px minmax(0, 1fr) auto;
 }
 
-.font-rendering-mode-field select {
+.font-rendering-mode-field .font-weight-select {
   width: 100%;
+  flex: 1 1 auto;
 }
 
 .font-character-section-title {
