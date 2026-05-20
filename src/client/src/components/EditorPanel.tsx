@@ -3,6 +3,7 @@ import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
 import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
+import { blurSelectAfterChange } from "../lib/selectFocus";
 import { CompactNumberControl } from "./controls/CompactNumberControl";
 
 type EditorPanelProps = {
@@ -70,7 +71,7 @@ export function EditorPanel({
       </div>
       <label className="grid gap-1.5 text-xs font-semibold text-soft">
         종류
-        <select value={block.type} disabled={disabled} onChange={(event) => onUpdate({ type: event.target.value as TranslationBlock["type"] })}>
+        <select value={block.type} disabled={disabled} onChange={(event) => onUpdate({ type: blurSelectAfterChange(event) as TranslationBlock["type"] })}>
           <option value="speech">speech</option>
           <option value="sfx">sfx</option>
           <option value="caption">caption</option>
@@ -100,7 +101,7 @@ export function EditorPanel({
         <select
           value={block.renderDirection}
           disabled={disabled}
-          onChange={(event) => onUpdate({ renderDirection: event.target.value as RenderTextDirection })}
+          onChange={(event) => onUpdate({ renderDirection: blurSelectAfterChange(event) as RenderTextDirection })}
         >
           <option value="horizontal">horizontal</option>
           <option value="vertical">vertical</option>

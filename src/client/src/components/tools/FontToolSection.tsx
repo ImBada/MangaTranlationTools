@@ -33,6 +33,7 @@ import {
 } from "../../lib/overlayLayout";
 import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
+import { blurSelectAfterChange } from "../../lib/selectFocus";
 import {
   FONT_FILTER_EFFECT_DEFINITIONS,
   buildEnabledFontFilterEffectSettingPatch,
@@ -411,7 +412,7 @@ export function FontToolSection({
                   value={currentFontWeight}
                   disabled={selectedPageEditLocked}
                   aria-label="폰트 자체 굵기"
-                  onChange={(event) => onFontSettingChange({ fontWeight: Number(event.target.value) })}
+                  onChange={(event) => onFontSettingChange({ fontWeight: Number(blurSelectAfterChange(event)) })}
                 >
                   {fontWeightOptions.map((weight) => (
                     <option key={weight} value={weight}>
@@ -430,7 +431,7 @@ export function FontToolSection({
             <select
               value={fontControlValues.fontRenderingMode ?? DEFAULT_FONT_RENDERING_MODE}
               disabled={selectedPageEditLocked}
-              onChange={(event) => onFontSettingChange({ fontRenderingMode: event.target.value as FontRenderingMode })}
+              onChange={(event) => onFontSettingChange({ fontRenderingMode: blurSelectAfterChange(event) as FontRenderingMode })}
             >
               {FONT_RENDERING_MODE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
@@ -457,7 +458,7 @@ export function FontToolSection({
               value={selectedFontSizePresetId ?? ""}
               disabled={fontSizePresetControlsDisabled}
               aria-label="폰트 크기 프리셋"
-              onChange={(event) => onSelectFontSizePreset(event.target.value || null)}
+              onChange={(event) => onSelectFontSizePreset(blurSelectAfterChange(event) || null)}
             >
               <option value="">개별 지정</option>
               {fontSizePresets.map((preset) => (

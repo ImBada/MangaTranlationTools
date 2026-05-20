@@ -1,6 +1,7 @@
 import React from "react";
 import type { ImportCreateSelection, ImportPreviewResult, LibraryIndex } from "../../../shared/types";
 import { mouseOnlyCheckboxProps } from "../lib/mouseOnlyCheckbox";
+import { blurSelectAfterChange } from "../lib/selectFocus";
 
 export type ImportModalSubmit = {
   target:
@@ -80,7 +81,7 @@ export function ImportModal({ library, preview, busy, onCancel, onSubmit }: Impo
             <select
               value={existingWorkId}
               disabled={busy || targetMode !== "existing" || library.works.length === 0}
-              onChange={(event) => setExistingWorkId(event.target.value)}
+              onChange={(event) => setExistingWorkId(blurSelectAfterChange(event))}
             >
               {library.works.map((work) => (
                 <option key={work.id} value={work.id}>
