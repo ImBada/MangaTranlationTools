@@ -42,7 +42,10 @@ describe("block type font presets", () => {
       shadowAngleDeg: 30,
       shadowDistancePx: 4,
       textColor: "#222222",
-      autoFitText: true
+      autoFitText: true,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     };
     const block = createBlock({ type: "sfx", fontSizePx: 18, lineHeight: 1.1 });
 
@@ -63,7 +66,10 @@ describe("block type font presets", () => {
       shadowAngleDeg: 30,
       shadowDistancePx: 4,
       textColor: "#222222",
-      autoFitText: true
+      autoFitText: true,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     });
   });
 
@@ -92,7 +98,10 @@ describe("block type font presets", () => {
       shadowOpacity: 1,
       shadowBlurPx: 0,
       shadowAngleDeg: 45,
-      shadowDistancePx: 0
+      shadowDistancePx: 0,
+      filterEffectEnabled: false,
+      filterZigzagEnabled: false,
+      filterZigzagIntensity: 0.35
     });
   });
 });

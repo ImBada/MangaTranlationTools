@@ -88,7 +88,10 @@ describe("editor utils", () => {
       screentoneFillEnabled: true,
       screentoneFillIntensity: 0.8,
       screentoneFillDensity: 0.35,
-      screentoneFillAntialias: false
+      screentoneFillAntialias: false,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     };
 
     const parsed = parseTranslationBlockFontStyleFromClipboard(
@@ -111,7 +114,10 @@ describe("editor utils", () => {
       shadowBlurPx: 4,
       textAlign: "right",
       textPosition: "bottom-right",
-      screentoneFillAntialias: false
+      screentoneFillAntialias: false,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     });
     expect(parsed).not.toBeNull();
     expect(Object.prototype.hasOwnProperty.call(parsed, "letterSpacingPx")).toBe(true);

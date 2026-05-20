@@ -14,12 +14,14 @@ import { FontPresetLinkIcon } from "../components/font/FontPresetLinkIcon";
 import {
   applyFontPresetPatchToBlock,
   buildNextFontSizePresetName,
+  buildFontPresetLinkFields,
   buildFontPresetLinkPatch,
   clearFontPresetLinkFields,
   createFontPreset,
   createFontSizePreset,
   DEFAULT_FONT_PRESET,
   isBlockFontPresetValueLinked,
+  LINKABLE_FONT_PRESET_KEYS,
   normalizeCharacterFontOverrides,
   resolveFontPreset,
   type BlockFontPatch,
@@ -216,30 +218,9 @@ export function useFontPresetEditing({
       : null
     : rawEditingFontPreset?.fontSizePresetId ?? null;
   const selectedBlockFontPresetLinks = selectedBlock
-    ? {
-        fontSizePx: isBlockFontPresetValueLinked(selectedBlock, "fontSizePx"),
-        lineHeight: isBlockFontPresetValueLinked(selectedBlock, "lineHeight"),
-        letterSpacingPx: isBlockFontPresetValueLinked(selectedBlock, "letterSpacingPx"),
-        outlineColor: isBlockFontPresetValueLinked(selectedBlock, "outlineColor"),
-        outlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "outlineWidthPx"),
-        secondaryOutlineColor: isBlockFontPresetValueLinked(selectedBlock, "secondaryOutlineColor"),
-        secondaryOutlineWidthPx: isBlockFontPresetValueLinked(selectedBlock, "secondaryOutlineWidthPx"),
-        shadowEnabled: isBlockFontPresetValueLinked(selectedBlock, "shadowEnabled"),
-        shadowColor: isBlockFontPresetValueLinked(selectedBlock, "shadowColor"),
-        shadowOpacity: isBlockFontPresetValueLinked(selectedBlock, "shadowOpacity"),
-        shadowBlurPx: isBlockFontPresetValueLinked(selectedBlock, "shadowBlurPx"),
-        shadowAngleDeg: isBlockFontPresetValueLinked(selectedBlock, "shadowAngleDeg"),
-        shadowDistancePx: isBlockFontPresetValueLinked(selectedBlock, "shadowDistancePx"),
-        autoFitText: isBlockFontPresetValueLinked(selectedBlock, "autoFitText"),
-        textColor: isBlockFontPresetValueLinked(selectedBlock, "textColor"),
-        screentoneFillEnabled: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillEnabled"),
-        screentoneFillIntensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillIntensity"),
-        screentoneFillDensity: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillDensity"),
-        screentoneFillAntialias: isBlockFontPresetValueLinked(selectedBlock, "screentoneFillAntialias"),
-        fontWeight: isBlockFontPresetValueLinked(selectedBlock, "fontWeight"),
-        fontStyle: isBlockFontPresetValueLinked(selectedBlock, "fontStyle"),
-        textDecoration: isBlockFontPresetValueLinked(selectedBlock, "textDecoration")
-      }
+    ? Object.fromEntries(
+        LINKABLE_FONT_PRESET_KEYS.map((key) => [key, isBlockFontPresetValueLinked(selectedBlock, key)])
+      ) as Record<LinkableFontPresetKey, boolean>
     : null;
   const fontFamilyOptions = React.useMemo(
     () => buildFontFamilyOptions(systemFonts, fontControlValues?.fontFamily),
@@ -461,28 +442,7 @@ export function useFontPresetEditing({
                   ? {
                       ...applyFontPresetPatchToBlock(block, preset, { forceLinkedValues: true }),
                       fontPresetId: preset.id,
-                      fontSizeLinkedToPreset: true,
-                      lineHeightLinkedToPreset: true,
-                      letterSpacingLinkedToPreset: true,
-                      outlineColorLinkedToPreset: true,
-                      outlineWidthLinkedToPreset: true,
-                      secondaryOutlineColorLinkedToPreset: true,
-                      secondaryOutlineWidthLinkedToPreset: true,
-                      shadowEnabledLinkedToPreset: true,
-                      shadowColorLinkedToPreset: true,
-                      shadowOpacityLinkedToPreset: true,
-                      shadowBlurPxLinkedToPreset: true,
-                      shadowAngleDegLinkedToPreset: true,
-                      shadowDistancePxLinkedToPreset: true,
-                      autoFitTextLinkedToPreset: true,
-                      textColorLinkedToPreset: true,
-                      screentoneFillEnabledLinkedToPreset: true,
-                      screentoneFillIntensityLinkedToPreset: true,
-                      screentoneFillDensityLinkedToPreset: true,
-                      screentoneFillAntialiasLinkedToPreset: true,
-                      fontWeightLinkedToPreset: true,
-                      fontStyleLinkedToPreset: true,
-                      textDecorationLinkedToPreset: true
+                      ...buildFontPresetLinkFields(true)
                     }
                   : block
               )
@@ -592,28 +552,7 @@ export function useFontPresetEditing({
     updateSelectedBlock({
       ...applyFontPresetPatchToBlock(selectedBlock, resolvedPreset, { forceLinkedValues: true }),
       fontPresetId: preset.id,
-      fontSizeLinkedToPreset: true,
-      lineHeightLinkedToPreset: true,
-      letterSpacingLinkedToPreset: true,
-      outlineColorLinkedToPreset: true,
-      outlineWidthLinkedToPreset: true,
-      secondaryOutlineColorLinkedToPreset: true,
-      secondaryOutlineWidthLinkedToPreset: true,
-      shadowEnabledLinkedToPreset: true,
-      shadowColorLinkedToPreset: true,
-      shadowOpacityLinkedToPreset: true,
-      shadowBlurPxLinkedToPreset: true,
-      shadowAngleDegLinkedToPreset: true,
-      shadowDistancePxLinkedToPreset: true,
-      autoFitTextLinkedToPreset: true,
-      textColorLinkedToPreset: true,
-      screentoneFillEnabledLinkedToPreset: true,
-      screentoneFillIntensityLinkedToPreset: true,
-      screentoneFillDensityLinkedToPreset: true,
-      screentoneFillAntialiasLinkedToPreset: true,
-      fontWeightLinkedToPreset: true,
-      fontStyleLinkedToPreset: true,
-      textDecorationLinkedToPreset: true
+      ...buildFontPresetLinkFields(true)
     });
   }, [fontPresets, fontSizePresets, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateSelectedBlock]);
 
@@ -623,28 +562,7 @@ export function useFontPresetEditing({
     }
     updateSelectedBlock({
       fontPresetId: undefined,
-      fontSizeLinkedToPreset: undefined,
-      lineHeightLinkedToPreset: undefined,
-      letterSpacingLinkedToPreset: undefined,
-      outlineColorLinkedToPreset: undefined,
-      outlineWidthLinkedToPreset: undefined,
-      secondaryOutlineColorLinkedToPreset: undefined,
-      secondaryOutlineWidthLinkedToPreset: undefined,
-      shadowEnabledLinkedToPreset: undefined,
-      shadowColorLinkedToPreset: undefined,
-      shadowOpacityLinkedToPreset: undefined,
-      shadowBlurPxLinkedToPreset: undefined,
-      shadowAngleDegLinkedToPreset: undefined,
-      shadowDistancePxLinkedToPreset: undefined,
-      autoFitTextLinkedToPreset: undefined,
-      textColorLinkedToPreset: undefined,
-      screentoneFillEnabledLinkedToPreset: undefined,
-      screentoneFillIntensityLinkedToPreset: undefined,
-      screentoneFillDensityLinkedToPreset: undefined,
-      screentoneFillAntialiasLinkedToPreset: undefined,
-      fontWeightLinkedToPreset: undefined,
-      fontStyleLinkedToPreset: undefined,
-      textDecorationLinkedToPreset: undefined
+      ...buildFontPresetLinkFields(undefined)
     });
   }, [selectedBlock, updateSelectedBlock]);
 

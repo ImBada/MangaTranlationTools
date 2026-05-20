@@ -131,6 +131,9 @@ export type TranslationBlock = {
   screentoneFillIntensityLinkedToPreset?: boolean;
   screentoneFillDensityLinkedToPreset?: boolean;
   screentoneFillAntialiasLinkedToPreset?: boolean;
+  filterEffectEnabledLinkedToPreset?: boolean;
+  filterZigzagEnabledLinkedToPreset?: boolean;
+  filterZigzagIntensityLinkedToPreset?: boolean;
   fontWeightLinkedToPreset?: boolean;
   fontStyleLinkedToPreset?: boolean;
   textDecorationLinkedToPreset?: boolean;
@@ -160,6 +163,9 @@ export type TranslationBlock = {
   screentoneFillIntensity?: number;
   screentoneFillDensity?: number;
   screentoneFillAntialias?: boolean;
+  filterEffectEnabled?: boolean;
+  filterZigzagEnabled?: boolean;
+  filterZigzagIntensity?: number;
   backgroundColor: string;
   opacity: number;
   autoFitText?: boolean;
@@ -209,6 +215,9 @@ export type FontPreset = {
   screentoneFillIntensity?: number;
   screentoneFillDensity?: number;
   screentoneFillAntialias?: boolean;
+  filterEffectEnabled?: boolean;
+  filterZigzagEnabled?: boolean;
+  filterZigzagIntensity?: number;
 };
 
 export type FontSizePreset = {

@@ -31,7 +31,10 @@ describe("font preset block links", () => {
       screentoneFillEnabled: true,
       screentoneFillIntensity: 0.8,
       screentoneFillDensity: 0.35,
-      screentoneFillAntialias: false
+      screentoneFillAntialias: false,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     });
 
     expect(applyFontPresetPatchToBlock(block, preset)).toMatchObject({
@@ -50,7 +53,10 @@ describe("font preset block links", () => {
       screentoneFillEnabled: true,
       screentoneFillIntensity: 0.8,
       screentoneFillDensity: 0.35,
-      screentoneFillAntialias: false
+      screentoneFillAntialias: false,
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.65
     });
   });
 
@@ -113,7 +119,10 @@ describe("font preset block links", () => {
       shadowOpacity: 1,
       shadowBlurPx: 0,
       shadowAngleDeg: 45,
-      shadowDistancePx: 0
+      shadowDistancePx: 0,
+      filterEffectEnabled: false,
+      filterZigzagEnabled: false,
+      filterZigzagIntensity: 0.35
     });
   });
 
@@ -189,6 +198,9 @@ function createBlock(patch: Partial<TranslationBlock> = {}): TranslationBlock {
     screentoneFillIntensity: 0.55,
     screentoneFillDensity: 0.55,
     screentoneFillAntialias: true,
+    filterEffectEnabled: false,
+    filterZigzagEnabled: false,
+    filterZigzagIntensity: 0.35,
     shadowEnabled: false,
     shadowColor: "#000000",
     shadowOpacity: 1,

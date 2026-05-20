@@ -8,8 +8,12 @@ import type {
   TextPosition,
   TranslationBlock
 } from "../../../../shared/types";
-import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX } from "../../../../shared/fontPresets";
+import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX, DEFAULT_FILTER_ZIGZAG_INTENSITY } from "../../../../shared/fontPresets";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
+import {
+  FontFilterEffectControls,
+  type FontFilterEffectControlKey
+} from "../font/FontFilterEffectControls";
 import { FontFamilyPicker, type FontFamilyOption } from "../font/FontFamilyPicker";
 import { FontOutlineControls } from "../font/FontOutlineControls";
 import { FontShadowControls, type FontShadowControlKey, type FontShadowControlValues } from "../font/FontShadowControls";
@@ -26,6 +30,7 @@ import {
 } from "../../lib/overlayLayout";
 import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
+import { buildFontFilterEffectSettingPatch, resolveEnabledFontZigzagIntensity } from "../../lib/fontFilterEffects";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
 
 type FontToolSectionProps = {
@@ -93,6 +98,11 @@ const FONT_SHADOW_LINK_KEY_BY_CONTROL_KEY = {
   enabled: "shadowEnabled",
   opacity: "shadowOpacity"
 } satisfies Record<FontShadowControlKey, LinkableFontPresetKey>;
+const FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY = {
+  enabled: "filterEffectEnabled",
+  zigzagEnabled: "filterZigzagEnabled",
+  zigzagIntensity: "filterZigzagIntensity"
+} satisfies Record<FontFilterEffectControlKey, LinkableFontPresetKey>;
 
 function buildFontShadowSettingPatch(patch: Partial<Omit<FontShadowControlValues, "enabled">>): BlockFontPatch {
   const fontPatch: BlockFontPatch = {};
@@ -251,6 +261,7 @@ export function FontToolSection({
     : [];
   const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0 || (fontControlValues?.shadowBlurPx ?? 0) > 0);
   const screentoneFillActive = fontControlValues?.screentoneFillEnabled ?? false;
+  const filterEffectActive = fontControlValues?.filterEffectEnabled ?? false;
 
   React.useEffect(() => {
     if (!renamingFontPresetId || renamingFontPresetId === activeFontPresetId) {
@@ -651,6 +662,28 @@ export function FontToolSection({
               </>
             ) : null}
           </div>
+          <FontFilterEffectControls
+            disabled={selectedPageEditLocked}
+            enabledAriaLabel="필터 효과 사용"
+            values={{
+              enabled: filterEffectActive,
+              zigzagEnabled: fontControlValues.filterZigzagEnabled ?? false,
+              zigzagIntensity: fontControlValues.filterZigzagIntensity ?? DEFAULT_FILTER_ZIGZAG_INTENSITY
+            }}
+            onEnabledChange={(enabled) => {
+              if (!enabled) {
+                onFontSettingChange({ filterEffectEnabled: false });
+                return;
+              }
+              onFontSettingChange({
+                filterEffectEnabled: true,
+                filterZigzagEnabled: true,
+                filterZigzagIntensity: resolveEnabledFontZigzagIntensity(fontControlValues.filterZigzagIntensity)
+              });
+            }}
+            onChange={(patch) => onFontSettingChange(buildFontFilterEffectSettingPatch(patch))}
+            renderLinkButton={(key, label) => renderFontPresetLinkButton(FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY[key], label)}
+          />
         </div>
       ) : (
         <p className="muted-line">블록이나 프리셋을 선택하면 폰트값을 조정할 수 있습니다.</p>

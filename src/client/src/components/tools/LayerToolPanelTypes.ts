@@ -2,6 +2,9 @@ import type { FontCharacterOverride, TextDecoration, TextFontStyle } from "../..
 
 export type LayerToolFontControlValues = {
   autoFitText?: boolean;
+  filterEffectEnabled?: boolean;
+  filterZigzagEnabled?: boolean;
+  filterZigzagIntensity?: number;
   fontFamily?: string;
   characterFontOverrides?: FontCharacterOverride[];
   fontStyle?: TextFontStyle;

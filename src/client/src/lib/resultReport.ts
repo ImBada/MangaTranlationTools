@@ -1,5 +1,6 @@
 import type { BBox, FontPreset, MangaPage, TranslationBlock } from "../../../shared/types";
 import { bboxToPixels, clamp } from "../../../shared/geometry";
+import { hasActiveFontZigzagFilter, resolveFilterZigzagIntensity } from "./fontFilterEffects";
 
 export type PixelRect = {
   x: number;
@@ -46,6 +47,7 @@ export type ResultReportRow = {
   secondaryOutline: string;
   shadow: string;
   screentone: string;
+  filterEffect: string;
   autoFitText: string;
   inpainted: string;
   sourceRectLabel: string;
@@ -92,6 +94,9 @@ const LINK_FIELD_LABELS: readonly [keyof TranslationBlock, string][] = [
   ["screentoneFillIntensityLinkedToPreset", "스크린톤강도"],
   ["screentoneFillDensityLinkedToPreset", "스크린톤밀도"],
   ["screentoneFillAntialiasLinkedToPreset", "스크린톤AA"],
+  ["filterEffectEnabledLinkedToPreset", "필터효과"],
+  ["filterZigzagEnabledLinkedToPreset", "지그재그"],
+  ["filterZigzagIntensityLinkedToPreset", "지그재그강도"],
   ["fontWeightLinkedToPreset", "굵기"],
   ["fontStyleLinkedToPreset", "스타일"],
   ["textDecorationLinkedToPreset", "장식"]
@@ -130,6 +135,7 @@ const REPORT_COLUMNS: readonly ReportColumn[] = [
   { key: "secondaryOutline", label: "2차 외곽선", type: "text" },
   { key: "shadow", label: "그림자", type: "text" },
   { key: "screentone", label: "스크린톤", type: "text" },
+  { key: "filterEffect", label: "필터 효과", type: "text" },
   { key: "autoFitText", label: "자동맞춤", type: "text" },
   { key: "inpainted", label: "블록 인페인트", type: "text" },
   { key: "sourceRectLabel", label: "원본 범위", type: "text" },
@@ -233,6 +239,7 @@ export function createResultReportRow(options: {
     secondaryOutline: formatOutline(block.secondaryOutlineColor, block.secondaryOutlineWidthPx),
     shadow: formatShadow(block),
     screentone: formatScreentone(block),
+    filterEffect: formatFilterEffect(block),
     autoFitText: formatBoolean(block.autoFitText),
     inpainted: formatBoolean(block.inpainted),
     sourceRectLabel: formatRect(sourceRect),
@@ -620,6 +627,16 @@ function formatScreentone(block: TranslationBlock): string {
     return "꺼짐";
   }
   return `강도 ${formatNumber(block.screentoneFillIntensity ?? 0)}, 밀도 ${formatNumber(block.screentoneFillDensity ?? 0)}, AA ${formatBoolean(block.screentoneFillAntialias)}`;
+}
+
+function formatFilterEffect(block: TranslationBlock): string {
+  if (!block.filterEffectEnabled) {
+    return "꺼짐";
+  }
+  if (!hasActiveFontZigzagFilter(block)) {
+    return "켜짐 / 활성 필터 없음";
+  }
+  return `지그재그 강도 ${formatNumber(resolveFilterZigzagIntensity(block.filterZigzagIntensity) * 100)}%`;
 }
 
 function formatInpaintSettings(page: MangaPage): string {

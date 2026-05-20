@@ -1,7 +1,7 @@
 import React from "react";
 import type { ChapterSnapshot, FontPreset, MangaPage, TranslationBlock } from "../../../shared/types";
 import { offsetBlockBboxes } from "../../../shared/geometry";
-import { DEFAULT_FONT_PRESET } from "../lib/fontPresets";
+import { buildFontPresetLinkFields, DEFAULT_FONT_PRESET } from "../lib/fontPresets";
 import {
   applyTranslationBlockFontStyle,
   cloneTranslationBlock,
@@ -320,28 +320,7 @@ export function useTranslationBlockActions({
       sourceDirection: "vertical",
       renderDirection: "horizontal",
       fontPresetId: editingFontPreset?.id,
-      fontSizeLinkedToPreset: editingFontPreset ? true : undefined,
-      lineHeightLinkedToPreset: editingFontPreset ? true : undefined,
-      letterSpacingLinkedToPreset: editingFontPreset ? true : undefined,
-      outlineColorLinkedToPreset: editingFontPreset ? true : undefined,
-      outlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
-      secondaryOutlineColorLinkedToPreset: editingFontPreset ? true : undefined,
-      secondaryOutlineWidthLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowEnabledLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowColorLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowOpacityLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowBlurPxLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowAngleDegLinkedToPreset: editingFontPreset ? true : undefined,
-      shadowDistancePxLinkedToPreset: editingFontPreset ? true : undefined,
-      autoFitTextLinkedToPreset: editingFontPreset ? true : undefined,
-      textColorLinkedToPreset: editingFontPreset ? true : undefined,
-      screentoneFillEnabledLinkedToPreset: editingFontPreset ? true : undefined,
-      screentoneFillIntensityLinkedToPreset: editingFontPreset ? true : undefined,
-      screentoneFillDensityLinkedToPreset: editingFontPreset ? true : undefined,
-      screentoneFillAntialiasLinkedToPreset: editingFontPreset ? true : undefined,
-      fontWeightLinkedToPreset: editingFontPreset ? true : undefined,
-      fontStyleLinkedToPreset: editingFontPreset ? true : undefined,
-      textDecorationLinkedToPreset: editingFontPreset ? true : undefined,
+      ...buildFontPresetLinkFields(editingFontPreset ? true : undefined),
       fontFamily: sourcePreset.fontFamily,
       characterFontOverrides: sourcePreset.characterFontOverrides?.map((override) => ({ ...override })),
       fontWeight: sourcePreset.fontWeight,
@@ -368,6 +347,9 @@ export function useTranslationBlockActions({
       screentoneFillIntensity: sourcePreset.screentoneFillIntensity,
       screentoneFillDensity: sourcePreset.screentoneFillDensity,
       screentoneFillAntialias: sourcePreset.screentoneFillAntialias,
+      filterEffectEnabled: sourcePreset.filterEffectEnabled,
+      filterZigzagEnabled: sourcePreset.filterZigzagEnabled,
+      filterZigzagIntensity: sourcePreset.filterZigzagIntensity,
       backgroundColor: "#fffdf5",
       opacity: 0.88
     };

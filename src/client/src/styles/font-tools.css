@@ -93,14 +93,17 @@
   grid-column: 1 / -1;
 }
 
-.font-shadow-header-actions {
+.font-shadow-header-actions,
+.font-filter-header-actions {
   display: inline-flex;
   align-items: center;
   gap: 4px;
 }
 
 .font-shadow-header-actions .font-preset-link-toggle,
-.font-screentone-header-actions .font-preset-link-toggle {
+.font-screentone-header-actions .font-preset-link-toggle,
+.font-filter-header-actions .font-preset-link-toggle,
+.font-filter-option-row .font-preset-link-toggle {
   width: 20px;
   min-width: 20px;
   max-width: 20px;
@@ -265,6 +268,19 @@
 .font-screentone-range-row {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px;
+}
+
+.font-filter-option-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
+.font-filter-range-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
   gap: 4px;
 }
 

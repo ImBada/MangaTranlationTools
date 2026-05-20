@@ -55,6 +55,42 @@ describe("result report helpers", () => {
     expect(html).toContain("&lt;원문&gt;");
     expect(html).toContain("&quot;번역&quot;");
   });
+
+  it("formats filter effect state with normalized active values", () => {
+    const page = createPage();
+    const block = createBlock({
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 1.5
+    });
+    const { sourceRect, outputRect } = resolveBlockReportRects(page, block);
+
+    expect(createResultReportRow({
+      block,
+      blockIndex: 1,
+      fontPreset: undefined,
+      outputCropDataUrl: "",
+      outputRect,
+      page,
+      pageIndex: 1,
+      rowIndex: 1,
+      sourceCropDataUrl: "",
+      sourceRect
+    }).filterEffect).toBe("지그재그 강도 100%");
+
+    expect(createResultReportRow({
+      block: { ...block, filterZigzagIntensity: 0 },
+      blockIndex: 1,
+      fontPreset: undefined,
+      outputCropDataUrl: "",
+      outputRect,
+      page,
+      pageIndex: 1,
+      rowIndex: 1,
+      sourceCropDataUrl: "",
+      sourceRect
+    }).filterEffect).toBe("켜짐 / 활성 필터 없음");
+  });
 });
 
 function createPage(patch: Partial<MangaPage> = {}): MangaPage {
