@@ -91,6 +91,33 @@ describe("font preset block links", () => {
     expect(applyFontPresetPatchToBlock(unlinkedBlock, preset, { forceLinkedValues: true }).fontSizePx).toBe(32);
   });
 
+  it("treats child filter effect values as unlinked when the master filter link is off", () => {
+    const block = createBlock({
+      filterEffectEnabled: false,
+      filterEffectEnabledLinkedToPreset: false,
+      filterZigzagEnabled: false,
+      filterZigzagIntensity: 0.2
+    });
+    const preset = createPreset({
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.8,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.7
+    });
+
+    expect(isBlockFontPresetValueLinked(block, "filterEffectEnabled")).toBe(false);
+    expect(isBlockFontPresetValueLinked(block, "filterZigzagEnabled")).toBe(false);
+    expect(isBlockFontPresetValueLinked(block, "filterZigzagIntensity")).toBe(false);
+    expect(applyFontPresetPatchToBlock(block, preset)).toMatchObject({
+      filterEffectEnabled: false,
+      filterZigzagEnabled: false,
+      filterZigzagIntensity: 0.2,
+      filterWaveEnabled: false,
+      filterWaveIntensity: 0.35
+    });
+  });
+
   it("keeps font rendering mode as a linkable preset value", () => {
     const block = createBlock({ fontRenderingMode: "smooth" });
     const unlinkedBlock = createBlock({ fontRenderingMode: "smooth", fontRenderingModeLinkedToPreset: false });

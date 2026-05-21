@@ -85,7 +85,25 @@ export function isBlockFontSizeLinkedToPreset(block: Pick<TranslationBlock, "fon
   return block.fontSizeLinkedToPreset !== false;
 }
 
+const FILTER_EFFECT_CHILD_PRESET_KEYS = new Set<LinkableFontPresetKey>([
+  "filterZigzagEnabled",
+  "filterZigzagIntensity",
+  "filterWaveEnabled",
+  "filterWaveIntensity",
+  "filterGlitchEnabled",
+  "filterGlitchIntensity",
+  "filterPixelateEnabled",
+  "filterPixelateIntensity",
+  "filterBlurEnabled",
+  "filterBlurIntensity",
+  "filterNoiseEnabled",
+  "filterNoiseIntensity"
+]);
+
 export function isBlockFontPresetValueLinked(block: TranslationBlock, key: LinkableFontPresetKey): boolean {
+  if (FILTER_EFFECT_CHILD_PRESET_KEYS.has(key) && block.filterEffectEnabledLinkedToPreset === false) {
+    return false;
+  }
   return block[FONT_PRESET_LINK_FIELD_BY_KEY[key]] !== false;
 }
 
