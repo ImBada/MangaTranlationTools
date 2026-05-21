@@ -1,4 +1,5 @@
 import type { FontPreset, FontSizePreset, TranslationBlock } from "../../../shared/types";
+import { FONT_FILTER_EFFECT_DEFINITIONS } from "./fontFilterEffectMetadata";
 import {
   DEFAULT_FONT_PRESET_VALUES,
   FONT_PRESET_LINK_FIELD_BY_KEY,
@@ -85,20 +86,9 @@ export function isBlockFontSizeLinkedToPreset(block: Pick<TranslationBlock, "fon
   return block.fontSizeLinkedToPreset !== false;
 }
 
-const FILTER_EFFECT_CHILD_PRESET_KEYS = new Set<LinkableFontPresetKey>([
-  "filterZigzagEnabled",
-  "filterZigzagIntensity",
-  "filterWaveEnabled",
-  "filterWaveIntensity",
-  "filterGlitchEnabled",
-  "filterGlitchIntensity",
-  "filterPixelateEnabled",
-  "filterPixelateIntensity",
-  "filterBlurEnabled",
-  "filterBlurIntensity",
-  "filterNoiseEnabled",
-  "filterNoiseIntensity"
-]);
+const FILTER_EFFECT_CHILD_PRESET_KEYS = new Set<LinkableFontPresetKey>(
+  FONT_FILTER_EFFECT_DEFINITIONS.flatMap((definition) => [definition.enabledKey, definition.intensityKey])
+);
 
 export function isBlockFontPresetValueLinked(block: TranslationBlock, key: LinkableFontPresetKey): boolean {
   if (FILTER_EFFECT_CHILD_PRESET_KEYS.has(key) && block.filterEffectEnabledLinkedToPreset === false) {
