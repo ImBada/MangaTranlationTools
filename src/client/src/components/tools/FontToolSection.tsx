@@ -290,6 +290,7 @@ export function FontToolSection({
   const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0 || (fontControlValues?.shadowBlurPx ?? 0) > 0);
   const screentoneFillActive = fontControlValues?.screentoneFillEnabled ?? false;
   const filterEffectActive = fontControlValues?.filterEffectEnabled ?? false;
+  const filterEffectLinkedToPreset = selectedBlock?.filterEffectEnabledLinkedToPreset !== false;
 
   React.useEffect(() => {
     if (!renamingFontPresetId || renamingFontPresetId === activeFontPresetId) {
@@ -712,7 +713,12 @@ export function FontToolSection({
               onFontSettingChange(buildEnabledFontFilterEffectSettingPatch(fontControlValues));
             }}
             onChange={(patch) => onFontSettingChange(buildFontFilterEffectSettingPatch(patch))}
-            renderLinkButton={(key, label) => renderFontPresetLinkButton(FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY[key], label)}
+            renderLinkButton={(key, label) => {
+              if (key !== "enabled" && !filterEffectLinkedToPreset) {
+                return null;
+              }
+              return renderFontPresetLinkButton(FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY[key], label);
+            }}
           />
         </div>
       ) : (
