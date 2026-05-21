@@ -1,9 +1,11 @@
 const http = require("node:http");
+const fs = require("node:fs");
 const net = require("node:net");
 const path = require("node:path");
 const { app, BrowserWindow, dialog, shell } = require("electron");
 
 const preferredPort = Number(process.env.MANGA_TRANSLATOR_PORT || 3000);
+const downloadConfiguredSessions = new WeakSet();
 let mainWindow = null;
 let serverUrl = null;
 
@@ -84,6 +86,8 @@ function createMainWindow(url) {
     return { action: "deny" };
   });
 
+  configureDownloadSavePath(mainWindow.webContents.session);
+
   mainWindow.webContents.on("will-navigate", (event, targetUrl) => {
     if (!targetUrl.startsWith(url)) {
       event.preventDefault();
@@ -96,6 +100,39 @@ function createMainWindow(url) {
   });
 
   void mainWindow.loadURL(url);
+}
+
+function configureDownloadSavePath(session) {
+  if (downloadConfiguredSessions.has(session)) {
+    return;
+  }
+  downloadConfiguredSessions.add(session);
+
+  session.on("will-download", (_event, item) => {
+    const filename = sanitizeDownloadFilename(item.getFilename() || "download");
+    item.setSavePath(resolveUniqueDownloadPath(filename));
+  });
+}
+
+function sanitizeDownloadFilename(filename) {
+  const sanitized = Array.from(path.basename(filename), (char) => {
+    return /[<>:"/\\|?*]/.test(char) || char.charCodeAt(0) < 32 ? "_" : char;
+  }).join("").trim();
+  return sanitized || "download";
+}
+
+function resolveUniqueDownloadPath(filename) {
+  const downloadsDir = app.getPath("downloads");
+  const parsed = path.parse(filename);
+  let candidate = path.join(downloadsDir, filename);
+  let index = 1;
+
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(downloadsDir, `${parsed.name} (${index})${parsed.ext}`);
+    index += 1;
+  }
+
+  return candidate;
 }
 
 function findFreePort(port) {
