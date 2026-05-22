@@ -52,6 +52,8 @@ type LayerToolPanelProps = {
   inpaintSelectionRect: ImageRect | null;
   inpaintTool: InpaintTool;
   jobActive: boolean;
+  lastExportedInpaintPsdFilename: string | null;
+  lastExportedInpaintPsdReady: boolean;
   lastImportedInpaintPsdAt: string | null;
   lastImportedInpaintPsdLabel: string | null;
   layerVisibility: LayerVisibility;
@@ -77,6 +79,7 @@ type LayerToolPanelProps = {
   onDeleteFontSizePreset: (presetId: string) => void;
   onDownloadLastImportedInpaintPsd: () => void | Promise<void>;
   onExportInpaintPsd: () => void | Promise<void>;
+  onQuickLoadLastExportedInpaintPsd: () => void | Promise<void>;
   onFillSelectedInpaintSelection: () => void | Promise<void>;
   onFavoriteFontPresetToggle: (presetId: string) => void;
   onFontPresetNameChange: (value: string) => void;
@@ -127,6 +130,8 @@ export function LayerToolPanel({
   inpaintSelectionRect,
   inpaintTool,
   jobActive,
+  lastExportedInpaintPsdFilename,
+  lastExportedInpaintPsdReady,
   lastImportedInpaintPsdAt,
   lastImportedInpaintPsdLabel,
   layerVisibility,
@@ -152,6 +157,7 @@ export function LayerToolPanel({
   onDeleteFontSizePreset,
   onDownloadLastImportedInpaintPsd,
   onExportInpaintPsd,
+  onQuickLoadLastExportedInpaintPsd,
   onFillSelectedInpaintSelection,
   onFavoriteFontPresetToggle,
   onFontPresetNameChange,
@@ -275,12 +281,15 @@ export function LayerToolPanel({
         <InpaintPsdToolSection
           currentChapter={currentChapter}
           inpaintPsdBusy={inpaintPsdBusy}
+          lastExportedInpaintPsdFilename={lastExportedInpaintPsdFilename}
+          lastExportedInpaintPsdReady={lastExportedInpaintPsdReady}
           lastImportedInpaintPsdAt={lastImportedInpaintPsdAt}
           lastImportedInpaintPsdLabel={lastImportedInpaintPsdLabel}
           selectedPage={selectedPage}
           selectedPageEditLocked={selectedPageEditLocked}
           onDownloadLastImportedInpaintPsd={onDownloadLastImportedInpaintPsd}
           onExportInpaintPsd={onExportInpaintPsd}
+          onQuickLoadLastExportedInpaintPsd={onQuickLoadLastExportedInpaintPsd}
           onSelectInpaintPsdFile={onSelectInpaintPsdFile}
         />
       ) : activeLayer === "inpaintResult" ? (

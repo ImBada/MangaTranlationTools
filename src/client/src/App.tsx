@@ -437,8 +437,11 @@ export default function App(): React.JSX.Element {
     inpaintResultToolStrength,
     inpaintSelectionRect,
     inpaintTool,
+    lastExportedInpaintPsdFilename,
+    lastExportedInpaintPsdReady,
     lastImportedInpaintPsdAt,
     lastImportedInpaintPsdLabel,
+    quickLoadLastExportedInpaintPsd,
     rerunInpaintForSelection,
     rerunInpaintWithCurrentMask,
     selectInpaintPsdFile,
@@ -950,6 +953,8 @@ export default function App(): React.JSX.Element {
       inpaintSelectionRect={inpaintSelectionRect}
       inpaintTool={inpaintTool}
       jobActive={jobActive}
+      lastExportedInpaintPsdFilename={lastExportedInpaintPsdFilename}
+      lastExportedInpaintPsdReady={lastExportedInpaintPsdReady}
       lastImportedInpaintPsdAt={lastImportedInpaintPsdAt}
       lastImportedInpaintPsdLabel={lastImportedInpaintPsdLabel}
       layerVisibility={layerVisibility}
@@ -975,6 +980,7 @@ export default function App(): React.JSX.Element {
       onDeleteFontSizePreset={deleteFontSizePreset}
       onDownloadLastImportedInpaintPsd={downloadLastImportedInpaintPsd}
       onExportInpaintPsd={exportSelectedPageInpaintPsd}
+      onQuickLoadLastExportedInpaintPsd={quickLoadLastExportedInpaintPsd}
       onFillSelectedInpaintSelection={fillSelectedInpaintSelection}
       onFontPresetNameChange={setFontPresetName}
       onFontPresetRename={renameFontPreset}

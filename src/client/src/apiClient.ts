@@ -32,7 +32,19 @@ import type {
 } from "../../shared/types";
 
 type ImportKind = "images" | "folder" | "zip" | "zip-folder";
-type LastImportedInpaintPsdMeta = { exists: boolean; importedAt?: string };
+type LastImportedInpaintPsdMeta = {
+  exists: boolean;
+  importedAt?: string;
+  quickLoad?: {
+    exists: boolean;
+    exportedAt?: string;
+    filename?: string;
+  };
+};
+
+type ExportInpaintPsdResult = {
+  filename: string;
+};
 
 function requestHeaders(init?: RequestInit): HeadersInit | undefined {
   return init?.body instanceof FormData ? init.headers : { "Content-Type": "application/json", ...init?.headers };
@@ -165,12 +177,13 @@ export const mangaApi = {
   saveInpaintResultLayer: (request: SaveInpaintResultLayerRequest): Promise<SaveInpaintResultLayerResult> =>
     postJson("/api/inpaint/result-layer", request),
   saveInpaintLayers: (request: SaveInpaintLayersRequest): Promise<SaveInpaintLayersResult> => postJson("/api/inpaint/layers", request),
-  exportInpaintPsd: (request: ExportInpaintPsdRequest): Promise<Blob> =>
-    requestBlob("/api/inpaint/psd/export", { method: "POST", body: JSON.stringify(request) }),
+  exportInpaintPsd: (request: ExportInpaintPsdRequest): Promise<ExportInpaintPsdResult> => postJson("/api/inpaint/psd/export", request),
   downloadLastImportedInpaintPsd: (chapterId: string, pageId: string): Promise<Blob> =>
     requestBlob(`/api/inpaint/psd/last-import?chapterId=${encodeURIComponent(chapterId)}&pageId=${encodeURIComponent(pageId)}`),
-  getLastImportedInpaintPsdMeta: (chapterId: string, pageId: string): Promise<LastImportedInpaintPsdMeta> =>
-    requestJson(`/api/inpaint/psd/last-import/meta?chapterId=${encodeURIComponent(chapterId)}&pageId=${encodeURIComponent(pageId)}`),
+  getInpaintPsdMeta: (chapterId: string, pageId: string): Promise<LastImportedInpaintPsdMeta> =>
+    requestJson(`/api/inpaint/psd/meta?chapterId=${encodeURIComponent(chapterId)}&pageId=${encodeURIComponent(pageId)}`),
+  quickLoadLastExportedInpaintPsd: (chapterId: string, pageId: string): Promise<ImportInpaintPsdResult> =>
+    postJson("/api/inpaint/psd/quick-load", { chapterId, pageId }),
   importInpaintPsd: (chapterId: string, pageId: string, file: File): Promise<ImportInpaintPsdResult> => {
     const formData = new FormData();
     formData.append("chapterId", chapterId);

@@ -5,6 +5,7 @@ export type { ChapterRunPaths } from "./libraryCrud";
 export type { CreateImportOptions, UploadedImportFile } from "./libraryImport";
 
 export {
+  getInpaintPsdExportMetaPath,
   getInpaintPsdImportPath,
   readPageImageAsset,
   saveImportedInpaintLayers,

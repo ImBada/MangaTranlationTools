@@ -1,12 +1,12 @@
 import express from "express";
 import multer from "multer";
-import { sanitizePsdFileBasename } from "../inpaintPsd";
 import {
   exportInpaintPsdRequest,
   importInpaintPsdRequest,
   inpaintPage,
+  quickImportLastExportedInpaintPsdRequest,
+  readInpaintPsdMeta,
   readLastImportedPsd,
-  readLastImportedPsdMeta,
   readOptionalPsdPageQuery,
   readPsdPageQuery,
   saveInpaintLayersRequest,
@@ -43,15 +43,17 @@ export function createInpaintRoutes(upload: multer.Multer): express.Router {
 
   router.post("/api/inpaint/psd/export", asyncHandler(async (req, res) => {
     const request = req.body as ExportInpaintPsdRequest;
-    const buffer = await exportInpaintPsdRequest(request);
-    const filename = `${sanitizePsdFileBasename(request.pageName || request.pageId, request.pageId || "inpaint")}-inpaint.psd`;
-    res.setHeader("Content-Type", "image/vnd.adobe.photoshop");
-    res.setHeader("Content-Disposition", `attachment; filename="inpaint.psd"; filename*=UTF-8''${encodeURIComponent(filename)}`);
-    res.end(buffer);
+    res.json(await exportInpaintPsdRequest(request));
   }));
 
   router.post("/api/inpaint/psd/import", upload.single("file"), asyncHandler(async (req, res) => {
     res.json(await importInpaintPsdRequest(req));
+  }));
+
+  router.post("/api/inpaint/psd/quick-load", asyncHandler(async (req, res) => {
+    const chapterId = typeof req.body?.chapterId === "string" ? req.body.chapterId : "";
+    const pageId = typeof req.body?.pageId === "string" ? req.body.pageId : "";
+    res.json(await quickImportLastExportedInpaintPsdRequest(chapterId, pageId));
   }));
 
   router.get("/api/inpaint/psd/last-import", asyncHandler(async (req, res) => {
@@ -66,14 +68,17 @@ export function createInpaintRoutes(upload: multer.Multer): express.Router {
     res.end(buffer);
   }));
 
-  router.get("/api/inpaint/psd/last-import/meta", asyncHandler(async (req, res) => {
+  const sendInpaintPsdMeta = asyncHandler(async (req, res) => {
     const pageQuery = readOptionalPsdPageQuery(req);
     if (!pageQuery) {
       res.json({ exists: false });
       return;
     }
-    res.json(await readLastImportedPsdMeta(pageQuery.chapterId, pageQuery.pageId));
-  }));
+    res.json(await readInpaintPsdMeta(pageQuery.chapterId, pageQuery.pageId));
+  });
+
+  router.get("/api/inpaint/psd/meta", sendInpaintPsdMeta);
+  router.get("/api/inpaint/psd/last-import/meta", sendInpaintPsdMeta);
 
   return router;
 }

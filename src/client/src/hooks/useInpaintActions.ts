@@ -68,8 +68,11 @@ type UseInpaintActionsState = {
   inpaintResultToolStrength: number;
   inpaintSelectionRect: ImageRect | null;
   inpaintTool: InpaintTool;
+  lastExportedInpaintPsdFilename: string | null;
+  lastExportedInpaintPsdReady: boolean;
   lastImportedInpaintPsdAt: string | null;
   lastImportedInpaintPsdLabel: string | null;
+  quickLoadLastExportedInpaintPsd: () => Promise<void>;
   rerunInpaintForSelection: () => Promise<void>;
   rerunInpaintWithCurrentMask: () => Promise<void>;
   selectInpaintPsdFile: () => void;
@@ -167,8 +170,11 @@ export function useInpaintActions({
     handleInpaintPsdInputChange,
     inpaintPsdBusy,
     inpaintPsdInputRef,
+    lastExportedInpaintPsdFilename,
+    lastExportedInpaintPsdReady,
     lastImportedInpaintPsdAt,
     lastImportedInpaintPsdLabel,
+    quickLoadLastExportedInpaintPsd,
     selectInpaintPsdFile
   } = useInpaintPsdActions({
     clearPendingInpaintSaveTimers,
@@ -266,8 +272,11 @@ export function useInpaintActions({
     inpaintResultToolStrength,
     inpaintSelectionRect,
     inpaintTool,
+    lastExportedInpaintPsdFilename,
+    lastExportedInpaintPsdReady,
     lastImportedInpaintPsdAt,
     lastImportedInpaintPsdLabel,
+    quickLoadLastExportedInpaintPsd,
     rerunInpaintForSelection,
     rerunInpaintWithCurrentMask,
     selectInpaintPsdFile,

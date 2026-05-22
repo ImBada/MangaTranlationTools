@@ -29,15 +29,13 @@ type UseInpaintPsdActionsState = {
   handleInpaintPsdInputChange: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   inpaintPsdBusy: boolean;
   inpaintPsdInputRef: React.RefObject<HTMLInputElement | null>;
+  lastExportedInpaintPsdFilename: string | null;
+  lastExportedInpaintPsdReady: boolean;
   lastImportedInpaintPsdAt: string | null;
   lastImportedInpaintPsdLabel: string | null;
+  quickLoadLastExportedInpaintPsd: () => Promise<void>;
   selectInpaintPsdFile: () => void;
 };
-
-function sanitizeDownloadBasename(value: string, fallback: string): string {
-  const base = value.replace(/\.[^.]+$/u, "").replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim();
-  return base || fallback;
-}
 
 export function useInpaintPsdActions({
   clearPendingInpaintSaveTimers,
@@ -59,8 +57,12 @@ export function useInpaintPsdActions({
   signalSaveComplete
 }: UseInpaintPsdActionsOptions): UseInpaintPsdActionsState {
   const [inpaintPsdBusy, setInpaintPsdBusy] = React.useState(false);
+  const [lastExportedInpaintPsdFilename, setLastExportedInpaintPsdFilename] = React.useState<string | null>(null);
+  const [lastExportedInpaintPsdReady, setLastExportedInpaintPsdReady] = React.useState(false);
   const [lastImportedInpaintPsdAt, setLastImportedInpaintPsdAt] = React.useState<string | null>(null);
   const inpaintPsdInputRef = React.useRef<HTMLInputElement | null>(null);
+  const psdMetaTargetRef = React.useRef<{ chapterId: string | null; pageId: string | null }>({ chapterId: null, pageId: null });
+  psdMetaTargetRef.current = { chapterId: currentChapterId, pageId: selectedPageCurrentId };
 
   const lastImportedInpaintPsdLabel = lastImportedInpaintPsdAt
     ? new Intl.DateTimeFormat(undefined, { dateStyle: "short", timeStyle: "short" }).format(new Date(lastImportedInpaintPsdAt))
@@ -68,11 +70,20 @@ export function useInpaintPsdActions({
 
   const refreshLastImportedInpaintPsdMeta = React.useCallback(async () => {
     if (!currentChapterId || !selectedPageCurrentId) {
-      setLastImportedInpaintPsdAt(null);
+      if (!psdMetaTargetRef.current.chapterId || !psdMetaTargetRef.current.pageId) {
+        setLastImportedInpaintPsdAt(null);
+        setLastExportedInpaintPsdFilename(null);
+        setLastExportedInpaintPsdReady(false);
+      }
       return { exists: false };
     }
-    const meta = await window.mangaApi.getLastImportedInpaintPsdMeta(currentChapterId, selectedPageCurrentId);
+    const meta = await window.mangaApi.getInpaintPsdMeta(currentChapterId, selectedPageCurrentId);
+    if (psdMetaTargetRef.current.chapterId !== currentChapterId || psdMetaTargetRef.current.pageId !== selectedPageCurrentId) {
+      return meta;
+    }
     setLastImportedInpaintPsdAt(meta.exists && meta.importedAt ? meta.importedAt : null);
+    setLastExportedInpaintPsdFilename(meta.quickLoad?.exists ? meta.quickLoad.filename ?? null : null);
+    setLastExportedInpaintPsdReady(Boolean(meta.quickLoad?.exists));
     return meta;
   }, [currentChapterId, selectedPageCurrentId]);
 
@@ -110,7 +121,7 @@ export function useInpaintPsdActions({
         activeLayer: "output",
         fontWeightAvailability
       });
-      const blob = await window.mangaApi.exportInpaintPsd({
+      const { filename } = await window.mangaApi.exportInpaintPsd({
         chapterId: currentChapter.id,
         pageId: selectedPage.id,
         pageName: selectedPage.name,
@@ -121,22 +132,29 @@ export function useInpaintPsdActions({
         resultDataUrl,
         translationBlocksDataUrl
       });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement("a");
-      anchor.href = url;
-      anchor.download = `${sanitizeDownloadBasename(selectedPage.name, selectedPage.id)}-inpaint.psd`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-      pushStatus("인페인트 PSD를 내보냈습니다.");
+      const exportedChapterId = currentChapter.id;
+      const exportedPageId = selectedPage.id;
+      if (psdMetaTargetRef.current.chapterId === exportedChapterId && psdMetaTargetRef.current.pageId === exportedPageId) {
+        void refreshLastImportedInpaintPsdMeta().catch((error) => {
+          console.error(error);
+        });
+      }
+      pushStatus(`인페인트 PSD를 내보냈습니다: ${filename}`);
     } catch (error) {
       console.error(error);
       pushStatus(error instanceof Error ? error.message : "인페인트 PSD 내보내기에 실패했습니다.");
     } finally {
       setInpaintPsdBusy(false);
     }
-  }, [currentChapter, fontWeightAvailability, inpaintPsdBusy, pushStatus, selectedPage, selectedPageEditLocked]);
+  }, [
+    currentChapter,
+    fontWeightAvailability,
+    inpaintPsdBusy,
+    pushStatus,
+    refreshLastImportedInpaintPsdMeta,
+    selectedPage,
+    selectedPageEditLocked
+  ]);
 
   const selectInpaintPsdFile = React.useCallback(() => {
     if (!currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy) {
@@ -169,6 +187,36 @@ export function useInpaintPsdActions({
     }
   }, [currentChapterId, inpaintPsdBusy, pushStatus, selectedPageCurrentId]);
 
+  const prepareInpaintPsdImport = React.useCallback(async () => {
+    if (!selectedPage) {
+      throw new Error("PSD를 가져올 페이지가 없습니다.");
+    }
+    clearPendingInpaintSaveTimers();
+    await flushInpaintMaskSave();
+    await flushInpaintResultSave();
+    if (dirty) {
+      await saveNow();
+    }
+
+    recordInpaintMaskUndoSnapshot(selectedPage);
+  }, [
+    clearPendingInpaintSaveTimers,
+    dirty,
+    flushInpaintMaskSave,
+    flushInpaintResultSave,
+    recordInpaintMaskUndoSnapshot,
+    saveNow,
+    selectedPage
+  ]);
+
+  const applyInpaintPsdImportResult = React.useCallback(async (result: Awaited<ReturnType<typeof window.mangaApi.importInpaintPsd>>) => {
+    mergeLiveChapter(result.chapter);
+    void refreshLastImportedInpaintPsdMeta();
+    signalSaveComplete();
+    void refreshLibrary();
+    showInpaintLayers();
+  }, [mergeLiveChapter, refreshLastImportedInpaintPsdMeta, refreshLibrary, showInpaintLayers, signalSaveComplete]);
+
   const handleInpaintPsdInputChange = React.useCallback(async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     event.target.value = "";
@@ -178,21 +226,10 @@ export function useInpaintPsdActions({
 
     setInpaintPsdBusy(true);
     try {
-      clearPendingInpaintSaveTimers();
-      await flushInpaintMaskSave();
-      await flushInpaintResultSave();
-      if (dirty) {
-        await saveNow();
-      }
-
-      recordInpaintMaskUndoSnapshot(selectedPage);
+      await prepareInpaintPsdImport();
 
       const result = await window.mangaApi.importInpaintPsd(currentChapter.id, selectedPage.id, file);
-      mergeLiveChapter(result.chapter);
-      void refreshLastImportedInpaintPsdMeta();
-      signalSaveComplete();
-      void refreshLibrary();
-      showInpaintLayers();
+      await applyInpaintPsdImportResult(result);
       pushStatus("PSD에서 인페인트 결과와 마스크를 가져왔습니다.");
     } catch (error) {
       console.error(error);
@@ -201,22 +238,43 @@ export function useInpaintPsdActions({
       setInpaintPsdBusy(false);
     }
   }, [
-    clearPendingInpaintSaveTimers,
+    applyInpaintPsdImportResult,
     currentChapter,
-    dirty,
-    flushInpaintMaskSave,
-    flushInpaintResultSave,
     inpaintPsdBusy,
-    mergeLiveChapter,
+    prepareInpaintPsdImport,
     pushStatus,
-    recordInpaintMaskUndoSnapshot,
-    refreshLastImportedInpaintPsdMeta,
-    refreshLibrary,
-    saveNow,
     selectedPage,
-    selectedPageEditLocked,
-    showInpaintLayers,
-    signalSaveComplete
+    selectedPageEditLocked
+  ]);
+
+  const quickLoadLastExportedInpaintPsd = React.useCallback(async () => {
+    if (!currentChapter || !selectedPage || selectedPageEditLocked || inpaintPsdBusy || !lastExportedInpaintPsdReady) {
+      return;
+    }
+
+    setInpaintPsdBusy(true);
+    try {
+      await prepareInpaintPsdImport();
+      const result = await window.mangaApi.quickLoadLastExportedInpaintPsd(currentChapter.id, selectedPage.id);
+      await applyInpaintPsdImportResult(result);
+      pushStatus("마지막으로 내보낸 PSD를 퀵로드했습니다.");
+    } catch (error) {
+      console.error(error);
+      pushStatus(error instanceof Error ? error.message : "인페인트 PSD 퀵로드에 실패했습니다.");
+      void refreshLastImportedInpaintPsdMeta();
+    } finally {
+      setInpaintPsdBusy(false);
+    }
+  }, [
+    applyInpaintPsdImportResult,
+    currentChapter,
+    inpaintPsdBusy,
+    lastExportedInpaintPsdReady,
+    prepareInpaintPsdImport,
+    pushStatus,
+    refreshLastImportedInpaintPsdMeta,
+    selectedPage,
+    selectedPageEditLocked
   ]);
 
   return {
@@ -225,8 +283,11 @@ export function useInpaintPsdActions({
     handleInpaintPsdInputChange,
     inpaintPsdBusy,
     inpaintPsdInputRef,
+    lastExportedInpaintPsdFilename,
+    lastExportedInpaintPsdReady,
     lastImportedInpaintPsdAt,
     lastImportedInpaintPsdLabel,
+    quickLoadLastExportedInpaintPsd,
     selectInpaintPsdFile
   };
 }

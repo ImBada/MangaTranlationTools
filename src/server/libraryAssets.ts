@@ -270,6 +270,23 @@ export async function getInpaintPsdImportPath(chapterId: string, pageId: string)
   return join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-last-import.psd`);
 }
 
+export async function getInpaintPsdExportMetaPath(chapterId: string, pageId: string): Promise<string> {
+  const locator = await findChapterLocation(chapterId);
+  if (!locator) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  const chapter = await readChapterFile(locator.workId, locator.chapterId);
+  if (!chapter) {
+    throw new Error("화를 찾지 못했습니다.");
+  }
+  if (!chapter.pages.some((candidate) => candidate.id === pageId)) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+  const inpaintDir = join(WORKS_ROOT, locator.workId, "chapters", locator.chapterId, "inpaint");
+  await mkdir(inpaintDir, { recursive: true });
+  return join(inpaintDir, `${sanitizeFileBasename(pageId, pageId)}-last-export.json`);
+}
+
 export async function removePageArtifacts(workId: string, chapterId: string, pageId: string): Promise<void> {
   const inpaintRoot = join(WORKS_ROOT, workId, "chapters", chapterId, "inpaint");
   if (existsSync(inpaintRoot)) {

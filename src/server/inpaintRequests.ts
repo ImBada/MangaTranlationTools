@@ -1,10 +1,13 @@
 import type express from "express";
-import { readFile, stat, unlink, writeFile } from "node:fs/promises";
-import { extname } from "node:path";
+import { existsSync } from "node:fs";
+import { homedir } from "node:os";
+import { mkdir, open, readFile, stat, unlink, writeFile } from "node:fs/promises";
+import { basename, extname, join, parse } from "node:path";
 import { resolveLamaCommandFromEnv, runInpaintEngine } from "./inpaintEngine";
-import { exportInpaintPsd, importInpaintPsd } from "./inpaintPsd";
+import { exportInpaintPsd, importInpaintPsd, sanitizePsdFileBasename } from "./inpaintPsd";
 import { clipOpaqueInpaintResultToMask, normalizeInpaintLayerDataUrls, normalizeInpaintMaskDataUrl } from "./libraryImageData";
 import {
+  getInpaintPsdExportMetaPath,
   getInpaintPsdImportPath,
   openChapter,
   saveImportedInpaintLayers,
@@ -12,6 +15,7 @@ import {
   saveNormalizedInpaintLayers,
   saveInpaintResultLayer
 } from "./library";
+import { writeJsonFile } from "./libraryFileIO";
 import { getActiveJob } from "./jobState";
 import type {
   ExportInpaintPsdRequest,
@@ -29,6 +33,16 @@ import type {
   SaveInpaintResultLayerRequest,
   SaveInpaintResultLayerResult
 } from "../shared/types";
+
+type ExportedInpaintPsdMeta = {
+  exportedAt: string;
+  filename: string;
+  path: string;
+};
+
+type ExportedInpaintPsdResult = {
+  filename: string;
+};
 
 export async function inpaintPage(request: InpaintPageRequest): Promise<InpaintPageResult> {
   if (getActiveJob()) {
@@ -120,7 +134,7 @@ async function resolvePreservedInpaintLayers(maskDataUrl: string, resultDataUrl:
   };
 }
 
-export async function exportInpaintPsdRequest(request: ExportInpaintPsdRequest): Promise<Buffer> {
+export async function exportInpaintPsdRequest(request: ExportInpaintPsdRequest): Promise<ExportedInpaintPsdResult> {
   if (!request.chapterId || !request.pageId) {
     throw new Error("내보낼 인페인트 PSD 페이지 정보가 없습니다.");
   }
@@ -134,7 +148,9 @@ export async function exportInpaintPsdRequest(request: ExportInpaintPsdRequest):
   if (request.translationBlocksDataUrl) {
     assertImageDataUrl(request.translationBlocksDataUrl, "번역 블록 레이어");
   }
-  return exportInpaintPsd(request);
+  const filename = `${sanitizePsdFileBasename(request.pageName || request.pageId, request.pageId || "inpaint")}-inpaint.psd`;
+  const buffer = await exportInpaintPsd(request);
+  return writeExportedInpaintPsd(request.chapterId, request.pageId, filename, buffer);
 }
 
 export async function importInpaintPsdRequest(req: express.Request): Promise<ImportInpaintPsdResult> {
@@ -149,29 +165,40 @@ export async function importInpaintPsdRequest(req: express.Request): Promise<Imp
   }
 
   try {
-    const chapter = await openChapter(chapterId);
-    const page = chapter.pages.find((candidate) => candidate.id === pageId);
-    if (!page) {
-      throw new Error("페이지를 찾지 못했습니다.");
-    }
-    const psdBuffer = await readFile(file.path);
-    const imported = await importInpaintPsd(psdBuffer, page.width, page.height);
-    await writeFile(await getInpaintPsdImportPath(chapterId, pageId), psdBuffer);
-    return {
-      chapter: await saveImportedInpaintLayers(chapterId, pageId, imported.maskDataUrl, imported.resultDataUrl)
-    };
+    return await importInpaintPsdBuffer(chapterId, pageId, await readFile(file.path));
   } finally {
     await unlink(file.path).catch(() => undefined);
   }
+}
+
+export async function quickImportLastExportedInpaintPsdRequest(chapterId: string, pageId: string): Promise<ImportInpaintPsdResult> {
+  if (!chapterId || !pageId) {
+    throw new Error("퀵로드할 인페인트 PSD 페이지 정보가 없습니다.");
+  }
+  const meta = await readExportedInpaintPsdMeta(chapterId, pageId);
+  if (!meta) {
+    throw new Error("현재 페이지에서 마지막으로 내보낸 PSD 파일 정보가 없습니다.");
+  }
+  if (!existsSync(meta.path)) {
+    throw new Error(`마지막으로 내보낸 PSD 파일을 찾지 못했습니다: ${meta.filename}`);
+  }
+  return importInpaintPsdBuffer(chapterId, pageId, await readFile(meta.path));
 }
 
 export async function readLastImportedPsd(chapterId: string, pageId: string): Promise<Buffer | null> {
   return readFile(await getInpaintPsdImportPath(chapterId, pageId)).catch(() => null);
 }
 
-export async function readLastImportedPsdMeta(chapterId: string, pageId: string): Promise<{ exists: boolean; importedAt?: string }> {
+export async function readInpaintPsdMeta(
+  chapterId: string,
+  pageId: string
+): Promise<{ exists: boolean; importedAt?: string; quickLoad: { exists: boolean; exportedAt?: string; filename?: string } }> {
   const stats = await stat(await getInpaintPsdImportPath(chapterId, pageId)).catch(() => null);
-  return stats ? { exists: true, importedAt: stats.mtime.toISOString() } : { exists: false };
+  const exported = await readExportedInpaintPsdMeta(chapterId, pageId);
+  const quickLoad = exported && existsSync(exported.path)
+    ? { exists: true, exportedAt: exported.exportedAt, filename: exported.filename }
+    : { exists: false };
+  return stats ? { exists: true, importedAt: stats.mtime.toISOString(), quickLoad } : { exists: false, quickLoad };
 }
 
 export function readOptionalPsdPageQuery(req: express.Request): { chapterId: string; pageId: string } | null {
@@ -216,4 +243,97 @@ function assertImageDataUrl(value: string, label: string): void {
   if (!/^data:image\/(?:png|jpeg|jpg|webp);base64,[A-Za-z0-9+/=]+$/u.test(value)) {
     throw new Error(`${label} 데이터 URL이 올바르지 않습니다.`);
   }
+}
+
+async function importInpaintPsdBuffer(chapterId: string, pageId: string, psdBuffer: Buffer): Promise<ImportInpaintPsdResult> {
+  const chapter = await openChapter(chapterId);
+  const page = chapter.pages.find((candidate) => candidate.id === pageId);
+  if (!page) {
+    throw new Error("페이지를 찾지 못했습니다.");
+  }
+  const imported = await importInpaintPsd(psdBuffer, page.width, page.height);
+  await writeFile(await getInpaintPsdImportPath(chapterId, pageId), psdBuffer);
+  return {
+    chapter: await saveImportedInpaintLayers(chapterId, pageId, imported.maskDataUrl, imported.resultDataUrl)
+  };
+}
+
+async function writeExportedInpaintPsd(chapterId: string, pageId: string, filename: string, buffer: Buffer): Promise<ExportedInpaintPsdResult> {
+  const outputPath = await writeUniqueDownloadFile(filename, buffer);
+  const meta: ExportedInpaintPsdMeta = {
+    exportedAt: new Date().toISOString(),
+    filename: basename(outputPath),
+    path: outputPath
+  };
+  await writeJsonFile(await getInpaintPsdExportMetaPath(chapterId, pageId), meta);
+  return {
+    filename: meta.filename
+  };
+}
+
+async function readExportedInpaintPsdMeta(chapterId: string, pageId: string): Promise<ExportedInpaintPsdMeta | null> {
+  const raw = await readFile(await getInpaintPsdExportMetaPath(chapterId, pageId), "utf8").catch(() => null);
+  if (!raw) {
+    return null;
+  }
+  const parsed = parseExportedInpaintPsdMeta(raw);
+  if (!parsed.path || !parsed.filename || !parsed.exportedAt || basename(parsed.path) !== parsed.filename) {
+    return null;
+  }
+  return {
+    exportedAt: parsed.exportedAt,
+    filename: parsed.filename,
+    path: parsed.path
+  };
+}
+
+async function writeUniqueDownloadFile(filename: string, buffer: Buffer): Promise<string> {
+  const downloadsDir = process.env.MANGA_TRANSLATOR_DOWNLOADS_DIR?.trim() || join(homedir(), "Downloads");
+  const safeFilename = basename(filename);
+  const parsed = parse(safeFilename);
+  await mkdir(downloadsDir, { recursive: true });
+
+  let index = 1;
+
+  while (true) {
+    const candidate = join(downloadsDir, index === 1 ? safeFilename : `${parsed.name} (${index - 1})${parsed.ext}`);
+    const handle = await openUniqueFile(candidate);
+    if (!handle) {
+      index += 1;
+      continue;
+    }
+
+    try {
+      await handle.writeFile(buffer);
+    } catch (error) {
+      await unlink(candidate).catch(() => undefined);
+      throw error;
+    } finally {
+      await handle.close();
+    }
+    return candidate;
+  }
+}
+
+async function openUniqueFile(path: string) {
+  try {
+    return await open(path, "wx");
+  } catch (error) {
+    if (isFileExistsError(error)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function parseExportedInpaintPsdMeta(raw: string): Partial<ExportedInpaintPsdMeta> {
+  try {
+    return JSON.parse(raw) as Partial<ExportedInpaintPsdMeta>;
+  } catch {
+    return {};
+  }
+}
+
+function isFileExistsError(error: unknown): boolean {
+  return typeof error === "object" && error !== null && "code" in error && (error as { code?: unknown }).code === "EEXIST";
 }

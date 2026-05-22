@@ -4,24 +4,30 @@ import type { ChapterSnapshot, MangaPage } from "../../../../shared/types";
 type InpaintPsdToolSectionProps = {
   currentChapter: ChapterSnapshot | null;
   inpaintPsdBusy: boolean;
+  lastExportedInpaintPsdFilename: string | null;
+  lastExportedInpaintPsdReady: boolean;
   lastImportedInpaintPsdAt: string | null;
   lastImportedInpaintPsdLabel: string | null;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   onDownloadLastImportedInpaintPsd: () => void | Promise<void>;
   onExportInpaintPsd: () => void | Promise<void>;
+  onQuickLoadLastExportedInpaintPsd: () => void | Promise<void>;
   onSelectInpaintPsdFile: () => void;
 };
 
 export function InpaintPsdToolSection({
   currentChapter,
   inpaintPsdBusy,
+  lastExportedInpaintPsdFilename,
+  lastExportedInpaintPsdReady,
   lastImportedInpaintPsdAt,
   lastImportedInpaintPsdLabel,
   selectedPage,
   selectedPageEditLocked,
   onDownloadLastImportedInpaintPsd,
   onExportInpaintPsd,
+  onQuickLoadLastExportedInpaintPsd,
   onSelectInpaintPsdFile
 }: InpaintPsdToolSectionProps): React.JSX.Element {
   return (
@@ -40,6 +46,14 @@ export function InpaintPsdToolSection({
           disabled={selectedPageEditLocked || inpaintPsdBusy || !selectedPage}
         >
           PSD 가져오기
+        </button>
+        <button
+          type="button"
+          onClick={() => void onQuickLoadLastExportedInpaintPsd()}
+          disabled={selectedPageEditLocked || inpaintPsdBusy || !currentChapter || !selectedPage || !lastExportedInpaintPsdReady}
+          title={lastExportedInpaintPsdFilename ?? undefined}
+        >
+          퀵로드
         </button>
       </div>
       <button

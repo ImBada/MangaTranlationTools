@@ -59,6 +59,7 @@ async function startApp() {
   process.env.MANGA_TRANSLATOR_PORT = String(port);
   process.env.MANGA_TRANSLATOR_APP_ROOT ||= appRoot;
   process.env.MANGA_TRANSLATOR_DATA_DIR ||= dataRoot;
+  process.env.MANGA_TRANSLATOR_DOWNLOADS_DIR ||= app.getPath("downloads");
   process.env.NODE_ENV ||= "production";
 
   require(path.join(appRoot, "out", "server", "index.js"));
@@ -122,7 +123,7 @@ function sanitizeDownloadFilename(filename) {
 }
 
 function resolveUniqueDownloadPath(filename) {
-  const downloadsDir = app.getPath("downloads");
+  const downloadsDir = process.env.MANGA_TRANSLATOR_DOWNLOADS_DIR || app.getPath("downloads");
   const parsed = path.parse(filename);
   let candidate = path.join(downloadsDir, filename);
   let index = 1;
