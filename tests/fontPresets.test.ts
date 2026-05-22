@@ -3,6 +3,7 @@ import {
   applyFontPresetPatchToBlock,
   buildAlphabeticPresetName,
   buildNextFontSizePresetName,
+  buildFontPresetRelinkPatch,
   createFontPreset,
   isBlockFontPresetValueLinked,
   isBlockFontSizeLinkedToPreset,
@@ -115,6 +116,53 @@ describe("font preset block links", () => {
       filterZigzagIntensity: 0.2,
       filterWaveEnabled: false,
       filterWaveIntensity: 0.35
+    });
+  });
+
+  it("relinks the full filter effect group when the master filter link is restored", () => {
+    const preset = createPreset({
+      filterEffectEnabled: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensity: 0.8,
+      filterWaveEnabled: true,
+      filterWaveIntensity: 0.7,
+      filterGlitchEnabled: false,
+      filterGlitchIntensity: 0.6,
+      filterPixelateEnabled: true,
+      filterPixelateIntensity: 0.5,
+      filterBlurEnabled: true,
+      filterBlurIntensity: 0.4,
+      filterNoiseEnabled: true,
+      filterNoiseIntensity: 0.3
+    });
+
+    expect(buildFontPresetRelinkPatch("filterEffectEnabled", preset)).toMatchObject({
+      filterEffectEnabledLinkedToPreset: true,
+      filterEffectEnabled: true,
+      filterZigzagEnabledLinkedToPreset: true,
+      filterZigzagEnabled: true,
+      filterZigzagIntensityLinkedToPreset: true,
+      filterZigzagIntensity: 0.8,
+      filterWaveEnabledLinkedToPreset: true,
+      filterWaveEnabled: true,
+      filterWaveIntensityLinkedToPreset: true,
+      filterWaveIntensity: 0.7,
+      filterGlitchEnabledLinkedToPreset: true,
+      filterGlitchEnabled: false,
+      filterGlitchIntensityLinkedToPreset: true,
+      filterGlitchIntensity: 0.6,
+      filterPixelateEnabledLinkedToPreset: true,
+      filterPixelateEnabled: true,
+      filterPixelateIntensityLinkedToPreset: true,
+      filterPixelateIntensity: 0.5,
+      filterBlurEnabledLinkedToPreset: true,
+      filterBlurEnabled: true,
+      filterBlurIntensityLinkedToPreset: true,
+      filterBlurIntensity: 0.4,
+      filterNoiseEnabledLinkedToPreset: true,
+      filterNoiseEnabled: true,
+      filterNoiseIntensityLinkedToPreset: true,
+      filterNoiseIntensity: 0.3
     });
   });
 

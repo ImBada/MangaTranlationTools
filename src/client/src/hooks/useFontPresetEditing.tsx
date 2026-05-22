@@ -16,6 +16,7 @@ import {
   buildNextFontSizePresetName,
   buildFontPresetLinkFields,
   buildFontPresetLinkPatch,
+  buildFontPresetRelinkPatch,
   clearFontPresetLinkFields,
   createFontPreset,
   createFontSizePreset,
@@ -375,10 +376,7 @@ export function useFontPresetEditing({
     }
 
     const nextLinked = !isBlockFontPresetValueLinked(selectedBlock, key);
-    updateSelectedBlock({
-      ...buildFontPresetLinkPatch(key, nextLinked),
-      ...(nextLinked ? { [key]: selectedFontPreset[key] } : {})
-    });
+    updateSelectedBlock(nextLinked ? buildFontPresetRelinkPatch(key, selectedFontPreset) : buildFontPresetLinkPatch(key, false));
   }, [selectedBlock, selectedFontPreset, updateSelectedBlock]);
 
   const toggleSelectedBlockFontPresetLinkGroup = React.useCallback((keys: LinkableFontPresetKey[], linked: boolean) => {
@@ -388,10 +386,7 @@ export function useFontPresetEditing({
 
     const patch: Partial<TranslationBlock> = {};
     for (const key of keys) {
-      Object.assign(patch, buildFontPresetLinkPatch(key, linked));
-      if (linked) {
-        Object.assign(patch, { [key]: selectedFontPreset[key] });
-      }
+      Object.assign(patch, linked ? buildFontPresetRelinkPatch(key, selectedFontPreset) : buildFontPresetLinkPatch(key, false));
     }
     updateSelectedBlock(patch);
   }, [selectedBlock, selectedFontPreset, updateSelectedBlock]);

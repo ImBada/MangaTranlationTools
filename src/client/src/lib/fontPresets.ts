@@ -89,6 +89,10 @@ export function isBlockFontSizeLinkedToPreset(block: Pick<TranslationBlock, "fon
 const FILTER_EFFECT_CHILD_PRESET_KEYS = new Set<LinkableFontPresetKey>(
   FONT_FILTER_EFFECT_DEFINITIONS.flatMap((definition) => [definition.enabledKey, definition.intensityKey])
 );
+const FILTER_EFFECT_PRESET_KEYS: LinkableFontPresetKey[] = [
+  "filterEffectEnabled",
+  ...FONT_FILTER_EFFECT_DEFINITIONS.flatMap((definition) => [definition.enabledKey, definition.intensityKey])
+];
 
 export function isBlockFontPresetValueLinked(block: TranslationBlock, key: LinkableFontPresetKey): boolean {
   if (FILTER_EFFECT_CHILD_PRESET_KEYS.has(key) && block.filterEffectEnabledLinkedToPreset === false) {
@@ -99,6 +103,19 @@ export function isBlockFontPresetValueLinked(block: TranslationBlock, key: Linka
 
 export function buildFontPresetLinkPatch(key: LinkableFontPresetKey, linked: boolean): Partial<TranslationBlock> {
   return { [FONT_PRESET_LINK_FIELD_BY_KEY[key]]: linked };
+}
+
+export function buildFontPresetRelinkPatch(key: LinkableFontPresetKey, preset: FontPresetPatch): Partial<TranslationBlock> {
+  const patch: Partial<TranslationBlock> = {};
+  const keys = key === "filterEffectEnabled" ? FILTER_EFFECT_PRESET_KEYS : [key];
+  for (const presetKey of keys) {
+    Object.assign(patch, buildFontPresetLinkPatch(presetKey, true));
+    const value = preset[presetKey];
+    if (value !== undefined) {
+      Object.assign(patch, { [presetKey]: value });
+    }
+  }
+  return patch;
 }
 
 export function clearFontPresetLinkFields(block: TranslationBlock): TranslationBlock {
