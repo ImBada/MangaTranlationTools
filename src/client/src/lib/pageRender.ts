@@ -95,6 +95,13 @@ type PositionedTextRunSegment = TextRunSegment & {
   x: number;
 };
 
+type TextDrawItem = {
+  fontSize: number;
+  text: string;
+  x: number;
+  y: number;
+};
+
 type CenteredEllipsisDotGeometry = {
   centers: [number, number, number];
   centerY: number;
@@ -634,11 +641,18 @@ function drawHorizontalRenderedText(
         : textLeft + maxSpacedLineWidth / 2;
 
   context.textAlign = block.textAlign;
-  for (const [index, line] of lines.entries()) {
-    const y = startY + index * lineHeightPx;
-    drawFilledText(context, block, line, x, y, fontSize, textRenderStyle);
-    drawTextDecoration(context, block, line, x, y, fontSize, fontWeightAvailability);
-  }
+  drawTextBlockItems(
+    context,
+    block,
+    lines.map((line, index) => ({
+      fontSize,
+      text: line,
+      x,
+      y: startY + index * lineHeightPx
+    })),
+    textRenderStyle,
+    fontWeightAvailability
+  );
 }
 
 function drawVerticalRenderedText(
@@ -662,11 +676,61 @@ function drawVerticalRenderedText(
   const startY = top + (innerHeight - totalHeight) * textPositionFactors.y;
   const x = left + (innerWidth - fontSize) * textPositionFactors.x + fontSize / 2;
   context.textAlign = "center";
-  for (const [index, char] of chars.entries()) {
-    const y = startY + index * charAdvancePx;
-    drawFilledText(context, block, char, x, y, fontSize, textRenderStyle);
-    drawTextDecoration(context, block, char, x, y, fontSize, textRenderStyle.fontWeightAvailability);
+  drawTextBlockItems(
+    context,
+    block,
+    chars.map((char, index) => ({
+      fontSize,
+      text: char,
+      x,
+      y: startY + index * charAdvancePx
+    })),
+    textRenderStyle,
+    textRenderStyle.fontWeightAvailability
+  );
+}
+
+function drawTextBlockItems(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  items: readonly TextDrawItem[],
+  textRenderStyle: TextRenderStyle,
+  fontWeightAvailability: readonly FontWeightAvailability[]
+): void {
+  for (const item of items) {
+    drawTextItemPhase(context, block, item, "shadow", textRenderStyle);
   }
+  for (const item of items) {
+    drawTextItemPhase(context, block, item, "outline", textRenderStyle);
+  }
+  for (const item of items) {
+    drawTextItemPhase(context, block, item, "fill", textRenderStyle);
+  }
+  for (const item of items) {
+    drawTextDecoration(context, block, item.text, item.x, item.y, item.fontSize, fontWeightAvailability);
+  }
+}
+
+function drawTextItemPhase(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  item: TextDrawItem,
+  phase: "fill" | "outline" | "shadow",
+  textRenderStyle: TextRenderStyle
+): void {
+  if (drawCenteredEllipsisStyledSegmentsPhase(context, block, item, phase, textRenderStyle)) {
+    return;
+  }
+
+  if (phase === "shadow") {
+    drawTextShadow(context, block, item.text, item.x, item.y, item.fontSize, textRenderStyle);
+    return;
+  }
+  if (phase === "outline") {
+    strokeTextOutlines(context, block, item.text, item.x, item.y, item.fontSize, textRenderStyle);
+    return;
+  }
+  fillTextBody(context, block, item.text, item.x, item.y, item.fontSize, textRenderStyle);
 }
 
 function drawTextDecoration(
@@ -726,7 +790,7 @@ function strokeTextOutlines(
   }
 }
 
-function drawOutlinedText(
+function fillTextBody(
   context: CanvasRenderingContext2D,
   block: TranslationBlock,
   text: string,
@@ -735,21 +799,6 @@ function drawOutlinedText(
   fontSize: number,
   textRenderStyle: TextRenderStyle
 ): void {
-  drawTextShadow(context, block, text, x, y, fontSize, textRenderStyle);
-  drawTextBodyAndOutlines(context, block, text, x, y, fontSize, textRenderStyle);
-}
-
-function drawTextBodyAndOutlines(
-  context: CanvasRenderingContext2D,
-  block: TranslationBlock,
-  text: string,
-  x: number,
-  y: number,
-  fontSize: number,
-  textRenderStyle: TextRenderStyle
-): void {
-  strokeTextOutlines(context, block, text, x, y, fontSize, textRenderStyle);
-
   if (block.screentoneFillEnabled ?? false) {
     context.save();
     context.fillStyle = "#ffffff";
@@ -773,36 +822,18 @@ function drawTextBodyAndOutlines(
   drawTextRun(context, block, text, x, y, fontSize, "fill", textRenderStyle);
 }
 
-function drawFilledText(
+function drawCenteredEllipsisStyledSegmentsPhase(
   context: CanvasRenderingContext2D,
   block: TranslationBlock,
-  text: string,
-  x: number,
-  y: number,
-  fontSize: number,
-  textRenderStyle: TextRenderStyle
-): void {
-  if (drawCenteredEllipsisStyledSegments(context, block, text, x, y, fontSize, textRenderStyle)) {
-    return;
-  }
-
-  drawOutlinedText(context, block, text, x, y, fontSize, textRenderStyle);
-}
-
-function drawCenteredEllipsisStyledSegments(
-  context: CanvasRenderingContext2D,
-  block: TranslationBlock,
-  text: string,
-  x: number,
-  y: number,
-  fontSize: number,
+  item: TextDrawItem,
+  phase: "fill" | "outline" | "shadow",
   textRenderStyle: TextRenderStyle
 ): boolean {
-  if (!containsCenteredEllipsis(text)) {
+  if (!containsCenteredEllipsis(item.text)) {
     return false;
   }
 
-  const positionedSegments = resolveTextRunSegmentPositions(context, block, text, x, fontSize, textRenderStyle);
+  const positionedSegments = resolveTextRunSegmentPositions(context, block, item.text, item.x, item.fontSize, textRenderStyle);
   if (!positionedSegments.some((segment) => segment.centerEllipsis)) {
     return false;
   }
@@ -811,19 +842,21 @@ function drawCenteredEllipsisStyledSegments(
   context.textAlign = "left";
   const originalFont = context.font;
   for (const segment of positionedSegments) {
-    applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
+    applySegmentFont(context, block, segment.fontFamily, item.fontSize, textRenderStyle, originalFont);
     if (segment.centerEllipsis) {
-      drawCenteredEllipsisShadow(context, block, segment.x, y, fontSize, segment.advance, textRenderStyle);
+      if (phase === "shadow") {
+        drawCenteredEllipsisShadow(context, block, segment.x, item.y, item.fontSize, segment.advance, textRenderStyle);
+      } else if (phase === "outline") {
+        drawCenteredEllipsisOutlines(context, block, segment.x, item.y, item.fontSize, segment.advance, textRenderStyle);
+      } else {
+        drawCenteredEllipsisFill(context, block, segment.x, item.y, item.fontSize, segment.advance, textRenderStyle);
+      }
+    } else if (phase === "shadow") {
+      drawTextShadow(context, block, segment.text, segment.x, item.y, item.fontSize, textRenderStyle);
+    } else if (phase === "outline") {
+      strokeTextOutlines(context, block, segment.text, segment.x, item.y, item.fontSize, textRenderStyle);
     } else {
-      drawTextShadow(context, block, segment.text, segment.x, y, fontSize, textRenderStyle);
-    }
-  }
-  for (const segment of positionedSegments) {
-    applySegmentFont(context, block, segment.fontFamily, fontSize, textRenderStyle, originalFont);
-    if (segment.centerEllipsis) {
-      drawCenteredEllipsisBody(context, block, segment.x, y, fontSize, segment.advance, textRenderStyle);
-    } else {
-      drawTextBodyAndOutlines(context, block, segment.text, segment.x, y, fontSize, textRenderStyle);
+      fillTextBody(context, block, segment.text, segment.x, item.y, item.fontSize, textRenderStyle);
     }
   }
   context.font = originalFont;
@@ -866,7 +899,7 @@ function drawCenteredEllipsisShadow(
   context.restore();
 }
 
-function drawCenteredEllipsisBody(
+function drawCenteredEllipsisOutlines(
   context: CanvasRenderingContext2D,
   block: TranslationBlock,
   x: number,
@@ -902,7 +935,23 @@ function drawCenteredEllipsisBody(
       );
       drawCenteredEllipsisDots(context, geometry, fillRadius, primaryOutlinePaint);
     }
+  });
+}
 
+function drawCenteredEllipsisFill(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  x: number,
+  y: number,
+  fontSize: number,
+  advance: number,
+  textRenderStyle: TextRenderStyle
+): void {
+  const geometry = resolveCenteredEllipsisDotGeometry(context, x, y, fontSize, advance);
+  const syntheticBoldRadiusPx = textRenderStyle.syntheticBoldWidthPx / 2;
+  const fillRadius = geometry.radius + syntheticBoldRadiusPx;
+
+  withSyntheticItalicTransform(context, x, y, fontSize, textRenderStyle, () => {
     if (block.screentoneFillEnabled ?? false) {
       drawCenteredEllipsisDots(context, geometry, fillRadius, "#ffffff");
       const pattern = createScreentonePattern(
