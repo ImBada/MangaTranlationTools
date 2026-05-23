@@ -89,6 +89,7 @@ export function InpaintLayerCanvas({
   const undoCanvasSnapshotRef = useRef<HTMLCanvasElement | null>(null);
   const editSessionActiveRef = useRef(false);
   const activePointerIdRef = useRef<number | null>(null);
+  const activeCanvasRectRef = useRef<DOMRect | null>(null);
   const pendingCommitsRef = useRef<PendingMaskCanvasCommit[]>([]);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
 
@@ -109,7 +110,7 @@ export function InpaintLayerCanvas({
   };
 
   const resolvePoint = (event: React.PointerEvent<HTMLCanvasElement>): DrawPoint => {
-    return resolveCanvasPoint(event.clientX, event.clientY, event.currentTarget.getBoundingClientRect(), pageSize);
+    return resolveCanvasPoint(event.clientX, event.clientY, activeCanvasRectRef.current ?? event.currentTarget.getBoundingClientRect(), pageSize);
   };
 
   const startEditSession = React.useCallback(() => {
@@ -432,12 +433,14 @@ export function InpaintLayerCanvas({
       });
       commitAutoEraseSelection(canvas);
       activePointerIdRef.current = null;
+      activeCanvasRectRef.current = null;
       endEditSession();
       return;
     }
 
     drawingRef.current = false;
     activePointerIdRef.current = null;
+    activeCanvasRectRef.current = null;
     lastPointRef.current = null;
     writeInpaintDebugLog("inpaint-mask:stroke-finish", {
       activePointerId,
@@ -474,6 +477,7 @@ export function InpaintLayerCanvas({
       releaseCanvasPointer(canvas, activePointerId);
     }
     activePointerIdRef.current = null;
+    activeCanvasRectRef.current = null;
     if (canvas && autoEraseSelectionRef.current) {
       writeInpaintDebugLog("inpaint-mask:stroke-cancel", {
         activePointerId,
@@ -554,6 +558,7 @@ export function InpaintLayerCanvas({
           if (selectionEnabled) {
             event.preventDefault();
             event.stopPropagation();
+            activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
             event.currentTarget.setPointerCapture(event.pointerId);
             const point = resolvePoint(event);
             selectionDragRef.current = { start: point, current: point };
@@ -565,6 +570,7 @@ export function InpaintLayerCanvas({
           }
           event.preventDefault();
           event.stopPropagation();
+          activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
           const point = resolvePoint(event);
           startMaskStroke(event.currentTarget, point, event.pointerId);
         }}
@@ -612,6 +618,7 @@ export function InpaintLayerCanvas({
             const rect = resolveSelectionRect(selectionDragRef.current.start, point, pageSize);
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
+            activeCanvasRectRef.current = null;
             setPreviewSelectionRect(null);
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
             return;
@@ -628,6 +635,7 @@ export function InpaintLayerCanvas({
           if (selectionEnabled && selectionDragRef.current) {
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
+            activeCanvasRectRef.current = null;
             setPreviewSelectionRect(null);
             return;
           }

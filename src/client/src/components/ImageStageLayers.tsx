@@ -163,6 +163,7 @@ export function ImageStageLayers({
   });
   const duplicateModifierPlatform = React.useMemo(() => (typeof navigator === "undefined" ? "" : navigator.platform), []);
   const [duplicateBlockMode, setDuplicateBlockMode] = React.useState(false);
+  const duplicateBlockModeRef = React.useRef(false);
   const selectedBlockIdSet = React.useMemo(() => new Set(selectedBlockIds), [selectedBlockIds]);
   const multiBlockSelectionActive = selectedBlockIds.length > 1;
   const visibleRangeSelectionRect =
@@ -262,6 +263,13 @@ export function ImageStageLayers({
   const resolveDuplicateModifierState = React.useCallback((event: Pick<KeyboardEvent | PointerEvent | React.PointerEvent, "ctrlKey" | "metaKey">) => (
     isBlockDuplicateModifier(event, duplicateModifierPlatform)
   ), [duplicateModifierPlatform]);
+  const updateDuplicateBlockMode = React.useCallback((next: boolean) => {
+    if (duplicateBlockModeRef.current === next) {
+      return;
+    }
+    duplicateBlockModeRef.current = next;
+    setDuplicateBlockMode(next);
+  }, []);
   const startInlineEdit = React.useCallback((block: TranslationBlock) => {
     setInlineEdit({ blockId: block.id, draft: block.translatedText });
   }, []);
@@ -385,9 +393,9 @@ export function ImageStageLayers({
 
   React.useEffect(() => {
     const updateFromKeyboardEvent = (event: KeyboardEvent) => {
-      setDuplicateBlockMode(resolveDuplicateModifierState(event));
+      updateDuplicateBlockMode(resolveDuplicateModifierState(event));
     };
-    const clearDuplicateMode = () => setDuplicateBlockMode(false);
+    const clearDuplicateMode = () => updateDuplicateBlockMode(false);
 
     window.addEventListener("keydown", updateFromKeyboardEvent);
     window.addEventListener("keyup", updateFromKeyboardEvent);
@@ -397,7 +405,7 @@ export function ImageStageLayers({
       window.removeEventListener("keyup", updateFromKeyboardEvent);
       window.removeEventListener("blur", clearDuplicateMode);
     };
-  }, [resolveDuplicateModifierState]);
+  }, [resolveDuplicateModifierState, updateDuplicateBlockMode]);
 
   const renderOverlayLayerContent = () => (
     <>
@@ -543,9 +551,9 @@ export function ImageStageLayers({
                 opacity: layerOpacity.overlay,
                 pointerEvents: overlayEditingEnabled ? "auto" : "none"
               }}
-              onPointerEnter={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
-              onPointerMove={(event) => setDuplicateBlockMode(resolveDuplicateModifierState(event))}
-              onPointerLeave={() => setDuplicateBlockMode(false)}
+              onPointerEnter={(event) => updateDuplicateBlockMode(resolveDuplicateModifierState(event))}
+              onPointerMove={(event) => updateDuplicateBlockMode(resolveDuplicateModifierState(event))}
+              onPointerLeave={() => updateDuplicateBlockMode(false)}
             >
               {debugLogEnabled ? (
                 <React.Profiler id="overlay-layer" onRender={handleOverlayProfilerRender}>

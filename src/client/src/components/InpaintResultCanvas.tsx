@@ -173,6 +173,7 @@ export function InpaintResultCanvas({
   const editSessionActiveRef = useRef(false);
   const activeStrokePointerIdRef = useRef<number | null>(null);
   const activeStrokeToolRef = useRef<InpaintResultPaintTool | null>(null);
+  const activeCanvasRectRef = useRef<DOMRect | null>(null);
   const pendingCommitsRef = useRef<PendingResultCanvasCommit[]>([]);
   const colorPickerPointerIdRef = useRef<number | null>(null);
   const [previewSelectionRect, setPreviewSelectionRect] = useState<ImageRect | null>(null);
@@ -385,7 +386,7 @@ export function InpaintResultCanvas({
   };
 
   const resolvePoint = (event: React.PointerEvent<HTMLCanvasElement>): DrawPoint => {
-    const rect = event.currentTarget.getBoundingClientRect();
+    const rect = activeCanvasRectRef.current ?? event.currentTarget.getBoundingClientRect();
     return {
       x: ((event.clientX - rect.left) / Math.max(1, rect.width)) * pageSize.width,
       y: ((event.clientY - rect.top) / Math.max(1, rect.height)) * pageSize.height
@@ -732,6 +733,7 @@ export function InpaintResultCanvas({
     drawingRef.current = false;
     activeStrokePointerIdRef.current = null;
     activeStrokeToolRef.current = null;
+    activeCanvasRectRef.current = null;
     lastPointRef.current = null;
     smudgePatchRef.current = null;
     writeInpaintDebugLog("inpaint-result:stroke-finish", {
@@ -785,9 +787,11 @@ export function InpaintResultCanvas({
           if (!colorPickerEnabled || colorPickerPointerIdRef.current !== null) {
             return;
           }
+          activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
           setColorPickerHover({ point: resolvePoint(event) });
         }}
         onPointerDown={(event) => {
+          activeCanvasRectRef.current = event.currentTarget.getBoundingClientRect();
           if (colorPickerEnabled) {
             if (event.button !== 0) {
               return;
@@ -876,6 +880,7 @@ export function InpaintResultCanvas({
             }
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             colorPickerPointerIdRef.current = null;
+            activeCanvasRectRef.current = null;
             setColorPickerPreview(null);
             return;
           }
@@ -886,6 +891,7 @@ export function InpaintResultCanvas({
             const rect = resolveSelectionRect(selectionDragRef.current.start, point, pageSize);
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
+            activeCanvasRectRef.current = null;
             setPreviewSelectionRect(null);
             onSelectionChange(rect.width >= 2 && rect.height >= 2 ? rect : null);
             return;
@@ -899,6 +905,7 @@ export function InpaintResultCanvas({
         }}
         onPointerLeave={() => {
           if (colorPickerPointerIdRef.current === null) {
+            activeCanvasRectRef.current = null;
             setColorPickerHover(null);
           }
         }}
@@ -906,6 +913,7 @@ export function InpaintResultCanvas({
           if (colorPickerEnabled && colorPickerPointerIdRef.current === event.pointerId) {
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             colorPickerPointerIdRef.current = null;
+            activeCanvasRectRef.current = null;
             setColorPickerHover(null);
             setColorPickerPreview(null);
             return;
@@ -913,6 +921,7 @@ export function InpaintResultCanvas({
           if (selectionEnabled && selectionDragRef.current) {
             releaseCanvasPointer(event.currentTarget, event.pointerId);
             selectionDragRef.current = null;
+            activeCanvasRectRef.current = null;
             setPreviewSelectionRect(null);
             return;
           }
