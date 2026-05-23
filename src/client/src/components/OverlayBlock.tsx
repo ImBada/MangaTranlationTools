@@ -11,6 +11,7 @@ import {
   hexToRgba,
   resolveBlockTextLayout,
   resolveCharacterFontRuns,
+  resolveSecondaryOutlineEnabled,
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
@@ -109,7 +110,8 @@ export function OverlayBlock({
       : [];
   const renderScale = Math.max(stageSize.width / pageSize.width, stageSize.height / pageSize.height);
   const outlineWidthPx = Math.max(0, block.outlineWidthPx ?? 0) * renderScale;
-  const secondaryOutlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0) * renderScale;
+  const secondaryOutlineEnabled = resolveSecondaryOutlineEnabled(block);
+  const secondaryOutlineWidthPx = secondaryOutlineEnabled ? Math.max(0, block.secondaryOutlineWidthPx ?? 0) * renderScale : 0;
   const combinedSecondaryOutlineWidthPx = outlineWidthPx + secondaryOutlineWidthPx * 2;
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0) * renderScale;
   const shadowBlurPx = Math.max(0, block.shadowBlurPx ?? 0) * renderScale;

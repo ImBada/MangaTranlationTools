@@ -2,6 +2,7 @@ import type { BBox, FontPreset, MangaPage, TranslationBlock } from "../../../sha
 import { bboxToPixels, clamp } from "../../../shared/geometry";
 import { FONT_PRESET_LINK_FIELD_BY_KEY } from "../../../shared/fontPresets";
 import { FONT_FILTER_EFFECT_DEFINITIONS } from "./fontFilterEffectMetadata";
+import { resolveSecondaryOutlineEnabled } from "./overlayLayout";
 
 export type PixelRect = {
   x: number;
@@ -81,6 +82,7 @@ const LINK_FIELD_LABELS: readonly [keyof TranslationBlock, string][] = [
   ["letterSpacingLinkedToPreset", "자간"],
   ["outlineColorLinkedToPreset", "외곽선색"],
   ["outlineWidthLinkedToPreset", "외곽선두께"],
+  ["secondaryOutlineEnabledLinkedToPreset", "2차개수"],
   ["secondaryOutlineColorLinkedToPreset", "2차색"],
   ["secondaryOutlineWidthLinkedToPreset", "2차두께"],
   ["shadowEnabledLinkedToPreset", "그림자"],
@@ -239,7 +241,9 @@ export function createResultReportRow(options: {
     backgroundColor: `${block.backgroundColor} / ${formatNumber(block.opacity)}`,
     opacity: block.opacity,
     outline: formatOutline(block.outlineColor, block.outlineWidthPx),
-    secondaryOutline: formatOutline(block.secondaryOutlineColor, block.secondaryOutlineWidthPx),
+    secondaryOutline: resolveSecondaryOutlineEnabled(block)
+      ? formatOutline(block.secondaryOutlineColor, block.secondaryOutlineWidthPx)
+      : "꺼짐",
     shadow: formatShadow(block),
     screentone: formatScreentone(block),
     filterEffect: formatFilterEffect(block),

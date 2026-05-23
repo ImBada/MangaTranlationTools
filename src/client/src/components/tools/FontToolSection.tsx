@@ -30,6 +30,7 @@ import {
   DEFAULT_FONT_RENDERING_MODE,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize,
+  resolveSecondaryOutlineEnabled,
   resolveTextPosition
 } from "../../lib/overlayLayout";
 import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
@@ -160,7 +161,8 @@ function resolvePresetTagTextMetrics(preset: FontPreset): {
 } {
   const sourceFontSizePx = Math.max(1, preset.fontSizePx);
   const sourceOutlineWidthPx = Math.max(0, preset.outlineWidthPx ?? 0);
-  const sourceSecondaryOutlineWidthPx = Math.max(0, preset.secondaryOutlineWidthPx ?? 0);
+  const sourceSecondaryOutlineEnabled = resolveSecondaryOutlineEnabled(preset);
+  const sourceSecondaryOutlineWidthPx = sourceSecondaryOutlineEnabled ? Math.max(0, preset.secondaryOutlineWidthPx ?? 0) : 0;
   const sourceOuterStrokeWidthPx = sourceOutlineWidthPx + sourceSecondaryOutlineWidthPx * 2;
   const scale = PRESET_TAG_FONT_SIZE_PX / Math.max(1, sourceFontSizePx + sourceOuterStrokeWidthPx * 2);
 

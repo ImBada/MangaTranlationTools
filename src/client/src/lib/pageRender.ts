@@ -18,6 +18,7 @@ import {
   resolveSyntheticBoldStrokeWidthPx,
   resolveSyntheticItalicSkewX,
   resolveCharacterFontRuns,
+  resolveSecondaryOutlineEnabled,
   resolveTextLetterSpacingPx,
   resolveTextPositionFactors,
   resolveWrappedTextLines,
@@ -286,7 +287,7 @@ export function resolveBlockCanvasDirtyRect(
   const pageSize = { width: page.width, height: page.height };
   const layout = resolvedLayout ?? resolveBlockTextLayout(block, text, pageSize, pageSize);
   const outlinePx = Math.max(0, block.outlineWidthPx ?? 0);
-  const secondaryOutlinePx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
+  const secondaryOutlinePx = resolveSecondaryOutlineEnabled(block) ? Math.max(0, block.secondaryOutlineWidthPx ?? 0) : 0;
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
   const shadowBlurPx = resolveBlockShadowBlurPx(block);
   const filterMarginPx = resolveFontFilterEffectMarginPx(block, layout.fontSizePx);
@@ -1420,6 +1421,9 @@ function resolveRenderedOutlineWidthPx(block: TranslationBlock, fontSize: number
 }
 
 function resolveRenderedSecondaryOutlineWidthPx(block: TranslationBlock, fontSize: number): number {
+  if (!resolveSecondaryOutlineEnabled(block)) {
+    return 0;
+  }
   const outlineWidthPx = Math.max(0, block.secondaryOutlineWidthPx ?? 0);
   return Math.min(outlineWidthPx, fontSize * 0.35);
 }

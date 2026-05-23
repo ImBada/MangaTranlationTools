@@ -531,6 +531,7 @@ function summarizeBlockRenderState(block: TranslationBlock): Record<string, unkn
     screentoneFillDensity: block.screentoneFillDensity,
     screentoneFillEnabled: block.screentoneFillEnabled,
     screentoneFillIntensity: block.screentoneFillIntensity,
+    secondaryOutlineEnabled: block.secondaryOutlineEnabled,
     secondaryOutlineColor: block.secondaryOutlineColor,
     secondaryOutlineWidthPx: block.secondaryOutlineWidthPx,
     shadowAngleDeg: block.shadowAngleDeg,

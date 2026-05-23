@@ -367,6 +367,13 @@
   line-height: 1;
 }
 
+.font-outline-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+}
+
 .font-outline-mode {
   display: grid;
   grid-template-columns: repeat(2, 30px);

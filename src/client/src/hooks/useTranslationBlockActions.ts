@@ -331,6 +331,7 @@ export function useTranslationBlockActions({
       letterSpacingPx: sourcePreset.letterSpacingPx,
       outlineColor: sourcePreset.outlineColor,
       outlineWidthPx: sourcePreset.outlineWidthPx,
+      secondaryOutlineEnabled: sourcePreset.secondaryOutlineEnabled,
       secondaryOutlineColor: sourcePreset.secondaryOutlineColor,
       secondaryOutlineWidthPx: sourcePreset.secondaryOutlineWidthPx,
       shadowEnabled: sourcePreset.shadowEnabled,

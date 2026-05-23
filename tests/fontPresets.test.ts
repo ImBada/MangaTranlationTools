@@ -176,6 +176,31 @@ describe("font preset block links", () => {
     expect(applyFontPresetPatchToBlock(unlinkedBlock, preset).fontRenderingMode).toBe("smooth");
   });
 
+  it("keeps secondary outline count as a linkable preset value independent of width", () => {
+    const linkedBlock = createBlock({
+      secondaryOutlineEnabled: false,
+      secondaryOutlineWidthPx: 0
+    });
+    const unlinkedBlock = createBlock({
+      secondaryOutlineEnabled: false,
+      secondaryOutlineEnabledLinkedToPreset: false,
+      secondaryOutlineWidthPx: 0
+    });
+    const preset = createPreset({
+      secondaryOutlineEnabled: true,
+      secondaryOutlineWidthPx: 0
+    });
+
+    expect(applyFontPresetPatchToBlock(linkedBlock, preset)).toMatchObject({
+      secondaryOutlineEnabled: true,
+      secondaryOutlineWidthPx: 0
+    });
+    expect(applyFontPresetPatchToBlock(unlinkedBlock, preset)).toMatchObject({
+      secondaryOutlineEnabled: false,
+      secondaryOutlineWidthPx: 0
+    });
+  });
+
   it("resolves font preset sizes from document size presets", () => {
     const preset = createPreset({ fontSizePx: 24, fontSizePresetId: "size-large" });
 

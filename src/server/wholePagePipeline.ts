@@ -383,6 +383,7 @@ function overlayItemToBlock(item: OverlayItem, page: MangaPage, index: number): 
     letterSpacingPx: 0,
     outlineColor: "#000000",
     outlineWidthPx: 0,
+    secondaryOutlineEnabled: false,
     secondaryOutlineColor: "#ffffff",
     secondaryOutlineWidthPx: 0,
     shadowEnabled: false,

@@ -20,6 +20,7 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "letterSpacingPx",
   "outlineColor",
   "outlineWidthPx",
+  "secondaryOutlineEnabled",
   "secondaryOutlineColor",
   "secondaryOutlineWidthPx",
   "shadowEnabled",

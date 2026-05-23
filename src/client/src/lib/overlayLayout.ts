@@ -80,6 +80,12 @@ export function resolveTextPosition(position: TextPosition | undefined): TextPos
   return position ?? DEFAULT_OVERLAY_TEXT_POSITION;
 }
 
+export function resolveSecondaryOutlineEnabled(
+  values: Pick<TranslationBlock, "secondaryOutlineEnabled" | "secondaryOutlineWidthPx">
+): boolean {
+  return values.secondaryOutlineEnabled ?? (values.secondaryOutlineWidthPx ?? 0) > 0;
+}
+
 export function resolveTextPositionFactors(position: TextPosition | undefined): TextPositionFactors {
   switch (resolveTextPosition(position)) {
     case "top-left":

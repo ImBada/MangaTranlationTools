@@ -29,6 +29,7 @@ export type LayerToolFontControlValues = {
   screentoneFillDensity?: number;
   screentoneFillEnabled?: boolean;
   screentoneFillIntensity?: number;
+  secondaryOutlineEnabled?: boolean;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
   shadowAngleDeg?: number;

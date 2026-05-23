@@ -118,6 +118,7 @@ export type TranslationBlock = {
   letterSpacingLinkedToPreset?: boolean;
   outlineColorLinkedToPreset?: boolean;
   outlineWidthLinkedToPreset?: boolean;
+  secondaryOutlineEnabledLinkedToPreset?: boolean;
   secondaryOutlineColorLinkedToPreset?: boolean;
   secondaryOutlineWidthLinkedToPreset?: boolean;
   shadowEnabledLinkedToPreset?: boolean;
@@ -160,6 +161,7 @@ export type TranslationBlock = {
   letterSpacingPx?: number;
   outlineColor?: string;
   outlineWidthPx?: number;
+  secondaryOutlineEnabled?: boolean;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
   shadowEnabled?: boolean;
@@ -225,6 +227,7 @@ export type FontPreset = {
   letterSpacingPx?: number;
   outlineColor?: string;
   outlineWidthPx?: number;
+  secondaryOutlineEnabled?: boolean;
   secondaryOutlineColor?: string;
   secondaryOutlineWidthPx?: number;
   shadowEnabled?: boolean;

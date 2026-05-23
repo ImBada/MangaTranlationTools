@@ -26,6 +26,7 @@ export const DEFAULT_FONT_PRESET_VALUES = {
   letterSpacingPx: 0,
   outlineColor: "#000000",
   outlineWidthPx: 0,
+  secondaryOutlineEnabled: false,
   secondaryOutlineColor: "#ffffff",
   secondaryOutlineWidthPx: 0,
   shadowEnabled: false,
@@ -76,6 +77,7 @@ export const FONT_PRESET_LINK_FIELD_BY_KEY = {
   letterSpacingPx: "letterSpacingLinkedToPreset",
   outlineColor: "outlineColorLinkedToPreset",
   outlineWidthPx: "outlineWidthLinkedToPreset",
+  secondaryOutlineEnabled: "secondaryOutlineEnabledLinkedToPreset",
   secondaryOutlineColor: "secondaryOutlineColorLinkedToPreset",
   secondaryOutlineWidthPx: "secondaryOutlineWidthLinkedToPreset",
   shadowEnabled: "shadowEnabledLinkedToPreset",
@@ -130,6 +132,9 @@ export function normalizeFontPreset(preset: FontPreset): FontPreset {
     if (normalized[key] === undefined || normalized[key] === null) {
       Object.assign(normalized, { [key]: DEFAULT_FONT_PRESET_VALUES[key] });
     }
+  }
+  if (preset.secondaryOutlineEnabled === undefined && (preset.secondaryOutlineWidthPx ?? 0) > 0) {
+    normalized.secondaryOutlineEnabled = true;
   }
   return normalized;
 }
