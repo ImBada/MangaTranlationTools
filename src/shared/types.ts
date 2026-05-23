@@ -146,6 +146,11 @@ export type TranslationBlock = {
   filterBlurIntensityLinkedToPreset?: boolean;
   filterNoiseEnabledLinkedToPreset?: boolean;
   filterNoiseIntensityLinkedToPreset?: boolean;
+  fontBackgroundEnabledLinkedToPreset?: boolean;
+  fontBackgroundScaleLinkedToPreset?: boolean;
+  fontBackgroundColorLinkedToPreset?: boolean;
+  fontBackgroundRadiusPxLinkedToPreset?: boolean;
+  fontBackgroundOpacityLinkedToPreset?: boolean;
   fontWeightLinkedToPreset?: boolean;
   fontStyleLinkedToPreset?: boolean;
   textDecorationLinkedToPreset?: boolean;
@@ -191,6 +196,11 @@ export type TranslationBlock = {
   filterBlurIntensity?: number;
   filterNoiseEnabled?: boolean;
   filterNoiseIntensity?: number;
+  fontBackgroundEnabled?: boolean;
+  fontBackgroundScale?: number;
+  fontBackgroundColor?: string;
+  fontBackgroundRadiusPx?: number;
+  fontBackgroundOpacity?: number;
   backgroundColor: string;
   opacity: number;
   autoFitText?: boolean;
@@ -255,6 +265,11 @@ export type FontPreset = {
   filterBlurIntensity?: number;
   filterNoiseEnabled?: boolean;
   filterNoiseIntensity?: number;
+  fontBackgroundEnabled?: boolean;
+  fontBackgroundScale?: number;
+  fontBackgroundColor?: string;
+  fontBackgroundRadiusPx?: number;
+  fontBackgroundOpacity?: number;
 };
 
 export type FontSizePreset = {

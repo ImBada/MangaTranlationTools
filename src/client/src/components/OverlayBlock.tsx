@@ -8,7 +8,12 @@ import {
   DEFAULT_OVERLAY_TEXT_DECORATION,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize,
+  DEFAULT_FONT_BACKGROUND_COLOR,
   hexToRgba,
+  resolveFontBackgroundRadiusPx,
+  resolveFontBackgroundScale,
+  normalizeFontBackgroundOpacity,
+  resolveFontBackgroundEnabled,
   resolveBlockTextLayout,
   resolveCharacterFontRuns,
   resolveSecondaryOutlineEnabled,
@@ -103,6 +108,7 @@ export function OverlayBlock({
   }
 
   const displayText = block.translatedText || block.sourceText || "...";
+  const renderedText = block.renderDirection === "vertical" ? displayText.replace(/\s+/g, "") : displayText;
   const layout = resolveBlockTextLayout(block, displayText, pageSize, stageSize);
   const horizontalLines =
     visualContentVisible && block.renderDirection === "horizontal"
@@ -133,6 +139,9 @@ export function OverlayBlock({
   const textPositionJustifyContent = textPositionFactors.x === 0 ? "flex-start" : textPositionFactors.x === 1 ? "flex-end" : "center";
   const textPositionAlignItems = textPositionFactors.y === 0 ? "flex-start" : textPositionFactors.y === 1 ? "flex-end" : "center";
   const letterSpacingPx = resolveTextLetterSpacingPx(block, layout.fontSizePx);
+  const fontBackgroundOpacity = normalizeFontBackgroundOpacity(block.fontBackgroundOpacity);
+  const fontBackgroundVisible = visualContentVisible && resolveFontBackgroundEnabled(block) && fontBackgroundOpacity > 0;
+  const fontBackgroundRadiusPx = resolveFontBackgroundRadiusPx(block, pageSize, stageSize);
   const screentoneFillStyle: React.CSSProperties = screentoneFillEnabled
     ? {
         WebkitTextFillColor: "transparent",
@@ -176,6 +185,8 @@ export function OverlayBlock({
     overflow: inlineEditDraft !== undefined || selectedControlsVisible ? "visible" : "hidden"
   };
   const textWrapStyle: React.CSSProperties = {
+    position: "relative",
+    zIndex: 1,
     boxSizing: "border-box",
     width: layout.innerWidth,
     maxWidth: "100%",
@@ -187,8 +198,8 @@ export function OverlayBlock({
   };
   const contentFrameStyle: React.CSSProperties = {
     position: "relative",
-    width: block.renderDirection === "vertical" ? `${layout.fitInnerWidth}px` : "fit-content",
-    height: block.renderDirection === "vertical" ? `${layout.fitInnerHeight}px` : undefined,
+    width: "fit-content",
+    height: block.renderDirection === "vertical" ? "fit-content" : undefined,
     maxWidth: "100%",
     maxHeight: "100%"
   };
@@ -238,6 +249,16 @@ export function OverlayBlock({
   const secondaryOutlineLineStyle: React.CSSProperties = {
     alignSelf: horizontalLineAlignSelf
   };
+  const fontBackgroundStyle: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    zIndex: 0,
+    transform: `scale(${resolveFontBackgroundScale(block)})`,
+    transformOrigin: "center center",
+    borderRadius: fontBackgroundRadiusPx,
+    backgroundColor: hexToRgba(block.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR, fontBackgroundOpacity),
+    pointerEvents: "none"
+  };
   const characterFontRunCache = new Map<string, ReturnType<typeof resolveCharacterFontRuns>>();
   const renderTextWithCharacterFonts = (text: string): React.ReactNode => {
     let runs = characterFontRunCache.get(text);
@@ -262,7 +283,7 @@ export function OverlayBlock({
               {renderTextWithCharacterFonts(line)}
             </span>
           ))
-        : renderTextWithCharacterFonts(displayText)}
+        : renderTextWithCharacterFonts(renderedText)}
     </span>
   );
   return (
@@ -308,6 +329,7 @@ export function OverlayBlock({
       {visualContentVisible ? (
         <div className="overlay-text" style={textWrapStyle}>
           <span className="overlay-text-layer-stack" style={contentFrameStyle}>
+            {fontBackgroundVisible ? <span className="overlay-font-background" style={fontBackgroundStyle} aria-hidden /> : null}
             {shadowEnabled ? renderTextContent(shadowStyle, secondaryOutlineLineStyle, true) : null}
             {secondaryOutlineWidthPx > 0 ? renderTextContent(secondaryOutlineStyle, secondaryOutlineLineStyle, true) : null}
             {renderTextContent(contentStyle, lineStyle)}

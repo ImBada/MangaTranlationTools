@@ -49,7 +49,12 @@ const TRANSLATION_BLOCK_FONT_STYLE_KEYS = [
   "filterBlurEnabled",
   "filterBlurIntensity",
   "filterNoiseEnabled",
-  "filterNoiseIntensity"
+  "filterNoiseIntensity",
+  "fontBackgroundEnabled",
+  "fontBackgroundScale",
+  "fontBackgroundColor",
+  "fontBackgroundRadiusPx",
+  "fontBackgroundOpacity"
 ] satisfies readonly (keyof TranslationBlock)[];
 
 type TranslationBlockFontStyleKey = typeof TRANSLATION_BLOCK_FONT_STYLE_KEYS[number];

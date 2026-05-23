@@ -45,7 +45,12 @@ describe("font preset block links", () => {
       filterBlurEnabled: true,
       filterBlurIntensity: 0.25,
       filterNoiseEnabled: true,
-      filterNoiseIntensity: 0.15
+      filterNoiseIntensity: 0.15,
+      fontBackgroundEnabled: true,
+      fontBackgroundScale: 0.72,
+      fontBackgroundColor: "#ffffff",
+      fontBackgroundRadiusPx: 24,
+      fontBackgroundOpacity: 0.64
     });
 
     expect(applyFontPresetPatchToBlock(block, preset)).toMatchObject({
@@ -77,7 +82,12 @@ describe("font preset block links", () => {
       filterBlurEnabled: true,
       filterBlurIntensity: 0.25,
       filterNoiseEnabled: true,
-      filterNoiseIntensity: 0.15
+      filterNoiseIntensity: 0.15,
+      fontBackgroundEnabled: true,
+      fontBackgroundScale: 0.72,
+      fontBackgroundColor: "#ffffff",
+      fontBackgroundRadiusPx: 24,
+      fontBackgroundOpacity: 0.64
     });
   });
 

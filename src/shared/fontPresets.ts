@@ -14,6 +14,17 @@ export const DEFAULT_FILTER_GLITCH_INTENSITY = 0.35;
 export const DEFAULT_FILTER_PIXELATE_INTENSITY = 0.35;
 export const DEFAULT_FILTER_BLUR_INTENSITY = 0.35;
 export const DEFAULT_FILTER_NOISE_INTENSITY = 0.35;
+export const DEFAULT_FONT_BACKGROUND_SCALE = 1.15;
+export const MIN_FONT_BACKGROUND_SCALE = 0.8;
+export const MAX_FONT_BACKGROUND_SCALE = 2;
+export const DEFAULT_FONT_BACKGROUND_COLOR = "#ffffff";
+export const DEFAULT_FONT_BACKGROUND_RADIUS_PX = 12;
+export const MIN_FONT_BACKGROUND_RADIUS_PX = 0;
+export const MAX_FONT_BACKGROUND_RADIUS_PX = 96;
+export const DEFAULT_ENABLED_FONT_BACKGROUND_OPACITY = 0.9;
+export const DEFAULT_FONT_BACKGROUND_OPACITY = 0;
+export const MIN_FONT_BACKGROUND_OPACITY = 0;
+export const MAX_FONT_BACKGROUND_OPACITY = 1;
 
 export const DEFAULT_FONT_PRESET_VALUES = {
   fontFamily: DEFAULT_OVERLAY_FONT_FAMILY,
@@ -53,7 +64,12 @@ export const DEFAULT_FONT_PRESET_VALUES = {
   filterBlurEnabled: false,
   filterBlurIntensity: DEFAULT_FILTER_BLUR_INTENSITY,
   filterNoiseEnabled: false,
-  filterNoiseIntensity: DEFAULT_FILTER_NOISE_INTENSITY
+  filterNoiseIntensity: DEFAULT_FILTER_NOISE_INTENSITY,
+  fontBackgroundEnabled: false,
+  fontBackgroundScale: DEFAULT_FONT_BACKGROUND_SCALE,
+  fontBackgroundColor: DEFAULT_FONT_BACKGROUND_COLOR,
+  fontBackgroundRadiusPx: DEFAULT_FONT_BACKGROUND_RADIUS_PX,
+  fontBackgroundOpacity: DEFAULT_FONT_BACKGROUND_OPACITY
 } satisfies DefaultFontPresetValues;
 export type FontPresetValueKey = keyof typeof DEFAULT_FONT_PRESET_VALUES;
 export const FONT_PRESET_VALUE_KEYS = Object.keys(DEFAULT_FONT_PRESET_VALUES) as FontPresetValueKey[];
@@ -105,6 +121,11 @@ export const FONT_PRESET_LINK_FIELD_BY_KEY = {
   filterBlurIntensity: "filterBlurIntensityLinkedToPreset",
   filterNoiseEnabled: "filterNoiseEnabledLinkedToPreset",
   filterNoiseIntensity: "filterNoiseIntensityLinkedToPreset",
+  fontBackgroundEnabled: "fontBackgroundEnabledLinkedToPreset",
+  fontBackgroundScale: "fontBackgroundScaleLinkedToPreset",
+  fontBackgroundColor: "fontBackgroundColorLinkedToPreset",
+  fontBackgroundRadiusPx: "fontBackgroundRadiusPxLinkedToPreset",
+  fontBackgroundOpacity: "fontBackgroundOpacityLinkedToPreset",
   fontWeight: "fontWeightLinkedToPreset",
   fontStyle: "fontStyleLinkedToPreset",
   textDecoration: "textDecorationLinkedToPreset",

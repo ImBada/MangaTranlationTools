@@ -15,6 +15,11 @@ export type LayerToolFontControlValues = {
   filterBlurIntensity?: number;
   filterNoiseEnabled?: boolean;
   filterNoiseIntensity?: number;
+  fontBackgroundEnabled?: boolean;
+  fontBackgroundScale?: number;
+  fontBackgroundColor?: string;
+  fontBackgroundRadiusPx?: number;
+  fontBackgroundOpacity?: number;
   fontFamily?: string;
   characterFontOverrides?: FontCharacterOverride[];
   fontStyle?: TextFontStyle;

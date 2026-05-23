@@ -361,6 +361,11 @@ export function useTranslationBlockActions({
       filterBlurIntensity: sourcePreset.filterBlurIntensity,
       filterNoiseEnabled: sourcePreset.filterNoiseEnabled,
       filterNoiseIntensity: sourcePreset.filterNoiseIntensity,
+      fontBackgroundEnabled: sourcePreset.fontBackgroundEnabled,
+      fontBackgroundScale: sourcePreset.fontBackgroundScale,
+      fontBackgroundColor: sourcePreset.fontBackgroundColor,
+      fontBackgroundRadiusPx: sourcePreset.fontBackgroundRadiusPx,
+      fontBackgroundOpacity: sourcePreset.fontBackgroundOpacity,
       backgroundColor: "#fffdf5",
       opacity: 0.88
     };

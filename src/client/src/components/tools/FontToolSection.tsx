@@ -9,7 +9,17 @@ import type {
   TextPosition,
   TranslationBlock
 } from "../../../../shared/types";
-import { DEFAULT_ENABLED_SHADOW_DISTANCE_PX } from "../../../../shared/fontPresets";
+import {
+  DEFAULT_ENABLED_SHADOW_DISTANCE_PX,
+  DEFAULT_ENABLED_FONT_BACKGROUND_OPACITY,
+  DEFAULT_FONT_BACKGROUND_COLOR,
+  MAX_FONT_BACKGROUND_OPACITY,
+  MAX_FONT_BACKGROUND_RADIUS_PX,
+  MAX_FONT_BACKGROUND_SCALE,
+  MIN_FONT_BACKGROUND_OPACITY,
+  MIN_FONT_BACKGROUND_RADIUS_PX,
+  MIN_FONT_BACKGROUND_SCALE
+} from "../../../../shared/fontPresets";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
 import {
   FontFilterEffectControls,
@@ -30,6 +40,10 @@ import {
   DEFAULT_FONT_RENDERING_MODE,
   buildScreentoneFillCssBackground,
   buildScreentoneFillCssSize,
+  normalizeFontBackgroundOpacity,
+  normalizeFontBackgroundRadiusPx,
+  normalizeFontBackgroundScale,
+  resolveFontBackgroundEnabled,
   resolveSecondaryOutlineEnabled,
   resolveTextPosition
 } from "../../lib/overlayLayout";
@@ -290,6 +304,7 @@ export function FontToolSection({
       : [...selectedFontWeights, currentFontWeight].sort((a, b) => a - b)
     : [];
   const shadowActive = fontControlValues?.shadowEnabled ?? ((fontControlValues?.shadowDistancePx ?? 0) > 0 || (fontControlValues?.shadowBlurPx ?? 0) > 0);
+  const fontBackgroundActive = fontControlValues ? resolveFontBackgroundEnabled(fontControlValues) : false;
   const screentoneFillActive = fontControlValues?.screentoneFillEnabled ?? false;
   const filterEffectActive = fontControlValues?.filterEffectEnabled ?? false;
   const filterEffectLinkedToPreset = selectedBlock?.filterEffectEnabledLinkedToPreset !== false;
@@ -698,6 +713,125 @@ export function FontToolSection({
                       onChange={(event) => onFontSettingChange({ screentoneFillDensity: Number(event.target.value) })}
                     />
                     {renderFontPresetLinkButton("screentoneFillDensity", "스크린톤 밀도")}
+                  </label>
+                </div>
+              </>
+            ) : null}
+          </div>
+          <div className="compact-tool-field font-outline-section font-background-section font-effect-section">
+            <div className="font-outline-section-header">
+              <span>글자 배경</span>
+              <div className="font-filter-header-actions">
+                <div className="font-outline-mode" aria-label="글자 배경 사용">
+                  <button
+                    type="button"
+                    className={!fontBackgroundActive ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({ fontBackgroundEnabled: false })}
+                    aria-pressed={!fontBackgroundActive}
+                  >
+                    OFF
+                  </button>
+                  <button
+                    type="button"
+                    className={fontBackgroundActive ? "active" : ""}
+                    disabled={selectedPageEditLocked}
+                    onClick={() => onFontSettingChange({
+                      fontBackgroundEnabled: true,
+                      fontBackgroundOpacity: normalizeFontBackgroundOpacity(fontControlValues.fontBackgroundOpacity) > 0
+                        ? fontControlValues.fontBackgroundOpacity
+                        : DEFAULT_ENABLED_FONT_BACKGROUND_OPACITY
+                    })}
+                    aria-pressed={fontBackgroundActive}
+                  >
+                    ON
+                  </button>
+                </div>
+                {renderFontPresetLinkButton("fontBackgroundEnabled", "글자 배경")}
+              </div>
+            </div>
+            {fontBackgroundActive ? (
+              <>
+                <label className="compact-tool-field font-color-field">
+                  <span>배경색</span>
+                  <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR }}>
+                    <input
+                      type="color"
+                      {...mouseOnlyColorInputProps}
+                      className="outline-color-input"
+                      value={fontControlValues.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => onFontSettingChange({ fontBackgroundColor: event.target.value })}
+                    />
+                  </span>
+                  {renderFontPresetLinkButton("fontBackgroundColor", "글자 배경색")}
+                </label>
+                <div className="font-background-range-row">
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>크기</span>
+                      <strong>{Math.round(normalizeFontBackgroundScale(fontControlValues.fontBackgroundScale) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      {...mouseOnlyRangeInputProps}
+                      min={MIN_FONT_BACKGROUND_SCALE}
+                      max={MAX_FONT_BACKGROUND_SCALE}
+                      step={0.01}
+                      value={normalizeFontBackgroundScale(fontControlValues.fontBackgroundScale)}
+                      style={rangeProgressStyle(
+                        normalizeFontBackgroundScale(fontControlValues.fontBackgroundScale),
+                        MIN_FONT_BACKGROUND_SCALE,
+                        MAX_FONT_BACKGROUND_SCALE
+                      )}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => onFontSettingChange({ fontBackgroundScale: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("fontBackgroundScale", "글자 배경 크기")}
+                  </label>
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>라운드</span>
+                      <strong>{Math.round(normalizeFontBackgroundRadiusPx(fontControlValues.fontBackgroundRadiusPx))}px</strong>
+                    </span>
+                    <input
+                      type="range"
+                      {...mouseOnlyRangeInputProps}
+                      min={MIN_FONT_BACKGROUND_RADIUS_PX}
+                      max={MAX_FONT_BACKGROUND_RADIUS_PX}
+                      step={1}
+                      value={normalizeFontBackgroundRadiusPx(fontControlValues.fontBackgroundRadiusPx)}
+                      style={rangeProgressStyle(
+                        normalizeFontBackgroundRadiusPx(fontControlValues.fontBackgroundRadiusPx),
+                        MIN_FONT_BACKGROUND_RADIUS_PX,
+                        MAX_FONT_BACKGROUND_RADIUS_PX
+                      )}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => onFontSettingChange({ fontBackgroundRadiusPx: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("fontBackgroundRadiusPx", "글자 배경 라운드")}
+                  </label>
+                  <label className="compact-tool-field font-range-field">
+                    <span>
+                      <span>투명도</span>
+                      <strong>{Math.round(normalizeFontBackgroundOpacity(fontControlValues.fontBackgroundOpacity) * 100)}%</strong>
+                    </span>
+                    <input
+                      type="range"
+                      {...mouseOnlyRangeInputProps}
+                      min={MIN_FONT_BACKGROUND_OPACITY}
+                      max={MAX_FONT_BACKGROUND_OPACITY}
+                      step={0.01}
+                      value={normalizeFontBackgroundOpacity(fontControlValues.fontBackgroundOpacity)}
+                      style={rangeProgressStyle(
+                        normalizeFontBackgroundOpacity(fontControlValues.fontBackgroundOpacity),
+                        MIN_FONT_BACKGROUND_OPACITY,
+                        MAX_FONT_BACKGROUND_OPACITY
+                      )}
+                      disabled={selectedPageEditLocked}
+                      onChange={(event) => onFontSettingChange({ fontBackgroundOpacity: Number(event.target.value) })}
+                    />
+                    {renderFontPresetLinkButton("fontBackgroundOpacity", "글자 배경 투명도")}
                   </label>
                 </div>
               </>

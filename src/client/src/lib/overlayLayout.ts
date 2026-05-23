@@ -5,7 +5,18 @@ import {
   DEFAULT_OVERLAY_FONT_STYLE,
   DEFAULT_OVERLAY_FONT_WEIGHT,
   DEFAULT_OVERLAY_TEXT_DECORATION,
-  DEFAULT_FONT_RENDERING_MODE
+  DEFAULT_FONT_RENDERING_MODE,
+  DEFAULT_FONT_BACKGROUND_SCALE,
+  MIN_FONT_BACKGROUND_SCALE,
+  MAX_FONT_BACKGROUND_SCALE,
+  DEFAULT_FONT_BACKGROUND_COLOR,
+  DEFAULT_FONT_BACKGROUND_RADIUS_PX,
+  MIN_FONT_BACKGROUND_RADIUS_PX,
+  MAX_FONT_BACKGROUND_RADIUS_PX,
+  DEFAULT_ENABLED_FONT_BACKGROUND_OPACITY,
+  DEFAULT_FONT_BACKGROUND_OPACITY,
+  MIN_FONT_BACKGROUND_OPACITY,
+  MAX_FONT_BACKGROUND_OPACITY
 } from "../../../shared/fontPresets";
 
 export {
@@ -13,7 +24,18 @@ export {
   DEFAULT_OVERLAY_FONT_STYLE,
   DEFAULT_OVERLAY_FONT_WEIGHT,
   DEFAULT_OVERLAY_TEXT_DECORATION,
-  DEFAULT_FONT_RENDERING_MODE
+  DEFAULT_FONT_RENDERING_MODE,
+  DEFAULT_FONT_BACKGROUND_SCALE,
+  MIN_FONT_BACKGROUND_SCALE,
+  MAX_FONT_BACKGROUND_SCALE,
+  DEFAULT_FONT_BACKGROUND_COLOR,
+  DEFAULT_FONT_BACKGROUND_RADIUS_PX,
+  MIN_FONT_BACKGROUND_RADIUS_PX,
+  MAX_FONT_BACKGROUND_RADIUS_PX,
+  DEFAULT_ENABLED_FONT_BACKGROUND_OPACITY,
+  DEFAULT_FONT_BACKGROUND_OPACITY,
+  MIN_FONT_BACKGROUND_OPACITY,
+  MAX_FONT_BACKGROUND_OPACITY
 };
 
 const MIN_FONT_SIZE_PX = 2;
@@ -309,6 +331,49 @@ function resolveAutoBlockPaddingPx(rect: PixelRect): number {
   }
 
   return Math.round(clamp(shortestSide * 0.06, 3, MAX_BLOCK_PADDING_PX));
+}
+
+export function resolveFontBackgroundScale(block: Partial<Pick<TranslationBlock, "fontBackgroundScale">>): number {
+  return normalizeFontBackgroundScale(block.fontBackgroundScale);
+}
+
+export function resolveFontBackgroundRadiusPx(
+  block: Partial<Pick<TranslationBlock, "fontBackgroundRadiusPx">>,
+  pageSize: ViewportSize,
+  renderSize: ViewportSize
+): number {
+  const renderScale = Math.min(renderSize.width / Math.max(1, pageSize.width), renderSize.height / Math.max(1, pageSize.height));
+  return normalizeFontBackgroundRadiusPx(block.fontBackgroundRadiusPx) * renderScale;
+}
+
+export function normalizeFontBackgroundScale(value: number | undefined): number {
+  const scale = value ?? DEFAULT_FONT_BACKGROUND_SCALE;
+  return Number.isFinite(scale) ? clamp(scale, MIN_FONT_BACKGROUND_SCALE, MAX_FONT_BACKGROUND_SCALE) : DEFAULT_FONT_BACKGROUND_SCALE;
+}
+
+export function normalizeFontBackgroundRadiusPx(value: number | undefined): number {
+  const radiusPx = value ?? DEFAULT_FONT_BACKGROUND_RADIUS_PX;
+  return Number.isFinite(radiusPx) ? clamp(radiusPx, MIN_FONT_BACKGROUND_RADIUS_PX, MAX_FONT_BACKGROUND_RADIUS_PX) : DEFAULT_FONT_BACKGROUND_RADIUS_PX;
+}
+
+export function normalizeFontBackgroundOpacity(value: number | undefined): number {
+  const opacity = value ?? DEFAULT_FONT_BACKGROUND_OPACITY;
+  return Number.isFinite(opacity) ? clamp(opacity, MIN_FONT_BACKGROUND_OPACITY, MAX_FONT_BACKGROUND_OPACITY) : DEFAULT_FONT_BACKGROUND_OPACITY;
+}
+
+export function resolveFontBackgroundEnabled(block: Partial<Pick<TranslationBlock, "fontBackgroundEnabled" | "fontBackgroundOpacity">>): boolean {
+  return block.fontBackgroundEnabled ?? normalizeFontBackgroundOpacity(block.fontBackgroundOpacity) > 0;
+}
+
+export function resolveScaledTextBackgroundRect(rect: PixelRect, scale: number): PixelRect {
+  const width = rect.width * scale;
+  const height = rect.height * scale;
+  return {
+    left: rect.left + (rect.width - width) / 2,
+    top: rect.top + (rect.height - height) / 2,
+    width,
+    height
+  };
 }
 
 export function resolveBlockTextLayout(

@@ -11,6 +11,12 @@ import {
   hexToRgba,
   buildOverlayCanvasFont,
   DEFAULT_OVERLAY_TEXT_DECORATION,
+  DEFAULT_FONT_BACKGROUND_COLOR,
+  resolveFontBackgroundScale,
+  resolveScaledTextBackgroundRect,
+  normalizeFontBackgroundOpacity,
+  normalizeFontBackgroundRadiusPx,
+  resolveFontBackgroundEnabled,
   resolveScreentoneDotRadiusPx,
   resolveScreentoneTileSizePx,
   resolveBlockTextLayout,
@@ -101,6 +107,11 @@ type TextDrawItem = {
   text: string;
   x: number;
   y: number;
+};
+
+type DrawTextOptions = {
+  includeFontBackground?: boolean;
+  includeGlyphs?: boolean;
 };
 
 type CenteredEllipsisDotGeometry = {
@@ -291,8 +302,13 @@ export function resolveBlockCanvasDirtyRect(
   const shadowDistancePx = Math.max(0, block.shadowDistancePx ?? 0);
   const shadowBlurPx = resolveBlockShadowBlurPx(block);
   const filterMarginPx = resolveFontFilterEffectMarginPx(block, layout.fontSizePx);
+  const fontBackgroundScale = resolveFontBackgroundScale(block);
+  const fontBackgroundMarginPx = resolveFontBackgroundEnabled(block) && normalizeFontBackgroundOpacity(block.fontBackgroundOpacity) > 0
+    ? Math.max(0, Math.max(layout.fitInnerWidth, layout.fitInnerHeight) * (fontBackgroundScale - 1) / 2)
+    : 0;
   const margin = Math.ceil(Math.max(
     24,
+    fontBackgroundMarginPx,
     layout.fontSizePx * 0.45 + outlinePx * 3 + secondaryOutlinePx * 4 + shadowDistancePx + shadowBlurPx * 3 + filterMarginPx + 8
   ));
   const expanded = {
@@ -418,14 +434,28 @@ function drawRenderedBlock(
 
   const fontWeightAvailability = options.fontWeightAvailability ?? [];
   const textRenderStyle = resolveTextRenderStyle(block, renderFontSizePx, options);
-  const drawText = (targetContext: CanvasRenderingContext2D): void => {
+  const drawText = (targetContext: CanvasRenderingContext2D, drawOptions: DrawTextOptions = {}): void => {
+    const includeFontBackground = drawOptions.includeFontBackground ?? true;
+    const includeGlyphs = drawOptions.includeGlyphs ?? true;
     targetContext.fillStyle = block.textColor;
     targetContext.lineJoin = "round";
     targetContext.font = buildOverlayCanvasFont(renderFontSizePx, block, fontWeightAvailability);
     targetContext.textBaseline = "top";
 
     if (block.renderDirection === "vertical") {
-      drawVerticalRenderedText(targetContext, block, text, left, top, layout.fitInnerWidth, layout.fitInnerHeight, renderFontSizePx, block.lineHeight, textRenderStyle);
+      drawVerticalRenderedText(
+        targetContext,
+        block,
+        text,
+        left,
+        top,
+        layout.fitInnerWidth,
+        layout.fitInnerHeight,
+        renderFontSizePx,
+        block.lineHeight,
+        textRenderStyle,
+        { includeFontBackground, includeGlyphs }
+      );
       return;
     }
 
@@ -440,7 +470,8 @@ function drawRenderedBlock(
       layout.fitInnerWidth,
       renderFontSizePx,
       textRenderStyle,
-      fontWeightAvailability
+      fontWeightAvailability,
+      { includeFontBackground, includeGlyphs }
     );
   };
 
@@ -462,7 +493,8 @@ function drawRenderedBlock(
         textContext.rotate((rotationDeg * Math.PI) / 180);
         textContext.translate(-centerX, -centerY);
       }
-      drawText(textContext);
+      drawText(context, { includeFontBackground: true, includeGlyphs: false });
+      drawText(textContext, { includeFontBackground: false, includeGlyphs: true });
       textContext.restore();
       applyFontFilterEffectsToCanvas(
         textContext,
@@ -502,7 +534,8 @@ function drawRenderedBlock(
         textContext.rotate((rotationDeg * Math.PI) / 180);
         textContext.translate(-centerX, -centerY);
       }
-      drawText(textContext);
+      drawText(context, { includeFontBackground: true, includeGlyphs: false });
+      drawText(textContext, { includeFontBackground: false, includeGlyphs: true });
       textContext.setTransform(1, 0, 0, 1, 0, 0);
       hardenCanvasTextPixels(textContext, hardTextBounds.width, hardTextBounds.height, block);
       context.restore();
@@ -516,6 +549,34 @@ function drawRenderedBlock(
 
   drawText(context);
   context.restore();
+}
+
+function fillRoundRect(
+  context: CanvasRenderingContext2D,
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+  radiusPx: number
+): void {
+  const radius = Math.max(0, Math.min(radiusPx, width / 2, height / 2));
+  if (radius <= 0) {
+    context.fillRect(left, top, width, height);
+    return;
+  }
+
+  context.beginPath();
+  context.moveTo(left + radius, top);
+  context.lineTo(left + width - radius, top);
+  context.quadraticCurveTo(left + width, top, left + width, top + radius);
+  context.lineTo(left + width, top + height - radius);
+  context.quadraticCurveTo(left + width, top + height, left + width - radius, top + height);
+  context.lineTo(left + radius, top + height);
+  context.quadraticCurveTo(left, top + height, left, top + height - radius);
+  context.lineTo(left, top + radius);
+  context.quadraticCurveTo(left, top, left + radius, top);
+  context.closePath();
+  context.fill();
 }
 
 function resolveBlockHardTextBounds(
@@ -622,7 +683,8 @@ function drawHorizontalRenderedText(
   fitInnerWidth: number,
   fontSize: number,
   textRenderStyle: TextRenderStyle,
-  fontWeightAvailability: readonly FontWeightAvailability[] = []
+  fontWeightAvailability: readonly FontWeightAvailability[] = [],
+  drawOptions: DrawTextOptions = {}
 ): void {
   const lines = resolveWrappedTextLines(block, text, fontSize, fitInnerWidth, fontWeightAvailability);
   const lineHeightPx = fontSize * block.lineHeight;
@@ -642,6 +704,17 @@ function drawHorizontalRenderedText(
         : textLeft + maxSpacedLineWidth / 2;
 
   context.textAlign = block.textAlign;
+  if (drawOptions.includeFontBackground ?? true) {
+    drawFontBackground(context, block, {
+      left: textLeft,
+      top: startY,
+      width: maxSpacedLineWidth,
+      height: totalHeight
+    });
+  }
+  if (drawOptions.includeGlyphs === false) {
+    return;
+  }
   drawTextBlockItems(
     context,
     block,
@@ -666,7 +739,8 @@ function drawVerticalRenderedText(
   innerHeight: number,
   fontSize: number,
   lineHeight: number,
-  textRenderStyle: TextRenderStyle
+  textRenderStyle: TextRenderStyle,
+  drawOptions: DrawTextOptions = {}
 ): void {
   const chars = [...text.replace(/\s+/g, "")];
   const lineHeightPx = fontSize * lineHeight;
@@ -677,6 +751,17 @@ function drawVerticalRenderedText(
   const startY = top + (innerHeight - totalHeight) * textPositionFactors.y;
   const x = left + (innerWidth - fontSize) * textPositionFactors.x + fontSize / 2;
   context.textAlign = "center";
+  if (drawOptions.includeFontBackground ?? true) {
+    drawFontBackground(context, block, {
+      left: x - fontSize / 2,
+      top: startY,
+      width: fontSize,
+      height: totalHeight
+    });
+  }
+  if (drawOptions.includeGlyphs === false) {
+    return;
+  }
   drawTextBlockItems(
     context,
     block,
@@ -689,6 +774,23 @@ function drawVerticalRenderedText(
     textRenderStyle,
     textRenderStyle.fontWeightAvailability
   );
+}
+
+function drawFontBackground(
+  context: CanvasRenderingContext2D,
+  block: TranslationBlock,
+  textRect: { left: number; top: number; width: number; height: number }
+): void {
+  const opacity = normalizeFontBackgroundOpacity(block.fontBackgroundOpacity);
+  if (!resolveFontBackgroundEnabled(block) || opacity <= 0 || textRect.width <= 0 || textRect.height <= 0) {
+    return;
+  }
+
+  const rect = resolveScaledTextBackgroundRect(textRect, resolveFontBackgroundScale(block));
+  context.save();
+  context.fillStyle = hexToRgba(block.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR, opacity);
+  fillRoundRect(context, rect.left, rect.top, rect.width, rect.height, normalizeFontBackgroundRadiusPx(block.fontBackgroundRadiusPx));
+  context.restore();
 }
 
 function drawTextBlockItems(

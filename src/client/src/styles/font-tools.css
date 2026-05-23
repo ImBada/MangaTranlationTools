@@ -297,6 +297,16 @@
   gap: 4px;
 }
 
+.font-background-section .font-color-field {
+  min-height: 52px;
+}
+
+.font-background-range-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 4px;
+}
+
 .font-filter-option-row {
   display: inline-flex;
   align-items: center;
