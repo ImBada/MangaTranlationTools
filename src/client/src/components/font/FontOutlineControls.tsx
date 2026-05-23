@@ -1,8 +1,8 @@
 import React from "react";
 import type { FontPresetPatch, LinkableFontPresetKey } from "../../lib/fontPresets";
-import { mouseOnlyColorInputProps } from "../../lib/mouseOnlyCheckbox";
 import { resolveSecondaryOutlineEnabled } from "../../lib/overlayLayout";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
+import { FastColorPicker } from "../controls/FastColorPicker";
 
 type FontOutlineValues = Pick<
   FontPresetPatch,
@@ -65,20 +65,16 @@ export function FontOutlineControls({ disabled, onChange, renderLinkButton, valu
         </div>
       </div>
       <div className="font-outline-row font-tool-grid">
-        <label className="compact-tool-field font-color-field">
+        <div className="compact-tool-field font-color-field">
           <span>{primaryOutlineColorLabel}</span>
-          <span className="color-picker-shell" style={{ backgroundColor: values.outlineColor ?? "#000000" }}>
-            <input
-              type="color"
-              {...mouseOnlyColorInputProps}
-              className="outline-color-input"
-              value={values.outlineColor ?? "#000000"}
-              disabled={disabled}
-              onChange={(event) => onChange({ outlineColor: event.target.value })}
-            />
-          </span>
+          <FastColorPicker
+            ariaLabel={primaryOutlineColorLabel}
+            value={values.outlineColor ?? "#000000"}
+            disabled={disabled}
+            onChange={(outlineColor) => onChange({ outlineColor })}
+          />
           {renderLinkButton("outlineColor", primaryOutlineColorLabel)}
-        </label>
+        </div>
         <label className="compact-tool-field font-number-field">
           <span>{primaryOutlineWidthLabel}</span>
           <CompactNumberControl
@@ -96,20 +92,16 @@ export function FontOutlineControls({ disabled, onChange, renderLinkButton, valu
       </div>
       {secondaryOutlineActive ? (
         <div className="font-outline-row font-tool-grid secondary-outline-row">
-          <label className="compact-tool-field font-color-field">
+          <div className="compact-tool-field font-color-field">
             <span>2차 외곽선 색</span>
-            <span className="color-picker-shell" style={{ backgroundColor: values.secondaryOutlineColor ?? "#ffffff" }}>
-              <input
-                type="color"
-                {...mouseOnlyColorInputProps}
-                className="outline-color-input"
-                value={values.secondaryOutlineColor ?? "#ffffff"}
-                disabled={disabled}
-                onChange={(event) => onChange({ secondaryOutlineColor: event.target.value })}
-              />
-            </span>
+            <FastColorPicker
+              ariaLabel="2차 외곽선 색"
+              value={values.secondaryOutlineColor ?? "#ffffff"}
+              disabled={disabled}
+              onChange={(secondaryOutlineColor) => onChange({ secondaryOutlineColor })}
+            />
             {renderLinkButton("secondaryOutlineColor", "2차 외곽선 색")}
-          </label>
+          </div>
           <label className="compact-tool-field font-number-field">
             <span>2차 외곽선 두께</span>
             <CompactNumberControl

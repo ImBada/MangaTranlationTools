@@ -1,10 +1,11 @@
 import React from "react";
 import { resolveBlockRotationDeg } from "../../../shared/geometry";
 import type { RenderTextDirection, TranslationBlock } from "../../../shared/types";
-import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../lib/mouseOnlyCheckbox";
+import { mouseOnlyRangeInputProps } from "../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../lib/rangeProgressStyle";
 import { CompactNumberControl } from "./controls/CompactNumberControl";
 import { DropdownSelect } from "./controls/DropdownSelect";
+import { FastColorPicker } from "./controls/FastColorPicker";
 
 type EditorPanelProps = {
   block: TranslationBlock | null;
@@ -174,19 +175,15 @@ export function EditorPanel({
             onChange={(textPaddingPx) => onUpdate({ textPaddingPx })}
           />
         </div>
-        <label className="compact-tool-field font-color-field">
+        <div className="compact-tool-field font-color-field">
           <span>배경색</span>
-          <span className="color-picker-shell" style={{ backgroundColor: block.backgroundColor }}>
-            <input
-              type="color"
-              {...mouseOnlyColorInputProps}
-              className="outline-color-input"
-              value={block.backgroundColor}
-              disabled={disabled}
-              onChange={(event) => onUpdate({ backgroundColor: event.target.value })}
-            />
-          </span>
-        </label>
+          <FastColorPicker
+            ariaLabel="블록 배경색"
+            value={block.backgroundColor}
+            disabled={disabled}
+            onChange={(backgroundColor) => onUpdate({ backgroundColor })}
+          />
+        </div>
       </div>
       <div className="block-actions">
         <button className="primary block-action" onClick={onApplyInpaint} disabled={disabled}>인페인트 실행</button>

@@ -47,7 +47,7 @@ import {
   resolveSecondaryOutlineEnabled,
   resolveTextPosition
 } from "../../lib/overlayLayout";
-import { mouseOnlyCheckboxProps, mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyCheckboxProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 import {
   FONT_FILTER_EFFECT_DEFINITIONS,
@@ -55,6 +55,7 @@ import {
   buildFontFilterEffectSettingPatch
 } from "../../lib/fontFilterEffectMetadata";
 import type { LayerToolFontControlValues } from "./LayerToolPanelTypes";
+import { FastColorPicker } from "../controls/FastColorPicker";
 
 type FontToolSectionProps = {
   activeFontSizePresetId: string | null;
@@ -527,20 +528,16 @@ export function FontToolSection({
               {renderFontPresetLinkButton("letterSpacingPx", "글자 간격")}
             </div>
           </div>
-          <label className="compact-tool-field font-color-field">
+          <div className="compact-tool-field font-color-field">
             <span>글자색</span>
-            <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.textColor ?? "#111111" }}>
-              <input
-                type="color"
-                {...mouseOnlyColorInputProps}
-                className="outline-color-input"
-                value={fontControlValues.textColor ?? "#111111"}
-                disabled={selectedPageEditLocked}
-                onChange={(event) => onFontSettingChange({ textColor: event.target.value })}
-              />
-            </span>
+            <FastColorPicker
+              ariaLabel="글자색"
+              value={fontControlValues.textColor ?? "#111111"}
+              disabled={selectedPageEditLocked}
+              onChange={(textColor) => onFontSettingChange({ textColor })}
+            />
             {renderFontPresetLinkButton("textColor", "글자색")}
-          </label>
+          </div>
           <FontOutlineControls
             values={fontControlValues}
             disabled={selectedPageEditLocked}
@@ -752,20 +749,16 @@ export function FontToolSection({
             </div>
             {fontBackgroundActive ? (
               <>
-                <label className="compact-tool-field font-color-field">
+                <div className="compact-tool-field font-color-field">
                   <span>배경색</span>
-                  <span className="color-picker-shell" style={{ backgroundColor: fontControlValues.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR }}>
-                    <input
-                      type="color"
-                      {...mouseOnlyColorInputProps}
-                      className="outline-color-input"
-                      value={fontControlValues.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR}
-                      disabled={selectedPageEditLocked}
-                      onChange={(event) => onFontSettingChange({ fontBackgroundColor: event.target.value })}
-                    />
-                  </span>
+                  <FastColorPicker
+                    ariaLabel="글자 배경색"
+                    value={fontControlValues.fontBackgroundColor ?? DEFAULT_FONT_BACKGROUND_COLOR}
+                    disabled={selectedPageEditLocked}
+                    onChange={(fontBackgroundColor) => onFontSettingChange({ fontBackgroundColor })}
+                  />
                   {renderFontPresetLinkButton("fontBackgroundColor", "글자 배경색")}
-                </label>
+                </div>
                 <div className="font-background-range-row">
                   <label className="compact-tool-field font-range-field">
                     <span>

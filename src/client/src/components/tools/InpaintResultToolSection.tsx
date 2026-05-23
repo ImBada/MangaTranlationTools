@@ -11,8 +11,9 @@ import {
   INPAINT_RESULT_BRUSH_SIZE_MIN
 } from "../../lib/inpaintToolSettings";
 import type { LayerVisibility } from "../../lib/layerState";
-import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
+import { mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
+import { FastColorPicker } from "../controls/FastColorPicker";
 
 type InpaintResultToolSectionProps = {
   inpaintBusy: boolean;
@@ -117,19 +118,15 @@ export function InpaintResultToolSection({
         />
       </div>
       <div className="result-tool-settings">
-        <label className="compact-tool-field result-color-field">
+        <div className="compact-tool-field result-color-field">
           <span>색상</span>
-          <span className="color-picker-shell" style={{ backgroundColor: inpaintResultBrushColor }}>
-            <input
-              type="color"
-              {...mouseOnlyColorInputProps}
-              className="outline-color-input"
-              value={inpaintResultBrushColor}
-              disabled={resultToolsDisabled || (inpaintResultTool !== "brush" && inpaintResultTool !== "smartBrush")}
-              onChange={(event) => onInpaintResultBrushColorChange(event.target.value)}
-            />
-          </span>
-        </label>
+          <FastColorPicker
+            ariaLabel="결과 브러시 색상"
+            value={inpaintResultBrushColor}
+            disabled={resultToolsDisabled || (inpaintResultTool !== "brush" && inpaintResultTool !== "smartBrush")}
+            onChange={onInpaintResultBrushColorChange}
+          />
+        </div>
         <label className="compact-tool-field result-size-field brush-size-field">
           <span>크기</span>
           <CompactNumberControl

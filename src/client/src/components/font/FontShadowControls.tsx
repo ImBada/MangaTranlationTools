@@ -1,6 +1,7 @@
 import React from "react";
 import { CompactNumberControl } from "../controls/CompactNumberControl";
-import { mouseOnlyColorInputProps, mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
+import { FastColorPicker } from "../controls/FastColorPicker";
+import { mouseOnlyRangeInputProps } from "../../lib/mouseOnlyCheckbox";
 import { rangeProgressStyle } from "../../lib/rangeProgressStyle";
 
 export type FontShadowControlValues = {
@@ -79,20 +80,16 @@ export function FontShadowControls({
       {values.enabled ? (
         <>
           <div className="font-shadow-row font-tool-grid">
-            <label className="compact-tool-field font-color-field">
+            <div className="compact-tool-field font-color-field">
               <span>그림자 색</span>
-              <span className="color-picker-shell" style={{ backgroundColor: values.color }}>
-                <input
-                  type="color"
-                  {...mouseOnlyColorInputProps}
-                  className="outline-color-input"
-                  value={values.color}
-                  disabled={disabled}
-                  onChange={(event) => onChange({ color: event.target.value })}
-                />
-              </span>
+              <FastColorPicker
+                ariaLabel="그림자 색"
+                value={values.color}
+                disabled={disabled}
+                onChange={(color) => onChange({ color })}
+              />
               {renderOptionalLinkButton("color", "그림자 색")}
-            </label>
+            </div>
           </div>
           <div className="font-shadow-row font-tool-grid">
             <label className="compact-tool-field font-range-field">

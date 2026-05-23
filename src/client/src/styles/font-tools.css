@@ -258,6 +258,7 @@
 }
 
 .font-number-field .compact-number-control,
+.font-color-field .fast-color-picker,
 .font-color-field .color-picker-shell,
 .font-range-field input[type="range"] {
   grid-area: control;
@@ -285,6 +286,7 @@
   border-radius: 5px;
 }
 
+.font-color-field .fast-color-picker,
 .font-color-field .color-picker-shell {
   width: 100%;
   height: 25px;

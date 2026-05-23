@@ -238,9 +238,6 @@
     @apply size-3 rounded-full border border-panel bg-ink shadow-sm;
   }
 
-  input[type="color"] {
-    @apply h-9 p-1;
-  }
 }
 
 @layer components {
@@ -938,6 +935,7 @@ input[type="checkbox"] {
   grid-template-columns: minmax(0, 1fr);
 }
 
+.result-color-field .fast-color-picker,
 .result-color-field .color-picker-shell {
   height: 26px;
   min-height: 26px;
