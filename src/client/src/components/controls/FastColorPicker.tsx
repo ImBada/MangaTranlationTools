@@ -19,8 +19,20 @@ type FastColorPickerProps = {
   onChange: (value: string) => void;
 };
 
+type EyeDropperResult = {
+  sRGBHex: string;
+};
+
+type EyeDropperConstructor = new () => {
+  open: () => Promise<EyeDropperResult>;
+};
+
+type EyeDropperWindow = Window & {
+  EyeDropper?: EyeDropperConstructor;
+};
+
 const COLOR_PICKER_POPOVER_GAP_PX = 6;
-const COLOR_PICKER_POPOVER_WIDTH_PX = 232;
+const COLOR_PICKER_POPOVER_WIDTH_PX = 220;
 const COLOR_PICKER_POPOVER_VIEWPORT_MARGIN_PX = 10;
 const HEX_COLOR_PATTERN = /^#[\da-f]{6}$/i;
 const QUICK_COLORS = [
@@ -42,7 +54,6 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
   const [draftHsv, setDraftHsv] = React.useState(() => hexToHsv(normalizeHexColor(value)));
   const rootRef = React.useRef<HTMLSpanElement | null>(null);
   const popoverRef = React.useRef<HTMLDivElement | null>(null);
-  const hexInputRef = React.useRef<HTMLInputElement | null>(null);
   const draggingRef = React.useRef(false);
   const localColorRef = React.useRef(localColor);
   const normalizedValue = normalizeHexColor(value);
@@ -52,6 +63,7 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
   const displayColor = open ? localColor : normalizedValue;
   const externalHsv = React.useMemo(() => hexToHsv(normalizedValue), [normalizedValue]);
   const hsv = open ? draftHsv : externalHsv;
+  const eyeDropperSupported = typeof window !== "undefined" && "EyeDropper" in window;
 
   React.useEffect(() => {
     normalizedValueRef.current = normalizedValue;
@@ -117,6 +129,19 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
     commitColor(localColorRef.current);
   }, [commitColor]);
 
+  const pickScreenColor = React.useCallback(async () => {
+    const EyeDropper = (window as EyeDropperWindow).EyeDropper;
+    if (!EyeDropper) {
+      return;
+    }
+    try {
+      const result = await new EyeDropper().open();
+      commitColor(result.sRGBHex);
+    } catch {
+      // Cancelling the native eyedropper should leave the picker unchanged.
+    }
+  }, [commitColor]);
+
   const finishActiveDrag = React.useCallback(() => {
     if (!draggingRef.current) {
       return;
@@ -154,7 +179,6 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
     window.addEventListener("pointerdown", handlePointerDown);
     window.addEventListener("pointerup", handlePointerUp);
     window.addEventListener("pointercancel", handlePointerCancel);
-    window.setTimeout(() => hexInputRef.current?.select(), 0);
     return () => {
       window.removeEventListener("pointerdown", handlePointerDown);
       window.removeEventListener("pointerup", handlePointerUp);
@@ -262,7 +286,10 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
           >
             <span
               className="fast-color-saturation-marker"
-              style={{ left: `${hsv.s * 100}%`, top: `${(1 - hsv.v) * 100}%` }}
+              style={{
+                left: `clamp(6px, ${hsv.s * 100}%, calc(100% - 6px))`,
+                top: `clamp(6px, ${(1 - hsv.v) * 100}%, calc(100% - 6px))`
+              }}
             />
           </div>
           <div
@@ -295,11 +322,13 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
               }
             }}
           >
-            <span className="fast-color-hue-marker" style={{ left: `${(hsv.h / 360) * 100}%` }} />
+            <span
+              className="fast-color-hue-marker"
+              style={{ left: `clamp(4px, ${(hsv.h / 360) * 100}%, calc(100% - 4px))` }}
+            />
           </div>
           <div className="fast-color-bottom-row">
             <input
-              ref={hexInputRef}
               className="fast-color-hex-input"
               value={draftHex}
               spellCheck={false}
@@ -319,6 +348,22 @@ export function FastColorPicker({ ariaLabel, disabled = false, value, onChange }
                 }
               }}
             />
+            <button
+              type="button"
+              className="fast-color-eyedropper"
+              disabled={!eyeDropperSupported}
+              aria-label="스포이드"
+              title={eyeDropperSupported ? "스포이드" : "스포이드 미지원"}
+              onClick={(event) => {
+                event.stopPropagation();
+                void pickScreenColor();
+              }}
+            >
+              <svg viewBox="0 0 18 18" aria-hidden="true">
+                <circle cx="9" cy="9" r="4.5" />
+                <path d="M9 1.5v3M9 13.5v3M1.5 9h3M13.5 9h3" />
+              </svg>
+            </button>
             <div className="fast-color-swatches" aria-label="빠른 색상">
               {QUICK_COLORS.map((color) => (
                 <button
