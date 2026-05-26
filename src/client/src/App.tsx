@@ -541,6 +541,7 @@ export default function App(): React.JSX.Element {
     recordGlobalUndoEntry,
     selectLayer,
     selectedBlock,
+    selectedBlocks,
     selectedBlockIds,
     selectedBlockIdRef,
     selectedPage,
@@ -964,6 +965,7 @@ export default function App(): React.JSX.Element {
       renderBusy={renderBusy}
       renderFontPresetLinkButton={renderFontPresetLinkButton}
       renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
+      multiBlockSelectionActive={multiSelectedBlockCount > 1}
       selectedBlock={multiSelectedBlockCount > 1 ? null : selectedBlock}
       selectedBlockGroup={selectedBlockGroup}
       selectedPage={selectedPage}

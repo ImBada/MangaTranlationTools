@@ -70,6 +70,7 @@ type FontToolSectionProps = {
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
+  multiBlockSelectionActive: boolean;
   selectedPageEditLocked: boolean;
   onClearSelectedBlockFontPreset: () => void;
   onClearEditingFontPreset: () => void;
@@ -133,6 +134,14 @@ const FONT_FILTER_EFFECT_LINK_KEY_BY_CONTROL_KEY = Object.fromEntries([
     [definition.intensityControlKey, definition.intensityKey]
   ])
 ]) as Record<FontFilterEffectControlKey, LinkableFontPresetKey>;
+
+export function resolveFontPresetTagActiveId(
+  selectedBlock: Pick<TranslationBlock, "fontPresetId"> | null,
+  editingFontPresetId: string | null,
+  multiBlockSelectionActive: boolean
+): string | null {
+  return selectedBlock?.fontPresetId ?? (!selectedBlock && !multiBlockSelectionActive ? editingFontPresetId : null);
+}
 
 function buildFontShadowSettingPatch(patch: Partial<Omit<FontShadowControlValues, "enabled">>): BlockFontPatch {
   const fontPatch: BlockFontPatch = {};
@@ -265,6 +274,7 @@ export function FontToolSection({
   renderFontPresetLinkButton,
   renderFontPresetLinkGroupButton,
   selectedBlock,
+  multiBlockSelectionActive,
   selectedPageEditLocked,
   onClearSelectedBlockFontPreset,
   onClearEditingFontPreset,
@@ -283,7 +293,7 @@ export function FontToolSection({
   onSelectFontPreset,
   onSelectFontSizePreset
 }: FontToolSectionProps): React.JSX.Element {
-  const activeFontPresetId = selectedBlock?.fontPresetId ?? (!selectedBlock ? editingFontPresetId : null);
+  const activeFontPresetId = resolveFontPresetTagActiveId(selectedBlock, editingFontPresetId, multiBlockSelectionActive);
   const [renamingFontPresetId, setRenamingFontPresetId] = React.useState<string | null>(null);
   const [renamingFontPresetName, setRenamingFontPresetName] = React.useState("");
   const [backupDialogMode, setBackupDialogMode] = React.useState<FontPresetBackupDialogMode | null>(null);
@@ -918,7 +928,7 @@ export function FontToolSection({
                       setRenamingFontPresetId(preset.id);
                       setRenamingFontPresetName(preset.name);
                     }}
-                    title={active ? `${preset.name} 이름 변경` : selectedBlock ? `${preset.name} 적용` : `${preset.name} 편집`}
+                    title={active ? `${preset.name} 이름 변경` : selectedBlock || multiBlockSelectionActive ? `${preset.name} 적용` : `${preset.name} 편집`}
                   >
                     <span className="font-preset-tag-text-stack" style={tagTextStyles.stack}>
                       {tagTextStyles.hasSecondaryOutline ? (

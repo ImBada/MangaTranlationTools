@@ -1,6 +1,7 @@
 import type { FontPreset, FontSizePreset, TranslationBlock } from "../../../shared/types";
 import { FONT_FILTER_EFFECT_DEFINITIONS } from "./fontFilterEffectMetadata";
 import {
+  buildFontPresetLinkFields,
   DEFAULT_FONT_PRESET_VALUES,
   FONT_PRESET_LINK_FIELD_BY_KEY,
   FONT_PRESET_LINK_FIELDS,
@@ -116,6 +117,14 @@ export function buildFontPresetRelinkPatch(key: LinkableFontPresetKey, preset: F
     }
   }
   return patch;
+}
+
+export function applyAssignedFontPresetToBlock(block: TranslationBlock, preset: FontPreset): TranslationBlock {
+  return {
+    ...applyFontPresetPatchToBlock(block, preset, { forceLinkedValues: true }),
+    fontPresetId: preset.id,
+    ...buildFontPresetLinkFields(true)
+  };
 }
 
 export function clearFontPresetLinkFields(block: TranslationBlock): TranslationBlock {

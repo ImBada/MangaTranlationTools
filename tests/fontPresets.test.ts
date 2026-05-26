@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  applyAssignedFontPresetToBlock,
   applyFontPresetPatchToBlock,
   buildAlphabeticPresetName,
   buildNextFontSizePresetName,
@@ -100,6 +101,29 @@ describe("font preset block links", () => {
     expect(isBlockFontPresetValueLinked(linkedBlock, "lineHeight")).toBe(true);
     expect(applyFontPresetPatchToBlock(linkedBlock, preset).fontSizePx).toBe(32);
     expect(applyFontPresetPatchToBlock(unlinkedBlock, preset, { forceLinkedValues: true }).fontSizePx).toBe(32);
+  });
+
+  it("assigns a preset with forced values and fresh link fields", () => {
+    const block = createBlock({
+      fontPresetId: "old-preset",
+      fontSizePx: 18,
+      fontSizeLinkedToPreset: false,
+      lineHeight: 1.05,
+      lineHeightLinkedToPreset: false
+    });
+    const preset = createPreset({
+      id: "new-preset",
+      fontSizePx: 32,
+      lineHeight: 1.4
+    });
+
+    expect(applyAssignedFontPresetToBlock(block, preset)).toMatchObject({
+      fontPresetId: "new-preset",
+      fontSizePx: 32,
+      fontSizeLinkedToPreset: true,
+      lineHeight: 1.4,
+      lineHeightLinkedToPreset: true
+    });
   });
 
   it("treats child filter effect values as unlinked when the master filter link is off", () => {

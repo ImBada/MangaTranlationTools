@@ -64,6 +64,7 @@ type LayerToolPanelProps = {
   renderFontPresetLinkButton: (key: LinkableFontPresetKey, label: string) => React.ReactNode;
   renderFontPresetLinkGroupButton: (keys: LinkableFontPresetKey[], label: string) => React.ReactNode;
   selectedBlock: TranslationBlock | null;
+  multiBlockSelectionActive: boolean;
   selectedBlockGroup: TranslationBlockGroup | null;
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
@@ -142,6 +143,7 @@ export function LayerToolPanel({
   renderFontPresetLinkButton,
   renderFontPresetLinkGroupButton,
   selectedBlock,
+  multiBlockSelectionActive,
   selectedBlockGroup,
   selectedPage,
   selectedPageEditLocked,
@@ -239,6 +241,7 @@ export function LayerToolPanel({
           fontSizePresets={fontSizePresets}
           renderFontPresetLinkButton={renderFontPresetLinkButton}
           renderFontPresetLinkGroupButton={renderFontPresetLinkGroupButton}
+          multiBlockSelectionActive={multiBlockSelectionActive}
           selectedBlock={selectedBlock}
           selectedPageEditLocked={selectedPageEditLocked}
           onClearEditingFontPreset={onClearEditingFontPreset}

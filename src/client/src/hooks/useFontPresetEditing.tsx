@@ -12,6 +12,7 @@ import type {
 import { buildFontFamilyOptions } from "../components/font/FontFamilyPicker";
 import { FontPresetLinkIcon } from "../components/font/FontPresetLinkIcon";
 import {
+  applyAssignedFontPresetToBlock,
   applyFontPresetPatchToBlock,
   buildNextFontSizePresetName,
   buildFontPresetLinkFields,
@@ -137,6 +138,7 @@ type UseFontPresetEditingOptions = {
   pushStatus: (line: string, tone?: "failed") => void;
   recordTranslationUndoSnapshot: (label: string) => boolean;
   selectedBlock: TranslationBlock | null;
+  selectedBlocks: TranslationBlock[];
   selectedPage: MangaPage | null;
   selectedPageEditLocked: boolean;
   setEditingFontPresetId: React.Dispatch<React.SetStateAction<string | null>>;
@@ -181,6 +183,7 @@ export function useFontPresetEditing({
   pushStatus,
   recordTranslationUndoSnapshot,
   selectedBlock,
+  selectedBlocks,
   selectedPage,
   selectedPageEditLocked,
   setEditingFontPresetId,
@@ -434,11 +437,7 @@ export function useFontPresetEditing({
               updatedAt: new Date().toISOString(),
               blocks: page.blocks.map((block) =>
                 block.id === selectedBlock.id
-                  ? {
-                      ...applyFontPresetPatchToBlock(block, preset, { forceLinkedValues: true }),
-                      fontPresetId: preset.id,
-                      ...buildFontPresetLinkFields(true)
-                    }
+                  ? applyAssignedFontPresetToBlock(block, preset)
                   : block
               )
             }
@@ -541,15 +540,46 @@ export function useFontPresetEditing({
     }
     const resolvedPreset = resolveFontPreset(preset, fontSizePresets);
     setEditingFontPresetId(presetId);
-    if (!selectedPage || !selectedBlock) {
+    if (!selectedPage) {
       return;
     }
-    updateSelectedBlock({
-      ...applyFontPresetPatchToBlock(selectedBlock, resolvedPreset, { forceLinkedValues: true }),
-      fontPresetId: preset.id,
-      ...buildFontPresetLinkFields(true)
-    });
-  }, [fontPresets, fontSizePresets, selectedBlock, selectedPage, selectedPageEditLocked, setEditingFontPresetId, updateSelectedBlock]);
+    if (selectedBlocks.length > 1) {
+      const selectedBlockIdSet = new Set(selectedBlocks.map((block) => block.id));
+      recordTranslationUndoSnapshot("폰트 프리셋 적용");
+      updateCurrentChapter(selectedPage.id, (current) => ({
+        ...current,
+        pages: current.pages.map((page) =>
+          page.id !== selectedPage.id
+            ? page
+            : {
+                ...page,
+                updatedAt: new Date().toISOString(),
+                blocks: page.blocks.map((block) =>
+                  selectedBlockIdSet.has(block.id)
+                    ? applyAssignedFontPresetToBlock(block, resolvedPreset)
+                    : block
+                )
+              }
+        )
+      }));
+      return;
+    }
+    if (!selectedBlock) {
+      return;
+    }
+    updateSelectedBlock(applyAssignedFontPresetToBlock(selectedBlock, resolvedPreset));
+  }, [
+    fontPresets,
+    fontSizePresets,
+    recordTranslationUndoSnapshot,
+    selectedBlock,
+    selectedBlocks,
+    selectedPage,
+    selectedPageEditLocked,
+    setEditingFontPresetId,
+    updateCurrentChapter,
+    updateSelectedBlock
+  ]);
 
   const clearSelectedBlockFontPreset = React.useCallback(() => {
     if (!selectedBlock) {
