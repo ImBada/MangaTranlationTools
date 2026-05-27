@@ -126,11 +126,24 @@ async function dragByMouse(page: Page, locator: Locator, dx: number, dy: number)
   await page.mouse.up();
 
   const movedBox = await locator.boundingBox();
-  if (movedBox && (Math.abs(movedBox.x - box.x) > 0.5 || Math.abs(movedBox.y - box.y) > 0.5)) {
+  if (movedBox && didMoveTowardDelta(movedBox, box, dx, dy)) {
     return;
   }
 
   await dragByPointerEvents(locator, startX, startY, dx, dy);
+}
+
+type ElementBox = NonNullable<Awaited<ReturnType<Locator["boundingBox"]>>>;
+
+function didMoveTowardDelta(movedBox: ElementBox, startBox: ElementBox, dx: number, dy: number): boolean {
+  return movedTowardAxis(movedBox.x - startBox.x, dx) && movedTowardAxis(movedBox.y - startBox.y, dy);
+}
+
+function movedTowardAxis(actualDelta: number, expectedDelta: number): boolean {
+  if (expectedDelta === 0) {
+    return Math.abs(actualDelta) <= 0.5;
+  }
+  return Math.sign(actualDelta) === Math.sign(expectedDelta) && Math.abs(actualDelta) > 0.5;
 }
 
 async function dragByPointerEvents(locator: Locator, startX: number, startY: number, dx: number, dy: number): Promise<void> {
