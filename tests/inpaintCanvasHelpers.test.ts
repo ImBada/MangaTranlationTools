@@ -27,6 +27,8 @@ import {
   sampleSharpen
 } from "../src/client/src/lib/inpaintResultCanvas";
 import {
+  applyInpaintMaskPixelsToLayer,
+  drawInpaintMaskImageForPixelRead,
   mergeInpaintMaskPixels,
   normalizeOpaqueMaskPixels,
   retainCenteredTextMaskComponents,
@@ -222,6 +224,43 @@ describe("inpaint layer canvas helpers", () => {
       0, 0, 0, 255,
       255, 255, 255, 255
     ]);
+  });
+
+  it("applies mask coverage directly to result layer alpha", () => {
+    const layer = new Uint8ClampedArray([
+      10, 20, 30, 255,
+      40, 50, 60, 200,
+      70, 80, 90, 128
+    ]);
+    const mask = new Uint8ClampedArray([
+      0, 0, 0, 255,
+      255, 255, 255, 128,
+      255, 255, 255, 255
+    ]);
+
+    applyInpaintMaskPixelsToLayer(layer, mask);
+
+    expect([...layer]).toEqual([
+      10, 20, 30, 0,
+      40, 50, 60, 100,
+      70, 80, 90, 128
+    ]);
+  });
+
+  it("disables smoothing before reading scaled mask pixels", () => {
+    const context = {
+      drawImage: vi.fn(),
+      imageSmoothingEnabled: true
+    } as unknown as CanvasRenderingContext2D & {
+      drawImage: ReturnType<typeof vi.fn>;
+      imageSmoothingEnabled: boolean;
+    };
+    const image = {} as CanvasImageSource;
+
+    drawInpaintMaskImageForPixelRead(context, image, 20, 30);
+
+    expect(context.imageSmoothingEnabled).toBe(false);
+    expect(context.drawImage).toHaveBeenCalledWith(image, 0, 0, 20, 30);
   });
 
   it("renders stored opaque masks with transparent blank pixels for editing", () => {

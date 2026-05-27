@@ -15,6 +15,7 @@ import { hasEnabledTranslationBlockGroupEffects } from "../lib/blockGroupEffects
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 import { resolveBlockRectPx, type FontWeightAvailability, type PixelRect, type ViewportSize } from "../lib/overlayLayout";
 import { drawOverlayBlocks, resolveBlockCanvasDirtyRect } from "../lib/pageRender";
+import { drawMaskedInpaintResultPreviewCanvas } from "../lib/maskedInpaintPreviewCanvas";
 import {
   addTranslationBlockDragPreviewOffsetListener,
   getTranslationBlockDragPreviewOffset,
@@ -170,7 +171,6 @@ export function ImageStageLayers({
     activeLayer === "overlay" ? rangeSelectionPreviewRect : rangeSelectionPreviewRect ?? inpaintSelectionRect;
   const rangeSelectionLayerVisible =
     rangeToolActive || Boolean(rangeSelectionPreviewRect) || (activeLayer !== "overlay" && Boolean(inpaintSelectionRect));
-  const inpaintResultMaskImage = inpaintResultComposite && inpaintMaskDataUrl ? `url(${inpaintMaskDataUrl})` : undefined;
   const renderInpaintResultLayer =
     layerVisibility.inpaintResult &&
     (Boolean(page.inpaintResultDataUrl) || activeLayer === "inpaintResult");
@@ -179,6 +179,15 @@ export function ImageStageLayers({
     (activeLayer === "inpaintMask" && temporaryPanActive);
   const inpaintEditingEnabled = !temporaryPanActive || inpaintStrokeActive;
   const inpaintMaskEditingEnabled = activeLayer === "inpaintMask" && inpaintEditingEnabled;
+  const inpaintResultStrokeActive = activeLayer === "inpaintResult" && inpaintStrokeActive;
+  const renderMaskedInpaintResultPreview = renderInpaintResultLayer && inpaintResultComposite && !inpaintResultStrokeActive;
+  const renderInteractiveInpaintResultCanvas =
+    renderInpaintResultLayer &&
+    (!renderMaskedInpaintResultPreview || (activeLayer === "inpaintResult" && inpaintEditingEnabled));
+  const inpaintResultLayerStyle = {
+    zIndex: inpaintResultComposite ? 1 : 3,
+    opacity: layerOpacity.inpaintResult
+  };
   const overlayEditingEnabled = activeLayer === "overlay" && !temporaryPanActive;
   const debugLogEnabled = isInpaintDebugLogEnabled();
   const activeBlockDragIdSet = React.useMemo(() => new Set(activeBlockDragIds), [activeBlockDragIds]);
@@ -489,7 +498,16 @@ export function ImageStageLayers({
       />
       {layerVisibility.inpaint ? (
         <div className="inpaint-layer-preview" style={{ opacity: layerOpacity.inpaint }}>
-          {renderInpaintResultLayer ? (
+          {renderMaskedInpaintResultPreview ? (
+            <MaskedInpaintResultPreviewCanvas
+              className="inpaint-result-canvas"
+              dataUrl={page.inpaintResultDataUrl}
+              maskDataUrl={inpaintMaskDataUrl}
+              pageSize={pageSize}
+              style={inpaintResultLayerStyle}
+            />
+          ) : null}
+          {renderInteractiveInpaintResultCanvas ? (
             <InpaintResultCanvas
               className="inpaint-result-canvas"
               colorPickerSampleRequired={finalOutputPreviewActive}
@@ -511,10 +529,8 @@ export function ImageStageLayers({
               onEditStart={onInpaintLayerEditStart}
               onSelectionChange={onInpaintSelectionChange}
               style={{
-                zIndex: inpaintResultComposite ? 1 : 3,
-                opacity: layerOpacity.inpaintResult,
-                maskImage: inpaintResultMaskImage,
-                WebkitMaskImage: inpaintResultMaskImage
+                ...inpaintResultLayerStyle,
+                opacity: renderMaskedInpaintResultPreview ? 0 : inpaintResultLayerStyle.opacity
               }}
             />
           ) : null}
@@ -578,6 +594,60 @@ export function ImageStageLayers({
       ) : null}
     </>
   );
+}
+
+type MaskedInpaintResultPreviewCanvasProps = {
+  className: string;
+  dataUrl?: string;
+  maskDataUrl?: string;
+  pageSize: ViewportSize;
+  style?: React.CSSProperties;
+};
+
+function MaskedInpaintResultPreviewCanvas({
+  className,
+  dataUrl,
+  maskDataUrl,
+  pageSize,
+  style
+}: MaskedInpaintResultPreviewCanvasProps): React.JSX.Element {
+  const canvasRef = React.useRef<HTMLCanvasElement | null>(null);
+
+  React.useEffect(() => {
+    const canvas = canvasRef.current;
+    const context = canvas?.getContext("2d", { willReadFrequently: true });
+    if (!canvas || !context) {
+      return;
+    }
+
+    let cancelled = false;
+    resizeCanvasToSize(canvas, pageSize);
+    context.clearRect(0, 0, canvas.width, canvas.height);
+    if (!dataUrl) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    void drawMaskedInpaintResultPreviewCanvas({
+      canvas,
+      context,
+      dataUrl,
+      isCancelled: () => cancelled,
+      maskDataUrl,
+      pageSize
+    }).catch((error) => {
+      if (!cancelled) {
+        console.error(error);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [dataUrl, maskDataUrl, pageSize.height, pageSize.width]);
+
+  return <canvas ref={canvasRef} className={className} style={style} aria-hidden="true" />;
 }
 
 type SourceImageCanvasProps = {

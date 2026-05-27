@@ -81,9 +81,7 @@ export async function maskDataUrlForSelection(maskDataUrl: string, width: number
     for (let x = 0; x < width; x += 1) {
       const offset = (y * width + x) * 4;
       const insideSelection = x >= selection.x && x < selection.x + selection.width && y >= selection.y && y < selection.y + selection.height;
-      const alpha = pixels.data[offset + 3] / 255;
-      const luma = (pixels.data[offset] * 0.299 + pixels.data[offset + 1] * 0.587 + pixels.data[offset + 2] * 0.114) / 255;
-      const active = insideSelection && alpha * luma > 0.03;
+      const active = insideSelection && resolveInpaintMaskCoverageAlpha(pixels.data, offset) > 0.03;
       if (active) {
         hasMaskPixel = true;
         continue;
@@ -303,6 +301,33 @@ export function normalizeOpaqueMaskPixels(pixels: Uint8ClampedArray): boolean {
   return hasCoverage;
 }
 
+export function resolveInpaintMaskRgbaCoverageAlpha(red: number, green: number, blue: number, alpha: number): number {
+  const maskAlpha = alpha / 255;
+  const maskLuma = (red * 0.299 + green * 0.587 + blue * 0.114) / 255;
+  return maskAlpha * maskLuma;
+}
+
+export function resolveInpaintMaskCoverageAlpha(pixels: Uint8ClampedArray, offset: number): number {
+  return resolveInpaintMaskRgbaCoverageAlpha(pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]);
+}
+
+export function applyInpaintMaskPixelsToLayer(layerPixels: Uint8ClampedArray, maskPixels: Uint8ClampedArray): void {
+  const length = Math.min(layerPixels.length, maskPixels.length);
+  for (let offset = 0; offset + 3 < length; offset += 4) {
+    layerPixels[offset + 3] = Math.round(layerPixels[offset + 3] * resolveInpaintMaskCoverageAlpha(maskPixels, offset));
+  }
+}
+
+export function drawInpaintMaskImageForPixelRead(
+  context: CanvasRenderingContext2D,
+  image: CanvasImageSource,
+  width: number,
+  height: number
+): void {
+  context.imageSmoothingEnabled = false;
+  context.drawImage(image, 0, 0, width, height);
+}
+
 function normalizeMaskPixelsForTransparentDisplay(pixels: Uint8ClampedArray): boolean {
   let hasCoverage = false;
   for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
@@ -359,9 +384,7 @@ function replacePixelsInsideMask(
 }
 
 export function isInpaintMaskPixelCovered(pixels: Uint8ClampedArray, offset: number): boolean {
-  const alpha = pixels[offset + 3] / 255;
-  const luma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
-  return alpha * luma > 0;
+  return resolveInpaintMaskCoverageAlpha(pixels, offset) > 0;
 }
 
 function writeOpaqueMaskPixel(pixels: Uint8ClampedArray, offset: number, covered: boolean): void {

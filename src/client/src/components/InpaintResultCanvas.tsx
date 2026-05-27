@@ -23,6 +23,7 @@ import {
   summarizeError,
   writeInpaintDebugLog
 } from "../lib/inpaintDiagnostics";
+import { resolveInpaintMaskRgbaCoverageAlpha } from "../lib/inpaintMaskImages";
 import type { InpaintLayerChangeOptions } from "../lib/inpaintLayerChange";
 
 export type InpaintResultTool = "select" | "brush" | "smartBrush" | "eraser" | "blur" | "sharpen" | "smudge" | "colorPicker";
@@ -1027,7 +1028,7 @@ function sampleFinalOutputColor({
   const result = readCanvasRgba(resultCanvas, x, y);
   const mask = readCanvasRgba(maskCanvas, x, y);
   const maskedResult = result && mask
-    ? { ...result, a: result.a * (mask.a / 255) * (Math.max(mask.r, mask.g, mask.b) / 255) }
+    ? { ...result, a: result.a * resolveInpaintMaskRgbaCoverageAlpha(mask.r, mask.g, mask.b, mask.a) }
     : result;
   const withResult = maskedResult ? compositeRgba(base, maskedResult) : base;
   const finalColor = compositeRgba(withResult, overlay);

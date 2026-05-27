@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { hardenTextPixelData } from "../src/client/src/lib/hardTextRendering";
-import { resolveCenteredEllipsisYOffset, resolveInpaintMaskCoverageAlpha } from "../src/client/src/lib/pageRender";
+import {
+  resolveInpaintMaskCoverageAlpha,
+  resolveInpaintMaskRgbaCoverageAlpha
+} from "../src/client/src/lib/inpaintMaskImages";
+import { resolveCenteredEllipsisYOffset } from "../src/client/src/lib/pageRender";
 
 describe("page render glyph positioning", () => {
   it("moves low ellipsis glyphs up to the center of the font box", () => {
@@ -44,6 +48,8 @@ describe("page render mask compositing", () => {
     expect(resolveInpaintMaskCoverageAlpha(pixels, 0)).toBe(0);
     expect(resolveInpaintMaskCoverageAlpha(pixels, 4)).toBe(1);
     expect(resolveInpaintMaskCoverageAlpha(pixels, 8)).toBeCloseTo(128 / 255);
+    expect(resolveInpaintMaskRgbaCoverageAlpha(255, 0, 0, 255)).toBeCloseTo(0.299);
+    expect(resolveInpaintMaskRgbaCoverageAlpha(255, 255, 255, 128)).toBeCloseTo(128 / 255);
   });
 });
 

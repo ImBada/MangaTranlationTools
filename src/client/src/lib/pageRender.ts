@@ -40,6 +40,7 @@ import {
   type FontFilterEffectBounds
 } from "./fontFilterEffects";
 import { hardenCanvasTextPixels } from "./hardTextRendering";
+import { applyInpaintMaskPixelsToLayer, drawInpaintMaskImageForPixelRead } from "./inpaintMaskImages";
 
 export type RenderLayerVisibility = {
   image: boolean;
@@ -119,12 +120,6 @@ type CenteredEllipsisDotGeometry = {
   centerY: number;
   radius: number;
 };
-
-export function resolveInpaintMaskCoverageAlpha(pixels: Uint8ClampedArray, offset: number): number {
-  const maskAlpha = pixels[offset + 3] / 255;
-  const maskLuma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
-  return maskAlpha * maskLuma;
-}
 
 export async function renderPageToPngDataUrl(page: MangaPage, options: RenderPageOptions): Promise<string> {
   const pageSize = { width: page.width, height: page.height };
@@ -389,18 +384,14 @@ function applyInpaintMaskToLayer(
   maskCanvas.height = height;
   const maskContext = maskCanvas.getContext("2d", { willReadFrequently: true });
   if (!maskContext) {
-    layerContext.globalCompositeOperation = "destination-in";
-    layerContext.drawImage(mask, 0, 0, width, height);
-    layerContext.globalCompositeOperation = "source-over";
+    layerContext.clearRect(0, 0, width, height);
     return;
   }
 
-  maskContext.drawImage(mask, 0, 0, width, height);
+  drawInpaintMaskImageForPixelRead(maskContext, mask, width, height);
   const layerPixels = layerContext.getImageData(0, 0, width, height);
   const maskPixels = maskContext.getImageData(0, 0, width, height).data;
-  for (let offset = 0; offset + 3 < layerPixels.data.length; offset += 4) {
-    layerPixels.data[offset + 3] = Math.round(layerPixels.data[offset + 3] * resolveInpaintMaskCoverageAlpha(maskPixels, offset));
-  }
+  applyInpaintMaskPixelsToLayer(layerPixels.data, maskPixels);
   layerContext.putImageData(layerPixels, 0, 0);
 }
 

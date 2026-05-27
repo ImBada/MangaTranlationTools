@@ -1,4 +1,4 @@
-import { normalizeOpaqueMaskPixels } from "./inpaintMaskImages";
+import { normalizeOpaqueMaskPixels, resolveInpaintMaskRgbaCoverageAlpha } from "./inpaintMaskImages";
 
 type CanvasSnapshotEncodeMode = "image" | "mask";
 
@@ -28,6 +28,17 @@ type PendingWorkerJob = {
 let worker: Worker | null = null;
 let nextWorkerJobId = 1;
 const pendingWorkerJobs = new Map<number, PendingWorkerJob>();
+
+export function resetCanvasSnapshotEncoderWorkerForTest(): void {
+  const resetError = new Error("Canvas snapshot encoder worker reset");
+  for (const job of pendingWorkerJobs.values()) {
+    job.reject(resetError);
+  }
+  pendingWorkerJobs.clear();
+  worker?.terminate();
+  worker = null;
+  nextWorkerJobId = 1;
+}
 
 export async function encodeCanvasSnapshotDataUrl(
   canvas: HTMLCanvasElement,
@@ -77,7 +88,7 @@ function resolveWorker(): Worker {
     return worker;
   }
 
-  const workerUrl = URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" }));
+  const workerUrl = URL.createObjectURL(new Blob([createCanvasSnapshotWorkerSource()], { type: "text/javascript" }));
   worker = new Worker(workerUrl);
   URL.revokeObjectURL(workerUrl);
   worker.onmessage = (event: MessageEvent<WorkerResponse>) => {
@@ -167,7 +178,10 @@ function canvasHasVisiblePixels(context: CanvasRenderingContext2D | OffscreenCan
   return false;
 }
 
-const workerSource = `
+export function createCanvasSnapshotWorkerSource(): string {
+  return `
+const resolveInpaintMaskRgbaCoverageAlpha = ${resolveInpaintMaskRgbaCoverageAlpha.toString()};
+
 self.onmessage = async (event) => {
   const { bitmap, height, id, includeBlank, mode, width } = event.data;
   let bitmapClosed = false;
@@ -224,7 +238,7 @@ function canvasHasVisiblePixels(context, width, height) {
 function normalizeOpaqueMaskPixels(pixels) {
   let hasContent = false;
   for (let offset = 0; offset + 3 < pixels.length; offset += 4) {
-    const covered = isInpaintMaskPixelCovered(pixels, offset);
+    const covered = resolveInpaintMaskRgbaCoverageAlpha(pixels[offset], pixels[offset + 1], pixels[offset + 2], pixels[offset + 3]) > 0;
     pixels[offset] = covered ? 255 : 0;
     pixels[offset + 1] = covered ? 255 : 0;
     pixels[offset + 2] = covered ? 255 : 0;
@@ -232,12 +246,6 @@ function normalizeOpaqueMaskPixels(pixels) {
     hasContent = hasContent || covered;
   }
   return hasContent;
-}
-
-function isInpaintMaskPixelCovered(pixels, offset) {
-  const alpha = pixels[offset + 3] / 255;
-  const luma = (pixels[offset] * 0.299 + pixels[offset + 1] * 0.587 + pixels[offset + 2] * 0.114) / 255;
-  return alpha * luma > 0;
 }
 
 async function blobToDataUrl(blob) {
@@ -250,3 +258,4 @@ async function blobToDataUrl(blob) {
   return "data:" + (blob.type || "image/png") + ";base64," + btoa(binary);
 }
 `;
+}
