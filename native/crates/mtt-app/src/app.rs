@@ -13,6 +13,7 @@ use crate::worker::Worker;
 
 pub enum AppEvent {
     PageLoaded(Box<PageLoad>),
+    Thumbnail(Box<crate::editor::thumbnails::ThumbLoad>),
     ChapterSaved { chapter_id: String, seq: u64, error: Option<String> },
     LayerSaved { page_id: String, error: Option<String> },
     ExportProgress { current: usize, total: usize },
@@ -69,6 +70,10 @@ impl MttApp {
         for event in self.worker.drain() {
             match (event, &mut self.screen) {
                 (AppEvent::PageLoaded(load), Screen::Editor(editor)) => editor.on_page_loaded(ctx, *load),
+                (AppEvent::Thumbnail(load), Screen::Editor(editor)) => {
+                    let chapter_id = editor.chapter.id.clone();
+                    editor.thumbnails.on_loaded(ctx, &chapter_id, *load);
+                }
                 (AppEvent::ChapterSaved { chapter_id, seq, error }, Screen::Editor(editor)) => {
                     editor.on_chapter_saved(&chapter_id, seq, error)
                 }
@@ -249,10 +254,46 @@ impl eframe::App for MttApp {
                 self.on_editor_action(action);
             }
         }
-        self.library.import_dialog(&ctx, &mut self.services, &self.worker);
         let job_active = matches!(&self.screen, Screen::Editor(editor) if editor.translation_running());
+        let blocked = if job_active {
+            Some("번역 중에는 가져올 수 없습니다")
+        } else if self.settings.is_open() {
+            Some("설정 창을 닫은 뒤 놓아 주세요")
+        } else if self.library.import_open() {
+            Some("열려 있는 가져오기 창을 먼저 끝내 주세요")
+        } else {
+            None
+        };
+        if let Some(error) = self.library.handle_file_drop(&ctx, blocked)
+            && let Screen::Editor(editor) = &mut self.screen
+        {
+            editor.status = error;
+        }
+        self.library.import_dialog(&ctx, &mut self.services, &self.worker);
         self.settings.ui(&ctx, &mut self.services, &self.worker, job_active);
         self.run_automation(&ctx);
+    }
+
+    /// Tab / Shift+Tab step through text blocks. egui would otherwise move keyboard focus
+    /// to the first button (which Space, the pan key, then presses), so the key is taken
+    /// out before egui sees it unless a text field or dialog has focus.
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        let Screen::Editor(editor) = &mut self.screen else { return };
+        if self.settings.is_open() || self.library.import_open() || ctx.memory(|memory| memory.focused().is_some()) {
+            return;
+        }
+        raw_input.events.retain(|event| match event {
+            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. }
+                if !modifiers.command && !modifiers.alt && !modifiers.ctrl =>
+            {
+                if *pressed {
+                    editor.pending_block_step += if modifiers.shift { -1 } else { 1 };
+                    ctx.request_repaint();
+                }
+                false
+            }
+            _ => true,
+        });
     }
 
     fn on_exit(&mut self) {

@@ -3,16 +3,19 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use eframe::egui::{self, RichText};
+use std::path::PathBuf;
+
+use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use mtt_core::import::{
     ImportPreview, ImportResult, ImportTarget, create_import, preview_folder, preview_images, preview_zip,
     preview_zip_folder,
 };
-use mtt_core::library::WorkSummary;
+use mtt_core::library::{ChapterSummary, WorkSummary};
 use mtt_core::model::ChapterStatus;
 
 use crate::app::AppEvent;
 use crate::services::Services;
+use crate::theme;
 use crate::worker::Worker;
 
 struct ImportDialog {
@@ -64,16 +67,18 @@ pub struct LibraryView {
     /// Last action message (`pushStatus`).
     pub status: Option<String>,
     pending_error: Option<String>,
+    /// Work whose chapters are listed.
+    selected_work: Option<String>,
 }
 
-/// `resolveChapterStatusLabel`.
+/// `resolveChapterStatusLabel` (the chapter status follows its pages' AI translation).
 pub fn status_label(status: ChapterStatus) -> &'static str {
     match status {
-        ChapterStatus::Idle => "대기",
-        ChapterStatus::Running => "진행 중",
-        ChapterStatus::Completed => "완료",
-        ChapterStatus::Partial => "부분 완료",
-        ChapterStatus::Failed => "실패",
+        ChapterStatus::Idle => "번역 전",
+        ChapterStatus::Running => "번역 중",
+        ChapterStatus::Completed => "번역 완료",
+        ChapterStatus::Partial => "일부 번역",
+        ChapterStatus::Failed => "번역 실패",
     }
 }
 
@@ -106,6 +111,7 @@ impl LibraryView {
             ImportEvent::Finished(Ok(result)) => {
                 let batch = dialog.preview.batch;
                 self.import = None;
+                self.selected_work = Some(result.work_id.clone());
                 self.refresh(services);
                 if batch {
                     Some(LibraryAction::OpenBatch(result.chapter_ids))
@@ -138,25 +144,6 @@ impl LibraryView {
             }
             Ok(_) => self.error = Some("가져올 이미지가 없습니다. (png, jpg, jpeg, webp)".into()),
             Err(error) => self.error = Some(error),
-        }
-    }
-
-    fn import_buttons(&mut self, ui: &mut egui::Ui) {
-        for (mode, label) in [
-            (ImportMode::Images, "이미지 열기"),
-            (ImportMode::Folder, "폴더 열기"),
-            (ImportMode::Zip, "압축파일 열기"),
-            (ImportMode::ZipFolder, "작품 일괄 번역"),
-        ] {
-            let response = ui.button(label);
-            let response = if mode == ImportMode::ZipFolder {
-                response.on_hover_text("폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다")
-            } else {
-                response
-            };
-            if response.clicked() {
-                self.pick_import(mode);
-            }
         }
     }
 
@@ -242,7 +229,7 @@ impl LibraryView {
                     });
                 });
                 if let Some(error) = &dialog.error {
-                    ui.colored_label(egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(theme::DANGER, error);
                 }
                 ui.horizontal(|ui| {
                     if let Some((done, total)) = dialog.running {
@@ -251,7 +238,7 @@ impl LibraryView {
                                 .desired_width(260.0)
                                 .text(format!("{done}/{total}")),
                         );
-                        if ui.button(RichText::new("가져오기 중단").color(egui::Color32::LIGHT_RED)).clicked() {
+                        if ui.button(RichText::new("가져오기 중단").color(theme::DANGER)).clicked() {
                             dialog.cancel.store(true, Ordering::SeqCst);
                         }
                     } else {
@@ -323,6 +310,52 @@ impl LibraryView {
         self.start_import(services, worker);
     }
 
+    /// Imports files dropped on the window (both screens); shows a drop hint while files
+    /// hover. `allowed` is false while a translation runs or a dialog is open.
+    /// Returns an error to show when the drop could not be imported.
+    pub fn handle_file_drop(&mut self, ctx: &egui::Context, blocked: Option<&str>) -> Option<String> {
+        let allowed = blocked.is_none();
+        let (hovering, dropped) = ctx.input(|i| (!i.raw.hovered_files.is_empty(), i.raw.dropped_files.clone()));
+        if hovering {
+            let rect = ctx.content_rect();
+            egui::Area::new(egui::Id::unique("file-drop-hint"))
+                .fixed_pos(rect.min)
+                .order(egui::Order::Foreground)
+                .interactable(false)
+                .show(ctx, |ui| {
+                    ui.painter().rect_filled(rect, 0.0, egui::Color32::from_black_alpha(170));
+                    ui.painter().rect_stroke(
+                        rect.shrink(16.0),
+                        12.0,
+                        egui::Stroke::new(2.0, if allowed { theme::ACCENT } else { theme::DANGER }),
+                        egui::StrokeKind::Inside,
+                    );
+                    let text = blocked.unwrap_or("놓으면 보관함으로 가져옵니다\n이미지 여러 장 · 폴더 · ZIP");
+                    ui.painter().text(
+                        rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        text,
+                        egui::FontId::proportional(22.0),
+                        egui::Color32::WHITE,
+                    );
+                });
+        }
+        if dropped.is_empty() {
+            return None;
+        }
+        if let Some(reason) = blocked {
+            return Some(reason.to_owned());
+        }
+        let paths: Vec<PathBuf> =
+            dropped.iter().map(|file| file.path().to_path_buf()).filter(|path| !path.as_os_str().is_empty()).collect();
+        if paths.is_empty() {
+            return None;
+        }
+        let before = self.error.clone();
+        self.begin_import(preview_dropped(&paths));
+        (self.error != before).then(|| self.error.clone()).flatten()
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -330,169 +363,201 @@ impl LibraryView {
         lama_card: &mut dyn FnMut(&mut egui::Ui, &Services) -> bool,
     ) -> Option<LibraryAction> {
         let mut action = None;
-        egui::Panel::top("library-header").show(ui, |ui| {
-            ui.horizontal(|ui| {
-                let count: usize = self.works.iter().map(|work| work.chapters.len()).sum();
-                ui.heading("보관함");
-                ui.label(RichText::new(count.to_string()).weak());
-                ui.separator();
-                ui.label(RichText::new("가져오기").weak().small());
-                self.import_buttons(ui);
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui.button("설정").clicked() {
-                        action = Some(LibraryAction::OpenSettings);
-                    }
-                    if ui.button("새로고침").clicked() {
-                        self.refresh(services);
-                    }
-                    ui.label(RichText::new(services.paths.library_dir.display().to_string()).weak().small());
-                });
-            });
-        });
-        egui::Panel::left("library-tree").resizable(true).default_size(380.0).size_range(260.0..=640.0).show(
-            ui,
-            |ui| {
-                ui.add(
-                    egui::TextEdit::singleline(&mut self.filter).hint_text("작품/화 검색").desired_width(f32::INFINITY),
-                );
-                ui.add_space(4.0);
-                if let Some(next) = self.library_tree(ui) {
-                    action = Some(next);
-                }
-                self.apply_reorder(ui, services);
-            },
-        );
-        egui::CentralPanel::default().show(ui, |ui| {
-            if let Some(error) = &self.error {
-                ui.colored_label(egui::Color32::LIGHT_RED, error);
-            }
-            if let Some(status) = &self.status {
-                ui.label(status);
-            }
-            if services.fonts_failed() {
-                ui.colored_label(egui::Color32::LIGHT_RED, "시스템 폰트를 불러오지 못했습니다.");
-            }
-            ui.add_space(40.0);
-            ui.vertical_centered(|ui| {
-                ui.set_max_width(560.0);
-                // `WorkspaceEmptyState`: the LaMa card until it is ready, then the import prompt.
-                if lama_card(ui, services) {
-                    return;
-                }
-                ui.heading("보관함에서 화를 열거나 새로 가져오세요.");
-                ui.label(
-                    RichText::new("작품과 화 단위로 저장해두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.")
-                        .weak(),
-                );
-                ui.add_space(8.0);
-                ui.horizontal(|ui| {
-                    for (mode, label) in [
-                        (ImportMode::Images, "이미지 열기"),
-                        (ImportMode::Folder, "폴더 열기"),
-                        (ImportMode::Zip, "압축파일 열기"),
-                        (ImportMode::ZipFolder, "작품 일괄 번역"),
-                    ] {
-                        if ui.button(label).clicked() {
-                            self.pick_import(mode);
-                        }
-                    }
-                });
-            });
-        });
-        self.pending_dialog(ui, services);
-        action
-    }
-
-    /// `LibraryTree`: works with their chapters (`{n}페이지 · {status}`), ✎ rename, and
-    /// chapter drag-reorder within a work while no search is active.
-    fn library_tree(&mut self, ui: &mut egui::Ui) -> Option<LibraryAction> {
-        let mut action = None;
         let filtered = mtt_core::library_filter::filter_library(&self.works, &self.filter);
         let search_active = !mtt_core::library_filter::normalize_search_text(&self.filter).is_empty();
-        egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-            if filtered.is_empty() {
-                ui.label(
-                    RichText::new(if search_active {
-                        "검색 결과가 없습니다."
-                    } else {
-                        "아직 보관함에 저장된 작품이 없습니다."
-                    })
-                    .weak(),
-                );
-            }
-            for work in &filtered {
-                egui::Frame::group(ui.style()).show(ui, |ui| {
-                    ui.set_width(ui.available_width());
-                    ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&work.work.title).strong()).truncate());
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✏").on_hover_text("이름 변경").clicked() {
+        if !filtered.iter().any(|work| Some(&work.work.id) == self.selected_work.as_ref()) {
+            self.selected_work = filtered.first().map(|work| work.work.id.clone());
+        }
+
+        egui::Panel::top("library-header").frame(theme::bar_frame(theme::APP_BG, 8)).show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("보관함").heading().strong())
+                    .on_hover_text(services.paths.library_dir.display().to_string());
+                let chapters: usize = self.works.iter().map(|work| work.chapters.len()).sum();
+                theme::pill(ui, &format!("작품 {} · 화 {chapters}", self.works.len()), theme::IDLE);
+                ui.add_space(12.0);
+                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("작품·화 검색").desired_width(240.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(
+                            egui::Button::new(theme::icon(theme::icon::GEAR_SIX).size(18.0))
+                                .min_size(egui::vec2(32.0, 28.0)),
+                        )
+                        .on_hover_text("설정")
+                        .clicked()
+                    {
+                        action = Some(LibraryAction::OpenSettings);
+                    }
+                    ui.menu_button(theme::icon(theme::icon::DOTS_THREE).size(18.0), |ui| {
+                        if ui.button("새로고침").clicked() {
+                            self.refresh(services);
+                            ui.close();
+                        }
+                        if ui.button("보관함 폴더 열기").clicked() {
+                            if let Err(error) = crate::editor::report::open_with_system(&services.paths.library_dir) {
+                                self.error = Some(format!("폴더를 열 수 없습니다: {error}"));
+                            }
+                            ui.close();
+                        }
+                    });
+                    let import = egui::Button::new((
+                        theme::icon(theme::icon::DOWNLOAD_SIMPLE).color(egui::Color32::WHITE),
+                        RichText::new("가져오기").strong().color(egui::Color32::WHITE),
+                        theme::icon(theme::icon::CARET_DOWN).size(11.0).color(egui::Color32::WHITE),
+                    ))
+                    .fill(theme::ACCENT_DIM);
+                    if let Some(mode) = import_menu(ui, import) {
+                        self.pick_import(mode);
+                    }
+                });
+            });
+        });
+
+        egui::Panel::left("library-works")
+            .resizable(true)
+            .default_size(300.0)
+            .size_range(240.0..=440.0)
+            .frame(theme::side_frame())
+            .show(ui, |ui| {
+                ui.label(RichText::new("작품").strong());
+                ui.add_space(4.0);
+                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                    if filtered.is_empty() {
+                        theme::hint(
+                            ui,
+                            if search_active {
+                                "검색 결과가 없습니다."
+                            } else {
+                                "아직 작품이 없습니다."
+                            },
+                        );
+                    }
+                    for work in &filtered {
+                        let selected = Some(&work.work.id) == self.selected_work.as_ref();
+                        let response = work_row(ui, work, selected);
+                        if response.clicked() {
+                            self.selected_work = Some(work.work.id.clone());
+                        }
+                        response.context_menu(|ui| {
+                            if ui.button("이름 변경 · 삭제…").clicked() {
                                 self.pending = Some(Pending {
                                     work: true,
                                     id: work.work.id.clone(),
                                     original: work.work.title.clone(),
                                     title: work.work.title.clone(),
                                 });
+                                ui.close();
                             }
                         });
-                    });
-                    for chapter in &work.chapters {
-                        // Title truncates; "{n}페이지 · {status}" and ✏ stay visible on the right.
-                        let row = ui.horizontal(|ui| {
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("✏").on_hover_text("이름 변경").clicked() {
-                                    self.pending = Some(Pending {
-                                        work: false,
-                                        id: chapter.id.clone(),
-                                        original: chapter.title.clone(),
-                                        title: chapter.title.clone(),
-                                    });
-                                }
-                                ui.label(
-                                    RichText::new(format!(
-                                        "{}페이지 · {}",
-                                        chapter.page_count,
-                                        status_label(chapter.status)
-                                    ))
-                                    .small()
-                                    .weak(),
-                                );
-                                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                                    let title = egui::Button::new(&chapter.title).truncate();
-                                    let response = if search_active {
-                                        ui.add(title)
-                                    } else {
-                                        let payload = (work.work.id.clone(), chapter.id.clone());
-                                        crate::dnd::drag_button(ui, title, payload, &chapter.title)
-                                    };
-                                    if response.clicked() {
-                                        action = Some(LibraryAction::Open(chapter.id.clone()));
-                                    }
-                                    response.on_hover_text(&chapter.title);
-                                });
-                            });
-                        });
-                        if !search_active
-                            && let Some(source) = row.response.dnd_release_payload::<(String, String)>()
-                            && source.0 == work.work.id
-                            && source.1 != chapter.id
-                        {
-                            ui.data_mut(|data| {
-                                data.insert_temp(
-                                    egui::Id::unique("library-reorder"),
-                                    (work.work.id.clone(), source.1.clone(), chapter.id.clone()),
-                                )
-                            });
-                        }
                     }
                 });
-                ui.add_space(6.0);
-            }
-        });
+            });
+
+        egui::CentralPanel::default()
+            .frame(egui::Frame::new().fill(theme::CANVAS_BG).inner_margin(egui::Margin::symmetric(24, 18)))
+            .show(ui, |ui| {
+                if let Some(error) = &self.error {
+                    ui.colored_label(theme::DANGER, error);
+                }
+                if let Some(status) = &self.status {
+                    theme::hint(ui, status);
+                }
+                if services.fonts_failed() {
+                    ui.colored_label(theme::DANGER, "시스템 폰트를 불러오지 못했습니다.");
+                }
+                egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+                    ui.set_max_width(880.0);
+                    // `WorkspaceEmptyState`: the LaMa setup card until it is ready.
+                    if lama_card(ui, services) {
+                        ui.add_space(12.0);
+                    }
+                    let selected = filtered.iter().find(|work| Some(&work.work.id) == self.selected_work.as_ref());
+                    match selected {
+                        Some(work) => {
+                            if let Some(next) = self.chapter_list(ui, work, search_active) {
+                                action = Some(next);
+                            }
+                        }
+                        None if self.works.is_empty() => welcome(ui, self),
+                        None => theme::hint(ui, "검색 결과가 없습니다."),
+                    }
+                });
+                self.apply_reorder(ui, services);
+            });
+        self.pending_dialog(ui, services);
         action
     }
 
-    /// Applies a chapter drop recorded by `library_tree` (`reorderByTarget` + `chapterOrder`).
+    /// The selected work: header with rename, then its chapters in reading order.
+    fn chapter_list(&mut self, ui: &mut egui::Ui, work: &WorkSummary, search_active: bool) -> Option<LibraryAction> {
+        let mut action = None;
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(&work.work.title).size(22.0).strong());
+            if ui.button(RichText::new("이름 변경 · 삭제").small()).clicked() {
+                self.pending = Some(Pending {
+                    work: true,
+                    id: work.work.id.clone(),
+                    original: work.work.title.clone(),
+                    title: work.work.title.clone(),
+                });
+            }
+        });
+        let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
+        let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
+        theme::hint(ui, &format!("{}화 · {pages}페이지 중 {done}페이지 완료", work.chapters.len()));
+        ui.add_space(10.0);
+        if work.chapters.is_empty() {
+            theme::hint(ui, "이 작품에는 아직 화가 없습니다.");
+        }
+        for chapter in &work.chapters {
+            let response = chapter_row(ui, chapter);
+            let response = if search_active {
+                response
+            } else {
+                crate::dnd::drag_source(ui, response, (work.work.id.clone(), chapter.id.clone()), &chapter.title)
+            };
+            if response.clicked() {
+                action = Some(LibraryAction::Open(chapter.id.clone()));
+            }
+            response.context_menu(|ui| {
+                if ui.button("열기").clicked() {
+                    action = Some(LibraryAction::Open(chapter.id.clone()));
+                    ui.close();
+                }
+                if ui.button("이름 변경 · 삭제…").clicked() {
+                    self.pending = Some(Pending {
+                        work: false,
+                        id: chapter.id.clone(),
+                        original: chapter.title.clone(),
+                        title: chapter.title.clone(),
+                    });
+                    ui.close();
+                }
+            });
+            if !search_active && response.dnd_hover_payload::<(String, String)>().is_some() {
+                ui.painter().hline(response.rect.x_range(), response.rect.top() - 3.0, (2.0, theme::ACCENT));
+            }
+            if !search_active
+                && let Some(source) = response.dnd_release_payload::<(String, String)>()
+                && source.0 == work.work.id
+                && source.1 != chapter.id
+            {
+                ui.data_mut(|data| {
+                    data.insert_temp(
+                        egui::Id::unique("library-reorder"),
+                        (work.work.id.clone(), source.1.clone(), chapter.id.clone()),
+                    )
+                });
+            }
+        }
+        if !search_active && work.chapters.len() > 1 {
+            ui.add_space(6.0);
+            theme::hint(ui, "끌어서 화 순서를 바꿀 수 있습니다. 우클릭하면 이름 변경과 삭제.");
+        }
+        action
+    }
+
+    /// Applies a chapter drop recorded by `chapter_list` (`reorderByTarget` + `chapterOrder`).
     fn apply_reorder(&mut self, ui: &mut egui::Ui, services: &mut Services) {
         let id = egui::Id::unique("library-reorder");
         let Some((work_id, source, target)) = ui.data_mut(|data| data.remove_temp::<(String, String, String)>(id))
@@ -540,7 +605,7 @@ impl LibraryView {
                 );
                 ui.horizontal(|ui| {
                     let delete_label = if pending.work { "작품 삭제" } else { "화 삭제" };
-                    if ui.button(RichText::new(delete_label).color(egui::Color32::LIGHT_RED)).clicked() {
+                    if ui.add(theme::danger(delete_label)).clicked() {
                         delete = true;
                     }
                     if ui.button("취소").clicked() {
@@ -578,7 +643,7 @@ impl LibraryView {
                     format!("\"{}\" 화와 포함된 모든 페이지, 번역 결과가 보관함에서 삭제됩니다.", pending.original),
                 )
             };
-            if crate::editor::layout::confirm(kind, "정말 삭제하시겠습니까?", &detail) {
+            if crate::theme::confirm(kind, "정말 삭제하시겠습니까?", &detail) {
                 let result = if pending.work {
                     services.library.delete_work(&pending.id)
                 } else {
@@ -607,5 +672,254 @@ impl LibraryView {
                 self.error = Some(error);
             }
         }
+    }
+}
+
+/// `ImportMode` entries of the "가져오기" menu.
+pub const IMPORT_MODES: [(ImportMode, &str, &str); 4] = [
+    (ImportMode::Images, "이미지 파일…", "고른 이미지들을 한 화로 가져옵니다"),
+    (ImportMode::Folder, "폴더…", "이미지가 든 폴더 하나를 한 화로 가져옵니다"),
+    (ImportMode::Zip, "압축파일…", "ZIP 하나를 한 화로 가져옵니다"),
+    (ImportMode::ZipFolder, "여러 화 일괄 번역…", "폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다"),
+];
+
+/// A menu button listing the import modes; returns the picked one.
+pub fn import_menu(ui: &mut egui::Ui, button: egui::Button<'static>) -> Option<ImportMode> {
+    let mut picked = None;
+    egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+        for (mode, label, hint) in IMPORT_MODES {
+            if mode == ImportMode::ZipFolder {
+                ui.separator();
+            }
+            if ui.button(label).on_hover_text(hint).clicked() {
+                picked = Some(mode);
+                ui.close();
+            }
+        }
+        ui.separator();
+        theme::hint(ui, "창에 파일이나 폴더를 끌어다 놓아도 됩니다.");
+    });
+    picked
+}
+
+/// What a set of dropped paths imports as: images → one chapter; one folder of images →
+/// one chapter; one folder of chapter folders/ZIPs → a batch; ZIPs and folders → one
+/// chapter each.
+pub fn preview_dropped(paths: &[PathBuf]) -> Result<ImportPreview, String> {
+    let images: Vec<PathBuf> =
+        paths.iter().filter(|path| path.is_file() && mtt_core::paths::is_supported_image_path(path)).cloned().collect();
+    let containers: Vec<&PathBuf> = paths
+        .iter()
+        .filter(|path| path.is_dir() || path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")))
+        .collect();
+    match (images.is_empty(), containers.as_slice()) {
+        (false, []) => Ok(preview_images(&images)),
+        (true, [folder]) if folder.is_dir() => {
+            let single = preview_folder(folder).map_err(|e| e.to_string())?;
+            if single.chapters.iter().any(|chapter| !chapter.pages.is_empty()) {
+                Ok(single)
+            } else {
+                preview_zip_folder(folder).map_err(|e| e.to_string())
+            }
+        }
+        (true, [archive]) => preview_zip(archive).map_err(|e| e.to_string()),
+        (true, many) if !many.is_empty() => {
+            let mut chapters = Vec::new();
+            for path in many {
+                let preview = if path.is_dir() { preview_folder(path) } else { preview_zip(path) };
+                chapters.extend(preview.map_err(|e| e.to_string())?.chapters);
+            }
+            chapters.retain(|chapter| !chapter.pages.is_empty());
+            chapters.sort_by(|a, b| mtt_core::import::natural_cmp(&a.title, &b.title));
+            let suggested_work_title = many[0]
+                .parent()
+                .and_then(|parent| parent.file_name())
+                .map(|name| name.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            Ok(ImportPreview {
+                batch: false,
+                source_kind: mtt_core::model::ImportSourceKind::Folder,
+                suggested_work_title,
+                chapters,
+            })
+        }
+        (true, _) => {
+            Err("가져올 수 있는 파일이 없습니다. png · jpg · jpeg · webp 이미지, 폴더, ZIP을 놓아 주세요.".into())
+        }
+        _ => Err("이미지 파일과 폴더/ZIP을 한 번에 섞어서 가져올 수 없습니다. 따로 놓아 주세요.".into()),
+    }
+}
+
+fn welcome(ui: &mut egui::Ui, view: &mut LibraryView) {
+    ui.add_space(30.0);
+    ui.vertical_centered(|ui| {
+        ui.label(RichText::new("만화 원고를 가져와서 시작하세요").size(22.0).strong());
+        ui.add_space(4.0);
+        theme::hint(ui, "작품과 화 단위로 보관해 두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.");
+        theme::hint(ui, "이미지 여러 장, 폴더, ZIP을 이 창에 끌어다 놓아도 됩니다.");
+        ui.add_space(12.0);
+        ui.horizontal(|ui| {
+            let width: f32 = 4.0 * 130.0;
+            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
+            for (mode, label, hint) in IMPORT_MODES {
+                if ui
+                    .add(egui::Button::new(label.trim_end_matches('…')).min_size(egui::vec2(120.0, 34.0)))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
+                    view.pick_import(mode);
+                }
+            }
+        });
+    });
+}
+
+fn row_fill(response: &egui::Response, selected: bool) -> Color32 {
+    if selected {
+        theme::ACCENT_DIM
+    } else if response.hovered() {
+        Color32::from_rgb(40, 44, 50)
+    } else {
+        Color32::TRANSPARENT
+    }
+}
+
+fn truncated(ui: &egui::Ui, text: &str, size: f32, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), egui::FontId::proportional(size), color);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));
+    ui.painter().layout_job(job)
+}
+
+fn work_row(ui: &mut egui::Ui, work: &WorkSummary, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 50.0), Sense::click());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        painter.rect_filled(rect, 6.0, row_fill(&response, selected));
+        let inner = rect.shrink2(egui::vec2(10.0, 7.0));
+        let title =
+            truncated(ui, &work.work.title, 14.5, if selected { Color32::WHITE } else { theme::TEXT }, inner.width());
+        painter.galley(inner.min, title, theme::TEXT);
+        let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
+        let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
+        let meta = format!("{}화 · 완료 {done}/{pages}p", work.chapters.len());
+        let meta = truncated(ui, &meta, 11.5, theme::TEXT_WEAK, inner.width());
+        painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
+    }
+    response.on_hover_text(&work.work.title)
+}
+
+fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), Sense::click_and_drag());
+    if ui.is_rect_visible(rect) {
+        let painter = ui.painter();
+        let fill = if response.hovered() { Color32::from_rgb(40, 44, 50) } else { theme::CARD_BG };
+        painter.rect_filled(rect, 8.0, fill);
+        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Inside);
+        let inner = rect.shrink2(egui::vec2(14.0, 9.0));
+
+        // Right: status pill, progress and the page count.
+        let (status_color, status) = status_style(chapter.status);
+        let ratio =
+            if chapter.page_count == 0 { 0.0 } else { chapter.completed_page_count as f32 / chapter.page_count as f32 };
+        let count = painter.layout_no_wrap(
+            format!("완료 {}/{}", chapter.completed_page_count, chapter.page_count),
+            egui::FontId::proportional(12.0),
+            theme::TEXT_WEAK,
+        );
+        let count_pos = egui::pos2(inner.right() - count.size().x, inner.center().y - count.size().y / 2.0);
+        let bar = Rect::from_min_size(egui::pos2(count_pos.x - 128.0, inner.center().y - 3.0), egui::vec2(116.0, 6.0));
+        painter.rect_filled(bar, 3.0, Color32::from_rgb(52, 56, 64));
+        painter.rect_filled(
+            Rect::from_min_size(bar.min, egui::vec2(bar.width() * ratio, bar.height())),
+            3.0,
+            if ratio >= 1.0 { theme::SUCCESS } else { theme::ACCENT },
+        );
+        painter.galley(count_pos, count, theme::TEXT_WEAK);
+        let pill_text = painter.layout_no_wrap(status.into(), egui::FontId::proportional(11.5), status_color);
+        let pill = Rect::from_min_size(
+            egui::pos2(
+                bar.left() - 14.0 - pill_text.size().x - 14.0,
+                inner.center().y - pill_text.size().y / 2.0 - 2.0,
+            ),
+            pill_text.size() + egui::vec2(14.0, 4.0),
+        );
+        painter.rect_filled(pill, 9.0, status_color.gamma_multiply(0.18));
+        painter.galley(pill.min + egui::vec2(7.0, 2.0), pill_text, status_color);
+
+        // Left: title and dates.
+        let text_width = pill.left() - 16.0 - inner.left();
+        let title = truncated(ui, &chapter.title, 15.0, theme::TEXT, text_width);
+        painter.galley(inner.min, title, theme::TEXT);
+        let updated = chapter.updated_at.get(..10).unwrap_or(&chapter.updated_at);
+        let meta = truncated(
+            ui,
+            &format!("{}페이지 · 수정 {updated}", chapter.page_count),
+            11.5,
+            theme::TEXT_WEAK,
+            text_width,
+        );
+        painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
+    }
+    ui.add_space(6.0);
+    response.on_hover_text(format!("{} 열기", chapter.title))
+}
+
+fn status_style(status: ChapterStatus) -> (Color32, &'static str) {
+    let color = match status {
+        ChapterStatus::Completed => theme::SUCCESS,
+        ChapterStatus::Running => theme::ACCENT,
+        ChapterStatus::Partial => theme::WARNING,
+        ChapterStatus::Failed => theme::DANGER,
+        ChapterStatus::Idle => theme::IDLE,
+    };
+    (color, status_label(status))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn png(path: &std::path::Path) {
+        image::RgbaImage::new(2, 2).save(path).unwrap();
+    }
+
+    #[test]
+    fn dropped_paths_pick_the_import_kind() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        // Loose images → one chapter of those images.
+        png(&root.join("b.png"));
+        png(&root.join("a.png"));
+        let preview = preview_dropped(&[root.join("b.png"), root.join("a.png")]).unwrap();
+        assert!(!preview.batch);
+        assert_eq!(preview.chapters.len(), 1);
+        assert_eq!(preview.chapters[0].pages.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["a.png", "b.png"]);
+
+        // A folder of images → one chapter named after it.
+        let single = root.join("1화");
+        std::fs::create_dir(&single).unwrap();
+        png(&single.join("001.png"));
+        let preview = preview_dropped(std::slice::from_ref(&single)).unwrap();
+        assert!(!preview.batch);
+        assert_eq!(preview.chapters[0].title, "1화");
+
+        // A folder of chapter folders → batch.
+        let series = root.join("작품");
+        for name in ["2화", "1화"] {
+            std::fs::create_dir_all(series.join(name)).unwrap();
+            png(&series.join(name).join("001.png"));
+        }
+        let preview = preview_dropped(std::slice::from_ref(&series)).unwrap();
+        assert!(preview.batch);
+        assert_eq!(preview.chapters.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["1화", "2화"]);
+
+        // Several folders → one chapter each, in natural order, not a batch.
+        let preview = preview_dropped(&[series.join("2화"), series.join("1화")]).unwrap();
+        assert!(!preview.batch);
+        assert_eq!(preview.chapters.iter().map(|c| c.title.as_str()).collect::<Vec<_>>(), ["1화", "2화"]);
+        assert_eq!(preview.suggested_work_title, "작품");
+
+        // Images mixed with folders are refused.
+        assert!(preview_dropped(&[root.join("a.png"), single]).is_err());
     }
 }

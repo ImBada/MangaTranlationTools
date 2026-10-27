@@ -37,6 +37,8 @@ pub enum Step {
     Report,
     WaitReport,
     PresetEdit(String),
+    /// Opens the shortcut sheet.
+    ShortcutSheet,
     Sample([f32; 2]),
     WaitTranslation,
     Window([f32; 2]),
@@ -107,6 +109,7 @@ impl Automation {
                     "report" => Step::Report,
                     "report-wait" => Step::WaitReport,
                     "preset-edit" => Step::PresetEdit(arg.to_owned()),
+                    "shortcuts" => Step::ShortcutSheet,
                     "sample" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Sample([v[0], v[1]]))?
@@ -251,8 +254,10 @@ impl Automation {
                 }
                 log::info!("automation: sampled {}", crate::editor::color::to_hex(editor.result_brush.color));
             }
+            (Step::ShortcutSheet, Some(editor)) => editor.shortcut_sheet = true,
             (Step::PresetEdit(id), Some(editor)) => {
                 editor.selection.clear();
+                editor.inspector_tab = crate::editor::InspectorTab::Presets;
                 editor.editing_preset_id = Some(id.clone());
             }
             (Step::WaitInpaint, Some(editor)) => {

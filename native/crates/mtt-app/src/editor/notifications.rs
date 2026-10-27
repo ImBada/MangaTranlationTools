@@ -1,19 +1,20 @@
-//! Status feedback like the TS app: a 4-second toast for each new status line, the
-//! "기록" history (last 16 lines), recoverable failure cards with 재시도/닫기, the page
-//! inpaint notice and the "저장 완료" flash (`useStatusFeedback.ts`,
-//! `useRecoverableFailures.ts`, `NotificationDock`, `StatusHistoryPanel`).
+//! Status feedback (`useStatusFeedback.ts`, `useRecoverableFailures.ts`): the latest
+//! status line and its history (last 16) for the status bar, recoverable failure cards
+//! with 재시도/닫기 over the canvas, the failed-inpaint notice and the "저장 완료" flash.
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use mtt_core::model::InpaintStatus;
 
 use super::{Editor, InpaintScope};
 use crate::app::AppEvent;
 use crate::services::Services;
+use crate::theme;
 use crate::worker::Worker;
 
-const TOAST_DURATION: Duration = Duration::from_secs(4);
+/// How long a new status line stays highlighted in the status bar.
+const FRESH_DURATION: Duration = Duration::from_secs(4);
 const SAVE_FLASH: Duration = Duration::from_millis(1200);
 const HISTORY_LIMIT: usize = 16;
 
@@ -35,8 +36,7 @@ struct Failure {
 pub struct Notifications {
     lines: Vec<String>,
     last_status: String,
-    toast: Option<(String, Instant)>,
-    pub history_open: bool,
+    fresh: Option<Instant>,
     failures: Vec<Failure>,
     save_flash: Option<Instant>,
 }
@@ -55,6 +55,11 @@ impl Notifications {
         !self.failures.is_empty()
     }
 
+    /// A chapter or layer write failed (the status bar's save state).
+    pub fn has_save_failure(&self) -> bool {
+        self.failures.iter().any(|failure| matches!(failure.id, FailureId::ChapterSave | FailureId::LayerSave))
+    }
+
     /// `signalSaveComplete`.
     pub fn flash_saved(&mut self) {
         self.save_flash = Some(Instant::now());
@@ -64,14 +69,29 @@ impl Notifications {
         self.save_flash.is_some_and(|at| at.elapsed() < SAVE_FLASH)
     }
 
-    /// `appendStatusLine`: a changed status becomes the toast and the newest history line.
+    /// Newest status line.
+    pub fn latest(&self) -> Option<&str> {
+        self.lines.first().map(String::as_str)
+    }
+
+    /// Whether the newest line arrived moments ago.
+    pub fn latest_is_fresh(&self) -> bool {
+        self.fresh.is_some_and(|at| at.elapsed() < FRESH_DURATION)
+    }
+
+    /// History, newest first.
+    pub fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// `appendStatusLine`: a changed status becomes the newest history line.
     fn observe(&mut self, status: &str) {
         let line = status.trim();
         if line.is_empty() || line == self.last_status {
             return;
         }
         self.last_status = line.to_owned();
-        self.toast = Some((line.to_owned(), Instant::now()));
+        self.fresh = Some(Instant::now());
         if self.lines.first().map(String::as_str) != Some(line) {
             self.lines.insert(0, line.to_owned());
             self.lines.truncate(HISTORY_LIMIT);
@@ -80,18 +100,7 @@ impl Notifications {
 }
 
 impl Editor {
-    /// Saved/unsaved/flash label for the status dot (`saveStatusLabel`).
-    pub fn save_state_label(&self) -> &'static str {
-        if self.notifications.save_flash_active() {
-            "저장 완료"
-        } else if self.has_unsaved_changes() {
-            "저장되지 않은 변경 있음"
-        } else {
-            "최신 상태"
-        }
-    }
-
-    /// Draws the notification dock and the history panel over the stage.
+    /// Records status changes and draws the failure cards in the canvas corner.
     pub fn notifications_ui(
         &mut self,
         ctx: &egui::Context,
@@ -101,12 +110,10 @@ impl Editor {
     ) {
         let status = self.status.clone();
         self.notifications.observe(&status);
-        if let Some((_, at)) = &self.notifications.toast {
-            if at.elapsed() >= TOAST_DURATION {
-                self.notifications.toast = None;
-            } else {
-                ctx.request_repaint_after(TOAST_DURATION.saturating_sub(at.elapsed()));
-            }
+        if let Some(at) = self.notifications.fresh
+            && at.elapsed() < FRESH_DURATION
+        {
+            ctx.request_repaint_after(FRESH_DURATION.saturating_sub(at.elapsed()));
         }
         if self.notifications.save_flash_active() {
             ctx.request_repaint_after(SAVE_FLASH);
@@ -115,36 +122,26 @@ impl Editor {
         let mut retry = None;
         let mut dismiss = None;
         let mut rerun_inpaint = false;
-        let page_notice = self.page().and_then(|page| match page.inpaint_status {
-            Some(InpaintStatus::Running) => Some(("인페인트 중".to_owned(), page.name.clone(), false)),
-            Some(InpaintStatus::Failed) => {
-                Some(("인페인트 실패".to_owned(), format!("{} - 마스크와 레이어 상태는 유지됨", page.name), true))
-            }
-            _ => None,
+        let failed_inpaint = self.page().and_then(|page| {
+            (page.inpaint_status == Some(InpaintStatus::Failed))
+                .then(|| format!("{} - 마스크와 레이어 상태는 유지됨", page.name))
         });
-        let has_cards =
-            page_notice.is_some() || self.notifications.has_failures() || self.notifications.toast.is_some();
-        if has_cards {
+        if failed_inpaint.is_some() || self.notifications.has_failures() {
             egui::Area::new(egui::Id::unique("notification-dock"))
-                .anchor(
-                    egui::Align2::RIGHT_BOTTOM,
-                    [
-                        -(ctx.content_rect().right() - stage.right()) - 12.0,
-                        -(ctx.content_rect().bottom() - stage.bottom()) - 52.0,
-                    ],
-                )
+                .pivot(egui::Align2::RIGHT_BOTTOM)
+                .fixed_pos(stage.right_bottom() - egui::vec2(12.0, 12.0))
                 .order(egui::Order::Foreground)
                 .show(ctx, |ui| {
                     ui.set_max_width(340.0);
-                    if let Some((title, message, failed)) = &page_notice {
-                        card(ui, *failed, title, message, |ui| {
-                            if *failed && ui.button("다시 실행").clicked() {
+                    if let Some(message) = &failed_inpaint {
+                        card(ui, "인페인트 실패", message, |ui| {
+                            if ui.button("다시 실행").clicked() {
                                 rerun_inpaint = true;
                             }
                         });
                     }
                     for failure in &self.notifications.failures {
-                        card(ui, true, &failure.title, &failure.message, |ui| {
+                        card(ui, &failure.title, &failure.message, |ui| {
                             if ui.button("재시도").clicked() {
                                 retry = Some(failure.id);
                             }
@@ -153,54 +150,6 @@ impl Editor {
                             }
                         });
                     }
-                    if let Some((line, _)) = &self.notifications.toast {
-                        let failed = line.contains("실패");
-                        card(ui, failed, "알림", line, |_| {});
-                    }
-                });
-        }
-
-        egui::Area::new(egui::Id::unique("status-history-button"))
-            .fixed_pos(stage.left_bottom() + egui::vec2(10.0, -40.0))
-            .order(egui::Order::Foreground)
-            .show(ctx, |ui| {
-                let failed = self.notifications.has_failures();
-                let text =
-                    RichText::new("기록").color(if failed { Color32::LIGHT_RED } else { ui.visuals().text_color() });
-                if ui.selectable_label(self.notifications.history_open, text).on_hover_text("상태 기록").clicked() {
-                    self.notifications.history_open = !self.notifications.history_open;
-                }
-            });
-        if self.notifications.history_open {
-            let job = self
-                .translation
-                .as_ref()
-                .map(|job| format!("{} {}/{}", job.phase_label(), job.done, job.total))
-                .unwrap_or_else(|| "대기 중".into());
-            egui::Area::new(egui::Id::unique("status-history-panel"))
-                .fixed_pos(stage.left_bottom() + egui::vec2(10.0, -330.0))
-                .order(egui::Order::Foreground)
-                .show(ctx, |ui| {
-                    egui::Frame::popup(ui.style()).show(ui, |ui| {
-                        ui.set_width(320.0);
-                        ui.horizontal(|ui| {
-                            ui.label(RichText::new("상태 기록").strong());
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if ui.small_button("×").on_hover_text("상태 기록 닫기").clicked() {
-                                    self.notifications.history_open = false;
-                                }
-                            });
-                        });
-                        ui.label(RichText::new(job).small().background_color(ui.visuals().faint_bg_color));
-                        egui::ScrollArea::vertical().max_height(230.0).show(ui, |ui| {
-                            if self.notifications.lines.is_empty() {
-                                ui.label(RichText::new("아직 표시할 상태가 없습니다.").weak());
-                            }
-                            for line in &self.notifications.lines {
-                                ui.label(RichText::new(line).small());
-                            }
-                        });
-                    });
                 });
         }
 
@@ -238,12 +187,10 @@ impl Editor {
     }
 }
 
-fn card(ui: &mut egui::Ui, failed: bool, title: &str, message: &str, actions: impl FnOnce(&mut egui::Ui)) {
-    let stroke =
-        if failed { Color32::from_rgb(239, 68, 68) } else { ui.visuals().widgets.noninteractive.bg_stroke.color };
-    egui::Frame::popup(ui.style()).stroke((1.0, stroke)).show(ui, |ui| {
+fn card(ui: &mut egui::Ui, title: &str, message: &str, actions: impl FnOnce(&mut egui::Ui)) {
+    egui::Frame::popup(ui.style()).stroke((1.0, theme::DANGER)).show(ui, |ui| {
         ui.set_width(320.0);
-        ui.label(RichText::new(title).strong());
+        ui.label(RichText::new(title).strong().color(theme::DANGER));
         ui.label(message);
         ui.horizontal(actions);
     });

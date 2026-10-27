@@ -299,6 +299,7 @@ pub fn picker_with_id(
         // Clicking the search box must not close the list.
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .width(ui.available_width())
+        .truncate()
         .selected_text(selected_label)
         .height(420.0)
         .show_ui(ui, |ui| {

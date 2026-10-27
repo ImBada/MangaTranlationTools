@@ -11,6 +11,7 @@ use mtt_core::settings::{
 
 use crate::app::AppEvent;
 use crate::services::Services;
+use crate::theme;
 use crate::update_check::{self, UpdateStatus};
 use crate::worker::Worker;
 
@@ -48,9 +49,19 @@ enum ActionState {
     Error,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+enum SettingsTab {
+    #[default]
+    Translation,
+    Inpaint,
+    Editing,
+    About,
+}
+
 #[derive(Default)]
 pub struct SettingsView {
     open: bool,
+    tab: SettingsTab,
     draft: Option<AppSettings>,
     testing: bool,
     test_result: Option<Result<String, String>>,
@@ -291,8 +302,8 @@ impl SettingsView {
         }
         if let Some((state, message)) = &self.lama_action {
             let color = match state {
-                ActionState::Success => egui::Color32::LIGHT_GREEN,
-                ActionState::Error => egui::Color32::LIGHT_RED,
+                ActionState::Success => theme::SUCCESS,
+                ActionState::Error => theme::DANGER,
             };
             ui.label(RichText::new(message).strong().color(color));
         }
@@ -322,6 +333,155 @@ impl SettingsView {
                 });
             });
         });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn translation_tab(
+        &mut self,
+        ui: &mut egui::Ui,
+        draft: &mut AppSettings,
+        worker: &Worker<AppEvent>,
+        job_active: bool,
+        can_submit: bool,
+        base_url_valid: bool,
+        base_url: &str,
+    ) {
+        theme::hint(ui, "모델과 번역 옵션은 다음 번 번역 실행부터 적용됩니다.");
+        ui.add_space(6.0);
+        ui.label(RichText::new("번역 모드").strong());
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Fast, "빠름");
+            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Accuracy, "정확성");
+        });
+        theme::hint(ui, translation_mode_description(draft.translation_mode));
+        ui.add_space(10.0);
+
+        ui.label(RichText::new("번역 엔진").strong());
+        ui.horizontal(|ui| {
+            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCodex, "OpenAI API");
+            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCompatible, "커스텀");
+        });
+        theme::hint(ui, provider_description(draft.model_provider));
+        ui.add_space(4.0);
+        egui::Grid::new("provider-fields").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
+            match draft.model_provider {
+                ModelProvider::OpenAiCodex => {
+                    ui.label("모델");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.codex.model).hint_text("gpt-5.5").desired_width(300.0),
+                    );
+                    ui.end_row();
+                    ui.label("생각");
+                    ui.horizontal(|ui| {
+                        for effort in [
+                            ReasoningEffort::None,
+                            ReasoningEffort::Low,
+                            ReasoningEffort::Medium,
+                            ReasoningEffort::High,
+                            ReasoningEffort::Xhigh,
+                        ] {
+                            ui.selectable_value(&mut draft.codex.reasoning_effort, effort, effort_label(effort));
+                        }
+                    });
+                    ui.end_row();
+                    ui.label("");
+                    theme::hint(ui, effort_description(draft.codex.reasoning_effort));
+                    ui.end_row();
+                    ui.label("oauth 포트");
+                    ui.add(egui::DragValue::new(&mut draft.codex.oauth_port).range(0..=65535));
+                    ui.end_row();
+                }
+                ModelProvider::OpenAiCompatible => {
+                    ui.label("Base URL");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.openai_compatible.base_url)
+                            .hint_text("http://127.0.0.1:1234/v1")
+                            .desired_width(300.0),
+                    );
+                    ui.end_row();
+                    ui.label("API Key");
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            egui::TextEdit::singleline(&mut draft.openai_compatible.api_key)
+                                .password(!self.show_key)
+                                .hint_text("로컬 서버면 비워둘 수 있습니다")
+                                .desired_width(230.0),
+                        );
+                        ui.checkbox(&mut self.show_key, "보기");
+                    });
+                    ui.end_row();
+                    ui.label("모델");
+                    ui.add(
+                        egui::TextEdit::singleline(&mut draft.openai_compatible.model)
+                            .hint_text("gpt-4o-mini")
+                            .desired_width(300.0),
+                    );
+                    ui.end_row();
+                }
+            }
+        });
+        if draft.model_provider == ModelProvider::OpenAiCodex {
+            theme::hint(
+                ui,
+                "네이티브 앱은 openai-oauth를 직접 띄우지 않습니다. 터미널에서 `npx openai-oauth`를 실행해 두세요.",
+            );
+        }
+        if draft.model_provider == ModelProvider::OpenAiCompatible && !base_url_valid {
+            ui.colored_label(theme::WARNING, "Base URL은 http:// 또는 https://로 시작해야 합니다.");
+        }
+        ui.add_space(10.0);
+
+        toggle_row(ui, "여러 페이지 동시에 번역", &mut draft.translation_parallel.enabled);
+        ui.horizontal(|ui| {
+            ui.label("최대 동시 번역 수");
+            ui.add_enabled(
+                draft.translation_parallel.enabled,
+                egui::DragValue::new(&mut draft.translation_parallel.max_concurrency)
+                    .range(TRANSLATION_PARALLEL_MIN..=TRANSLATION_PARALLEL_MAX),
+            );
+        });
+        theme::hint(ui, "API/로컬 모델 한도에 맞춰 조절하세요.");
+        ui.add_space(10.0);
+
+        ui.label(RichText::new("모델 테스트").strong());
+        ui.horizontal(|ui| {
+            let label = if self.testing { "테스트 중..." } else { "잘 작동하는지 확인" };
+            if ui.add_enabled(!self.testing && can_submit && !job_active, egui::Button::new(label)).clicked() {
+                self.testing = true;
+                self.test_result = None;
+                let mut settings = draft.normalized();
+                settings.openai_compatible.base_url = base_url.to_owned();
+                let config = mtt_translate::TranslationConfig::from_settings(&settings);
+                self.test_endpoint = Some(config.endpoint.base_url.clone());
+                worker.spawn(move || {
+                    AppEvent::ModelTest(
+                        mtt_translate::test_model(&config).map(|reply| format!("모델 응답 확인 완료: {reply}")),
+                    )
+                });
+            }
+            if self.testing {
+                ui.spinner();
+            }
+        });
+        theme::hint(
+            ui,
+            "서버가 뜨고 간단한 텍스트 요청에 응답하는지만 확인합니다. 실제 이미지 번역 가능 여부와는 다를 수 있습니다.",
+        );
+        if job_active {
+            theme::hint(ui, "번역 작업 중에는 모델 테스트를 실행할 수 없습니다.");
+        }
+        match &self.test_result {
+            Some(Ok(message)) => {
+                ui.label(RichText::new(message).strong().color(theme::SUCCESS));
+                if let Some(endpoint) = &self.test_endpoint {
+                    theme::hint(ui, &format!("엔드포인트: {endpoint}"));
+                }
+            }
+            Some(Err(error)) => {
+                ui.label(RichText::new(error).strong().color(theme::DANGER));
+            }
+            None => {}
+        }
     }
 
     pub fn is_open(&self) -> bool {
@@ -357,163 +517,84 @@ impl SettingsView {
             ModelProvider::OpenAiCodex => !draft.codex.model.trim().is_empty(),
             ModelProvider::OpenAiCompatible => base_url_valid && !draft.openai_compatible.model.trim().is_empty(),
         };
-        egui::Window::new("설정").open(&mut open).collapsible(false).resizable(false).default_width(540.0).show(ctx, |ui| {
-            egui::ScrollArea::vertical().max_height(ctx.content_rect().height() - 120.0).show(ui, |ui| {
-                ui.label(RichText::new("모델과 번역 옵션은 다음 번 번역 실행부터 적용됩니다.").weak().small());
-                ui.add_space(4.0);
-                toggle_row(ui, "한손모드", &mut draft.one_hand_mode);
-                ui.label(
-                    RichText::new("켜두면 편집 화면에서 Q 키가 Delete/Backspace와 같은 삭제 동작으로 작동합니다. 텍스트 입력 중에는 적용되지 않습니다.")
-                        .weak()
-                        .small(),
-                );
-                ui.add_space(6.0);
-
-                ui.label("번역 모드");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut draft.translation_mode, TranslationMode::Fast, "빠름");
-                    ui.selectable_value(&mut draft.translation_mode, TranslationMode::Accuracy, "정확성");
-                });
-                ui.label(RichText::new(translation_mode_description(draft.translation_mode)).weak().small());
-                ui.add_space(6.0);
-
-                ui.label("번역 엔진");
-                ui.horizontal(|ui| {
-                    ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCodex, "OpenAI API");
-                    ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCompatible, "커스텀");
-                });
-                ui.label(RichText::new(provider_description(draft.model_provider)).weak().small());
-                ui.add_space(6.0);
-
-                toggle_row(ui, "AI 번역 병렬 처리", &mut draft.translation_parallel.enabled);
-                ui.horizontal(|ui| {
-                    ui.label("최대 동시 번역 수");
-                    ui.add_enabled(
-                        draft.translation_parallel.enabled,
-                        egui::DragValue::new(&mut draft.translation_parallel.max_concurrency)
-                            .range(TRANSLATION_PARALLEL_MIN..=TRANSLATION_PARALLEL_MAX),
-                    );
-                });
-                ui.label(RichText::new("켜두면 여러 페이지를 동시에 AI 번역합니다. API/로컬 모델 한도에 맞춰 조절하세요.").weak().small());
-
-                ui.separator();
-                self.lama_section(ui, services, worker);
-                ui.separator();
-
-                match draft.model_provider {
-                    ModelProvider::OpenAiCodex => {
-                        ui.label("Codex 모델");
-                        ui.add(egui::TextEdit::singleline(&mut draft.codex.model).hint_text("gpt-5.5"));
-                        ui.label("생각");
-                        ui.horizontal(|ui| {
-                            for effort in [
-                                ReasoningEffort::None,
-                                ReasoningEffort::Low,
-                                ReasoningEffort::Medium,
-                                ReasoningEffort::High,
-                                ReasoningEffort::Xhigh,
-                            ] {
-                                ui.selectable_value(&mut draft.codex.reasoning_effort, effort, effort_label(effort));
-                            }
-                        });
-                        ui.label(RichText::new(effort_description(draft.codex.reasoning_effort)).weak().small());
-                        ui.horizontal(|ui| {
-                            ui.label("openai-oauth 포트");
-                            ui.add(egui::DragValue::new(&mut draft.codex.oauth_port).range(0..=65535));
-                        });
-                        ui.label(
-                            RichText::new("네이티브 앱은 openai-oauth를 직접 띄우지 않습니다. 터미널에서 `npx openai-oauth`를 실행해 두세요.")
-                                .weak()
-                                .small(),
-                        );
-                    }
-                    ModelProvider::OpenAiCompatible => {
-                        ui.label("Base URL");
-                        ui.add(
-                            egui::TextEdit::singleline(&mut draft.openai_compatible.base_url)
-                                .hint_text("http://127.0.0.1:1234/v1"),
-                        );
-                        ui.label("API Key");
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::TextEdit::singleline(&mut draft.openai_compatible.api_key)
-                                    .password(!self.show_key)
-                                    .hint_text("로컬 서버면 비워둘 수 있습니다"),
+        let max_height = (ctx.content_rect().height() - 220.0).clamp(240.0, 560.0);
+        egui::Window::new("설정")
+            .open(&mut open)
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .fixed_size([560.0, max_height + 110.0])
+            .show(ctx, |ui| {
+                if let Some(tab) = theme::segmented(
+                    ui,
+                    self.tab,
+                    &[
+                        (SettingsTab::Translation, "번역", "번역 엔진과 모델"),
+                        (SettingsTab::Inpaint, "인페인트", "LaMa 준비"),
+                        (SettingsTab::Editing, "편집", "단축키 옵션"),
+                        (SettingsTab::About, "정보", "버전과 데이터 폴더"),
+                    ],
+                ) {
+                    self.tab = tab;
+                }
+                ui.add_space(8.0);
+                egui::ScrollArea::vertical().max_height(max_height).auto_shrink([false, false]).show(ui, |ui| {
+                    match self.tab {
+                        SettingsTab::Translation => {
+                            self.translation_tab(ui, &mut draft, worker, job_active, can_submit, base_url_valid, &base_url)
+                        }
+                        SettingsTab::Inpaint => self.lama_section(ui, services, worker),
+                        SettingsTab::Editing => {
+                            toggle_row(ui, "한손모드", &mut draft.one_hand_mode);
+                            theme::hint(
+                                ui,
+                                "켜두면 편집 화면에서 Q 키가 Delete/Backspace와 같은 삭제 동작으로 작동합니다. 텍스트 입력 중에는 적용되지 않습니다.",
                             );
-                            ui.checkbox(&mut self.show_key, "보기");
-                        });
-                        ui.label("모델");
-                        ui.add(egui::TextEdit::singleline(&mut draft.openai_compatible.model).hint_text("gpt-4o-mini"));
-                    }
-                }
-
-                ui.add_space(6.0);
-                ui.label("모델 테스트");
-                let label = if self.testing { "테스트 중..." } else { "잘 작동되나 확인" };
-                if ui.add_enabled(!self.testing && can_submit && !job_active, egui::Button::new(label)).clicked() {
-                    self.testing = true;
-                    self.test_result = None;
-                    let mut settings = draft.normalized();
-                    settings.openai_compatible.base_url = base_url.clone();
-                    let config = mtt_translate::TranslationConfig::from_settings(&settings);
-                    self.test_endpoint = Some(config.endpoint.base_url.clone());
-                    worker.spawn(move || {
-                        AppEvent::ModelTest(
-                            mtt_translate::test_model(&config).map(|reply| format!("모델 응답 확인 완료: {reply}")),
-                        )
-                    });
-                }
-                ui.label(
-                    RichText::new("서버가 뜨고 간단한 텍스트 요청에 응답하는지만 확인합니다. 실제 이미지 번역 가능 여부와는 다를 수 있습니다.")
-                        .weak()
-                        .small(),
-                );
-                if job_active {
-                    ui.label(RichText::new("번역 작업 중에는 모델 테스트를 실행할 수 없습니다.").weak().small());
-                }
-                if self.testing {
-                    ui.horizontal(|ui| {
-                        ui.spinner();
-                        ui.label(RichText::new("모델을 불러오고 간단한 텍스트 응답을 확인하는 중입니다...").strong());
-                    });
-                    ui.label(RichText::new("이 테스트는 모델 로드와 텍스트 응답만 확인합니다.").small());
-                }
-                match &self.test_result {
-                    Some(Ok(message)) => {
-                        ui.label(RichText::new(message).strong().color(egui::Color32::LIGHT_GREEN));
-                        if let Some(endpoint) = &self.test_endpoint {
-                            ui.label(RichText::new(format!("엔드포인트: {endpoint}")).small());
+                            ui.add_space(12.0);
+                            ui.label(RichText::new("단축키").strong());
+                            theme::hint(ui, "편집 화면에서 ? 를 누르거나 상태 바의 '단축키'로도 볼 수 있습니다.");
+                            ui.add_space(4.0);
+                            crate::shortcuts::sheet(ui, 1);
+                        }
+                        SettingsTab::About => {
+                            self.version_bar(ui, worker);
+                            ui.add_space(8.0);
+                            ui.horizontal(|ui| {
+                                ui.label("데이터 폴더");
+                                theme::hint(ui, &services.paths.data_root.display().to_string());
+                            });
+                            if ui.button("데이터 폴더 열기").clicked()
+                                && let Err(error) = crate::editor::report::open_with_system(&services.paths.data_root)
+                            {
+                                self.save_error = Some(format!("폴더를 열 수 없습니다: {error}"));
+                            }
                         }
                     }
-                    Some(Err(error)) => {
-                        ui.label(RichText::new(error).strong().color(egui::Color32::LIGHT_RED));
+                });
+                ui.separator();
+                if let Some(error) = &self.save_error {
+                    ui.colored_label(theme::DANGER, format!("저장 실패: {error}"));
+                }
+                if let Some(message) = &self.reset_message {
+                    theme::hint(ui, message);
+                }
+                ui.horizontal(|ui| {
+                    if ui.button("기본값 복원").on_hover_text("모든 설정을 기본값으로 되돌리고 바로 저장합니다").clicked() {
+                        reset = true;
                     }
-                    None => {}
-                }
-                if draft.model_provider == ModelProvider::OpenAiCompatible && !base_url_valid {
-                    ui.label(RichText::new("Base URL은 http:// 또는 https://로 시작해야 합니다.").weak().small());
-                }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(can_submit, theme::primary("저장")).clicked() {
+                            save = true;
+                        }
+                        if ui.button("취소").clicked() {
+                            cancel = true;
+                        }
+                        if !can_submit {
+                            theme::hint(ui, "번역 탭의 모델·주소를 확인하세요");
+                        }
+                    });
+                });
             });
-            ui.separator();
-            self.version_bar(ui, worker);
-            if let Some(error) = &self.save_error {
-                ui.colored_label(egui::Color32::LIGHT_RED, format!("저장 실패: {error}"));
-            }
-            if let Some(message) = &self.reset_message {
-                ui.label(RichText::new(message).small());
-            }
-            ui.horizontal(|ui| {
-                if ui.button("기본값 복원").clicked() {
-                    reset = true;
-                }
-                if ui.button("취소").clicked() {
-                    cancel = true;
-                }
-                if ui.add_enabled(can_submit, egui::Button::new("저장")).clicked() {
-                    save = true;
-                }
-            });
-        });
         if reset {
             // `resetAppSettings` writes the defaults right away.
             let defaults = AppSettings::env_defaults();
@@ -607,11 +688,11 @@ fn python_help(ui: &mut egui::Ui) {
 
 fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool) {
     let (text, color) = if ready {
-        ("준비됨", egui::Color32::LIGHT_GREEN)
+        ("준비됨", theme::SUCCESS)
     } else if busy {
-        ("진행 중", egui::Color32::from_rgb(240, 200, 80))
+        ("진행 중", theme::WARNING)
     } else {
-        ("필요", egui::Color32::LIGHT_RED)
+        ("필요", theme::DANGER)
     };
     egui::Frame::group(ui.style()).show(ui, |ui| {
         ui.set_min_width(96.0);

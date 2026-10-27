@@ -16,6 +16,16 @@ pub fn drag_button<Payload: Any + Send + Sync>(
     ghost: &str,
 ) -> egui::Response {
     let response = ui.add(button.sense(egui::Sense::click_and_drag()));
+    drag_source(ui, response, payload, ghost)
+}
+
+/// The same for a custom-drawn row whose `response` senses click and drag.
+pub fn drag_source<Payload: Any + Send + Sync>(
+    ui: &egui::Ui,
+    response: egui::Response,
+    payload: Payload,
+    ghost: &str,
+) -> egui::Response {
     response.dnd_set_drag_payload(payload);
     if response.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);

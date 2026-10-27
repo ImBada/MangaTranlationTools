@@ -214,8 +214,8 @@ impl Editor {
         }
         std::fs::copy(path, &import_path).map_err(|error| error.to_string())?;
         self.refresh_psd_files(services, true);
-        if self.layer != Layer::Inpaint {
-            self.set_layer(Layer::Inpaint);
+        if self.layer != Layer::InpaintResult {
+            self.set_layer(Layer::InpaintResult);
         }
         Ok(())
     }

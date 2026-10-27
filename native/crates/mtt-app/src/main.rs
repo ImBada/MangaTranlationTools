@@ -8,8 +8,10 @@ mod library_view;
 mod logging;
 mod services;
 mod settings_view;
+mod shortcuts;
 mod single_instance;
 mod textures;
+mod theme;
 mod update_check;
 mod worker;
 
@@ -55,6 +57,7 @@ fn main() -> eframe::Result {
         options,
         Box::new(move |creation| {
             install_ui_fonts(&creation.egui_ctx);
+            theme::apply(&creation.egui_ctx);
             if let Some(listener) = listener {
                 let ctx = creation.egui_ctx.clone();
                 single_instance::serve(listener, move || {

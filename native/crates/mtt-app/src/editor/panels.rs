@@ -84,55 +84,8 @@ fn highlighted(ui: &egui::Ui, text: &str, highlight: &str) -> egui::text::Layout
     job
 }
 
-/// Tool rail content on the overlay layer: group settings when a whole group is
-/// selected, otherwise the font settings of the selection (or of the preset being edited
-/// when nothing is selected).
-pub(super) fn font_tool_section(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
-    group_buttons(editor, ui);
-    let group = editor.page().and_then(|page| mtt_core::groups::selected_group(page, &editor.selection));
-    if let Some(group) = group {
-        group_settings(editor, ui, &group);
-        return;
-    }
-    let target = editor.selected_blocks().into_iter().next().or_else(|| editor.preset_proxy_block());
-    let Some(first) = target else {
-        ui.label(RichText::new("블록이나 프리셋을 선택하면 폰트값을 조정할 수 있습니다.").weak());
-        preset_panel(editor, ui, &TranslationBlock::default(), services);
-        return;
-    };
-    font_section(editor, ui, &first, services);
-    outline_section(editor, ui, &first);
-    shadow_section(editor, ui, &first);
-    background_section(editor, ui, &first);
-    effect_section(editor, ui, &first);
-    preset_panel(editor, ui, &first, services);
-}
-
-/// Group/ungroup for two or more selected blocks (`groupSelectedBlocks`).
-fn group_buttons(editor: &mut Editor, ui: &mut egui::Ui) {
-    let Some(page) = editor.page() else { return };
-    let group = mtt_core::groups::selected_group(page, &editor.selection);
-    let any_grouped = editor.selection.iter().any(|id| mtt_core::groups::group_block_ids(page, id).is_some());
-    if editor.selection.len() < 2 && !any_grouped {
-        return;
-    }
-    ui.horizontal(|ui| {
-        if group.is_none() && editor.selection.len() >= 2 && ui.button("그룹으로 묶기").clicked() {
-            let count = editor.selection.len();
-            editor.group_selected();
-            editor.status = format!("{count}개 텍스트 블록을 그룹으로 묶었습니다.");
-        }
-        if (group.is_some() || any_grouped) && ui.button("그룹 해제").clicked() {
-            let count = editor.selection.len();
-            editor.ungroup_selected();
-            editor.status = format!("{count}개 텍스트 블록 그룹을 해제했습니다.");
-        }
-    });
-    ui.separator();
-}
-
 /// `TranslationBlockGroupToolSection.tsx`.
-fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt_core::model::TranslationBlockGroup) {
+pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt_core::model::TranslationBlockGroup) {
     ui.horizontal(|ui| {
         ui.label("선택 그룹");
         ui.label(RichText::new(format!("{}개 블록", group.block_ids.len())).strong());
@@ -174,7 +127,7 @@ fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt_core::mode
             {
                 let after = pointer.y > row.rect.center().y;
                 let y = if after { row.rect.bottom() } else { row.rect.top() };
-                ui.painter().hline(row.rect.x_range(), y, (2.0, Color32::LIGHT_BLUE));
+                ui.painter().hline(row.rect.x_range(), y, (2.0, crate::theme::ACCENT));
                 if let Some(source) = row.dnd_release_payload::<String>() {
                     let position = if after {
                         mtt_core::library::DropPosition::After
@@ -243,7 +196,14 @@ struct TagRename {
 }
 
 /// The preset panel under the font controls (`font-preset-panel`).
-fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, services: &mut Services) {
+/// `manage` adds the backup/restore row (the preset tab).
+pub(super) fn preset_panel(
+    editor: &mut Editor,
+    ui: &mut egui::Ui,
+    first: &TranslationBlock,
+    services: &mut Services,
+    manage: bool,
+) {
     let presets = ensure_block_type_font_presets(editor.chapter.font_presets.as_deref().unwrap_or(&[]));
     let size_presets = editor.chapter.font_size_presets.clone().unwrap_or_default();
     let favorites = editor.chapter.favorite_font_preset_ids.clone().unwrap_or_default();
@@ -258,20 +218,6 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
     let rename_id = ui.make_persistent_id("preset-tag-rename");
     let mut name_input: String = ui.data_mut(|data| data.get_temp(name_id).unwrap_or_default());
     let mut rename: Option<TagRename> = ui.data_mut(|data| data.get_temp(rename_id));
-    ui.separator();
-    ui.horizontal(|ui| {
-        let response =
-            ui.add(egui::TextEdit::singleline(&mut name_input).hint_text("새 프리셋 이름").desired_width(170.0));
-        if response.has_focus() {
-            editor.text_editing = true;
-        }
-        if ui.button("만들기").clicked() {
-            match editor.create_preset_from_selection(&name_input) {
-                Ok(()) => name_input.clear(),
-                Err(error) => editor.status = error,
-            }
-        }
-    });
     let mut select = None;
     let mut delete = None;
     let mut favorite = None;
@@ -297,13 +243,19 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
             };
             let spacing = ui.spacing().item_spacing.x;
             let extras = if favorite_index.is_some() { 14.0 + spacing } else { 0.0 } + 18.0 + spacing;
-            let tag_size = egui::vec2(content.x + extras + 12.0, content.y.max(18.0) + 6.0);
-            let fill =
-                if active { ui.visuals().selection.bg_fill.gamma_multiply(0.5) } else { Color32::from_gray(235) };
+            let tag_size = egui::vec2(content.x + extras + 16.0, content.y.max(18.0) + 10.0);
+            // Tags are paper-coloured samples of the preset's font.
+            let fill = if active { Color32::from_rgb(214, 228, 255) } else { Color32::from_gray(232) };
+            // Same stroke width either way: a frame's stroke takes room, so selecting a tag
+            // must not resize it and shift the others.
+            let stroke = egui::Stroke::new(2.0, if active { crate::theme::ACCENT } else { Color32::TRANSPARENT });
             ui.allocate_ui_with_layout(tag_size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 3)).show(
-                    ui,
-                    |ui| {
+                egui::Frame::new()
+                    .fill(fill)
+                    .stroke(stroke)
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::symmetric(6, 3))
+                    .show(ui, |ui| {
                         if renaming {
                             let edit = rename.as_mut().expect("checked");
                             let response = ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(110.0));
@@ -351,28 +303,63 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                                     .color(Color32::from_rgb(217, 119, 6)),
                             );
                         }
-                        if ui.small_button("×").on_hover_text(format!("{} 삭제", preset.name)).clicked() {
+                        let close = egui::Button::new(RichText::new("×").color(Color32::from_gray(90))).frame(false);
+                        if ui.add(close).on_hover_text(format!("{} 삭제", preset.name)).clicked() {
                             delete = Some(preset.clone());
                         }
-                    },
-                );
+                    });
             });
-        }
-        if has_selection && first.font_preset_id.is_some() && ui.button("프리셋 해제").clicked() {
-            editor.clear_selected_preset();
-        }
-        if !has_selection && editor.editing_preset_id.is_some() && ui.button("프리셋 선택 해제").clicked() {
-            editor.editing_preset_id = None;
         }
     });
     ui.horizontal(|ui| {
-        if ui.button("백업").clicked() {
-            editor.preset_backup_dialog = Some(super::PresetBackupDialog::backup());
+        if has_selection
+            && first.font_preset_id.is_some()
+            && ui.button("프리셋 해제").on_hover_text("지금 모양은 그대로 두고 프리셋 연결만 끊습니다").clicked()
+        {
+            editor.clear_selected_preset();
         }
-        if ui.button("복원").clicked() {
-            editor.preset_backup_dialog = Some(super::PresetBackupDialog::restore());
+        if !has_selection && editor.editing_preset_id.is_some() && ui.button("편집 끝내기").clicked() {
+            editor.editing_preset_id = None;
         }
     });
+    let can_create = has_selection || editor.editing_preset_id.is_some();
+    ui.horizontal(|ui| {
+        let response = ui.add_enabled(
+            can_create,
+            egui::TextEdit::singleline(&mut name_input)
+                .hint_text("새 프리셋 이름")
+                .desired_width((ui.available_width() - 150.0).max(70.0)),
+        );
+        if response.has_focus() {
+            editor.text_editing = true;
+        }
+        let hint = if has_selection {
+            "선택한 블록의 스타일로 새 프리셋을 만들고 연결합니다"
+        } else {
+            "편집 중인 프리셋을 복제합니다"
+        };
+        if ui
+            .add_enabled(can_create, egui::Button::new("새 프리셋으로 저장"))
+            .on_hover_text(hint)
+            .on_disabled_hover_text("블록이나 프리셋을 먼저 선택하세요")
+            .clicked()
+        {
+            match editor.create_preset_from_selection(&name_input) {
+                Ok(()) => name_input.clear(),
+                Err(error) => editor.status = error,
+            }
+        }
+    });
+    if manage {
+        ui.horizontal(|ui| {
+            if ui.button("백업…").on_hover_text("프리셋을 파일로 내보내기").clicked() {
+                editor.preset_backup_dialog = Some(super::PresetBackupDialog::backup());
+            }
+            if ui.button("복원…").on_hover_text("백업 파일에서 프리셋 가져오기").clicked() {
+                editor.preset_backup_dialog = Some(super::PresetBackupDialog::restore());
+            }
+        });
+    }
     if let Some(preset) = select {
         editor.select_preset(&preset);
     }
@@ -380,7 +367,7 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
         editor.toggle_favorite(&id);
     }
     if let Some(preset) = delete
-        && super::layout::confirm(
+        && crate::theme::confirm(
             "폰트 프리셋 삭제",
             &format!("\"{}\" 프리셋을 삭제할까요?", preset.name),
             "이 프리셋이 적용된 텍스트 블록에서는 프리셋 연결만 해제됩니다.",
@@ -439,7 +426,7 @@ fn size_preset_row(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBl
             let selected_text =
                 active.as_deref().and_then(|id| sizes.iter().find(|p| p.id == id)).map(label).unwrap_or("개별 지정".into());
             let mut chosen: Option<Option<String>> = None;
-            egui::ComboBox::from_id_salt("font-size-preset").selected_text(selected_text).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("font-size-preset").width(110.0).truncate().selected_text(selected_text).show_ui(ui, |ui| {
                 if ui.selectable_label(active.is_none(), "개별 지정").clicked() {
                     chosen = Some(None);
                 }
@@ -557,7 +544,7 @@ fn stepped_row(
     ui.end_row();
 }
 
-fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, services: &mut Services) {
+pub(super) fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, services: &mut Services) {
     let style = &first.style;
     egui::CollapsingHeader::new("글꼴").default_open(true).show(ui, |ui| {
         ui.label("서체");
@@ -593,26 +580,6 @@ fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                     let value = if underline { TextDecoration::None } else { TextDecoration::Underline };
                     editor.edit_selected_style(StyleKey::TextDecoration, |b| b.style.text_decoration = Some(value));
                 }
-                if weights.len() > 1 {
-                    let current_weight = weight.round() as u16;
-                    let mut options = weights.clone();
-                    if !options.contains(&current_weight) {
-                        options.push(current_weight);
-                        options.sort_unstable();
-                    }
-                    egui::ComboBox::from_id_salt("font-weight").selected_text(weight_label(current_weight)).show_ui(
-                        ui,
-                        |ui| {
-                            for option in options {
-                                if ui.selectable_label(option == current_weight, weight_label(option)).clicked() {
-                                    editor.edit_selected_style(StyleKey::FontWeight, |b| {
-                                        b.style.font_weight = Some(f64::from(option))
-                                    });
-                                }
-                            }
-                        },
-                    );
-                }
             });
             link_group_toggle(
                 editor,
@@ -621,22 +588,50 @@ fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                 &[StyleKey::FontWeight, StyleKey::FontStyle, StyleKey::TextDecoration],
             );
             ui.end_row();
+            if weights.len() > 1 {
+                ui.label("굵기");
+                let weight = style.font_weight.unwrap_or(DEFAULT_FONT_WEIGHT);
+                let current_weight = weight.round() as u16;
+                let mut options = weights.clone();
+                if !options.contains(&current_weight) {
+                    options.push(current_weight);
+                    options.sort_unstable();
+                }
+                egui::ComboBox::from_id_salt("font-weight")
+                    .width(130.0)
+                    .truncate()
+                    .selected_text(weight_label(current_weight))
+                    .show_ui(ui, |ui| {
+                        for option in options {
+                            if ui.selectable_label(option == current_weight, weight_label(option)).clicked() {
+                                editor.edit_selected_style(StyleKey::FontWeight, |b| {
+                                    b.style.font_weight = Some(f64::from(option))
+                                });
+                            }
+                        }
+                    });
+                ui.end_row();
+            }
 
             ui.label("글자 렌더링");
             let mode = style.font_rendering_mode.unwrap_or_default();
             let label = |mode: FontRenderingMode| match mode {
-                FontRenderingMode::Hard => "최단입점(하드 가장자리 유지)",
+                FontRenderingMode::Hard => "선명하게 (하드 가장자리)",
                 _ => "부드럽게",
             };
-            egui::ComboBox::from_id_salt("font-rendering-mode").selected_text(label(mode)).show_ui(ui, |ui| {
-                for option in [FontRenderingMode::Smooth, FontRenderingMode::Hard] {
-                    if ui.selectable_label(mode == option, label(option)).clicked() && mode != option {
-                        editor.edit_selected_style(StyleKey::FontRenderingMode, |b| {
-                            b.style.font_rendering_mode = Some(option)
-                        });
+            egui::ComboBox::from_id_salt("font-rendering-mode")
+                .width(130.0)
+                .truncate()
+                .selected_text(label(mode))
+                .show_ui(ui, |ui| {
+                    for option in [FontRenderingMode::Smooth, FontRenderingMode::Hard] {
+                        if ui.selectable_label(mode == option, label(option)).clicked() && mode != option {
+                            editor.edit_selected_style(StyleKey::FontRenderingMode, |b| {
+                                b.style.font_rendering_mode = Some(option)
+                            });
+                        }
                     }
-                }
-            });
+                });
             link_toggle(editor, ui, first, StyleKey::FontRenderingMode);
             ui.end_row();
 
@@ -684,9 +679,9 @@ fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
             ui.label("정렬");
             let mut align = first.text_align;
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut align, TextAlign::Left, "왼쪽");
-                ui.selectable_value(&mut align, TextAlign::Center, "가운데");
-                ui.selectable_value(&mut align, TextAlign::Right, "오른쪽");
+                ui.selectable_value(&mut align, TextAlign::Left, "좌").on_hover_text("왼쪽 정렬");
+                ui.selectable_value(&mut align, TextAlign::Center, "중").on_hover_text("가운데 정렬");
+                ui.selectable_value(&mut align, TextAlign::Right, "우").on_hover_text("오른쪽 정렬");
             });
             if align != first.text_align {
                 editor.edit_style(|b| b.text_align = align);
@@ -822,7 +817,7 @@ pub fn character_override_window(editor: &mut Editor, ui: &mut egui::Ui, service
             }
         });
         if let Some(error) = &dialog.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(crate::theme::DANGER, error);
         }
         ui.separator();
         if dialog.drafts.is_empty() {
@@ -917,7 +912,7 @@ fn switch(ui: &mut egui::Ui, value: bool, off: &str, on: &str) -> Option<bool> {
 }
 
 /// `FontOutlineControls.tsx`.
-fn outline_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
+pub(super) fn outline_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
     let style = &first.style;
     egui::CollapsingHeader::new("외곽선").show(ui, |ui| {
         egui::Grid::new("outline-grid").num_columns(3).show(ui, |ui| {
@@ -988,7 +983,7 @@ fn outline_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBl
 }
 
 /// `FontShadowControls.tsx`.
-fn shadow_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
+pub(super) fn shadow_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
     let style = &first.style;
     egui::CollapsingHeader::new("그림자").show(ui, |ui| {
         egui::Grid::new("shadow-grid").num_columns(3).show(ui, |ui| {
@@ -1070,7 +1065,7 @@ fn shadow_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlo
 }
 
 /// Screentone fill and font background (`font-screentone-field`, `font-background-field`).
-fn background_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
+pub(super) fn background_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
     let style = &first.style;
     egui::CollapsingHeader::new("스크린톤 · 글자 배경").show(ui, |ui| {
         egui::Grid::new("background-grid").num_columns(3).show(ui, |ui| {
@@ -1179,7 +1174,7 @@ fn background_section(editor: &mut Editor, ui: &mut egui::Ui, first: &Translatio
 }
 
 /// `FontFilterEffectControls.tsx`: child 🔗 only while the master link is on.
-fn effect_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
+pub(super) fn effect_section(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock) {
     egui::CollapsingHeader::new("필터 효과").show(ui, |ui| {
         let enabled = first.style.filter_effect_enabled.unwrap_or(false);
         let master_linked = mtt_core::font_presets::is_value_linked(first, StyleKey::FilterEffectEnabled);
@@ -1324,12 +1319,12 @@ pub fn preset_backup_window(editor: &mut Editor, ui: &mut egui::Ui, services: &m
                 });
             }
             Some(Err(error)) => {
-                ui.colored_label(Color32::LIGHT_RED, error);
+                ui.colored_label(crate::theme::DANGER, error);
             }
             None => {}
         }
         if let Some(backup) = delete
-            && super::layout::confirm(
+            && crate::theme::confirm(
                 "폰트 프리셋 백업 삭제",
                 &format!("\"{}\" 백업을 삭제할까요?", backup.name),
                 "삭제한 백업은 복원할 수 없습니다.",
@@ -1342,7 +1337,7 @@ pub fn preset_backup_window(editor: &mut Editor, ui: &mut egui::Ui, services: &m
             dialog.backups = None;
         }
         if let Some(error) = &dialog.error {
-            ui.colored_label(Color32::LIGHT_RED, error);
+            ui.colored_label(crate::theme::DANGER, error);
         }
         ui.horizontal(|ui| {
             if ui.button("취소").clicked() {

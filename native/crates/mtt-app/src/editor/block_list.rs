@@ -3,13 +3,14 @@
 //! selection, and drag reordering of page units (blocks or whole groups) and of blocks
 //! inside a group.
 
-use eframe::egui::{self, Color32, RichText};
+use eframe::egui::{self, RichText};
 use mtt_core::groups::{ListItem, list_items};
 use mtt_core::library::{DropPosition, reorder_by_target};
 use mtt_core::model::{PageRecord, RenderTextDirection, TranslationBlock};
 
+use super::Editor;
 use super::panels::{block_preview_text, block_type_label};
-use super::{Editor, Layer};
+use crate::theme;
 
 /// What a row drags: a page unit (`block:` / `group:` id) or a block within its group.
 #[derive(Clone, PartialEq, Eq)]
@@ -147,11 +148,9 @@ impl Editor {
     }
 }
 
-/// Draws the list in the stage's top-right corner.
-pub fn block_list(editor: &mut Editor, ctx: &egui::Context, stage: egui::Rect) {
-    if editor.layer != Layer::Overlay {
-        return;
-    }
+/// The outline card at the top of the translate inspector; the list scrolls inside
+/// `max_height`.
+pub fn block_outline(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) {
     let Some(page) = editor.page().cloned() else { return };
     let locked = editor.page_edit_locked();
     let units = page_units(&page);
@@ -160,54 +159,51 @@ pub fn block_list(editor: &mut Editor, ctx: &egui::Context, stage: egui::Rect) {
     let mut page_drop: Option<(String, String, DropPosition)> = None;
     let mut group_drop: Option<(String, String, String, DropPosition)> = None;
     let mut group_action = None;
-    egui::Area::new(egui::Id::unique("stage-text-block-list"))
-        .fixed_pos(egui::pos2((stage.right() - 262.0).max(stage.left() + 10.0), stage.top() + 10.0))
-        .order(egui::Order::Foreground)
-        .show(ctx, |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                ui.set_width(240.0);
-                ui.horizontal(|ui| {
-                    let arrow = if editor.block_list_collapsed { "▸" } else { "▾" };
-                    if ui.add(egui::Button::new(format!("{arrow} 텍스트 블록")).frame(false)).clicked() {
-                        editor.block_list_collapsed = !editor.block_list_collapsed;
-                    }
-                    ui.label(RichText::new(page.blocks.len().to_string()).weak());
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let group = mtt_core::groups::selected_group(&page, &editor.selection);
-                        let any_grouped =
-                            editor.selection.iter().any(|id| mtt_core::groups::group_block_ids(&page, id).is_some());
-                        if group.is_some() || (any_grouped && editor.selection.len() >= 2) {
-                            let tip = if locked {
-                                "잠긴 페이지에서는 그룹을 해제할 수 없음"
-                            } else {
-                                "선택한 텍스트 블록 그룹 해제"
-                            };
-                            if ui
-                                .add_enabled(!locked, egui::Button::new("그룹 해제").small())
-                                .on_hover_text(tip)
-                                .clicked()
-                            {
-                                group_action = Some(false);
-                            }
-                        } else if editor.selection.len() >= 2 {
-                            let tip = if locked {
-                                "잠긴 페이지에서는 그룹화할 수 없음"
-                            } else {
-                                "선택한 텍스트 블록 그룹화"
-                            };
-                            if ui.add_enabled(!locked, egui::Button::new("그룹").small()).on_hover_text(tip).clicked()
-                            {
-                                group_action = Some(true);
-                            }
-                        }
-                    });
-                });
-                if editor.block_list_collapsed {
-                    return;
+    let mut toggle_collapsed = false;
+    let title = format!("텍스트 블록 {}", page.blocks.len());
+    theme::card_with(
+        ui,
+        &title,
+        |ui| {
+            let arrow = if editor.block_list_collapsed { "펼치기" } else { "접기" };
+            if ui.add(egui::Button::new(RichText::new(arrow).small()).frame_when_inactive(false)).clicked() {
+                toggle_collapsed = true;
+            }
+            let group = mtt_core::groups::selected_group(&page, &editor.selection);
+            let any_grouped = editor.selection.iter().any(|id| mtt_core::groups::group_block_ids(&page, id).is_some());
+            if group.is_some() || (any_grouped && editor.selection.len() >= 2) {
+                let tip = if locked {
+                    "잠긴 페이지에서는 그룹을 해제할 수 없음"
+                } else {
+                    "선택한 텍스트 블록 그룹 해제"
+                };
+                if ui.add_enabled(!locked, egui::Button::new("그룹 해제").small()).on_hover_text(tip).clicked() {
+                    group_action = Some(false);
                 }
-                egui::ScrollArea::vertical().max_height(stage.height() * 0.5).show(ui, |ui| {
+            } else if editor.selection.len() >= 2 {
+                let tip = if locked {
+                    "잠긴 페이지에서는 그룹화할 수 없음"
+                } else {
+                    "선택한 텍스트 블록 그룹화"
+                };
+                if ui.add_enabled(!locked, egui::Button::new("그룹으로 묶기").small()).on_hover_text(tip).clicked()
+                {
+                    group_action = Some(true);
+                }
+            }
+        },
+        |ui| {
+            if editor.block_list_collapsed {
+                return;
+            }
+            egui::ScrollArea::vertical()
+                .id_salt("block-outline")
+                .max_height(max_height)
+                .auto_shrink([false, true])
+                .show(ui, |ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
                     if page.blocks.is_empty() {
-                        ui.label(RichText::new("텍스트 블록 없음").weak());
+                        theme::hint(ui, "텍스트 블록이 없습니다. AI 번역을 돌리거나 '블록 추가'로 만드세요.");
                     }
                     for item in list_items(&page) {
                         match item {
@@ -223,9 +219,11 @@ pub fn block_list(editor: &mut Editor, ctx: &egui::Context, stage: egui::Rect) {
                             ListItem::Group { group, blocks } => {
                                 let selected = blocks.iter().all(|(_, block)| editor.selection.contains(&block.id));
                                 let drag = DragItem::Page(group_unit(&group.id));
+                                let label = RichText::new(format!("그룹 · {}개", blocks.len())).strong();
                                 let header = crate::dnd::drag_button(
                                     ui,
-                                    egui::Button::selectable(selected, RichText::new("그룹").strong()),
+                                    egui::Button::selectable(selected, label)
+                                        .min_size(egui::vec2(ui.available_width(), 0.0)),
                                     drag.clone(),
                                     "그룹",
                                 );
@@ -263,8 +261,19 @@ pub fn block_list(editor: &mut Editor, ctx: &egui::Context, stage: egui::Rect) {
                         }
                     }
                 });
-            });
-        });
+            theme::hint(
+                ui,
+                &format!(
+                    "{} / {} 클릭으로 여러 개 선택, 드래그로 출력 순서 변경",
+                    crate::shortcuts::keys("⇧"),
+                    crate::shortcuts::keys("⌘")
+                ),
+            );
+        },
+    );
+    if toggle_collapsed {
+        editor.block_list_collapsed = !editor.block_list_collapsed;
+    }
     if let Some((id, modifiers)) = select {
         editor.list_select(&id, modifiers);
     }
@@ -311,19 +320,21 @@ fn block_row(
     let selected = editor.selection.contains(&block.id);
     let hidden = block.render_direction == RenderTextDirection::Hidden;
     let meta = format!("{}{}", block_type_label(block.block_type), if hidden { " · 숨김" } else { "" });
-    let label = format!("{}  {meta}  {}", index + 1, block_preview_text(block));
-    let text = if hidden { RichText::new(label).color(Color32::GRAY) } else { RichText::new(label) };
+    let label = format!("{:>2}  {}", index + 1, block_preview_text(block));
+    let text = if hidden { RichText::new(label).color(theme::TEXT_WEAK) } else { RichText::new(label) };
+    let button = egui::Button::selectable(selected, text)
+        .right_text(RichText::new(meta).small().color(theme::TEXT_WEAK))
+        .truncate()
+        .min_size(egui::vec2(ui.available_width(), 0.0));
     let response = if reorder {
         let ghost = block_preview_text(block);
-        let row =
-            crate::dnd::drag_button(ui, egui::Button::selectable(selected, text).truncate(), drag.clone(), &ghost)
-                .on_hover_text("드래그해서 순서 변경");
+        let row = crate::dnd::drag_button(ui, button, drag.clone(), &ghost).on_hover_text("드래그해서 순서 변경");
         if row.clicked() {
             *select = Some((block.id.clone(), ui.input(|i| i.modifiers)));
         }
         row
     } else {
-        let response = ui.add(egui::Button::selectable(selected, text).truncate());
+        let response = ui.add(button);
         if response.clicked() {
             *select = Some((block.id.clone(), ui.input(|i| i.modifiers)));
         }
@@ -338,7 +349,7 @@ fn drop_on(ui: &egui::Ui, response: &egui::Response) -> Option<(DragItem, DropPo
     let pointer = ui.input(|i| i.pointer.hover_pos())?;
     let position = if pointer.y > response.rect.center().y { DropPosition::After } else { DropPosition::Before };
     let y = if position == DropPosition::After { response.rect.bottom() } else { response.rect.top() };
-    ui.painter().hline(response.rect.x_range(), y, (2.0, Color32::LIGHT_BLUE));
+    ui.painter().hline(response.rect.x_range(), y, (2.0, theme::ACCENT));
     let released = response.dnd_release_payload::<DragItem>()?;
     let _ = hover;
     Some(((*released).clone(), position))
@@ -347,6 +358,7 @@ fn drop_on(ui: &egui::Ui, response: &egui::Response) -> Option<(DragItem, DropPo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::editor::Layer;
     use mtt_core::model::{BBox, Chapter, TranslationBlockGroup};
 
     fn editor() -> Editor {

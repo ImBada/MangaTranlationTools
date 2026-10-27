@@ -3,7 +3,7 @@
 
 use std::collections::HashSet;
 
-use eframe::egui::{self, Color32, Key, Modifiers, Pos2, Rect, RichText, Sense, Stroke, StrokeKind, Vec2};
+use eframe::egui::{self, Color32, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 use image::GrayImage;
 use mtt_core::geometry::{apply_editable_block_bbox, bbox_to_pixels, editable_block_bbox, resolve_block_rotation_deg};
 use mtt_core::model::{BBox, PageRecord, TranslationBlock};
@@ -329,7 +329,7 @@ pub fn inline_editor(editor: &mut Editor, ui: &mut egui::Ui) {
 }
 
 pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
-    let frame = egui::Frame::NONE.fill(Color32::from_gray(38));
+    let frame = egui::Frame::NONE.fill(crate::theme::CANVAS_BG);
     egui::CentralPanel::default().frame(frame).show(ui, |ui| {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
         if editor.view.auto_fit && editor.view.stage_rect.size() != rect.size() {
@@ -359,7 +359,6 @@ pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
         paint_decorations(editor, ui, &painter, &page);
         handle_view_input(editor, ui, &response);
         handle_pointer(editor, ui, &response, &page);
-        stage_overlays(editor, ui, rect, &page);
         block_quick_controls(editor, ui, &page);
     });
 }
@@ -368,17 +367,29 @@ pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
 /// alignment (좌/중/우), favourite preset tags, "자동 맞춤 OFF" or the individual size
 /// stepper (press and hold repeats), and COPY.
 fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecord) {
+    // Areas draw above windows, so stay out of the way while a dialog is open.
+    let dialog_open = editor.shortcut_sheet
+        || editor.find.open
+        || editor.app_modal_open
+        || editor.preset_backup_dialog.is_some()
+        || editor.character_dialog.is_some();
     if editor.layer != Layer::Overlay
         || editor.selection.len() != 1
         || editor.drag.is_some()
         || editor.inline_edit.is_some()
         || editor.page_edit_locked()
+        || dialog_open
     {
         editor.size_repeat = None;
         return;
     }
     let Some(block) = page.blocks.iter().find(|block| block.id == editor.selection[0]).cloned() else { return };
     let rect = editor.view.rect_to_screen(block_rect(&block, page));
+    // Nothing floats over the toolbars when the block is scrolled out of the canvas.
+    if !editor.view.stage_rect().shrink(8.0).intersects(rect) {
+        editor.size_repeat = None;
+        return;
+    }
     let ctx = ui.ctx().clone();
     let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2));
     let favorites: Vec<mtt_core::model::FontPreset> = editor
@@ -418,11 +429,11 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
             });
         });
     egui::Area::new(egui::Id::unique("block-quick-left"))
-        .fixed_pos(rect.left_top() - egui::vec2(64.0, 0.0))
+        .fixed_pos(rect.left_top() - egui::vec2(76.0, 0.0))
         .order(egui::Order::Foreground)
         .show(&ctx, |ui| {
             frame.show(ui, |ui| {
-                ui.set_width(52.0);
+                ui.set_width(64.0);
                 ui.vertical_centered(|ui| {
                     if block.style.auto_fit_text != Some(false) {
                         if ui.button("자동\n맞춤\nOFF").on_hover_text("자동 맞춤 끄기").clicked() {
@@ -480,89 +491,6 @@ fn repeat_size_step(editor: &mut Editor, ctx: &egui::Context, held: Option<f64>,
         }
         (None, _) => editor.size_repeat = None,
     }
-}
-
-/// `StageZoomOverlay` (bottom right) and `StageToolOverlay` (top left) floating over the stage.
-fn stage_overlays(editor: &mut Editor, ui: &mut egui::Ui, stage: Rect, page: &PageRecord) {
-    let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4));
-    egui::Area::new(egui::Id::unique("stage-zoom-overlay"))
-        .fixed_pos(egui::pos2((stage.right() - 250.0).max(stage.left() + 60.0), stage.bottom() - 40.0))
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    if ui.small_button("-").on_hover_text("축소").clicked() {
-                        editor.zoom_step(false);
-                    }
-                    ui.label(format!("{}%", (editor.view.zoom * 100.0).round()));
-                    if ui.small_button("+").on_hover_text("확대").clicked() {
-                        editor.zoom_step(true);
-                    }
-                    if ui.small_button("원본").on_hover_text("원본 사이즈 보기").clicked() {
-                        editor.view.original_size(page.width as f32, page.height as f32);
-                    }
-                    if ui.small_button("맞춤").on_hover_text("화면에 맞춤").clicked() {
-                        editor.view.fit_requested = true;
-                    }
-                });
-            });
-        });
-    egui::Area::new(egui::Id::unique("stage-tool-overlay"))
-        .fixed_pos(stage.left_top() + egui::vec2(10.0, 10.0))
-        .order(egui::Order::Foreground)
-        .show(ui.ctx(), |ui| {
-            frame.show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    let pointer = !matches!(editor.tool, Tool::Range | Tool::Zoom);
-                    if ui.selectable_label(pointer, "A").on_hover_text("포인터 (A)").clicked() {
-                        editor.select_pointer_tool();
-                    }
-                    if ui.selectable_label(editor.tool == Tool::Range, "T").on_hover_text("범위 선택 (T)").clicked()
-                    {
-                        editor.select_range_tool();
-                    }
-                    if ui.selectable_label(editor.tool == Tool::Zoom, "Z").on_hover_text("줌 (Z)").clicked() {
-                        editor.select_zoom_tool();
-                    }
-                    if editor.layer == Layer::InpaintResult {
-                        let active = editor.tool == Tool::Result
-                            && editor.result_tool == super::result_tools::ResultTool::ColorPicker;
-                        if ui.selectable_label(active, "I").on_hover_text("색상 추출 (I)").clicked() {
-                            editor.select_result_edit_tool(super::result_tools::ResultTool::ColorPicker);
-                        }
-                    }
-                    if editor.layer == Layer::Overlay {
-                        let single = editor.selection.len() == 1;
-                        if ui
-                            .add_enabled(single, egui::Button::new("E").small())
-                            .on_hover_text("텍스트 직접 편집 (E)")
-                            .clicked()
-                        {
-                            let id = editor.selection[0].clone();
-                            editor.start_inline_edit(&id);
-                        }
-                    }
-                    if ui.small_button("찾기 ⌘F").on_hover_text("찾아 바꾸기").clicked() {
-                        editor.find.open = true;
-                    }
-                });
-                if editor.layer == Layer::Overlay && pointer_hints(editor) {
-                    ui.label(RichText::new("Alt+드래그: 선택 블록 범위 변경").small().weak());
-                    ui.label(
-                        RichText::new(format!(
-                            "{}+클릭: 블록 복제",
-                            if cfg!(target_os = "macos") { "Cmd" } else { "Ctrl" }
-                        ))
-                        .small()
-                        .weak(),
-                    );
-                }
-            });
-        });
-}
-
-fn pointer_hints(editor: &Editor) -> bool {
-    !matches!(editor.tool, Tool::Range | Tool::Zoom)
 }
 
 fn paint_layers(editor: &Editor, painter: &egui::Painter, page: &PageRecord, page_rect: Rect) {
@@ -1359,10 +1287,17 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
         let command = Modifiers::COMMAND;
         let command_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         if input.consume_key(Modifiers::NONE, Key::Escape) {
-            // Esc leaves the zoom tool, then the range tool.
+            // Esc closes the shortcut sheet, else leaves the zoom tool, then the range tool.
             actions.push(Box::new(|editor, _| {
-                editor.escape_tool();
+                if editor.shortcut_sheet {
+                    editor.shortcut_sheet = false;
+                } else {
+                    editor.escape_tool();
+                }
             }));
+        }
+        if input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "?")) {
+            actions.push(Box::new(|editor, _| editor.shortcut_sheet = !editor.shortcut_sheet));
         }
         if input.consume_key(command_shift, Key::Z) || input.consume_key(command, Key::Y) {
             let ctx = ctx.clone();

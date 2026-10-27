@@ -3,12 +3,13 @@
 
 pub mod assets;
 pub mod block_list;
+mod chrome;
 pub mod clipboard;
 pub mod color;
 pub mod font_picker;
 pub mod history;
+mod inspector;
 pub mod layer_ops;
-pub mod layout;
 pub mod notifications;
 pub mod overlay;
 mod panels;
@@ -16,6 +17,7 @@ pub mod presets;
 pub mod report;
 pub mod result_tools;
 mod stage;
+pub mod thumbnails;
 pub mod translation;
 
 use std::collections::{HashMap, HashSet};
@@ -55,7 +57,25 @@ pub enum Layer {
     InpaintResult,
     InpaintMask,
     Image,
+}
+
+/// What the editor is being used for; each mode works on its own layer(s) and shows its
+/// own tools and inspector. The original image (`5`) is a view toggle on top of a mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// Text blocks (layer 2).
+    Translate,
+    /// Inpaint result / mask (layers 3, 4).
     Inpaint,
+    /// Final output: page check-off, export, report (layer 1).
+    Review,
+}
+
+/// Tabs of the translate-mode inspector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum InspectorTab {
+    Blocks,
+    Presets,
 }
 
 impl Layer {
@@ -107,7 +127,6 @@ fn focus_opacity(layer: Layer, current: LayerOpacity) -> LayerOpacity {
     match layer {
         Layer::Output => return DEFAULT_LAYER_OPACITY,
         Layer::Image => set(Some(1.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)),
-        Layer::Inpaint => set(Some(0.5), Some(1.0), Some(1.0), Some(0.0), None),
         Layer::InpaintResult => set(Some(0.5), Some(1.0), Some(1.0), Some(0.0), Some(0.5)),
         Layer::InpaintMask => set(Some(0.5), Some(1.0), Some(0.0), Some(1.0), Some(0.5)),
         Layer::Overlay => set(Some(1.0), Some(0.2), Some(0.2), Some(0.0), Some(1.0)),
@@ -290,7 +309,6 @@ pub struct Editor {
     pub psd_files: layer_ops::PsdFiles,
     /// Library listing for the context bar popover (read when it opens).
     pub library_cache: Option<Vec<mtt_core::library::WorkSummary>>,
-    pub library_chapter_count: usize,
     /// "전체 페이지 출력" progress `(done, total)`.
     pub export_progress: Option<(usize, usize)>,
     /// Pages still waiting in an all-pages inpaint run.
@@ -323,6 +341,18 @@ pub struct Editor {
     /// HTML file of the last generated report.
     pub last_report: Option<std::path::PathBuf>,
     pub inline_edit: Option<InlineEdit>,
+    pub inspector_tab: InspectorTab,
+    /// Inpaint layer the inpaint mode returns to.
+    pub inpaint_layer: Layer,
+    /// Layer to go back to when the original-image view is turned off.
+    source_return: Option<Layer>,
+    /// Title of the chapter's work (breadcrumb).
+    pub work_title: String,
+    pub thumbnails: thumbnails::Thumbnails,
+    /// Tab / Shift+Tab presses taken before egui's focus handling (see `MttApp::raw_input_hook`).
+    pub pending_block_step: i32,
+    /// The shortcut sheet (`?` or the status bar button).
+    pub shortcut_sheet: bool,
 }
 
 impl Editor {
@@ -330,8 +360,14 @@ impl Editor {
     pub fn open(chapter: Chapter, services: &Services) -> Self {
         let mut editor = Self::new(chapter);
         editor.configure_inpaint(services);
-        editor.library_chapter_count =
-            services.library.list().map(|works| works.iter().map(|work| work.chapters.len()).sum()).unwrap_or(0);
+        editor.work_title = services
+            .library
+            .list()
+            .ok()
+            .and_then(|works| works.into_iter().find(|work| work.work.id == editor.chapter.work_id))
+            .map(|work| work.work.title)
+            .unwrap_or_default();
+        editor.set_layer(Layer::Overlay);
         editor
     }
 
@@ -413,9 +449,15 @@ impl Editor {
             failed_layer_pages: HashSet::new(),
             psd_files: Default::default(),
             library_cache: None,
-            library_chapter_count: 0,
             export_progress: None,
             inline_edit: None,
+            inspector_tab: InspectorTab::Blocks,
+            inpaint_layer: Layer::InpaintResult,
+            source_return: None,
+            work_title: String::new(),
+            thumbnails: Default::default(),
+            pending_block_step: 0,
+            shortcut_sheet: false,
         };
         editor.reset_checkpoint();
         editor
@@ -438,6 +480,12 @@ impl Editor {
             Some(PageAssets::Ready(page)) => Some(page),
             _ => None,
         }
+    }
+
+    /// Whether the current page finished decoding (or failed to).
+    pub fn is_page_decoded(&self) -> bool {
+        self.page()
+            .is_none_or(|page| matches!(self.assets.get(&page.id), Some(PageAssets::Ready(_) | PageAssets::Failed(_))))
     }
 
     /// Current page decoded and every block rendered (used by automation).
@@ -560,20 +608,52 @@ impl Editor {
 
     // ---- layers ----------------------------------------------------------------------
 
-    /// Layer shortcuts `1`..`5`; pressing 3/4 again on the result/mask layer selects the
-    /// inpaint group.
+    /// Layer shortcuts `1`..`5` (1 출력, 2 번역, 3 인페인트 결과, 4 마스크, 5 원본 보기).
     pub fn select_layer_shortcut(&mut self, key: u8) {
         let layer = match key {
             1 => Layer::Output,
             2 => Layer::Overlay,
-            3 if self.layer == Layer::InpaintResult => Layer::Inpaint,
             3 => Layer::InpaintResult,
-            4 if self.layer == Layer::InpaintMask => Layer::Inpaint,
             4 => Layer::InpaintMask,
-            5 => Layer::Image,
+            5 => return self.toggle_source_view(),
             _ => return,
         };
         self.set_layer(layer);
+    }
+
+    pub fn mode(&self) -> Mode {
+        let layer = match self.layer {
+            Layer::Image => self.source_return.unwrap_or(Layer::Overlay),
+            layer => layer,
+        };
+        match layer {
+            Layer::Output => Mode::Review,
+            Layer::InpaintResult | Layer::InpaintMask => Mode::Inpaint,
+            Layer::Overlay | Layer::Image => Mode::Translate,
+        }
+    }
+
+    pub fn set_mode(&mut self, mode: Mode) {
+        self.set_layer(match mode {
+            Mode::Translate => Layer::Overlay,
+            Mode::Inpaint => self.inpaint_layer,
+            Mode::Review => Layer::Output,
+        });
+    }
+
+    /// Original image only (`5`); pressing again returns to the mode's layer.
+    pub fn source_view(&self) -> bool {
+        self.layer == Layer::Image
+    }
+
+    pub fn toggle_source_view(&mut self) {
+        if self.layer == Layer::Image {
+            let back = self.source_return.take().unwrap_or(Layer::Overlay);
+            self.set_layer(back);
+        } else {
+            self.source_return = Some(self.layer);
+            self.set_layer(Layer::Image);
+        }
     }
 
     /// `selectLayerWithBlockSelection` + `selectLayer`: focus opacities, per-layer inpaint
@@ -590,6 +670,12 @@ impl Editor {
         }
         let previous = self.layer;
         self.layer = layer;
+        if matches!(layer, Layer::InpaintResult | Layer::InpaintMask) {
+            self.inpaint_layer = layer;
+        }
+        if layer != Layer::Image {
+            self.source_return = None;
+        }
         if self.focus_mode {
             self.opacity = focus_opacity(layer, self.opacity);
         }
@@ -602,8 +688,13 @@ impl Editor {
                     .overlay_selection
                     .take()
                     .filter(|id| self.page().is_some_and(|page| page.blocks.iter().any(|block| &block.id == id)));
-                self.selection = restored.map(|id| self.block_or_group_ids(&id)).unwrap_or_default();
+                // A block picked in the inspector while the original was shown wins.
+                if self.selection.is_empty() {
+                    self.selection = restored.map(|id| self.block_or_group_ids(&id)).unwrap_or_default();
+                }
             }
+        } else if layer == Layer::Image && previous == Layer::Overlay {
+            // The translate inspector stays usable over the original view.
         } else {
             self.selection.clear();
         }
@@ -682,6 +773,27 @@ impl Editor {
         self.selection = self.block_or_group_ids(id);
     }
 
+    /// Selects the next (`step > 0`) or previous block in output order on the overlay
+    /// layer; with nothing selected it starts at the first or last block.
+    pub fn select_adjacent_block(&mut self, step: i32) {
+        let Some(page) = self.page() else { return };
+        let ids: Vec<String> = page.blocks.iter().map(|block| block.id.clone()).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let current = self.selection.first().and_then(|id| ids.iter().position(|other| other == id));
+        let next = match current {
+            Some(index) if step > 0 => (index + 1).min(ids.len() - 1),
+            Some(index) => index.saturating_sub(1),
+            None if step > 0 => 0,
+            None => ids.len() - 1,
+        };
+        if self.inline_edit.is_some() {
+            self.commit_inline_edit();
+        }
+        self.selection = vec![ids[next].clone()];
+    }
+
     fn block_or_group_ids(&self, id: &str) -> Vec<String> {
         let group = self.page().and_then(|page| mtt_core::groups::group_block_ids(page, id));
         match group {
@@ -717,6 +829,17 @@ impl Editor {
                 overlay: true,
             };
             return (visibility, DEFAULT_LAYER_OPACITY);
+        }
+        if self.layer == Layer::Image {
+            // "원본": only the source image, whatever FOCUS MODE did to the opacities.
+            let visibility = LayerVisibility {
+                image: true,
+                inpaint: false,
+                inpaint_result: false,
+                inpaint_mask: false,
+                overlay: false,
+            };
+            return (visibility, LayerOpacity { image: 1.0, ..self.opacity });
         }
         let mut opacity = self.opacity;
         if self.overlay_opacity_edit {
@@ -1964,14 +2087,39 @@ impl Editor {
         self.text_editing = false;
         self.font_previews.begin_frame();
         self.eyedropper_frame(&ui.ctx().clone());
-        let action = layout::context_bar(self, ui, services, worker);
-        layout::page_list(self, ui, services, worker);
-        layout::right_side(self, ui, services, worker);
+        // Tab / Shift+Tab taken by `MttApp::raw_input_hook`, applied before drawing so the
+        // new selection shows this frame.
+        let step = std::mem::take(&mut self.pending_block_step);
+        let dialog_open = self.app_modal_open
+            || self.find.open
+            || self.preset_backup_dialog.is_some()
+            || self.character_dialog.is_some();
+        if step != 0 && !dialog_open && self.mode() == Mode::Translate {
+            self.select_adjacent_block(step);
+        }
+        let action = chrome::top_bar(self, ui, services, worker);
+        chrome::status_bar(self, ui);
+        chrome::page_strip(self, ui, services, worker);
+        inspector::inspector(self, ui, services, worker);
+        chrome::canvas_toolbar(self, ui);
         stage::stage(self, ui, services);
         let stage_rect = self.view.stage_rect();
-        block_list::block_list(self, &ui.ctx().clone(), stage_rect);
         self.notifications_ui(&ui.ctx().clone(), stage_rect, services, worker);
         stage::inline_editor(self, ui);
+        if self.shortcut_sheet {
+            let mut open = true;
+            egui::Window::new("단축키")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .default_width(760.0)
+                .show(&ui.ctx().clone(), |ui| {
+                    crate::shortcuts::sheet(ui, 2);
+                    crate::theme::hint(ui, "? 또는 Esc로 닫습니다. 버튼 옆의 작은 글자도 단축키입니다.");
+                });
+            self.shortcut_sheet = open;
+        }
         panels::find_replace_window(self, ui);
         panels::preset_backup_window(self, ui, services);
         panels::character_override_window(self, ui, services);
@@ -2447,18 +2595,44 @@ mod tests {
     }
 
     #[test]
-    fn layer_shortcuts_toggle_inpaint_group() {
+    fn block_stepping_follows_output_order() {
+        let mut chapter = chapter_with_pages(1);
+        let page = &mut chapter.pages[0];
+        page.blocks.push(TranslationBlock { id: "x".into(), ..TranslationBlock::default() });
+        page.blocks.push(TranslationBlock { id: "y".into(), ..TranslationBlock::default() });
+        let mut editor = Editor::new(chapter);
+        editor.select_adjacent_block(1);
+        assert_eq!(editor.selection, ["b0"], "nothing selected starts at the first block");
+        editor.select_adjacent_block(1);
+        editor.select_adjacent_block(1);
+        editor.select_adjacent_block(1);
+        assert_eq!(editor.selection, ["y"], "stops at the last block");
+        editor.select_adjacent_block(-1);
+        assert_eq!(editor.selection, ["x"]);
+        editor.selection.clear();
+        editor.select_adjacent_block(-1);
+        assert_eq!(editor.selection, ["y"], "Shift+Tab with nothing selected starts at the end");
+    }
+
+    #[test]
+    fn layer_shortcuts_and_modes() {
         let mut editor = Editor::new(chapter_with_pages(1));
         editor.select_layer_shortcut(4);
         assert_eq!(editor.layer, Layer::InpaintMask);
+        assert_eq!(editor.mode(), Mode::Inpaint);
         assert_eq!(editor.tool, Tool::Select, "entering the mask layer keeps the pointer");
         assert_eq!(editor.opacity.inpaint_mask, 1.0);
         editor.select_shared_inpaint_tool(Tool::MaskBrush);
-        editor.select_layer_shortcut(4);
-        assert_eq!(editor.layer, Layer::Inpaint);
-        assert_eq!(editor.tool, Tool::Select);
-        editor.select_layer_shortcut(4);
+        editor.set_mode(Mode::Translate);
+        assert_eq!(editor.layer, Layer::Overlay);
+        editor.set_mode(Mode::Inpaint);
+        assert_eq!(editor.layer, Layer::InpaintMask, "inpaint mode returns to the last inpaint layer");
         assert_eq!(editor.tool, Tool::MaskBrush, "the mask tool is remembered");
+        editor.select_layer_shortcut(5);
+        assert_eq!(editor.layer, Layer::Image);
+        assert_eq!(editor.mode(), Mode::Inpaint, "the original view stays in its mode");
+        editor.select_layer_shortcut(5);
+        assert_eq!(editor.layer, Layer::InpaintMask, "5 again goes back");
         editor.select_layer_shortcut(3);
         assert_eq!(editor.tool, Tool::Result, "brush is shared with the result layer");
         editor.select_layer_shortcut(1);
