@@ -2,7 +2,15 @@
 
 기존 TypeScript/Electron 앱(`../src`)을 Rust + egui로 옮긴 데스크톱 앱입니다. 같은 보관함 폴더를 그대로 읽고 씁니다.
 
-## 실행
+## 바로 실행 (더블클릭)
+
+- **macOS**: Finder에서 `native/run-macos.command`를 더블클릭합니다. 터미널 창이 열리고 앱을 빌드한 뒤(처음엔 몇 분, 이후엔 바뀐 부분만) 실행합니다.
+  앱이 이미 실행 중이면 종료하고 새로 빌드할지 묻습니다(변경 내용은 저장됨). 실행된 뒤에는 터미널 창을 닫아도 됩니다.
+  만들어진 앱은 `native/target/bundle/MangaTranslationTools.app`이며, 이것을 직접 더블클릭하거나 응용 프로그램 폴더로 옮겨 써도 됩니다.
+- **Windows**: 탐색기에서 `native\run-windows.bat`을 더블클릭합니다.
+- Rust가 없다면 먼저 <https://rustup.rs>에서 설치하세요.
+
+## 개발용 실행
 
 ```bash
 cd native
