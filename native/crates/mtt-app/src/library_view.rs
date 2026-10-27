@@ -349,14 +349,19 @@ impl LibraryView {
                 });
             });
         });
-        egui::Panel::left("library-tree").resizable(true).default_size(380.0).show(ui, |ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("작품/화 검색").desired_width(f32::INFINITY));
-            ui.add_space(4.0);
-            if let Some(next) = self.library_tree(ui) {
-                action = Some(next);
-            }
-            self.apply_reorder(ui, services);
-        });
+        egui::Panel::left("library-tree").resizable(true).default_size(380.0).size_range(260.0..=640.0).show(
+            ui,
+            |ui| {
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter).hint_text("작품/화 검색").desired_width(f32::INFINITY),
+                );
+                ui.add_space(4.0);
+                if let Some(next) = self.library_tree(ui) {
+                    action = Some(next);
+                }
+                self.apply_reorder(ui, services);
+            },
+        );
         egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &self.error {
                 ui.colored_label(egui::Color32::LIGHT_RED, error);

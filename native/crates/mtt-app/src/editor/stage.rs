@@ -30,12 +30,14 @@ pub struct ViewState {
     /// Screen offset of the page origin from the stage rect's top-left corner.
     pub offset: Vec2,
     pub fit_requested: bool,
+    /// Still showing the fitted view (`viewScale === null`): refit when the stage resizes.
+    pub auto_fit: bool,
     stage_rect: Rect,
 }
 
 impl Default for ViewState {
     fn default() -> Self {
-        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: true, stage_rect: Rect::NOTHING }
+        Self { zoom: 1.0, offset: Vec2::ZERO, fit_requested: true, auto_fit: true, stage_rect: Rect::NOTHING }
     }
 }
 
@@ -63,10 +65,12 @@ impl ViewState {
             .clamp(MIN_ZOOM, MAX_ZOOM);
         self.offset = (self.stage_rect.size() - Vec2::new(width, height) * self.zoom) / 2.0;
         self.fit_requested = false;
+        self.auto_fit = true;
     }
 
     /// "원본": 100% centred on the stage.
     pub fn original_size(&mut self, width: f32, height: f32) {
+        self.auto_fit = false;
         self.zoom = 1.0;
         self.offset = (self.stage_rect.size() - Vec2::new(width, height)) / 2.0;
     }
@@ -85,6 +89,7 @@ impl ViewState {
 
     /// Zooms keeping the page point under `anchor` (screen) fixed.
     fn zoom_at(&mut self, anchor: Pos2, factor: f32) {
+        self.auto_fit = false;
         let page_point = self.to_page(anchor);
         self.zoom = (self.zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
         self.offset = anchor - self.stage_rect.min - page_point.to_vec2() * self.zoom;
@@ -327,6 +332,9 @@ pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
     let frame = egui::Frame::NONE.fill(Color32::from_gray(38));
     egui::CentralPanel::default().frame(frame).show(ui, |ui| {
         let (rect, response) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+        if editor.view.auto_fit && editor.view.stage_rect.size() != rect.size() {
+            editor.view.fit_requested = true;
+        }
         editor.view.stage_rect = rect;
         let painter = ui.painter_at(rect);
         let Some(page) = editor.page().cloned() else {
@@ -478,7 +486,7 @@ fn repeat_size_step(editor: &mut Editor, ctx: &egui::Context, held: Option<f64>,
 fn stage_overlays(editor: &mut Editor, ui: &mut egui::Ui, stage: Rect, page: &PageRecord) {
     let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(6, 4));
     egui::Area::new(egui::Id::unique("stage-zoom-overlay"))
-        .fixed_pos(stage.right_bottom() - egui::vec2(250.0, 40.0))
+        .fixed_pos(egui::pos2((stage.right() - 250.0).max(stage.left() + 60.0), stage.bottom() - 40.0))
         .order(egui::Order::Foreground)
         .show(ui.ctx(), |ui| {
             frame.show(ui, |ui| {
@@ -779,6 +787,7 @@ fn handle_view_input(editor: &mut Editor, ui: &egui::Ui, response: &egui::Respon
             editor.view.zoom_at(anchor, zoom_delta);
         } else if scroll != Vec2::ZERO {
             editor.view.offset += scroll;
+            editor.view.auto_fit = false;
         }
     }
 }
@@ -1008,6 +1017,9 @@ fn update_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord, scre
     match &mut drag {
         Drag::Pan { last } => {
             editor.view.offset += screen - *last;
+            if screen != *last {
+                editor.view.auto_fit = false;
+            }
             *last = screen;
         }
         Drag::Zoom { start, start_zoom, anchor } => {

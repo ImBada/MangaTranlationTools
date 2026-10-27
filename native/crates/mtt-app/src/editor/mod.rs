@@ -1966,8 +1966,7 @@ impl Editor {
         self.eyedropper_frame(&ui.ctx().clone());
         let action = layout::context_bar(self, ui, services, worker);
         layout::page_list(self, ui, services, worker);
-        layout::right_rail(self, ui, worker);
-        layout::tool_rail(self, ui, services, worker);
+        layout::right_side(self, ui, services, worker);
         stage::stage(self, ui, services);
         let stage_rect = self.view.stage_rect();
         block_list::block_list(self, &ui.ctx().clone(), stage_rect);

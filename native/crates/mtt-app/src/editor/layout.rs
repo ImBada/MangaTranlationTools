@@ -170,7 +170,7 @@ fn status_indicator(editor: &Editor, ui: &mut egui::Ui) {
 // ---- page list (`PageList.tsx`) -----------------------------------------------------
 
 pub fn page_list(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
-    egui::Panel::left("editor-pages").resizable(true).default_size(210.0).show(ui, |ui| {
+    egui::Panel::left("editor-pages").resizable(true).default_size(210.0).size_range(160.0..=340.0).show(ui, |ui| {
         let completed = editor.chapter.pages.iter().filter(|page| page.is_completed()).count();
         ui.horizontal(|ui| {
             ui.label(RichText::new("페이지").strong());
@@ -292,14 +292,48 @@ pub fn page_list(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services
 
 // ---- right rail: layers + block panel (`AppRightRail.tsx`) -----------------------------
 
-pub fn right_rail(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>) {
-    egui::Panel::right("editor-right-rail").resizable(true).default_size(270.0).show(ui, |ui| {
-        egui::ScrollArea::vertical().id_salt("right-rail").auto_shrink(false).show(ui, |ui| {
-            layer_panel(editor, ui);
-            ui.separator();
-            block_panel(editor, ui, worker);
-        });
-    });
+/// Below this window width the right rail and the tool rail share one column, like the TS
+/// `@media (max-width: 1400px)` three-column layout.
+const WIDE_LAYOUT_MIN_WIDTH: f32 = 1400.0;
+
+/// Right side: two rails on wide windows, one stacked column otherwise.
+pub fn right_side(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
+    if ui.ctx().content_rect().width() >= WIDE_LAYOUT_MIN_WIDTH {
+        egui::Panel::right("editor-right-rail").resizable(true).default_size(280.0).size_range(240.0..=360.0).show(
+            ui,
+            |ui| {
+                egui::ScrollArea::vertical().id_salt("right-rail").auto_shrink(false).show(ui, |ui| {
+                    layer_panel(editor, ui);
+                    ui.separator();
+                    block_panel(editor, ui, worker);
+                });
+            },
+        );
+        egui::Panel::right("editor-tool-rail").resizable(true).default_size(330.0).size_range(280.0..=400.0).show(
+            ui,
+            |ui| {
+                tool_rail_header(editor, ui);
+                egui::ScrollArea::vertical()
+                    .id_salt("tool-rail")
+                    .auto_shrink(false)
+                    .show(ui, |ui| tool_rail_contents(editor, ui, services, worker));
+            },
+        );
+    } else {
+        egui::Panel::right("editor-side-column").resizable(true).default_size(330.0).size_range(280.0..=380.0).show(
+            ui,
+            |ui| {
+                egui::ScrollArea::vertical().id_salt("side-column").auto_shrink(false).show(ui, |ui| {
+                    layer_panel(editor, ui);
+                    ui.separator();
+                    block_panel(editor, ui, worker);
+                    ui.separator();
+                    tool_rail_header(editor, ui);
+                    tool_rail_contents(editor, ui, services, worker);
+                });
+            },
+        );
+    }
 }
 
 /// `LayerPanel.tsx`.
@@ -572,43 +606,48 @@ fn block_panel(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>
 
 // ---- tool rail (`LayerToolPanel.tsx`) ----------------------------------------------------
 
-pub fn tool_rail(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
-    egui::Panel::right("editor-tool-rail").resizable(true).default_size(330.0).show(ui, |ui| {
-        let group = editor.page().and_then(|page| mtt_core::groups::selected_group(page, &editor.selection));
-        let title = match editor.layer {
-            Layer::Overlay if group.is_some() => "그룹 설정",
-            Layer::Overlay => "폰트 설정",
-            Layer::InpaintMask => "마스크 도구",
-            Layer::InpaintResult => "결과 레이어 도구",
-            Layer::Output => "최종 아웃풋 도구",
-            _ => "도구",
-        };
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(title).strong());
-            if editor.layer == Layer::Overlay && group.is_none() {
-                // "고급 설정" needs a preset behind the font controls.
-                let has_preset = editor
-                    .selected_blocks()
-                    .first()
-                    .map(|block| block.font_preset_id.is_some())
-                    .unwrap_or_else(|| editor.preset_proxy_block().is_some());
-                let hint = if has_preset { "고급 설정" } else { "폰트 프리셋 선택 후 설정 가능" };
-                if ui
-                    .add_enabled(has_preset, egui::Button::new("⚙").small())
-                    .on_hover_text(hint)
-                    .on_disabled_hover_text(hint)
-                    .clicked()
-                {
-                    super::panels::open_character_overrides(editor);
-                }
+/// Tool rail title (`resolveLayerToolTitle`) with the "고급 설정" gear.
+fn tool_rail_header(editor: &mut Editor, ui: &mut egui::Ui) {
+    let group = editor.page().and_then(|page| mtt_core::groups::selected_group(page, &editor.selection));
+    let title = match editor.layer {
+        Layer::Overlay if group.is_some() => "그룹 설정",
+        Layer::Overlay => "폰트 설정",
+        Layer::InpaintMask => "마스크 도구",
+        Layer::InpaintResult => "결과 레이어 도구",
+        Layer::Output => "최종 아웃풋 도구",
+        _ => "도구",
+    };
+    ui.horizontal(|ui| {
+        ui.label(RichText::new(title).strong());
+        if editor.layer == Layer::Overlay && group.is_none() {
+            // "고급 설정" needs a preset behind the font controls.
+            let has_preset = editor
+                .selected_blocks()
+                .first()
+                .map(|block| block.font_preset_id.is_some())
+                .unwrap_or_else(|| editor.preset_proxy_block().is_some());
+            let hint = if has_preset { "고급 설정" } else { "폰트 프리셋 선택 후 설정 가능" };
+            if ui
+                .add_enabled(has_preset, egui::Button::new("⚙").small())
+                .on_hover_text(hint)
+                .on_disabled_hover_text(hint)
+                .clicked()
+            {
+                super::panels::open_character_overrides(editor);
             }
-        });
-        ui.separator();
+        }
+    });
+    ui.separator();
+}
+
+/// `LayerToolPanel.tsx` body for the active layer.
+fn tool_rail_contents(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
+    ui.scope(|ui| {
         if editor.page_edit_locked() && editor.layer != Layer::Output {
             ui.label(RichText::new("번역 중인 페이지는 끝날 때까지 편집할 수 없습니다.").weak().small());
             ui.disable();
         }
-        egui::ScrollArea::vertical().id_salt("tool-rail").auto_shrink(false).show(ui, |ui| match editor.layer {
+        match editor.layer {
             Layer::Output => output_tool_section(editor, ui, services, worker),
             Layer::Overlay => panels::font_tool_section(editor, ui, services),
             Layer::InpaintMask => {
@@ -623,7 +662,7 @@ pub fn tool_rail(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services
             Layer::Image => {
                 ui.label(RichText::new("원본 이미지 레이어에는 사용할 도구가 없습니다.").weak());
             }
-        });
+        }
     });
 }
 

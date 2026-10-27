@@ -161,7 +161,7 @@ pub fn block_list(editor: &mut Editor, ctx: &egui::Context, stage: egui::Rect) {
     let mut group_drop: Option<(String, String, String, DropPosition)> = None;
     let mut group_action = None;
     egui::Area::new(egui::Id::unique("stage-text-block-list"))
-        .fixed_pos(egui::pos2(stage.right() - 262.0, stage.top() + 10.0))
+        .fixed_pos(egui::pos2((stage.right() - 262.0).max(stage.left() + 10.0), stage.top() + 10.0))
         .order(egui::Order::Foreground)
         .show(ctx, |ui| {
             egui::Frame::popup(ui.style()).show(ui, |ui| {

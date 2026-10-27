@@ -277,15 +277,34 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
     let mut favorite = None;
     let mut commit_rename = None;
     ui.horizontal_wrapped(|ui| {
+        let ppp = ui.ctx().pixels_per_point();
         for preset in &presets {
             let active = active_id.as_deref() == Some(preset.id.as_str());
+            let renaming = rename.as_ref().is_some_and(|r| r.id == preset.id);
+            let favorite_index = favorites.iter().position(|id| id == &preset.id);
+            let resolved = resolve_font_preset(preset, &size_presets);
+            let texture = (!renaming).then(|| editor.font_previews.preset_tag(ui.ctx(), services, &resolved)).flatten();
+            // A tag's size must be known up front so the wrapping row can break before it
+            // (a frame of unknown width never wraps and widens the whole panel).
+            let content = if renaming {
+                egui::vec2(110.0, 20.0)
+            } else if let Some(texture) = &texture {
+                texture.size_vec2() / ppp
+            } else {
+                ui.painter()
+                    .layout_no_wrap(preset.name.clone(), egui::TextStyle::Body.resolve(ui.style()), Color32::BLACK)
+                    .size()
+            };
+            let spacing = ui.spacing().item_spacing.x;
+            let extras = if favorite_index.is_some() { 14.0 + spacing } else { 0.0 } + 18.0 + spacing;
+            let tag_size = egui::vec2(content.x + extras + 12.0, content.y.max(18.0) + 6.0);
             let fill =
                 if active { ui.visuals().selection.bg_fill.gamma_multiply(0.5) } else { Color32::from_gray(235) };
-            egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 3)).show(
-                ui,
-                |ui| {
-                    ui.horizontal(|ui| {
-                        if rename.as_ref().is_some_and(|r| r.id == preset.id) {
+            ui.allocate_ui_with_layout(tag_size, egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                egui::Frame::new().fill(fill).corner_radius(6.0).inner_margin(egui::Margin::symmetric(6, 3)).show(
+                    ui,
+                    |ui| {
+                        if renaming {
                             let edit = rename.as_mut().expect("checked");
                             let response = ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(110.0));
                             response.request_focus();
@@ -297,7 +316,6 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                             }
                             return;
                         }
-                        let resolved = resolve_font_preset(preset, &size_presets);
                         let hint = if active {
                             format!("{} 이름 변경", preset.name)
                         } else if has_selection {
@@ -305,11 +323,10 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                         } else {
                             format!("{} 편집", preset.name)
                         };
-                        let response = match editor.font_previews.preset_tag(ui.ctx(), services, &resolved) {
-                            Some(texture) => {
-                                let size = texture.size_vec2() / ui.ctx().pixels_per_point();
-                                ui.add(egui::Image::new((texture.id(), size)).sense(egui::Sense::click()))
-                            }
+                        let response = match &texture {
+                            Some(texture) => ui.add(
+                                egui::Image::new((texture.id(), texture.size_vec2() / ppp)).sense(egui::Sense::click()),
+                            ),
                             None => ui.add(
                                 egui::Label::new(RichText::new(&preset.name).color(Color32::BLACK))
                                     .sense(egui::Sense::click()),
@@ -326,7 +343,7 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                         if response.secondary_clicked() {
                             favorite = Some(preset.id.clone());
                         }
-                        if let Some(index) = favorites.iter().position(|id| id == &preset.id) {
+                        if let Some(index) = favorite_index {
                             ui.label(
                                 RichText::new((index + 1).to_string())
                                     .small()
@@ -337,9 +354,9 @@ fn preset_panel(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock
                         if ui.small_button("×").on_hover_text(format!("{} 삭제", preset.name)).clicked() {
                             delete = Some(preset.clone());
                         }
-                    });
-                },
-            );
+                    },
+                );
+            });
         }
         if has_selection && first.font_preset_id.is_some() && ui.button("프리셋 해제").clicked() {
             editor.clear_selected_preset();

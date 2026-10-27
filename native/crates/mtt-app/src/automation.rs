@@ -39,6 +39,7 @@ pub enum Step {
     PresetEdit(String),
     Sample([f32; 2]),
     WaitTranslation,
+    Window([f32; 2]),
     InpaintAll,
     WaitSample,
     Quit,
@@ -112,6 +113,10 @@ impl Automation {
                     }
                     "sample-wait" => Step::WaitSample,
                     "translate-wait" => Step::WaitTranslation,
+                    "window" => {
+                        let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                        (v.len() == 2).then(|| Step::Window([v[0], v[1]]))?
+                    }
                     "inpaint-all" => Step::InpaintAll,
                     "quit" => Step::Quit,
                     "" => return None,
@@ -258,6 +263,10 @@ impl Automation {
             }
             (Step::Paint(points, erase), Some(editor)) => {
                 editor.paint_stroke(ctx, (points[0], points[1]), (points[2], points[3]), *erase)
+            }
+            (Step::Window(size), _) => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(size[0], size[1])));
+                self.wait_frames = 10;
             }
             (Step::Wait(frames), _) => self.wait_frames = *frames,
             (Step::Screenshot(path), _) => {
