@@ -1,0 +1,867 @@
+//! Library store (`libraryStore.ts`, `libraryCrud.ts`, `libraryPaths.ts`).
+//!
+//! Layout under `<data>/library`:
+//! `index.json`, `works/<workId>/work.json`, `works/<workId>/chapters/<chapterId>/chapter.json`
+//! plus `pages/`, `inpaint/`, `renders/`, `runs/` next to each chapter file.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use serde::Deserialize;
+
+use crate::error::{CoreError, CoreResult};
+use crate::json_io::{backup_once, read_json_optional, write_json_atomic};
+use crate::model::{Chapter, ChapterStatus, LibraryIndexFile, PageAnalysisStatus, PageRecord, Work};
+use crate::paths::sanitize_file_basename;
+use crate::time::now_iso;
+
+pub const DEFAULT_WORK_TITLE: &str = "미정 작품";
+pub const DEFAULT_CHAPTER_TITLE: &str = "제목없음";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PageLayer {
+    Source,
+    InpaintMask,
+    InpaintResult,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ChapterSummary {
+    pub id: String,
+    pub work_id: String,
+    pub title: String,
+    pub status: ChapterStatus,
+    pub page_count: usize,
+    pub completed_page_count: usize,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct WorkSummary {
+    pub work: Work,
+    pub chapters: Vec<ChapterSummary>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Library {
+    root: PathBuf,
+}
+
+impl Library {
+    pub fn new(root: impl Into<PathBuf>) -> Self {
+        Self { root: root.into() }
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
+    pub fn index_path(&self) -> PathBuf {
+        self.root.join("index.json")
+    }
+
+    pub fn works_root(&self) -> PathBuf {
+        self.root.join("works")
+    }
+
+    pub fn work_dir(&self, work_id: &str) -> PathBuf {
+        self.works_root().join(work_id)
+    }
+
+    pub fn work_file(&self, work_id: &str) -> PathBuf {
+        self.work_dir(work_id).join("work.json")
+    }
+
+    pub fn chapter_dir(&self, work_id: &str, chapter_id: &str) -> PathBuf {
+        self.work_dir(work_id).join("chapters").join(chapter_id)
+    }
+
+    pub fn chapter_file(&self, work_id: &str, chapter_id: &str) -> PathBuf {
+        self.chapter_dir(work_id, chapter_id).join("chapter.json")
+    }
+
+    pub fn read_index(&self) -> CoreResult<LibraryIndexFile> {
+        Ok(read_json_optional(&self.index_path())?.unwrap_or_default())
+    }
+
+    pub fn write_index(&self, index: &LibraryIndexFile) -> CoreResult<()> {
+        write_json_atomic(&self.index_path(), index)
+    }
+
+    /// The folder name is the work's identity: a missing or copied `id` in `work.json` must
+    /// never redirect writes or deletes to another work.
+    pub fn read_work(&self, work_id: &str) -> CoreResult<Option<Work>> {
+        if !is_safe_id(work_id) {
+            return Ok(None);
+        }
+        let work: Option<Work> = read_json_optional(&self.work_file(work_id))?;
+        Ok(work.map(|mut work| {
+            work.id = work_id.to_owned();
+            work
+        }))
+    }
+
+    pub fn write_work(&self, work: &Work) -> CoreResult<()> {
+        write_json_atomic(&self.work_file(&work.id), work)
+    }
+
+    /// Like [`Library::read_work`], the location is the chapter's identity.
+    pub fn read_chapter(&self, work_id: &str, chapter_id: &str) -> CoreResult<Option<Chapter>> {
+        if !is_safe_id(work_id) || !is_safe_id(chapter_id) {
+            return Ok(None);
+        }
+        let chapter: Option<Chapter> = read_json_optional(&self.chapter_file(work_id, chapter_id))?;
+        Ok(chapter.map(|mut chapter| {
+            chapter.id = chapter_id.to_owned();
+            chapter.work_id = work_id.to_owned();
+            chapter
+        }))
+    }
+
+    /// Writes `chapter.json` atomically (backing up the TypeScript app's version once) and
+    /// bumps the parent work's `updatedAt`.
+    pub fn write_chapter(&self, chapter: &Chapter) -> CoreResult<()> {
+        let path = self.chapter_file(&chapter.work_id, &chapter.id);
+        backup_once(&path)?;
+        write_json_atomic(&path, chapter)?;
+        if let Some(mut work) = self.read_work(&chapter.work_id)? {
+            work.updated_at = chapter.updated_at.clone();
+            self.write_work(&work)?;
+        }
+        Ok(())
+    }
+
+    pub fn find_chapter_work_id(&self, chapter_id: &str) -> CoreResult<Option<String>> {
+        for work_id in self.read_index()?.work_order {
+            if let Some(work) = self.read_work(&work_id)?
+                && work.chapter_order.iter().any(|id| id == chapter_id)
+            {
+                return Ok(Some(work_id));
+            }
+        }
+        Ok(None)
+    }
+
+    pub fn open_chapter(&self, chapter_id: &str) -> CoreResult<Chapter> {
+        let work_id = self
+            .find_chapter_work_id(chapter_id)?
+            .ok_or_else(|| CoreError::NotFound("열려는 화를 찾지 못했습니다.".into()))?;
+        let mut chapter = self
+            .read_chapter(&work_id, chapter_id)?
+            .ok_or_else(|| CoreError::NotFound("열려는 화를 찾지 못했습니다.".into()))?;
+        chapter.normalize_page_order();
+        Ok(chapter)
+    }
+
+    /// `listLibrary`: works in index order with lightweight chapter summaries.
+    pub fn list(&self) -> CoreResult<Vec<WorkSummary>> {
+        let mut works = Vec::new();
+        for work_id in self.read_index()?.work_order {
+            let Some(work) = self.read_work(&work_id)? else {
+                continue;
+            };
+            let mut chapters = Vec::new();
+            for chapter_id in &work.chapter_order {
+                let path = self.chapter_file(&work_id, chapter_id);
+                let Some(header) = read_json_optional::<ChapterHeader>(&path)? else {
+                    continue;
+                };
+                chapters.push(ChapterSummary {
+                    id: chapter_id.clone(),
+                    work_id: work_id.clone(),
+                    title: header.title,
+                    status: header.status,
+                    page_count: header.pages.len(),
+                    completed_page_count: header
+                        .pages
+                        .iter()
+                        .filter(|page| page.progress_completed == Some(true))
+                        .count(),
+                    created_at: header.created_at,
+                    updated_at: header.updated_at,
+                });
+            }
+            works.push(WorkSummary { work, chapters });
+        }
+        Ok(works)
+    }
+
+    pub fn create_work(&self, title: &str) -> CoreResult<Work> {
+        let now = now_iso();
+        let work = Work {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: sanitize_title(title, DEFAULT_WORK_TITLE),
+            chapter_order: Vec::new(),
+            created_at: now.clone(),
+            updated_at: now,
+            ..Work::default()
+        };
+        let mut index = self.read_index()?;
+        index.work_order.push(work.id.clone());
+        self.write_index(&index)?;
+        self.write_work(&work)?;
+        Ok(work)
+    }
+
+    pub fn rename_work(&self, work_id: &str, title: &str) -> CoreResult<()> {
+        let mut work = self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
+        work.title = sanitize_title(title, DEFAULT_WORK_TITLE);
+        work.updated_at = now_iso();
+        self.write_work(&work)
+    }
+
+    pub fn rename_chapter(&self, chapter_id: &str, title: &str) -> CoreResult<()> {
+        let mut chapter = self.open_chapter(chapter_id)?;
+        chapter.title = self.make_unique_chapter_title(
+            &chapter.work_id,
+            &sanitize_title(title, DEFAULT_CHAPTER_TITLE),
+            Some(chapter_id),
+        )?;
+        chapter.updated_at = now_iso();
+        self.write_chapter(&chapter)
+    }
+
+    /// `deleteWork`: removes the work from the index and deletes its directory. Like the TS
+    /// app it refuses ids without a readable `work.json`.
+    pub fn delete_work(&self, work_id: &str) -> CoreResult<()> {
+        if self.read_work(work_id)?.is_none() {
+            return Err(CoreError::NotFound("작품을 찾지 못했습니다.".into()));
+        }
+        let mut index = self.read_index()?;
+        index.work_order.retain(|id| id != work_id);
+        self.write_index(&index)?;
+        remove_dir_if_exists(&self.work_dir(work_id))
+    }
+
+    pub fn delete_chapter(&self, chapter_id: &str) -> CoreResult<()> {
+        if !is_safe_id(chapter_id) {
+            return Err(CoreError::NotFound("화를 찾지 못했습니다.".into()));
+        }
+        let work_id = self
+            .find_chapter_work_id(chapter_id)?
+            .ok_or_else(|| CoreError::NotFound("화를 찾지 못했습니다.".into()))?;
+        let mut work =
+            self.read_work(&work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
+        work.chapter_order.retain(|id| id != chapter_id);
+        work.updated_at = now_iso();
+        self.write_work(&work)?;
+        remove_dir_if_exists(&self.chapter_dir(&work_id, chapter_id))
+    }
+
+    /// `reorderChapters`: stores `work.chapterOrder` reordered by `chapter_ids` (see [`reorder_ids`]).
+    pub fn reorder_chapters(&self, work_id: &str, chapter_ids: &[String]) -> CoreResult<()> {
+        let mut work = self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
+        work.chapter_order = reorder_ids(&work.chapter_order, chapter_ids);
+        work.updated_at = now_iso();
+        self.write_work(&work)
+    }
+
+    /// `reorderPages`: [`reorder_chapter_pages`] on the stored chapter, then saves it.
+    pub fn reorder_pages(&self, chapter_id: &str, page_ids: &[String]) -> CoreResult<Chapter> {
+        let (_, mut chapter) = self.read_located_chapter(chapter_id)?;
+        reorder_chapter_pages(&mut chapter, page_ids);
+        self.write_chapter(&chapter)?;
+        Ok(chapter)
+    }
+
+    /// `deletePage`: [`remove_chapter_page`] on the stored chapter, saves it, then deletes the
+    /// page's files ([`Library::remove_page_files`]). An unknown page id changes nothing.
+    pub fn delete_page(&self, chapter_id: &str, page_id: &str) -> CoreResult<Chapter> {
+        let (work_id, mut chapter) = self.read_located_chapter(chapter_id)?;
+        let Some(removed) = remove_chapter_page(&mut chapter, page_id) else {
+            return Ok(chapter);
+        };
+        self.write_chapter(&chapter)?;
+        self.remove_page_files(&work_id, chapter_id, &removed)?;
+        Ok(chapter)
+    }
+
+    /// File cleanup half of `deletePage`, run after the chapter without `page` was saved:
+    /// unlinks the stored `imagePath` (errors ignored, like `safeUnlink`) and then
+    /// [`Library::remove_page_artifacts`]. Rendered pages in `renders/` are kept, as in TS.
+    pub fn remove_page_files(&self, work_id: &str, chapter_id: &str, page: &PageRecord) -> CoreResult<()> {
+        safe_unlink(Path::new(&page.image_path));
+        self.remove_page_artifacts(work_id, chapter_id, &page.id)
+    }
+
+    /// `removePageArtifacts`: deletes regular files in `inpaint/` whose name starts with `page_id`
+    /// and every `runs/<run>/pages/<page_id>` entry. Ids that are not a single path component are
+    /// skipped so a corrupt id can never widen the recursive delete.
+    pub fn remove_page_artifacts(&self, work_id: &str, chapter_id: &str, page_id: &str) -> CoreResult<()> {
+        if page_id.is_empty() || page_id == "." || page_id == ".." || page_id.contains(['/', '\\']) {
+            log::warn!("skipping artifact cleanup for unsafe page id {page_id:?}");
+            return Ok(());
+        }
+        let chapter_dir = self.chapter_dir(work_id, chapter_id);
+        let inpaint_root = chapter_dir.join("inpaint");
+        if inpaint_root.exists() {
+            for entry in read_dir_entries(&inpaint_root)? {
+                let is_file = entry.file_type().is_ok_and(|kind| kind.is_file());
+                if is_file && entry.file_name().to_string_lossy().starts_with(page_id) {
+                    safe_unlink(&entry.path());
+                }
+            }
+        }
+
+        let runs_root = chapter_dir.join("runs");
+        if !runs_root.exists() {
+            return Ok(());
+        }
+        for run in read_dir_entries(&runs_root)? {
+            if !run.file_type().is_ok_and(|kind| kind.is_dir()) {
+                continue;
+            }
+            let target = run.path().join("pages").join(page_id);
+            if target.exists() {
+                remove_path_all(&target)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Locates and reads `chapter.json` as stored (no page-order normalization), returning the
+    /// owning work id alongside it.
+    fn read_located_chapter(&self, chapter_id: &str) -> CoreResult<(String, Chapter)> {
+        let not_found = || CoreError::NotFound("화를 찾지 못했습니다.".into());
+        let work_id = self.find_chapter_work_id(chapter_id)?.ok_or_else(not_found)?;
+        let chapter = self.read_chapter(&work_id, chapter_id)?.ok_or_else(not_found)?;
+        Ok((work_id, chapter))
+    }
+
+    pub fn make_unique_chapter_title(
+        &self,
+        work_id: &str,
+        desired: &str,
+        exclude_chapter_id: Option<&str>,
+    ) -> CoreResult<String> {
+        let work =
+            self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("선택한 작품을 찾지 못했습니다.".into()))?;
+        let mut used = std::collections::HashSet::new();
+        for chapter_id in &work.chapter_order {
+            if Some(chapter_id.as_str()) == exclude_chapter_id {
+                continue;
+            }
+            if let Some(header) = read_json_optional::<ChapterHeader>(&self.chapter_file(work_id, chapter_id))? {
+                used.insert(header.title);
+            }
+        }
+        if !used.contains(desired) {
+            return Ok(desired.to_owned());
+        }
+        let mut index = 1;
+        while used.contains(&format!("{desired} ({index})")) {
+            index += 1;
+        }
+        Ok(format!("{desired} ({index})"))
+    }
+
+    /// Path of a page layer image, tolerating a moved data directory: stored absolute paths
+    /// are tried first, then the conventional location inside the chapter directory.
+    pub fn resolve_page_layer_path(&self, chapter: &Chapter, page: &PageRecord, layer: PageLayer) -> Option<PathBuf> {
+        let chapter_dir = self.chapter_dir(&chapter.work_id, &chapter.id);
+        let (stored, fallback) = match layer {
+            PageLayer::Source => {
+                let stored = non_empty_path(&page.image_path);
+                let fallback =
+                    stored.as_ref().and_then(|path| path.file_name()).map(|name| chapter_dir.join("pages").join(name));
+                (stored, fallback)
+            }
+            PageLayer::InpaintMask => (
+                page.inpaint_mask_path.as_deref().and_then(non_empty_path),
+                Some(self.inpaint_layer_path(chapter, &page.id, PageLayer::InpaintMask)),
+            ),
+            PageLayer::InpaintResult => (
+                page.inpaint_result_path.as_deref().and_then(non_empty_path),
+                Some(self.inpaint_layer_path(chapter, &page.id, PageLayer::InpaintResult)),
+            ),
+        };
+        if let Some(path) = stored.filter(|path| path.is_file()) {
+            return Some(path);
+        }
+        if layer == PageLayer::InpaintMask || layer == PageLayer::InpaintResult {
+            // Only fall back for inpaint layers the page claims to have; otherwise a stale file
+            // left behind by a cleared layer would reappear.
+            let claimed = match layer {
+                PageLayer::InpaintMask => page.inpaint_mask_path.is_some(),
+                _ => page.inpaint_result_path.is_some(),
+            };
+            if !claimed {
+                return None;
+            }
+        }
+        fallback.filter(|path| path.is_file())
+    }
+
+    /// Conventional `inpaint/<pageId>-mask.png` / `-result.png` location.
+    pub fn inpaint_layer_path(&self, chapter: &Chapter, page_id: &str, layer: PageLayer) -> PathBuf {
+        let suffix = match layer {
+            PageLayer::InpaintMask => "mask",
+            PageLayer::InpaintResult => "result",
+            PageLayer::Source => "source",
+        };
+        self.chapter_dir(&chapter.work_id, &chapter.id)
+            .join("inpaint")
+            .join(format!("{}-{suffix}.png", sanitize_file_basename(page_id, page_id)))
+    }
+
+    /// `renders/<page name>.png` (`saveRenderedPage`).
+    pub fn render_output_path(&self, chapter: &Chapter, page: &PageRecord) -> PathBuf {
+        self.chapter_dir(&chapter.work_id, &chapter.id)
+            .join("renders")
+            .join(format!("{}.png", sanitize_file_basename(&page.name, &page.id)))
+    }
+}
+
+/// `resolveChapterStatus`.
+pub fn resolve_chapter_status(pages: &[PageRecord]) -> ChapterStatus {
+    if pages.is_empty() {
+        return ChapterStatus::Idle;
+    }
+    let all = |status| pages.iter().all(|page| page.analysis_status == status);
+    let any = |status| pages.iter().any(|page| page.analysis_status == status);
+    if all(PageAnalysisStatus::Completed) {
+        ChapterStatus::Completed
+    } else if any(PageAnalysisStatus::Running) {
+        ChapterStatus::Running
+    } else if all(PageAnalysisStatus::Failed) {
+        ChapterStatus::Failed
+    } else if any(PageAnalysisStatus::Completed) {
+        ChapterStatus::Partial
+    } else {
+        ChapterStatus::Idle
+    }
+}
+
+/// `reorderIds`: ids of `next_order` that exist in `current_order` (in requested order, duplicates
+/// kept), followed by the remaining current ids in their existing order.
+pub fn reorder_ids(current_order: &[String], next_order: &[String]) -> Vec<String> {
+    let current: std::collections::HashSet<&str> = current_order.iter().map(String::as_str).collect();
+    let filtered: Vec<&String> = next_order.iter().filter(|id| current.contains(id.as_str())).collect();
+    let placed: std::collections::HashSet<&str> = filtered.iter().map(|id| id.as_str()).collect();
+    filtered.into_iter().chain(current_order.iter().filter(|id| !placed.contains(id.as_str()))).cloned().collect()
+}
+
+/// Drop side for [`reorder_by_target`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum DropPosition {
+    #[default]
+    Before,
+    After,
+}
+
+/// `reorderByTarget` (client `editorUtils.ts`): moves `source_id` next to `target_id`. The order is
+/// returned unchanged when either id is missing or both are the same.
+pub fn reorder_by_target(
+    current_order: &[String],
+    source_id: &str,
+    target_id: &str,
+    position: DropPosition,
+) -> Vec<String> {
+    let mut next = current_order.to_vec();
+    let has_target = source_id != target_id && next.iter().any(|id| id == target_id);
+    let Some(source_index) = next.iter().position(|id| id == source_id).filter(|_| has_target) else {
+        return next;
+    };
+    let item = next.remove(source_index);
+    // The ids differ, so removing the source cannot remove the target.
+    let target_index = next.iter().position(|id| id == target_id).unwrap_or(next.len());
+    let insert_at = if position == DropPosition::After { target_index + 1 } else { target_index };
+    next.insert(insert_at, item);
+    next
+}
+
+/// In-memory part of `reorderPages`: reorders `page_order` by `page_ids` ([`reorder_ids`]), sorts
+/// `pages` to match, bumps `updated_at` and recomputes `status`. The caller saves the chapter.
+pub fn reorder_chapter_pages(chapter: &mut Chapter, page_ids: &[String]) {
+    chapter.page_order = reorder_ids(&chapter.page_order, page_ids);
+    chapter.apply_page_order();
+    chapter.updated_at = now_iso();
+    chapter.status = resolve_chapter_status(&chapter.pages);
+}
+
+/// In-memory part of `deletePage`: drops the page from `pages`/`page_order`, points
+/// `last_opened_page_id` at the first remaining `page_order` entry when it was the deleted page,
+/// bumps `updated_at` and recomputes `status`. Returns the removed page for
+/// [`Library::remove_page_files`], or `None` (chapter untouched) when no page has that id.
+pub fn remove_chapter_page(chapter: &mut Chapter, page_id: &str) -> Option<PageRecord> {
+    let index = chapter.pages.iter().position(|page| page.id == page_id)?;
+    let removed = chapter.pages.remove(index);
+    chapter.pages.retain(|page| page.id != page_id);
+    chapter.page_order.retain(|id| id != page_id);
+    if chapter.last_opened_page_id.as_deref() == Some(page_id) {
+        chapter.last_opened_page_id = chapter.page_order.first().cloned();
+    }
+    chapter.updated_at = now_iso();
+    chapter.status = resolve_chapter_status(&chapter.pages);
+    Some(removed)
+}
+
+pub fn sanitize_title(title: &str, fallback: &str) -> String {
+    let trimmed = title.trim();
+    if trimmed.is_empty() { fallback.to_owned() } else { trimmed.to_owned() }
+}
+
+fn non_empty_path(value: &str) -> Option<PathBuf> {
+    (!value.trim().is_empty()).then(|| PathBuf::from(value))
+}
+
+fn remove_dir_if_exists(path: &Path) -> CoreResult<()> {
+    match fs::remove_dir_all(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(CoreError::io(path, source)),
+    }
+}
+
+/// `safeUnlink`: removes a file, ignoring every error.
+fn safe_unlink(path: &Path) {
+    let _ = fs::remove_file(path);
+}
+
+/// `rm(path, { recursive: true, force: true })`: removes a file, symlink or directory tree.
+fn remove_path_all(path: &Path) -> CoreResult<()> {
+    let result = match fs::symlink_metadata(path) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path),
+        Ok(_) => fs::remove_file(path),
+        Err(error) => Err(error),
+    };
+    match result {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(source) => Err(CoreError::io(path, source)),
+    }
+}
+
+fn read_dir_entries(path: &Path) -> CoreResult<Vec<fs::DirEntry>> {
+    fs::read_dir(path)
+        .and_then(|entries| entries.collect::<std::io::Result<Vec<_>>>())
+        .map_err(|source| CoreError::io(path, source))
+}
+
+/// Minimal view of `chapter.json` for listings; skips block data.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ChapterHeader {
+    #[serde(default)]
+    title: String,
+    #[serde(default)]
+    status: ChapterStatus,
+    #[serde(default)]
+    pages: Vec<PageHeader>,
+    #[serde(default)]
+    created_at: String,
+    #[serde(default)]
+    updated_at: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PageHeader {
+    #[serde(default)]
+    progress_completed: Option<bool>,
+}
+
+/// Ids are folder names: non-empty, no path separators, not `.`/`..`.
+fn is_safe_id(id: &str) -> bool {
+    !id.is_empty() && id != "." && id != ".." && !id.contains(['/', '\\'])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::PageRecord;
+
+    fn sample_chapter(library: &Library, work: &Work) -> Chapter {
+        let chapter = Chapter {
+            id: "c1".into(),
+            work_id: work.id.clone(),
+            title: "1화".into(),
+            page_order: vec!["p2".into(), "p1".into()],
+            pages: vec![
+                PageRecord { id: "p1".into(), progress_completed: Some(true), ..PageRecord::default() },
+                PageRecord { id: "p2".into(), ..PageRecord::default() },
+            ],
+            updated_at: "2026-01-01T00:00:00.000Z".into(),
+            ..Chapter::default()
+        };
+        let mut work = library.read_work(&work.id).unwrap().unwrap();
+        work.chapter_order.push(chapter.id.clone());
+        library.write_work(&work).unwrap();
+        library.write_chapter(&chapter).unwrap();
+        chapter
+    }
+
+    #[test]
+    fn create_list_open_rename_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("  ").unwrap();
+        assert_eq!(work.title, DEFAULT_WORK_TITLE);
+        sample_chapter(&library, &work);
+
+        let listed = library.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].chapters[0].page_count, 2);
+        assert_eq!(listed[0].chapters[0].completed_page_count, 1);
+        assert_eq!(library.read_work(&work.id).unwrap().unwrap().updated_at, "2026-01-01T00:00:00.000Z");
+
+        let opened = library.open_chapter("c1").unwrap();
+        assert_eq!(opened.page_order, ["p2", "p1"]);
+        assert_eq!(opened.pages[0].id, "p2");
+
+        library.rename_chapter("c1", " 2화 ").unwrap();
+        assert_eq!(library.open_chapter("c1").unwrap().title, "2화");
+
+        library.delete_chapter("c1").unwrap();
+        assert!(library.open_chapter("c1").is_err());
+        library.delete_work(&work.id).unwrap();
+        assert!(library.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn unique_chapter_titles() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        sample_chapter(&library, &work);
+        assert_eq!(library.make_unique_chapter_title(&work.id, "1화", None).unwrap(), "1화 (1)");
+        assert_eq!(library.make_unique_chapter_title(&work.id, "1화", Some("c1")).unwrap(), "1화");
+    }
+
+    #[test]
+    fn page_layer_paths_fall_back_to_chapter_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let chapter = Chapter { id: "c".into(), work_id: "w".into(), ..Chapter::default() };
+        let pages_dir = library.chapter_dir("w", "c").join("pages");
+        fs::create_dir_all(&pages_dir).unwrap();
+        fs::write(pages_dir.join("001-p.jpg"), b"x").unwrap();
+        let page =
+            PageRecord { id: "p".into(), image_path: "/old/location/pages/001-p.jpg".into(), ..PageRecord::default() };
+        assert_eq!(
+            library.resolve_page_layer_path(&chapter, &page, PageLayer::Source),
+            Some(pages_dir.join("001-p.jpg"))
+        );
+
+        let mask = library.inpaint_layer_path(&chapter, "p", PageLayer::InpaintMask);
+        fs::create_dir_all(mask.parent().unwrap()).unwrap();
+        fs::write(&mask, b"x").unwrap();
+        assert_eq!(library.resolve_page_layer_path(&chapter, &page, PageLayer::InpaintMask), None, "unclaimed layer");
+        let page = PageRecord { inpaint_mask_path: Some("/old/mask.png".into()), ..page };
+        assert_eq!(library.resolve_page_layer_path(&chapter, &page, PageLayer::InpaintMask), Some(mask));
+    }
+
+    #[test]
+    fn chapter_status_resolution() {
+        let page = |status| PageRecord { analysis_status: status, ..PageRecord::default() };
+        use PageAnalysisStatus::*;
+        assert_eq!(resolve_chapter_status(&[]), ChapterStatus::Idle);
+        assert_eq!(resolve_chapter_status(&[page(Completed), page(Completed)]), ChapterStatus::Completed);
+        assert_eq!(resolve_chapter_status(&[page(Completed), page(Running)]), ChapterStatus::Running);
+        assert_eq!(resolve_chapter_status(&[page(Failed), page(Failed)]), ChapterStatus::Failed);
+        assert_eq!(resolve_chapter_status(&[page(Completed), page(Failed)]), ChapterStatus::Partial);
+        assert_eq!(resolve_chapter_status(&[page(Idle), page(Failed)]), ChapterStatus::Idle);
+    }
+
+    fn ids(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_owned()).collect()
+    }
+
+    fn page_ids(chapter: &Chapter) -> Vec<&str> {
+        chapter.pages.iter().map(|page| page.id.as_str()).collect()
+    }
+
+    const OLD: &str = "2026-01-01T00:00:00.000Z";
+
+    fn status_chapter() -> Chapter {
+        use PageAnalysisStatus::*;
+        let page = |id: &str, status| PageRecord { id: id.into(), analysis_status: status, ..PageRecord::default() };
+        Chapter {
+            id: "c".into(),
+            work_id: "w".into(),
+            status: ChapterStatus::Idle,
+            last_opened_page_id: Some("p2".into()),
+            page_order: ids(&["p1", "p2", "p3"]),
+            pages: vec![page("p1", Completed), page("p2", Idle), page("p3", Completed)],
+            updated_at: OLD.into(),
+            ..Chapter::default()
+        }
+    }
+
+    #[test]
+    fn reorder_ids_matches_ts() {
+        let current = ids(&["a", "b", "c"]);
+        assert_eq!(reorder_ids(&current, &ids(&["c", "x", "a"])), ["c", "a", "b"]);
+        assert_eq!(reorder_ids(&current, &[]), ["a", "b", "c"]);
+        assert_eq!(reorder_ids(&current, &ids(&["b", "b"])), ["b", "b", "a", "c"], "TS keeps requested duplicates");
+    }
+
+    #[test]
+    fn reorder_by_target_moves_before_or_after() {
+        let order = ids(&["a", "b", "c", "d"]);
+        assert_eq!(reorder_by_target(&order, "a", "c", DropPosition::Before), ["b", "a", "c", "d"]);
+        assert_eq!(reorder_by_target(&order, "a", "c", DropPosition::After), ["b", "c", "a", "d"]);
+        assert_eq!(reorder_by_target(&order, "d", "a", DropPosition::default()), ["d", "a", "b", "c"]);
+        assert_eq!(reorder_by_target(&order, "d", "a", DropPosition::After), ["a", "d", "b", "c"]);
+        assert_eq!(reorder_by_target(&order, "x", "a", DropPosition::Before), order);
+        assert_eq!(reorder_by_target(&order, "a", "x", DropPosition::Before), order);
+        assert_eq!(reorder_by_target(&order, "b", "b", DropPosition::After), order);
+    }
+
+    #[test]
+    fn reorder_chapters_persists_validated_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let mut work = library.create_work("w").unwrap();
+        work.chapter_order = ids(&["c1", "c2", "c3"]);
+        work.updated_at = OLD.into();
+        library.write_work(&work).unwrap();
+
+        library.reorder_chapters(&work.id, &ids(&["c3", "unknown", "c1"])).unwrap();
+        let stored = library.read_work(&work.id).unwrap().unwrap();
+        assert_eq!(stored.chapter_order, ["c3", "c1", "c2"]);
+        assert_ne!(stored.updated_at, OLD);
+        assert!(matches!(library.reorder_chapters("missing", &[]), Err(CoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn reorder_chapter_pages_in_memory() {
+        let mut chapter = status_chapter();
+        reorder_chapter_pages(&mut chapter, &ids(&["p3", "p1"]));
+        assert_eq!(chapter.page_order, ["p3", "p1", "p2"]);
+        assert_eq!(page_ids(&chapter), ["p3", "p1", "p2"]);
+        assert_eq!(chapter.status, ChapterStatus::Partial);
+        assert_ne!(chapter.updated_at, OLD);
+
+        // Like TS, pages missing from `page_order` are appended to `pages` but not added to the order.
+        let mut chapter = status_chapter();
+        chapter.page_order = ids(&["p1", "p2"]);
+        reorder_chapter_pages(&mut chapter, &ids(&["p2"]));
+        assert_eq!(chapter.page_order, ["p2", "p1"]);
+        assert_eq!(page_ids(&chapter), ["p2", "p1", "p3"]);
+    }
+
+    #[test]
+    fn reorder_pages_saves_chapter_and_touches_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        sample_chapter(&library, &work);
+
+        let returned = library.reorder_pages("c1", &ids(&["p1"])).unwrap();
+        let stored = library.read_chapter(&work.id, "c1").unwrap().unwrap();
+        assert_eq!(stored, returned);
+        assert_eq!(stored.page_order, ["p1", "p2"]);
+        assert_eq!(page_ids(&stored), ["p1", "p2"]);
+        assert_eq!(library.read_work(&work.id).unwrap().unwrap().updated_at, stored.updated_at);
+        assert!(matches!(library.reorder_pages("missing", &[]), Err(CoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn remove_chapter_page_updates_order_last_opened_and_status() {
+        let mut chapter = status_chapter();
+        let removed = remove_chapter_page(&mut chapter, "p2").unwrap();
+        assert_eq!(removed.id, "p2");
+        assert_eq!(chapter.page_order, ["p1", "p3"]);
+        assert_eq!(page_ids(&chapter), ["p1", "p3"]);
+        assert_eq!(chapter.last_opened_page_id.as_deref(), Some("p1"), "falls back to the first remaining page");
+        assert_eq!(chapter.status, ChapterStatus::Completed);
+        assert_ne!(chapter.updated_at, OLD);
+
+        remove_chapter_page(&mut chapter, "p3").unwrap();
+        assert_eq!(chapter.last_opened_page_id.as_deref(), Some("p1"), "other pages keep the last opened page");
+        remove_chapter_page(&mut chapter, "p1").unwrap();
+        assert_eq!(chapter.last_opened_page_id, None);
+        assert_eq!(chapter.status, ChapterStatus::Idle);
+
+        let mut chapter = status_chapter();
+        let before = chapter.clone();
+        assert!(remove_chapter_page(&mut chapter, "missing").is_none());
+        assert_eq!(chapter, before, "unknown page leaves the chapter untouched");
+    }
+
+    /// Writes `relative` under `root`, creating parent directories.
+    fn touch(root: &Path, relative: &str) -> PathBuf {
+        let path = root.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"x").unwrap();
+        path
+    }
+
+    #[test]
+    fn delete_page_saves_chapter_then_removes_page_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        let mut chapter = sample_chapter(&library, &work);
+        let chapter_dir = library.chapter_dir(&work.id, "c1");
+        let source = touch(&chapter_dir, "pages/001-p1.png");
+        chapter.pages[0].name = "001".into();
+        chapter.pages[0].image_path = source.to_string_lossy().into_owned();
+        library.write_chapter(&chapter).unwrap();
+
+        let removed = [
+            touch(&chapter_dir, "inpaint/p1-mask.png"),
+            touch(&chapter_dir, "inpaint/p1-last-import.psd"),
+            touch(&chapter_dir, "inpaint/p10-mask.png"), // TS matches by `startsWith(pageId)`.
+            touch(&chapter_dir, "runs/r1/pages/p1/blocks.json"),
+            touch(&chapter_dir, "runs/r2/pages/p1/nested/crop.png"),
+        ];
+        let kept = [
+            touch(&chapter_dir, "inpaint/p2-mask.png"),
+            touch(&chapter_dir, "inpaint/p1-dir/file.png"),
+            touch(&chapter_dir, "runs/r1/pages/p2/blocks.json"),
+            touch(&chapter_dir, "runs/r1/pages/p1x/blocks.json"),
+            touch(&chapter_dir, "renders/001.png"),
+            touch(&chapter_dir, "pages/002-p2.png"),
+        ];
+        touch(&chapter_dir, "runs/stray-file");
+
+        let returned = library.delete_page("c1", "p1").unwrap();
+        let stored = library.read_chapter(&work.id, "c1").unwrap().unwrap();
+        assert_eq!(stored, returned);
+        assert_eq!(stored.page_order, ["p2"]);
+        assert_eq!(page_ids(&stored), ["p2"]);
+        assert_eq!(library.read_work(&work.id).unwrap().unwrap().updated_at, stored.updated_at);
+        assert!(!source.exists());
+        for path in &removed {
+            assert!(!path.exists(), "{} should be deleted", path.display());
+        }
+        assert!(!chapter_dir.join("runs/r1/pages/p1").exists());
+        for path in &kept {
+            assert!(path.exists(), "{} should be kept", path.display());
+        }
+
+        let unchanged = library.delete_page("c1", "missing").unwrap();
+        assert_eq!(unchanged, stored);
+        assert!(matches!(library.delete_page("missing", "p2"), Err(CoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn page_artifact_cleanup_skips_unsafe_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let chapter_dir = library.chapter_dir("w", "c");
+        let files = [touch(&chapter_dir, "inpaint/p1-mask.png"), touch(&chapter_dir, "runs/r1/pages/p1/blocks.json")];
+        for page_id in ["", ".", "..", "../pages", "a\\b"] {
+            library.remove_page_artifacts("w", "c", page_id).unwrap();
+        }
+        assert!(files.iter().all(|path| path.exists()));
+        library.remove_page_artifacts("w", "missing-chapter", "p1").unwrap();
+    }
+
+    #[test]
+    fn deletes_refuse_unsafe_or_unknown_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        std::fs::create_dir_all(library.work_dir("keep")).unwrap();
+        std::fs::write(library.work_file("keep"), r#"{"title":"no id"}"#).unwrap();
+        assert!(library.delete_work("").is_err());
+        assert!(library.delete_work("..").is_err());
+        assert!(library.delete_work("missing").is_err());
+        assert!(library.work_dir("keep").exists(), "nothing else was removed");
+        assert_eq!(library.read_work("keep").unwrap().unwrap().id, "keep", "folder name wins");
+        assert!(library.delete_chapter("../keep").is_err());
+    }
+}
