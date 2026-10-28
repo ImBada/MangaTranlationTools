@@ -26,6 +26,7 @@ pub enum AppEvent {
     Report { chapter_id: String, event: crate::editor::report::ReportEvent },
     ReportFocus { page_id: String, block_id: String },
     Import(crate::library_view::ImportEvent),
+    EditorJob { chapter_id: String, job: crate::editor::EditorJob },
 }
 
 enum Screen {
@@ -93,6 +94,9 @@ impl MttApp {
                 (AppEvent::Report { chapter_id, event }, Screen::Editor(editor)) => {
                     editor.on_report_event(&chapter_id, event)
                 }
+                (AppEvent::EditorJob { chapter_id, job }, Screen::Editor(editor)) => {
+                    editor.on_editor_job(&chapter_id, job, &self.services)
+                }
                 (AppEvent::ReportFocus { page_id, block_id }, Screen::Editor(editor)) => {
                     editor.focus_report_block(&page_id, &block_id);
                     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
@@ -104,9 +108,14 @@ impl MttApp {
                         editor.configure_inpaint(&self.services);
                     }
                 }
-                (AppEvent::Import(event), _) => match self.library.on_import_event(event, &mut self.services) {
+                (AppEvent::Import(event), screen) => match self.library.on_import_event(event, &mut self.services) {
                     Some(LibraryAction::Open(chapter_id)) => pending_open = Some(chapter_id),
                     Some(LibraryAction::OpenBatch(ids)) => pending_batch = Some(ids),
+                    Some(LibraryAction::Notice(message)) => {
+                        if let Screen::Editor(editor) = screen {
+                            editor.status = message;
+                        }
+                    }
                     _ => {}
                 },
                 (AppEvent::ExportProgress { current, total }, Screen::Editor(editor)) => {
@@ -246,7 +255,8 @@ impl eframe::App for MttApp {
                     self.advance_batch();
                 }
                 Some(LibraryAction::OpenSettings) => self.settings.open(&self.services, &self.worker),
-                None => {}
+                // The library screen shows its own error line.
+                Some(LibraryAction::Notice(_)) | None => {}
             },
             Screen::Editor(editor) => {
                 editor.app_modal_open = self.settings.is_open() || self.library.import_open();

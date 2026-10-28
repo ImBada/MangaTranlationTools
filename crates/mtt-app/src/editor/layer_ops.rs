@@ -7,10 +7,12 @@ use std::time::Instant;
 use eframe::egui;
 use mtt_core::paths::sanitize_file_basename;
 
+use super::Editor;
 use super::assets::{LoadedPage, PageAssets};
 use super::history::{Entry, LayerKind, LayerPatch, read_rect};
-use super::{Editor, Layer};
+use crate::app::AppEvent;
 use crate::services::Services;
+use crate::worker::Worker;
 
 /// `-last-export.json` beside the inpaint layers (`ExportedInpaintPsdMeta`).
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -119,7 +121,7 @@ impl Editor {
     }
 
     /// Re-reads `-last-export.json` and `-last-import.psd` when the page changed.
-    fn refresh_psd_files(&mut self, services: &Services, force: bool) {
+    pub(super) fn refresh_psd_files(&mut self, services: &Services, force: bool) {
         let Some(page_id) = self.page().map(|page| page.id.clone()) else {
             self.psd_files = PsdFiles::default();
             return;
@@ -158,66 +160,55 @@ impl Editor {
     }
 
     /// "PSD 내보내기": writes `{page}-inpaint.psd` straight into Downloads (` (n)` when the
-    /// name is taken) and remembers it for quick load.
-    pub fn export_psd_to_downloads(&mut self, services: &mut Services) {
+    /// name is taken) and remembers it for quick load. Built and written on the worker.
+    pub fn export_psd_to_downloads(&mut self, services: &mut Services, worker: &Worker<AppEvent>) {
         let Some(page) = self.page().cloned() else { return };
         let filename = format!("{}-inpaint.psd", sanitize_psd_basename(&page.name, &page.id));
-        let result = (|| -> Result<PathBuf, String> {
-            let bytes = self.render_psd(services)?;
-            let path = write_unique_download(&filename, &bytes)?;
-            let (meta_path, _) = self.psd_paths(services, &page.id);
-            let meta = ExportedPsdMeta {
-                exported_at: mtt_core::time::now_iso(),
-                filename: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                path: path.to_string_lossy().into_owned(),
-            };
-            mtt_core::json_io::write_json_atomic(&meta_path, &meta).map_err(|error| error.to_string())?;
-            Ok(path)
-        })();
-        self.status = match result {
-            Ok(path) => format!(
-                "인페인트 PSD를 내보냈습니다: {}",
-                path.file_name().map(|n| n.to_string_lossy()).unwrap_or_default()
-            ),
-            Err(error) => error,
+        let job = match self.psd_export_job(services) {
+            Ok(job) => job,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
         };
-        self.refresh_psd_files(services, true);
+        let (meta_path, _) = self.psd_paths(services, &page.id);
+        self.page_export_running = true;
+        self.status = "PSD를 만드는 중…".into();
+        let chapter_id = self.chapter.id.clone();
+        worker.spawn(move || {
+            let result = job().and_then(|bytes| {
+                let path = write_unique_download(&filename, &bytes)?;
+                let meta = ExportedPsdMeta {
+                    exported_at: mtt_core::time::now_iso(),
+                    filename: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+                    path: path.to_string_lossy().into_owned(),
+                };
+                mtt_core::json_io::write_json_atomic(&meta_path, &meta).map_err(|error| error.to_string())?;
+                Ok(path)
+            });
+            AppEvent::EditorJob { chapter_id, job: super::EditorJob::PsdExported(result) }
+        });
     }
 
     /// "PSD 가져오기": imports the layers and keeps a copy as `-last-import.psd`.
-    pub fn import_psd_file(&mut self, ctx: &egui::Context, services: &Services, path: &Path) {
-        self.status = match self.import_psd_and_keep(ctx, services, path) {
-            Ok(()) => "PSD에서 인페인트 결과와 마스크를 가져왔습니다.".into(),
-            Err(error) => error,
-        };
+    pub fn import_psd_file(&mut self, services: &Services, worker: &Worker<AppEvent>, path: &Path) {
+        self.import_psd_and_keep(services, worker, path, false);
     }
 
     /// "퀵로드": re-imports the PSD exported last from this page.
-    pub fn quick_load_psd(&mut self, ctx: &egui::Context, services: &Services, path: &Path) {
+    pub fn quick_load_psd(&mut self, services: &Services, worker: &Worker<AppEvent>, path: &Path) {
         if !path.is_file() {
             let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
             self.status = format!("마지막으로 내보낸 PSD 파일을 찾지 못했습니다: {name}");
             return;
         }
-        self.status = match self.import_psd_and_keep(ctx, services, path) {
-            Ok(()) => "마지막으로 내보낸 PSD를 퀵로드했습니다.".into(),
-            Err(error) => error,
-        };
+        self.import_psd_and_keep(services, worker, path, true);
     }
 
-    fn import_psd_and_keep(&mut self, ctx: &egui::Context, services: &Services, path: &Path) -> Result<(), String> {
-        self.import_psd(ctx, path)?;
-        let Some(page_id) = self.page().map(|page| page.id.clone()) else { return Ok(()) };
-        let (_, import_path) = self.psd_paths(services, &page_id);
-        if let Some(parent) = import_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
-        }
-        std::fs::copy(path, &import_path).map_err(|error| error.to_string())?;
-        self.refresh_psd_files(services, true);
-        if self.layer != Layer::InpaintResult {
-            self.set_layer(Layer::InpaintResult);
-        }
-        Ok(())
+    fn import_psd_and_keep(&mut self, services: &Services, worker: &Worker<AppEvent>, path: &Path, quick: bool) {
+        let Some(page_id) = self.page().map(|page| page.id.clone()) else { return };
+        let (_, keep_as) = self.psd_paths(services, &page_id);
+        self.start_psd_import(worker, path, keep_as, quick);
     }
 
     /// "마지막으로 사용한 PSD 내려받기" (saved as `last-imported-inpaint.psd`).

@@ -26,6 +26,28 @@ pub struct FindState {
     pub replacement: String,
     /// Keyword of the last "찾기" (`searchedKeyword`); results follow it, not the field.
     pub searched: Option<String>,
+    /// Matches for `(keyword, replacement, revision, page count)`, so an open window doesn't
+    /// search every block each frame.
+    cache: Option<FindCache>,
+}
+
+/// `(keyword, replacement, revision, page count, matches)`.
+type FindCache = (String, String, u64, usize, std::sync::Arc<Vec<FindMatch>>);
+
+/// `collect_matches`, cached until the search or the text changes.
+fn cached_matches(editor: &mut Editor, keyword: &str) -> std::sync::Arc<Vec<FindMatch>> {
+    let key = (editor.revision, editor.chapter.pages.len());
+    if let Some((cached_keyword, replacement, revision, pages, matches)) = &editor.find.cache
+        && cached_keyword == keyword
+        && *replacement == editor.find.replacement
+        && (*revision, *pages) == key
+    {
+        return std::sync::Arc::clone(matches);
+    }
+    let matches = std::sync::Arc::new(collect_matches(editor, keyword, &editor.find.replacement));
+    editor.find.cache =
+        Some((keyword.to_owned(), editor.find.replacement.clone(), key.0, key.1, std::sync::Arc::clone(&matches)));
+    matches
 }
 
 /// `FindReplaceMatch`.
@@ -1449,8 +1471,7 @@ pub fn find_replace_window(editor: &mut Editor, ui: &mut egui::Ui) {
             && ui.input(|i| i.key_pressed(egui::Key::Enter));
         let can_find = !editor.find.keyword.is_empty();
         let searched = editor.find.searched.clone();
-        let matches =
-            searched.as_deref().map(|k| collect_matches(editor, k, &editor.find.replacement)).unwrap_or_default();
+        let matches = searched.as_deref().map(|keyword| cached_matches(editor, keyword)).unwrap_or_default();
         let changeable = matches.iter().filter(|m| m.before != m.after).count();
         ui.horizontal(|ui| {
             if (ui.add_enabled(can_find, egui::Button::new("찾기")).clicked() || enter) && can_find {
@@ -1478,7 +1499,7 @@ pub fn find_replace_window(editor: &mut Editor, ui: &mut egui::Ui) {
             return;
         }
         egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {
-            for found in &matches {
+            for found in matches.iter() {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {

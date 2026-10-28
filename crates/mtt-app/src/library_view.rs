@@ -42,10 +42,18 @@ pub enum LibraryAction {
     /// "작품 일괄 번역": open each chapter in turn and translate its pending pages.
     OpenBatch(Vec<String>),
     OpenSettings,
+    /// A message for the screen in front (an import that could not start).
+    Notice(String),
 }
 
 pub enum ImportEvent {
-    Progress { done: usize, total: usize },
+    /// The files picked or dropped, listed on a worker (folders and ZIPs can be slow to
+    /// walk, e.g. on a network drive).
+    Preview(Result<ImportPreview, String>),
+    Progress {
+        done: usize,
+        total: usize,
+    },
     Finished(Result<ImportResult, String>),
 }
 
@@ -60,6 +68,10 @@ struct Pending {
 #[derive(Default)]
 pub struct LibraryView {
     works: Vec<WorkSummary>,
+    /// Bumped whenever `works` is replaced.
+    works_generation: u64,
+    /// The search result for `(query, works_generation)`; searching normalizes every title.
+    filtered: Option<(String, u64, std::sync::Arc<Vec<WorkSummary>>)>,
     filter: String,
     pending: Option<Pending>,
     import: Option<ImportDialog>,
@@ -69,7 +81,12 @@ pub struct LibraryView {
     pending_error: Option<String>,
     /// Work whose chapters are listed.
     selected_work: Option<String>,
+    /// A picked or dropped selection waiting to be listed on a worker.
+    queued_preview: Option<PreviewJob>,
+    previewing: bool,
 }
+
+type PreviewJob = Box<dyn FnOnce() -> Result<ImportPreview, String> + Send>;
 
 /// `resolveChapterStatusLabel` (the chapter status follows its pages' AI translation).
 pub fn status_label(status: ChapterStatus) -> &'static str {
@@ -83,10 +100,25 @@ pub fn status_label(status: ChapterStatus) -> &'static str {
 }
 
 impl LibraryView {
+    /// `filter_library` for the current query, recomputed only when the query or the
+    /// library changes.
+    fn filtered_works(&mut self) -> std::sync::Arc<Vec<WorkSummary>> {
+        if let Some((query, generation, works)) = &self.filtered
+            && *query == self.filter
+            && *generation == self.works_generation
+        {
+            return std::sync::Arc::clone(works);
+        }
+        let works = std::sync::Arc::new(mtt_core::library_filter::filter_library(&self.works, &self.filter));
+        self.filtered = Some((self.filter.clone(), self.works_generation, std::sync::Arc::clone(&works)));
+        works
+    }
+
     pub fn refresh(&mut self, services: &mut Services) {
         match services.library.list() {
             Ok(works) => {
                 self.works = works;
+                self.works_generation += 1;
                 self.error = None;
             }
             Err(error) => self.error = Some(format!("보관함을 읽지 못했습니다: {error}")),
@@ -102,8 +134,16 @@ impl LibraryView {
     }
 
     pub fn on_import_event(&mut self, event: ImportEvent, services: &mut Services) -> Option<LibraryAction> {
+        if let ImportEvent::Preview(preview) = event {
+            self.previewing = false;
+            self.status = None;
+            let before = self.error.clone();
+            self.begin_import(preview);
+            return self.error.clone().filter(|error| Some(error) != before.as_ref()).map(LibraryAction::Notice);
+        }
         let dialog = self.import.as_mut()?;
         match event {
+            ImportEvent::Preview(_) => unreachable!("handled above"),
             ImportEvent::Progress { done, total } => {
                 dialog.running = Some((done, total));
                 None
@@ -147,38 +187,45 @@ impl LibraryView {
         }
     }
 
-    /// Opens the system picker for `mode` and shows the import dialog for the selection.
+    /// Opens the system picker for `mode`; the selection is listed in the background and
+    /// then shown in the import dialog.
     pub fn pick_import(&mut self, mode: ImportMode) {
         let images = ["png", "jpg", "jpeg", "webp", "PNG", "JPG", "JPEG", "WEBP"];
-        match mode {
-            ImportMode::Images => {
-                if let Some(paths) = rfd::FileDialog::new().add_filter("이미지", &images).pick_files() {
-                    self.begin_import(Ok(preview_images(&paths)));
-                }
-            }
-            ImportMode::Folder => {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                    self.begin_import(preview_folder(&folder).map_err(|e| e.to_string()));
-                }
-            }
-            ImportMode::Zip => {
-                if let Some(path) = rfd::FileDialog::new().add_filter("ZIP", &["zip", "ZIP"]).pick_file() {
-                    self.begin_import(preview_zip(&path).map_err(|e| e.to_string()));
-                }
-            }
-            ImportMode::ZipFolder => {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
-                    self.begin_import(preview_zip_folder(&folder).map_err(|e| e.to_string()));
-                }
-            }
+        let job: Option<PreviewJob> = match mode {
+            ImportMode::Images => rfd::FileDialog::new()
+                .add_filter("이미지", &images)
+                .pick_files()
+                .map(|paths| Box::new(move || Ok(preview_images(&paths))) as PreviewJob),
+            ImportMode::Folder => rfd::FileDialog::new()
+                .pick_folder()
+                .map(|folder| Box::new(move || preview_folder(&folder).map_err(|e| e.to_string())) as PreviewJob),
+            ImportMode::Zip => rfd::FileDialog::new()
+                .add_filter("ZIP", &["zip", "ZIP"])
+                .pick_file()
+                .map(|path| Box::new(move || preview_zip(&path).map_err(|e| e.to_string())) as PreviewJob),
+            ImportMode::ZipFolder => rfd::FileDialog::new()
+                .pick_folder()
+                .map(|folder| Box::new(move || preview_zip_folder(&folder).map_err(|e| e.to_string())) as PreviewJob),
+        };
+        if let Some(job) = job {
+            self.queue_preview(job);
         }
+    }
+
+    fn queue_preview(&mut self, job: PreviewJob) {
+        self.queued_preview = Some(job);
+        self.status = Some("가져올 파일을 확인하는 중…".into());
     }
 
     /// The import dialog; drawn by the app on both screens (the editor imports too).
     pub fn import_dialog(&mut self, ctx: &egui::Context, services: &mut Services, worker: &Worker<AppEvent>) {
+        if let Some(job) = self.queued_preview.take() {
+            self.previewing = true;
+            worker.spawn(move || AppEvent::Import(ImportEvent::Preview(job())));
+        }
+        let Some(dialog) = &mut self.import else { return };
         let works: Vec<(String, String)> =
             self.works.iter().map(|w| (w.work.id.clone(), w.work.title.clone())).collect();
-        let Some(dialog) = &mut self.import else { return };
         let mut close = false;
         let mut start = false;
         let title = if dialog.preview.batch { "작품 일괄 번역 준비" } else { "보관함에 추가" };
@@ -354,9 +401,11 @@ impl LibraryView {
         if paths.is_empty() {
             return None;
         }
-        let before = self.error.clone();
-        self.begin_import(preview_dropped(&paths));
-        (self.error != before).then(|| self.error.clone()).flatten()
+        if self.previewing || self.queued_preview.is_some() {
+            return Some("가져올 파일을 확인하는 중입니다. 잠시 뒤에 다시 놓아 주세요.".into());
+        }
+        self.queue_preview(Box::new(move || preview_dropped(&paths)));
+        None
     }
 
     pub fn ui(
@@ -366,7 +415,7 @@ impl LibraryView {
         lama_card: &mut dyn FnMut(&mut egui::Ui, &Services) -> bool,
     ) -> Option<LibraryAction> {
         let mut action = None;
-        let filtered = mtt_core::library_filter::filter_library(&self.works, &self.filter);
+        let filtered = self.filtered_works();
         let search_active = !mtt_core::library_filter::normalize_search_text(&self.filter).is_empty();
         if !filtered.iter().any(|work| Some(&work.work.id) == self.selected_work.as_ref()) {
             self.selected_work = filtered.first().map(|work| work.work.id.clone());
@@ -435,7 +484,7 @@ impl LibraryView {
                             },
                         );
                     }
-                    for work in &filtered {
+                    for work in filtered.iter() {
                         let selected = Some(&work.work.id) == self.selected_work.as_ref();
                         let response = work_row(ui, work, selected);
                         if response.clicked() {

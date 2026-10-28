@@ -22,6 +22,7 @@ pub mod translation;
 pub mod widgets;
 
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -237,6 +238,17 @@ pub struct InpaintQueue {
     pub total: usize,
 }
 
+/// Builds the imported layers on the worker (see `Editor::psd_import_job`).
+trait PsdImportJob: FnOnce(&egui::Context) -> Result<InpaintOutcome, String> + Send + 'static {}
+impl<F: FnOnce(&egui::Context) -> Result<InpaintOutcome, String> + Send + 'static> PsdImportJob for F {}
+
+/// One-off jobs the editor runs on the worker.
+pub enum EditorJob {
+    PageExported(Result<PathBuf, String>),
+    PsdExported(Result<PathBuf, String>),
+    PsdImported { page_id: String, quick: bool, result: Result<InpaintOutcome, String> },
+}
+
 /// A finished inpaint, ready to swap in: the new layers with their textures and the undo
 /// patches, all made on the worker.
 pub struct InpaintOutcome {
@@ -346,6 +358,10 @@ pub struct Editor {
     pub library_cache: Option<Vec<mtt_core::library::WorkSummary>>,
     /// "전체 페이지 출력" progress `(done, total)`.
     pub export_progress: Option<(usize, usize)>,
+    /// "이 페이지 출력" or a PSD export rendering on the worker.
+    pub page_export_running: bool,
+    /// Page whose layers a PSD import is replacing on the worker (layer edits wait).
+    psd_import_running: Option<String>,
     /// Pages still waiting in an all-pages inpaint run.
     pub inpaint_queue: Option<InpaintQueue>,
     pub notifications: notifications::Notifications,
@@ -399,10 +415,10 @@ impl Editor {
         editor.configure_inpaint(services);
         editor.work_title = services
             .library
-            .list()
+            .read_work(&editor.chapter.work_id)
             .ok()
-            .and_then(|works| works.into_iter().find(|work| work.work.id == editor.chapter.work_id))
-            .map(|work| work.work.title)
+            .flatten()
+            .map(|work| work.title)
             .unwrap_or_default();
         editor.set_layer(Layer::Overlay);
         editor
@@ -488,6 +504,8 @@ impl Editor {
             psd_files: Default::default(),
             library_cache: None,
             export_progress: None,
+            page_export_running: false,
+            psd_import_running: None,
             inline_edit: None,
             inspector_tab: InspectorTab::Blocks,
             inpaint_layer: Layer::InpaintResult,
@@ -1533,96 +1551,164 @@ impl Editor {
     }
 
     pub fn inpaint_busy(&self) -> bool {
-        self.inpaint_running.is_some() || self.inpaint_queue.is_some()
+        self.inpaint_running.is_some() || self.inpaint_queue.is_some() || self.psd_import_running.is_some()
     }
 
     /// Exports source, masked result and the rendered translation as a layered PSD.
     /// PSD bytes of the current page (`exportInpaintPsd`).
+    #[cfg(test)]
     pub fn render_psd(&mut self, services: &mut Services) -> Result<Vec<u8>, String> {
+        self.psd_export_job(services)?()
+    }
+
+    /// Builds the PSD on whatever thread runs the returned job, from shared copies of the
+    /// page's layers.
+    fn psd_export_job(
+        &mut self,
+        services: &mut Services,
+    ) -> Result<impl FnOnce() -> Result<Vec<u8>, String> + Send + 'static, String> {
         use mtt_inpaint::psd::{
             BACKGROUND_LAYER_NAME, ExportLayer, RESULT_LAYER_NAME, TRANSLATION_LAYER_NAME, write_psd,
         };
         let page = self.page().cloned().ok_or("페이지가 없습니다.")?;
+        let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
         let loaded = self.loaded_page().ok_or("페이지 이미지가 아직 로드되지 않았습니다.")?;
         let (width, height) = (loaded.width(), loaded.height());
-        let mut source = (*loaded.source).clone();
-        source.pixels_mut().for_each(|p| p[3] = 255);
-        let mut result = loaded.result.as_deref().cloned().unwrap_or_else(|| RgbaImage::new(width, height));
-        if let Some(mask) = &loaded.mask {
-            for (pixel, covered) in result.pixels_mut().zip(mask.iter()) {
-                if *covered == 0 {
-                    pixel[3] = 0;
+        let (source, mask, result) = (Arc::clone(&loaded.source), loaded.mask.clone(), loaded.result.clone());
+        Ok(move || {
+            let mut source = (*source).clone();
+            source.pixels_mut().for_each(|p| p[3] = 255);
+            let mut result = result.as_deref().cloned().unwrap_or_else(|| RgbaImage::new(width, height));
+            if let Some(mask) = &mask {
+                for (pixel, covered) in result.pixels_mut().zip(mask.iter()) {
+                    if *covered == 0 {
+                        pixel[3] = 0;
+                    }
                 }
             }
-        }
-        let mut composite = source.clone();
-        image::imageops::overlay(&mut composite, &result, 0, 0);
-        let translation = {
-            let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
-            let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
-            let options = PageRenderOptions {
-                visibility: mtt_render::page::LayerVisibility {
-                    image: false,
-                    inpaint: false,
-                    inpaint_result: false,
-                    inpaint_mask: false,
-                    overlay: true,
-                },
-                ..PageRenderOptions::OUTPUT
+            let mut composite = source.clone();
+            image::imageops::overlay(&mut composite, &result, 0, 0);
+            let translation = {
+                let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
+                let options = PageRenderOptions {
+                    visibility: mtt_render::page::LayerVisibility {
+                        image: false,
+                        inpaint: false,
+                        inpaint_result: false,
+                        inpaint_mask: false,
+                        overlay: true,
+                    },
+                    ..PageRenderOptions::OUTPUT
+                };
+                mtt_render::page::render_page(
+                    &mut fonts,
+                    &page,
+                    &PageImages { source: None, inpaint_mask: None, inpaint_result: None },
+                    &options,
+                )
             };
-            mtt_render::page::render_page(
-                &mut fonts,
-                &page,
-                &PageImages { source: None, inpaint_mask: None, inpaint_result: None },
-                &options,
-            )
-        };
-        let mut layers = vec![
-            ExportLayer::new(BACKGROUND_LAYER_NAME, &source, false),
-            ExportLayer::new(RESULT_LAYER_NAME, &result, false),
-        ];
-        if let Some(translation) = &translation {
-            layers.push(ExportLayer::new(TRANSLATION_LAYER_NAME, translation, true));
-        }
-        Ok(write_psd(width, height, &composite, &layers))
+            let mut layers = vec![
+                ExportLayer::new(BACKGROUND_LAYER_NAME, &source, false),
+                ExportLayer::new(RESULT_LAYER_NAME, &result, false),
+            ];
+            if let Some(translation) = &translation {
+                layers.push(ExportLayer::new(TRANSLATION_LAYER_NAME, translation, true));
+            }
+            Ok(write_psd(width, height, &composite, &layers))
+        })
     }
 
     /// Replaces the result and mask with the visible non-background layers of a PSD.
+    #[cfg(test)]
     pub fn import_psd(&mut self, ctx: &egui::Context, path: &std::path::Path) -> Result<(), String> {
-        let bytes = std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?;
-        let document = mtt_inpaint::psd::read_psd(&bytes)?;
+        let (page_id, job) = self.psd_import_job(path)?;
+        let outcome = job(ctx)?;
+        self.apply_psd_layers(&page_id, outcome)
+    }
+
+    /// Reads the PSD and builds the new layers (and their undo patches and textures) on the
+    /// thread that runs the returned job.
+    fn psd_import_job(&self, path: &std::path::Path) -> Result<(String, impl PsdImportJob), String> {
         let page_id = self.page().map(|page| page.id.clone()).ok_or("페이지가 없습니다.")?;
-        let Some(PageAssets::Ready(loaded)) = self.assets.get_mut(&page_id) else {
+        let Some(PageAssets::Ready(loaded)) = self.assets.get(&page_id) else {
             return Err("페이지 이미지가 아직 로드되지 않았습니다.".into());
         };
         let (width, height) = (loaded.width(), loaded.height());
-        let (result, mask) = mtt_inpaint::psd::import_inpaint_layers(&document, width, height)?;
-        let computed = ComputedInpaint {
-            before_mask: loaded.mask.clone(),
-            before_result: loaded.result.clone(),
-            mask,
-            result,
-            engine: InpaintEngine::LocalFillFallback,
-            message: String::new(),
+        let (before_mask, before_result) = (loaded.mask.clone(), loaded.result.clone());
+        let path = path.to_owned();
+        let job_page = page_id.clone();
+        Ok((page_id, move |ctx: &egui::Context| {
+            let bytes = std::fs::read(&path).map_err(|error| format!("{}: {error}", path.display()))?;
+            let document = mtt_inpaint::psd::read_psd(&bytes)?;
+            let (result, mask) = mtt_inpaint::psd::import_inpaint_layers(&document, width, height)?;
+            let computed = ComputedInpaint {
+                before_mask,
+                before_result,
+                mask,
+                result,
+                engine: InpaintEngine::LocalFillFallback,
+                message: String::new(),
+            };
+            Ok(computed.finish(ctx, &job_page))
+        }))
+    }
+
+    fn apply_psd_layers(&mut self, page_id: &str, outcome: InpaintOutcome) -> Result<(), String> {
+        let Some(PageAssets::Ready(loaded)) = self.assets.get_mut(page_id) else {
+            return Err("PSD를 적용할 페이지가 더 이상 열려 있지 않습니다.".into());
         };
-        let outcome = computed.finish(ctx, &page_id);
         let entries: Vec<Entry> = outcome
             .patches
             .into_iter()
-            .map(|(layer, patch)| Entry::Layer { page_id: page_id.clone(), layer, patch })
+            .map(|(layer, patch)| Entry::Layer { page_id: page_id.to_owned(), layer, patch })
             .collect();
         loaded.install_layers(outcome.layers);
         if !entries.is_empty() {
-            self.history.push(Entry::Batch { page_id: page_id.clone(), entries });
+            self.history.push(Entry::Batch { page_id: page_id.to_owned(), entries });
         }
         let now = Instant::now();
-        self.layer_dirty.insert((page_id.clone(), LayerKind::Mask), now);
-        self.layer_dirty.insert((page_id.clone(), LayerKind::Result), now);
-        if let Some(page) = self.page_mut() {
+        self.layer_dirty.insert((page_id.to_owned(), LayerKind::Mask), now);
+        self.layer_dirty.insert((page_id.to_owned(), LayerKind::Result), now);
+        if let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == page_id) {
             page.inpaint_status = Some(InpaintStatus::Completed);
         }
         self.mark_chapter_dirty();
         Ok(())
+    }
+
+    /// Starts a PSD import of `path` for the current page; `keep_as` is where to keep a copy
+    /// (`-last-import.psd`), `quick` picks the status message.
+    pub(super) fn start_psd_import(
+        &mut self,
+        worker: &Worker<AppEvent>,
+        path: &std::path::Path,
+        keep_as: PathBuf,
+        quick: bool,
+    ) {
+        let (page_id, job) = match self.psd_import_job(path) {
+            Ok(job) => job,
+            Err(error) => {
+                self.status = error;
+                return;
+            }
+        };
+        self.psd_import_running = Some(page_id.clone());
+        self.status = "PSD를 불러오는 중…".into();
+        let chapter_id = self.chapter.id.clone();
+        let source = path.to_owned();
+        let ctx = worker.ctx().clone();
+        worker.spawn(move || {
+            let result = job(&ctx).and_then(|outcome| {
+                if let Some(parent) = keep_as.parent() {
+                    std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+                }
+                if source != keep_as {
+                    std::fs::copy(&source, &keep_as).map_err(|error| error.to_string())?;
+                }
+                Ok(outcome)
+            });
+            AppEvent::EditorJob { chapter_id, job: EditorJob::PsdImported { page_id, quick, result } }
+        });
     }
 
     pub fn group_selected(&mut self) {
@@ -1838,7 +1924,7 @@ impl Editor {
             return;
         }
         let changed = match (&self.checkpoint, self.page()) {
-            (Some((page_id, snapshot)), Some(page)) => page_id != &page.id || &BlocksSnapshot::of(page) != snapshot,
+            (Some((page_id, snapshot)), Some(page)) => page_id != &page.id || !snapshot.matches(page),
             _ => true,
         };
         if changed {
@@ -2041,25 +2127,89 @@ impl Editor {
 
     // ---- export ----------------------------------------------------------------------
 
-    /// Renders the current page like "출력" and writes it to `renders/`.
+    /// Renders the current page like "출력" and writes it to `renders/` (automation).
     pub fn export_current(&mut self, services: &mut Services) -> Result<std::path::PathBuf, String> {
+        self.page_export_job(services)?()
+    }
+
+    /// "이 페이지 출력" on the worker.
+    pub fn export_current_in_background(&mut self, services: &mut Services, worker: &Worker<AppEvent>) {
+        match self.page_export_job(services) {
+            Ok(job) => {
+                self.page_export_running = true;
+                self.status = "이 페이지를 출력하는 중…".into();
+                let chapter_id = self.chapter.id.clone();
+                worker.spawn(move || AppEvent::EditorJob { chapter_id, job: EditorJob::PageExported(job()) });
+            }
+            Err(error) => self.status = format!("출력 실패: {error}"),
+        }
+    }
+
+    /// Renders and writes the page from shared copies of its layers, on any thread. The
+    /// editor's fonts are held only while rendering; the canvas skips its update meanwhile.
+    fn page_export_job(
+        &mut self,
+        services: &mut Services,
+    ) -> Result<impl FnOnce() -> Result<std::path::PathBuf, String> + Send + 'static, String> {
         let page = self.page().cloned().ok_or("페이지가 없습니다.")?;
-        let loaded = self.loaded_page().ok_or("페이지 이미지가 아직 로드되지 않았습니다.")?;
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
-        let images = PageImages {
-            source: Some(&loaded.source),
-            inpaint_mask: loaded.mask.as_deref(),
-            inpaint_result: loaded.result.as_deref(),
-        };
-        let rendered = {
-            let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
-            mtt_render::page::render_page(&mut fonts, &page, &images, &PageRenderOptions::OUTPUT)
-                .ok_or("렌더링 실패")?
-        };
+        let loaded = self.loaded_page().ok_or("페이지 이미지가 아직 로드되지 않았습니다.")?;
+        let (source, mask, result) = (Arc::clone(&loaded.source), loaded.mask.clone(), loaded.result.clone());
         let path = services.library.render_output_path(&self.chapter, &page);
-        let bytes = encode_png(&rendered)?;
-        mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())?;
-        Ok(path)
+        Ok(move || {
+            let images =
+                PageImages { source: Some(&source), inpaint_mask: mask.as_deref(), inpaint_result: result.as_deref() };
+            let rendered = {
+                let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
+                mtt_render::page::render_page(&mut fonts, &page, &images, &PageRenderOptions::OUTPUT)
+                    .ok_or("렌더링 실패")?
+            };
+            let bytes = encode_png(&rendered)?;
+            mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())?;
+            Ok(path)
+        })
+    }
+
+    /// A finished editor job (see `EditorJob`).
+    pub fn on_editor_job(&mut self, chapter_id: &str, job: EditorJob, services: &Services) {
+        if chapter_id != self.chapter.id {
+            return;
+        }
+        let file_name = |path: &std::path::Path| {
+            path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
+        };
+        match job {
+            EditorJob::PageExported(result) => {
+                self.page_export_running = false;
+                self.status = match result {
+                    Ok(path) => {
+                        format!("이 페이지를 출력했습니다: {} (출력 폴더 열기는 검수 · 출력 모드)", file_name(&path))
+                    }
+                    Err(error) => format!("출력 실패: {error}"),
+                };
+            }
+            EditorJob::PsdExported(result) => {
+                self.page_export_running = false;
+                self.status = match result {
+                    Ok(path) => format!("인페인트 PSD를 내보냈습니다: {}", file_name(&path)),
+                    Err(error) => error,
+                };
+                self.refresh_psd_files(services, true);
+            }
+            EditorJob::PsdImported { page_id, quick, result } => {
+                self.psd_import_running = None;
+                let applied = result.and_then(|outcome| self.apply_psd_layers(&page_id, outcome));
+                self.status = match applied {
+                    Ok(()) if quick => "마지막으로 내보낸 PSD를 퀵로드했습니다.".into(),
+                    Ok(()) => "PSD에서 인페인트 결과와 마스크를 가져왔습니다.".into(),
+                    Err(error) => error,
+                };
+                self.refresh_psd_files(services, true);
+                if self.page().is_some_and(|page| page.id == page_id) && self.layer != Layer::InpaintResult {
+                    self.set_layer(Layer::InpaintResult);
+                }
+            }
+        }
     }
 
     /// Renders every page in the background (decoding images there too), reporting

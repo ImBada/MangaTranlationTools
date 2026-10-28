@@ -23,6 +23,11 @@ impl BlocksSnapshot {
         Self { blocks: page.blocks.clone(), groups: page.block_groups.clone(), completed: page.progress_completed }
     }
 
+    /// Whether `page` still has these blocks (compared in place, without a snapshot).
+    pub fn matches(&self, page: &PageRecord) -> bool {
+        self.completed == page.progress_completed && self.groups == page.block_groups && self.blocks == page.blocks
+    }
+
     pub fn apply(&self, page: &mut PageRecord) {
         page.blocks = self.blocks.clone();
         page.block_groups = self.groups.clone();

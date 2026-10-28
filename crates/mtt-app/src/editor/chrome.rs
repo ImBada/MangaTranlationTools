@@ -465,13 +465,19 @@ fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         for index in 0..editor.page_count() {
+            let selected = index == editor.current;
+            let (rect, response) =
+                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), Sense::click_and_drag());
+            // Rows out of view only take their space (a long chapter has many), except the
+            // one being dragged and the current one when it has to be scrolled to.
+            let needed = ui.is_rect_visible(rect) || response.dragged() || (selected && editor.view.fit_requested);
+            if !needed {
+                continue;
+            }
             let (page_id, page_name, completed) = {
                 let page = &editor.chapter.pages[index];
                 (page.id.clone(), page.name.clone(), page.is_completed())
             };
-            let selected = index == editor.current;
-            let (rect, response) =
-                ui.allocate_exact_size(egui::vec2(ui.available_width(), ROW_HEIGHT), Sense::click_and_drag());
             let response = if job_active {
                 response
             } else {

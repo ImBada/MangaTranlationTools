@@ -90,12 +90,13 @@ fn translate(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
 }
 
 fn selection(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
-    let Some(page) = editor.page().cloned() else {
+    let Some(page) = editor.page() else {
         theme::hint(ui, "페이지가 없습니다.");
         return;
     };
+    let group = mtt_core::groups::selected_group(page, &editor.selection);
     let blocks = editor.selected_blocks();
-    if let Some(group) = mtt_core::groups::selected_group(&page, &editor.selection) {
+    if let Some(group) = group {
         theme::card(ui, &format!("그룹 · {}개 블록", group.block_ids.len()), |ui| {
             selection_actions(editor, ui, worker, blocks.len());
             ui.add_space(4.0);
@@ -195,12 +196,17 @@ pub(super) fn page_widget(
     worker: &Worker<AppEvent>,
     host: Host,
 ) {
-    let Some(page) = editor.page().cloned() else { return };
+    // The few fields shown, not a copy of the page and its blocks every frame.
+    let Some((name, analysis_status, inpaint_status, block_count, completed)) = editor.page().map(|page| {
+        (page.name.clone(), page.analysis_status, page.inpaint_status, page.blocks.len(), page.is_completed())
+    }) else {
+        return;
+    };
     let mode = editor.mode();
     let busy = editor.inpaint_busy();
     let locked = editor.page_edit_locked();
-    let export_busy = editor.translation_running() || editor.export_progress.is_some();
-    let title = format!("이 페이지 · {}", page.name);
+    let export_busy = editor.translation_running() || editor.export_progress.is_some() || editor.page_export_running;
+    let title = format!("이 페이지 · {}", name);
     let mut add_block = false;
     let mut inpaint = false;
     let mut toggle_completed = false;
@@ -217,21 +223,21 @@ pub(super) fn page_widget(
                 ui.add_space(4.0);
             }
             ui.horizontal_wrapped(|ui| {
-                let (translate, color) = match page.analysis_status {
+                let (translate, color) = match analysis_status {
                     PageAnalysisStatus::Completed => ("번역됨", theme::SUCCESS),
                     PageAnalysisStatus::Running => ("번역 중", theme::ACCENT),
                     PageAnalysisStatus::Failed => ("번역 실패", theme::DANGER),
                     PageAnalysisStatus::Idle => ("번역 전", theme::IDLE),
                 };
                 theme::pill(ui, translate, color);
-                let (inpainted, color) = match page.inpaint_status {
+                let (inpainted, color) = match inpaint_status {
                     Some(InpaintStatus::Completed) => ("인페인트됨", theme::SUCCESS),
                     Some(InpaintStatus::Running) => ("인페인트 중", theme::ACCENT),
                     Some(InpaintStatus::Failed) => ("인페인트 실패", theme::DANGER),
                     _ => ("인페인트 전", theme::IDLE),
                 };
                 theme::pill(ui, inpainted, color);
-                theme::pill(ui, &format!("블록 {}개", page.blocks.len()), theme::IDLE);
+                theme::pill(ui, &format!("블록 {}개", block_count), theme::IDLE);
             });
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
@@ -241,13 +247,13 @@ pub(super) fn page_widget(
                 if mode != Mode::Review {
                     inpaint = ui
                         .add_enabled(
-                            !busy && !locked && !page.blocks.is_empty(),
+                            !busy && !locked && block_count > 0,
                             theme::icon_button(theme::icon::BANDAIDS, "이 페이지 인페인트"),
                         )
                         .on_hover_text("이 페이지 블록 안의 원문 글자를 모두 지웁니다")
                         .clicked();
                 }
-                let button = if page.is_completed() {
+                let button = if completed {
                     egui::Button::new((RichText::new("검수 완료 해제"), theme::key_hint("₩", false)))
                 } else if mode == Mode::Review {
                     egui::Button::new((
@@ -265,7 +271,7 @@ pub(super) fn page_widget(
                     .on_hover_text("PNG로 저장")
                     .clicked();
             });
-            if page.is_completed() && mode == Mode::Review {
+            if completed && mode == Mode::Review {
                 theme::hint(ui, "검수 완료한 페이지는 AI 번역과 모든 페이지 인페인트에서 건너뜁니다.");
             }
         },
@@ -280,13 +286,7 @@ pub(super) fn page_widget(
         editor.toggle_page_completed();
     }
     if export {
-        editor.status = match editor.export_current(services) {
-            Ok(path) => format!(
-                "이 페이지를 출력했습니다: {} (출력 폴더 열기는 검수 · 출력 모드)",
-                path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
-            ),
-            Err(error) => format!("출력 실패: {error}"),
-        };
+        editor.export_current_in_background(services, worker);
     }
     widgets::toggled(editor, Widget::Page, host, toggle);
 }
@@ -294,15 +294,16 @@ pub(super) fn page_widget(
 /// "블록" (`Widget::Block`): the selected block's text and actions, or with several
 /// selected what applies to all of them. Groups stay in the inspector (group settings).
 pub(super) fn block_widget(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>, host: Host) {
-    let Some(page) = editor.page().cloned() else { return };
+    let Some(page) = editor.page() else { return };
+    let grouped = mtt_core::groups::selected_group(page, &editor.selection).is_some();
+    let total = page.blocks.len();
     let blocks = editor.selected_blocks();
-    let grouped = mtt_core::groups::selected_group(&page, &editor.selection).is_some();
     let locked = editor.page_edit_locked();
     let toggle = match blocks.as_slice() {
         [block] if !grouped => {
             // Like the TS block panel: the text waits for a running inpaint.
             let enabled = !locked && !editor.inpaint_busy();
-            sentence_card(editor, ui, block, &page, worker, host, enabled)
+            sentence_card(editor, ui, block, total, worker, host, enabled)
         }
         [_, _, ..] if !grouped => {
             let title = format!("{}개 블록 선택", blocks.len());
@@ -339,13 +340,12 @@ fn sentence_card(
     editor: &mut Editor,
     ui: &mut egui::Ui,
     block: &TranslationBlock,
-    page: &mtt_core::model::PageRecord,
+    total: usize,
     worker: &Worker<AppEvent>,
     host: Host,
     enabled: bool,
 ) -> Option<egui::Pos2> {
-    let index = page.blocks.iter().position(|b| b.id == block.id).unwrap_or(0);
-    let total = page.blocks.len();
+    let index = editor.page().and_then(|page| page.blocks.iter().position(|b| b.id == block.id)).unwrap_or(0);
     let mut step = None;
     let title = format!("블록 {} / {}", index + 1, total);
     let (_, toggle) = widgets::frame(
@@ -423,10 +423,10 @@ pub(super) fn presets_widget(editor: &mut Editor, ui: &mut egui::Ui, services: &
     let grouped = editor.page().and_then(|page| mtt_core::groups::selected_group(page, &editor.selection)).is_some();
     // Groups keep their own settings, and the preset tab edits presets instead.
     let first = editor
-        .selected_blocks()
-        .into_iter()
-        .next()
-        .filter(|_| !grouped && editor.inspector_tab == InspectorTab::Blocks);
+        .page()
+        .and_then(|page| page.blocks.iter().find(|block| editor.selection.contains(&block.id)))
+        .filter(|_| !grouped && editor.inspector_tab == InspectorTab::Blocks)
+        .cloned();
     let has_preset = first.as_ref().is_some_and(|block| block.font_preset_id.is_some());
     let locked = editor.page_edit_locked();
     let mut overrides = false;
@@ -639,7 +639,7 @@ fn inpaint(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, work
             brush_card(editor, ui);
             range_card(editor, ui, worker);
             layers_card(editor, ui);
-            psd_card(editor, ui, services);
+            psd_card(editor, ui, services, worker);
         });
     });
 }
@@ -851,20 +851,19 @@ fn layers_card(editor: &mut Editor, ui: &mut egui::Ui) {
     });
 }
 
-fn psd_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
-    let busy = editor.inpaint_busy() || editor.page().is_none();
-    let ctx = ui.ctx().clone();
+fn psd_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
+    let busy = editor.inpaint_busy() || editor.page_export_running || editor.page().is_none();
     theme::card(ui, "PSD로 다듬기", |ui| {
         theme::hint(ui, "포토샵에서 결과를 손본 뒤 다시 불러옵니다.");
         ui.horizontal_wrapped(|ui| {
             if ui.add_enabled(!busy, egui::Button::new("내보내기")).on_hover_text("다운로드 폴더에 PSD 저장").clicked()
             {
-                editor.export_psd_to_downloads(services);
+                editor.export_psd_to_downloads(services, worker);
             }
             if ui.add_enabled(!busy, egui::Button::new("가져오기…")).clicked()
                 && let Some(path) = rfd::FileDialog::new().add_filter("PSD", &["psd", "PSD"]).pick_file()
             {
-                editor.import_psd_file(&ctx, services, &path);
+                editor.import_psd_file(services, worker, &path);
             }
             let last_export = editor.last_exported_psd(services);
             let hint = last_export
@@ -875,7 +874,7 @@ fn psd_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
             if ui.add_enabled(!busy && last_export.is_some(), egui::Button::new("퀵로드")).on_hover_text(hint).clicked()
                 && let Some(path) = last_export
             {
-                editor.quick_load_psd(&ctx, services, &path);
+                editor.quick_load_psd(services, worker, &path);
             }
         });
         let last_import = editor.last_imported_psd(services);

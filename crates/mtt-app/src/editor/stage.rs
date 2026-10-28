@@ -624,12 +624,20 @@ fn paint_overlay(
         _ => HashSet::new(),
     };
     let scale = raster_scale(editor.view.zoom, ui.ctx().pixels_per_point());
-    let pending = match fonts.lock() {
-        Ok(mut fonts) => editor.overlay.sync(ui.ctx(), &mut fonts, page, editor.revision, scale, &moving),
-        Err(_) => false,
-    };
-    if pending {
-        ui.ctx().request_repaint();
+    // The fonts are only needed for changed blocks; a background job may hold them, so the
+    // frame draws what is cached and tries again shortly instead of waiting.
+    if !editor.overlay.up_to_date(page, editor.revision, scale, &moving) {
+        match fonts.try_lock() {
+            Ok(mut fonts) => {
+                if editor.overlay.sync(ui.ctx(), &mut fonts, page, editor.revision, scale, &moving) {
+                    ui.ctx().request_repaint();
+                }
+            }
+            Err(std::sync::TryLockError::WouldBlock) => {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(30));
+            }
+            Err(std::sync::TryLockError::Poisoned(_)) => {}
+        }
     }
 
     let tint = alpha_tint(opacity.overlay);
@@ -652,7 +660,7 @@ fn paint_overlay(
         }
     }
     let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
-    for shadow in editor.overlay.shadows() {
+    for shadow in editor.overlay.shadows(page) {
         painter.image(shadow.texture.id(), editor.view.rect_to_screen(shadow.rect), uv, tint);
     }
     for block in &page.blocks {

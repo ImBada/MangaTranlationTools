@@ -4,13 +4,16 @@
 //! `index.json`, `works/<workId>/work.json`, `works/<workId>/chapters/<chapterId>/chapter.json`
 //! plus `pages/`, `inpaint/`, `renders/`, `runs/` next to each chapter file.
 
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::time::SystemTime;
 
 use serde::Deserialize;
 
 use crate::error::{CoreError, CoreResult};
-use crate::json_io::{backup_once, read_json_optional, write_json_atomic};
+use crate::json_io::{backup_once, read_json_optional, write_json_atomic, write_json_replace};
 use crate::model::{Chapter, ChapterStatus, LibraryIndexFile, PageAnalysisStatus, PageRecord, Work};
 use crate::paths::sanitize_file_basename;
 use crate::time::now_iso;
@@ -43,14 +46,67 @@ pub struct WorkSummary {
     pub chapters: Vec<ChapterSummary>,
 }
 
+/// Clones share the summary cache.
 #[derive(Debug, Clone)]
 pub struct Library {
     root: PathBuf,
+    cache: Arc<Mutex<SummaryCache>>,
+}
+
+/// What a file looked like when it was read, to tell whether it changed since.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct FileStamp {
+    modified: SystemTime,
+    len: u64,
+}
+
+impl FileStamp {
+    fn of(path: &Path) -> Option<Self> {
+        let metadata = fs::metadata(path).ok()?;
+        Some(Self { modified: metadata.modified().ok()?, len: metadata.len() })
+    }
+}
+
+/// Chapter summaries by `chapter.json` path, valid while the file's stamp is unchanged (the
+/// library is listed often; a chapter file holds every block). Also which work a chapter
+/// belongs to.
+#[derive(Debug, Default)]
+struct SummaryCache {
+    summaries: HashMap<PathBuf, (FileStamp, ChapterSummary)>,
+    owners: HashMap<String, String>,
 }
 
 impl Library {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into() }
+        Self { root: root.into(), cache: Arc::default() }
+    }
+
+    fn cache(&self) -> std::sync::MutexGuard<'_, SummaryCache> {
+        self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    /// The summary of one chapter: from the cache when its file is unchanged, else read.
+    fn chapter_summary(&self, work_id: &str, chapter_id: &str) -> CoreResult<Option<ChapterSummary>> {
+        let path = self.chapter_file(work_id, chapter_id);
+        let Some(stamp) = FileStamp::of(&path) else { return Ok(None) };
+        if let Some((cached, summary)) = self.cache().summaries.get(&path)
+            && *cached == stamp
+        {
+            return Ok(Some(summary.clone()));
+        }
+        let Some(header) = read_json_optional::<ChapterHeader>(&path)? else { return Ok(None) };
+        let summary = ChapterSummary {
+            id: chapter_id.to_owned(),
+            work_id: work_id.to_owned(),
+            title: header.title,
+            status: header.status,
+            page_count: header.pages.len(),
+            completed_page_count: header.pages.iter().filter(|page| page.progress_completed == Some(true)).count(),
+            created_at: header.created_at,
+            updated_at: header.updated_at,
+        };
+        self.cache().summaries.insert(path, (stamp, summary.clone()));
+        Ok(Some(summary))
     }
 
     pub fn root(&self) -> &Path {
@@ -122,21 +178,51 @@ impl Library {
     /// Writes `chapter.json` atomically (backing up the TypeScript app's version once) and
     /// bumps the parent work's `updatedAt`.
     pub fn write_chapter(&self, chapter: &Chapter) -> CoreResult<()> {
+        self.write_chapter_file(chapter)?;
+        if let Some(mut work) = self.read_work(&chapter.work_id)? {
+            work.updated_at = chapter.updated_at.clone();
+            // Only a timestamp: not worth a second disk flush per save.
+            write_json_replace(&self.work_file(&work.id), &work)?;
+        }
+        Ok(())
+    }
+
+    /// Writes `chapter.json` alone (the caller updates `work.json`) and refreshes its
+    /// cached summary from the chapter in memory.
+    pub fn write_chapter_file(&self, chapter: &Chapter) -> CoreResult<()> {
         let path = self.chapter_file(&chapter.work_id, &chapter.id);
         backup_once(&path)?;
         write_json_atomic(&path, chapter)?;
-        if let Some(mut work) = self.read_work(&chapter.work_id)? {
-            work.updated_at = chapter.updated_at.clone();
-            self.write_work(&work)?;
+        if let Some(stamp) = FileStamp::of(&path) {
+            let summary = ChapterSummary {
+                id: chapter.id.clone(),
+                work_id: chapter.work_id.clone(),
+                title: chapter.title.clone(),
+                status: chapter.status,
+                page_count: chapter.pages.len(),
+                completed_page_count: chapter.pages.iter().filter(|page| page.progress_completed == Some(true)).count(),
+                created_at: chapter.created_at.clone(),
+                updated_at: chapter.updated_at.clone(),
+            };
+            let mut cache = self.cache();
+            cache.summaries.insert(path, (stamp, summary));
+            cache.owners.insert(chapter.id.clone(), chapter.work_id.clone());
         }
         Ok(())
     }
 
     pub fn find_chapter_work_id(&self, chapter_id: &str) -> CoreResult<Option<String>> {
+        let known = self.cache().owners.get(chapter_id).cloned();
+        if let Some(work_id) = known
+            && self.chapter_file(&work_id, chapter_id).is_file()
+        {
+            return Ok(Some(work_id));
+        }
         for work_id in self.read_index()?.work_order {
             if let Some(work) = self.read_work(&work_id)?
                 && work.chapter_order.iter().any(|id| id == chapter_id)
             {
+                self.cache().owners.insert(chapter_id.to_owned(), work_id.clone());
                 return Ok(Some(work_id));
             }
         }
@@ -163,25 +249,15 @@ impl Library {
             };
             let mut chapters = Vec::new();
             for chapter_id in &work.chapter_order {
-                let path = self.chapter_file(&work_id, chapter_id);
-                let Some(header) = read_json_optional::<ChapterHeader>(&path)? else {
-                    continue;
-                };
-                chapters.push(ChapterSummary {
-                    id: chapter_id.clone(),
-                    work_id: work_id.clone(),
-                    title: header.title,
-                    status: header.status,
-                    page_count: header.pages.len(),
-                    completed_page_count: header
-                        .pages
-                        .iter()
-                        .filter(|page| page.progress_completed == Some(true))
-                        .count(),
-                    created_at: header.created_at,
-                    updated_at: header.updated_at,
-                });
+                if let Some(summary) = self.chapter_summary(&work_id, chapter_id)? {
+                    chapters.push(summary);
+                }
             }
+            let mut cache = self.cache();
+            for chapter in &chapters {
+                cache.owners.insert(chapter.id.clone(), work_id.clone());
+            }
+            drop(cache);
             works.push(WorkSummary { work, chapters });
         }
         Ok(works)
@@ -335,25 +411,24 @@ impl Library {
         desired: &str,
         exclude_chapter_id: Option<&str>,
     ) -> CoreResult<String> {
+        Ok(unique_title(desired, &self.titles_except(work_id, exclude_chapter_id)?))
+    }
+
+    /// Titles of the work's chapters (to pick unused ones).
+    pub fn chapter_titles(&self, work_id: &str) -> CoreResult<HashSet<String>> {
+        self.titles_except(work_id, None)
+    }
+
+    fn titles_except(&self, work_id: &str, excluded: Option<&str>) -> CoreResult<HashSet<String>> {
         let work =
             self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("선택한 작품을 찾지 못했습니다.".into()))?;
-        let mut used = std::collections::HashSet::new();
-        for chapter_id in &work.chapter_order {
-            if Some(chapter_id.as_str()) == exclude_chapter_id {
-                continue;
-            }
-            if let Some(header) = read_json_optional::<ChapterHeader>(&self.chapter_file(work_id, chapter_id))? {
-                used.insert(header.title);
+        let mut used = HashSet::new();
+        for chapter_id in work.chapter_order.iter().filter(|id| Some(id.as_str()) != excluded) {
+            if let Some(summary) = self.chapter_summary(work_id, chapter_id)? {
+                used.insert(summary.title);
             }
         }
-        if !used.contains(desired) {
-            return Ok(desired.to_owned());
-        }
-        let mut index = 1;
-        while used.contains(&format!("{desired} ({index})")) {
-            index += 1;
-        }
-        Ok(format!("{desired} ({index})"))
+        Ok(used)
     }
 
     /// Path of a page layer image, tolerating a moved data directory: stored absolute paths
@@ -414,6 +489,18 @@ impl Library {
 }
 
 /// `resolveChapterStatus`.
+/// `desired`, or `desired (n)` with the first `n` not in `used`.
+pub fn unique_title(desired: &str, used: &HashSet<String>) -> String {
+    if !used.contains(desired) {
+        return desired.to_owned();
+    }
+    let mut index = 1;
+    while used.contains(&format!("{desired} ({index})")) {
+        index += 1;
+    }
+    format!("{desired} ({index})")
+}
+
 pub fn resolve_chapter_status(pages: &[PageRecord]) -> ChapterStatus {
     if pages.is_empty() {
         return ChapterStatus::Idle;
@@ -617,6 +704,26 @@ mod tests {
         assert!(library.open_chapter("c1").is_err());
         library.delete_work(&work.id).unwrap();
         assert!(library.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn listing_reuses_summaries_until_the_file_changes() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        let mut chapter = sample_chapter(&library, &work);
+        assert_eq!(library.list().unwrap()[0].chapters[0].title, "1화");
+        // A save through the library updates the summary without a re-read.
+        chapter.title = "저장됨".into();
+        library.write_chapter(&chapter).unwrap();
+        assert_eq!(library.list().unwrap()[0].chapters[0].title, "저장됨");
+        // A change from outside (another app version) has a new size, so it is read again.
+        let path = library.chapter_file(&work.id, &chapter.id);
+        let mut json: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["title"] = "바깥에서 바뀜".into();
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+        assert_eq!(library.list().unwrap()[0].chapters[0].title, "바깥에서 바뀜");
+        assert_eq!(library.find_chapter_work_id(&chapter.id).unwrap(), Some(work.id.clone()));
     }
 
     #[test]

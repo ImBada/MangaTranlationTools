@@ -9,7 +9,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, CoreResult};
-use crate::library::{DEFAULT_CHAPTER_TITLE, DEFAULT_WORK_TITLE, Library, resolve_chapter_status, sanitize_title};
+use crate::library::{
+    DEFAULT_CHAPTER_TITLE, DEFAULT_WORK_TITLE, Library, resolve_chapter_status, sanitize_title, unique_title,
+};
 use crate::model::{Chapter, ImportSourceKind, PageAnalysisStatus, PageRecord};
 use crate::paths::is_supported_image_path;
 use crate::time::now_iso;
@@ -262,6 +264,8 @@ pub fn create_import(
     let mut done = 0usize;
     let mut created: Vec<(String, PathBuf)> = Vec::new();
     let result = (|| -> CoreResult<Vec<String>> {
+        // Read once; each new chapter's title is added as it is taken.
+        let mut used_titles = library.chapter_titles(&work.id)?;
         for draft in preview.chapters.iter().filter(|chapter| chapter.enabled) {
             if draft.pages.is_empty() {
                 continue;
@@ -282,11 +286,8 @@ pub fn create_import(
                 progress(done, total);
             }
             let now = now_iso();
-            let title = library.make_unique_chapter_title(
-                &work.id,
-                &sanitize_title(&draft.title, DEFAULT_CHAPTER_TITLE),
-                None,
-            )?;
+            let title = unique_title(&sanitize_title(&draft.title, DEFAULT_CHAPTER_TITLE), &used_titles);
+            used_titles.insert(title.clone());
             let chapter = Chapter {
                 id: chapter_id.clone(),
                 work_id: work.id.clone(),
@@ -303,7 +304,7 @@ pub fn create_import(
             current_work.chapter_order.push(chapter_id.clone());
             current_work.updated_at = now;
             library.write_work(&current_work)?;
-            library.write_chapter(&chapter)?;
+            library.write_chapter_file(&chapter)?;
         }
         Ok(created.iter().map(|(id, _)| id.clone()).collect())
     })();

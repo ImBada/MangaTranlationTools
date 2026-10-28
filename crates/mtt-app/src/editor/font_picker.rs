@@ -93,30 +93,98 @@ fn search_key(value: &str) -> String {
     value.nfkc().collect::<String>().to_lowercase().chars().filter(|c| !c.is_whitespace()).collect()
 }
 
-/// `buildFontFamilyOptions`.
-pub fn build_options(families: &[mtt_render::fonts::SystemFontFamily], selected: &str) -> Vec<FontOption> {
+/// An option with what grouping, sorting and search need, worked out once.
+struct IndexedOption {
+    option: FontOption,
+    group: Group,
+    sort_label: String,
+    search: String,
+}
+
+impl IndexedOption {
+    fn new(option: FontOption) -> Self {
+        let group = language_group(&option);
+        let sort_label = option.label.to_lowercase();
+        let search = search_key(&format!("{} {}", option.label, option.value));
+        Self { option, group, sort_label, search }
+    }
+
+    fn sort_key(&self) -> (Group, &str) {
+        (self.group, &self.sort_label)
+    }
+}
+
+/// `buildFontFamilyOptions` without the current value: built-ins plus installed families,
+/// deduplicated and sorted by language group then label.
+fn index_options(families: &[mtt_render::fonts::SystemFontFamily]) -> Vec<IndexedOption> {
     let mut options: Vec<FontOption> = BUILTIN
         .iter()
         .map(|(label, value)| FontOption { label: (*label).into(), value: (*value).into(), weights: Vec::new() })
         .collect();
+    let mut by_value: HashMap<String, usize> =
+        options.iter().enumerate().map(|(index, option)| (option.value.clone(), index)).collect();
     for family in families {
-        match options.iter_mut().find(|option| option.value == family.css_family) {
-            Some(existing) if existing.weights.is_empty() => existing.weights = family.weights.clone(),
+        match by_value.get(&family.css_family) {
+            Some(&index) if options[index].weights.is_empty() => options[index].weights = family.weights.clone(),
             Some(_) => {}
-            None => options.push(FontOption {
-                label: family.family.clone(),
-                value: family.css_family.clone(),
-                weights: family.weights.clone(),
-            }),
+            None => {
+                by_value.insert(family.css_family.clone(), options.len());
+                options.push(FontOption {
+                    label: family.family.clone(),
+                    value: family.css_family.clone(),
+                    weights: family.weights.clone(),
+                });
+            }
         }
     }
-    if !selected.is_empty() && !options.iter().any(|option| option.value == selected) {
-        options.push(FontOption { label: selected.into(), value: selected.into(), weights: Vec::new() });
+    let mut indexed: Vec<IndexedOption> = options.into_iter().map(IndexedOption::new).collect();
+    indexed.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+    indexed
+}
+
+/// The options in display order, with `selected` added in its place when it isn't one of
+/// them (a family that isn't installed).
+fn with_selected<'a>(index: &'a [IndexedOption], extra: Option<&'a IndexedOption>) -> Vec<&'a IndexedOption> {
+    let mut options: Vec<&IndexedOption> = index.iter().collect();
+    if let Some(extra) = extra {
+        let at = options.partition_point(|option| option.sort_key() <= extra.sort_key());
+        options.insert(at, extra);
     }
-    options.sort_by(|a, b| {
-        language_group(a).cmp(&language_group(b)).then_with(|| a.label.to_lowercase().cmp(&b.label.to_lowercase()))
-    });
     options
+}
+
+#[cfg(test)]
+fn build_options(families: &[mtt_render::fonts::SystemFontFamily], selected: &str) -> Vec<FontOption> {
+    let index = index_options(families);
+    let extra = (!selected.is_empty() && !index.iter().any(|option| option.option.value == selected)).then(|| {
+        IndexedOption::new(FontOption { label: selected.into(), value: selected.into(), weights: Vec::new() })
+    });
+    with_selected(&index, extra.as_ref()).into_iter().map(|option| option.option.clone()).collect()
+}
+
+/// The option list, built once with the built-ins and again when the installed families
+/// arrive (the font system loads in the background; its family list doesn't change after).
+#[derive(Default)]
+struct OptionIndex {
+    with_system_fonts: bool,
+    options: Vec<IndexedOption>,
+}
+
+impl OptionIndex {
+    fn refresh(&mut self, services: &mut Services) {
+        if self.with_system_fonts {
+            return;
+        }
+        let system = services.fonts().and_then(|fonts| fonts.lock().ok().map(|f| index_options(f.system_families())));
+        match system {
+            Some(options) => {
+                self.options = options;
+                self.with_system_fonts = true;
+            }
+            None if self.options.is_empty() => self.options = index_options(&[]),
+            None => {}
+        }
+    }
 }
 
 /// Rendered previews keyed by css family (`None` = nothing to draw).
@@ -124,6 +192,7 @@ pub fn build_options(families: &[mtt_render::fonts::SystemFontFamily], selected:
 pub struct FontPreviews {
     textures: HashMap<String, Option<TextureHandle>>,
     rendered_this_frame: usize,
+    options: OptionIndex,
 }
 
 impl FontPreviews {
@@ -150,10 +219,7 @@ impl FontPreviews {
         services: &mut Services,
         preset: &mtt_core::model::FontPreset,
     ) -> Option<TextureHandle> {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        serde_json::to_string(preset).unwrap_or_default().hash(&mut hasher);
-        let key = format!("preset:{:x}", hasher.finish());
+        let key = format!("preset:{:x}", super::overlay::content_hash(preset));
         if let Some(texture) = self.textures.get(&key) {
             return texture.clone();
         }
@@ -283,15 +349,12 @@ pub fn picker_with_id(
     text_editing: &mut bool,
     id_salt: &str,
 ) -> Option<FontOption> {
-    let options = match services.fonts() {
-        Some(fonts) => match fonts.lock() {
-            Ok(fonts) => build_options(fonts.system_families(), current),
-            Err(_) => Vec::new(),
-        },
-        None => build_options(&[], current),
-    };
-    let selected_label =
-        options.iter().find(|option| option.value == current).map_or(current.to_owned(), |option| option.label.clone());
+    previews.options.refresh(services);
+    let index = std::mem::take(&mut previews.options.options);
+    let known = index.iter().find(|option| option.option.value == current);
+    let selected_label = known.map_or(current.to_owned(), |option| option.option.label.clone());
+    let extra = (known.is_none() && !current.is_empty())
+        .then(|| IndexedOption::new(FontOption { label: current.into(), value: current.into(), weights: Vec::new() }));
     let id = ui.make_persistent_id((id_salt, "search"));
     let mut query: String = ui.data_mut(|data| data.get_temp(id).unwrap_or_default());
     let mut chosen = None;
@@ -309,23 +372,23 @@ pub fn picker_with_id(
                 *text_editing = true;
             }
             let needle = search_key(&query);
-            let matches = |option: &FontOption| {
-                needle.is_empty() || search_key(&format!("{} {}", option.label, option.value)).contains(&needle)
-            };
+            let options = with_selected(&index, extra.as_ref());
             let recent: Vec<FontOption> = services
                 .ui_state
                 .recent_font_families
                 .iter()
                 .map(|recent| {
-                    options.iter().find(|option| option.value == recent.value).cloned().unwrap_or(FontOption {
-                        label: recent.label.clone(),
-                        value: recent.value.clone(),
-                        weights: Vec::new(),
-                    })
+                    options.iter().find(|option| option.option.value == recent.value).map_or_else(
+                        || FontOption { label: recent.label.clone(), value: recent.value.clone(), weights: Vec::new() },
+                        |option| option.option.clone(),
+                    )
                 })
-                .filter(|option| matches(option))
+                .filter(|option| {
+                    needle.is_empty() || search_key(&format!("{} {}", option.label, option.value)).contains(&needle)
+                })
                 .collect();
-            let filtered: Vec<&FontOption> = options.iter().filter(|option| matches(option)).collect();
+            let filtered: Vec<&IndexedOption> =
+                options.into_iter().filter(|option| needle.is_empty() || option.search.contains(&needle)).collect();
             ui.label(RichText::new(format!("{}개", recent.len() + filtered.len())).weak().small());
             egui::ScrollArea::vertical().max_height(360.0).show(ui, |ui| {
                 if recent.is_empty() && filtered.is_empty() {
@@ -338,17 +401,17 @@ pub fn picker_with_id(
                 }
                 let mut last_group = None;
                 for option in filtered {
-                    let group = language_group(option);
-                    if last_group != Some(group) {
-                        last_group = Some(group);
-                        ui.label(RichText::new(group.label()).small().strong());
+                    if last_group != Some(option.group) {
+                        last_group = Some(option.group);
+                        ui.label(RichText::new(option.group.label()).small().strong());
                     }
-                    if option_row(ui, services, previews, option, current) {
-                        chosen = Some(option.clone());
+                    if option_row(ui, services, previews, &option.option, current) {
+                        chosen = Some(option.option.clone());
                     }
                 }
             });
         });
+    previews.options.options = index;
     ui.data_mut(|data| data.insert_temp(id, query));
     if let Some(option) = &chosen {
         services.remember_font(&option.label, &option.value);
@@ -391,6 +454,26 @@ mod tests {
         assert_eq!(language_group(&option("Helvetica", "Helvetica")), Group::English);
         assert_eq!(language_group(&option("Ткань", "x")), Group::Other);
         assert_eq!(search_key(" Ａｐｐｌｅ  SD "), "applesd");
+    }
+
+    #[test]
+    fn options_are_sorted_with_the_selection_in_place() {
+        let family = |name: &str| mtt_render::fonts::SystemFontFamily {
+            family: name.into(),
+            aliases: Vec::new(),
+            weights: vec![400],
+            css_family: format!("\"{name}\""),
+        };
+        let families =
+            [family("Zapfino"), family("나눔고딕"), family("arial"), family("Hiragino Sans"), family("Zapfino")];
+        let options = build_options(&families, "\"Missing\"");
+        let keys: Vec<(Group, String)> =
+            options.iter().map(|option| (language_group(option), option.label.to_lowercase())).collect();
+        let mut sorted = keys.clone();
+        sorted.sort();
+        assert_eq!(keys, sorted);
+        assert_eq!(options.iter().filter(|option| option.label == "Zapfino").count(), 1, "deduplicated");
+        assert!(options.iter().any(|option| option.value == "\"Missing\""));
     }
 
     #[test]

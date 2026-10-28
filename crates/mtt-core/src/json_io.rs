@@ -2,12 +2,12 @@
 //! temp file + rename).
 
 use std::fs;
-use std::io::Write;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
 use serde::Serialize;
 use serde::de::DeserializeOwned;
-use serde_json::Value;
+use serde_json::ser::{Formatter, PrettyFormatter};
 
 use crate::error::{CoreError, CoreResult};
 
@@ -26,13 +26,51 @@ pub fn read_json_optional<T: DeserializeOwned>(path: &Path) -> CoreResult<Option
 }
 
 /// Serializes like `JSON.stringify(value, null, 2) + "\n"`: whole-number floats are written
-/// without a fractional part so files stay diff-friendly with the TypeScript app.
+/// without a fractional part so files stay diff-friendly with the TypeScript app. Written
+/// straight from the value (no `serde_json::Value` copy of a whole chapter).
 pub fn to_pretty_json<T: Serialize>(value: &T) -> Result<String, serde_json::Error> {
-    let mut json = serde_json::to_value(value)?;
-    normalize_whole_numbers(&mut json);
-    let mut text = serde_json::to_string_pretty(&json)?;
-    text.push('\n');
-    Ok(text)
+    let mut bytes = Vec::with_capacity(4096);
+    let mut serializer = serde_json::Serializer::with_formatter(&mut bytes, JsFormatter(PrettyFormatter::new()));
+    value.serialize(&mut serializer)?;
+    bytes.push(b'\n');
+    Ok(String::from_utf8(bytes).expect("serde_json writes UTF-8"))
+}
+
+/// `PrettyFormatter` that writes whole floats like integers (`24.0` → `24`, `-0.0` → `0`).
+struct JsFormatter<'a>(PrettyFormatter<'a>);
+
+macro_rules! delegate {
+    ($($name:ident($($arg:ident: $ty:ty),*);)*) => {
+        $(fn $name<W: ?Sized + io::Write>(&mut self, writer: &mut W, $($arg: $ty),*) -> io::Result<()> {
+            self.0.$name(writer, $($arg),*)
+        })*
+    };
+}
+
+impl Formatter for JsFormatter<'_> {
+    delegate! {
+        begin_array();
+        end_array();
+        begin_array_value(first: bool);
+        end_array_value();
+        begin_object();
+        end_object();
+        begin_object_key(first: bool);
+        begin_object_value();
+        end_object_value();
+    }
+
+    fn write_f64<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f64) -> io::Result<()> {
+        if value.fract() == 0.0 && value.abs() < 9_007_199_254_740_992.0 {
+            self.0.write_i64(writer, value as i64)
+        } else {
+            self.0.write_f64(writer, value)
+        }
+    }
+
+    fn write_f32<W: ?Sized + io::Write>(&mut self, writer: &mut W, value: f32) -> io::Result<()> {
+        self.write_f64(writer, f64::from(value))
+    }
 }
 
 /// Atomically replaces `path` (write to a sibling temp file, fsync, rename).
@@ -94,27 +132,46 @@ fn append_extension(path: &Path, suffix: &str) -> PathBuf {
     path.with_file_name(name)
 }
 
-fn normalize_whole_numbers(value: &mut Value) {
-    match value {
-        Value::Number(number) => {
-            if number.is_f64()
-                && let Some(float) = number.as_f64()
-                && float.fract() == 0.0
-                && float.abs() < 9_007_199_254_740_992.0
-            {
-                *value = Value::from(float as i64);
-            }
-        }
-        Value::Array(items) => items.iter_mut().for_each(normalize_whole_numbers),
-        Value::Object(map) => map.values_mut().for_each(normalize_whole_numbers),
-        _ => {}
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use serde_json::{Value, json};
+
+    /// The `Value` round trip `to_pretty_json` used to do.
+    fn normalize_whole_numbers(value: &mut Value) {
+        match value {
+            Value::Number(number) => {
+                if number.is_f64()
+                    && let Some(float) = number.as_f64()
+                    && float.fract() == 0.0
+                    && float.abs() < 9_007_199_254_740_992.0
+                {
+                    *value = Value::from(float as i64);
+                }
+            }
+            Value::Array(items) => items.iter_mut().for_each(normalize_whole_numbers),
+            Value::Object(map) => map.values_mut().for_each(normalize_whole_numbers),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn direct_serialization_matches_the_value_round_trip() {
+        let chapter: crate::model::Chapter = serde_json::from_value(json!({
+            "id": "c", "workId": "w", "title": "1화", "pageOrder": ["p"],
+            "pages": [{ "id": "p", "name": "001.png", "width": 1000, "height": 1400, "imagePath": "x",
+                "blocks": [{ "id": "b", "bbox": { "x": 10.0, "y": 20.5, "w": 300.0, "h": -0.0 },
+                    "translatedText": "안녕", "style": { "fontSizePx": 24.0, "lineHeight": 1.18 },
+                    "custom": { "nested": [1.0, 2.5, null, true] } }] }],
+            "fontPresets": [{ "id": "f", "name": "기본", "fontSizePx": 30.0 }],
+            "unknown": { "kept": 3.0 }
+        }))
+        .unwrap();
+        let mut value = serde_json::to_value(&chapter).unwrap();
+        normalize_whole_numbers(&mut value);
+        let expected = serde_json::to_string_pretty(&value).unwrap() + "\n";
+        assert_eq!(to_pretty_json(&chapter).unwrap(), expected);
+    }
 
     #[test]
     fn pretty_json_matches_js_stringify_style() {
