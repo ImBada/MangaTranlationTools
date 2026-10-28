@@ -742,7 +742,6 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
             Stroke::new(1.0, Color32::WHITE),
             StrokeKind::Outside,
         );
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
     if !editor.final_preview
         && (matches!(editor.tool, Tool::MaskBrush | Tool::MaskEraser | Tool::MaskAutoEraser)
@@ -753,7 +752,6 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
         let radius = size * editor.view.zoom / 2.0;
         painter.circle_stroke(pos, radius, Stroke::new(1.5, Color32::BLACK));
         painter.circle_stroke(pos, radius, Stroke::new(0.75, Color32::WHITE));
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
 }
 
@@ -806,36 +804,87 @@ fn handle_pointer(editor: &mut Editor, ui: &egui::Ui, response: &egui::Response,
     }
 
     // Space held only pans: clicks don't select or start editing blocks.
-    if space_down {
-        if response.hovered() || matches!(editor.drag, Some(Drag::Pan { .. })) {
-            let grabbing = matches!(editor.drag, Some(Drag::Pan { .. }));
-            ctx.set_cursor_icon(if grabbing { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
-        }
-    } else if response.double_clicked()
+    if !space_down
+        && response.double_clicked()
         && editor.layer.edits_blocks()
         && let Some(screen) = pointer_pos
         && let Some(block) = hit_block(page, editor.view.to_page(screen))
     {
         let id = block.id.clone();
         editor.start_inline_edit(&id);
-    } else if response.clicked()
+    } else if !space_down
+        && response.clicked()
         && let Some(screen) = pointer_pos
     {
         click(editor, page, editor.view.to_page(screen), modifiers);
     }
 
-    if editor.layer.edits_blocks()
-        && !space_down
-        && editor.drag.is_none()
-        && let Some(screen) = response.hover_pos()
-        && editor.selection.len() == 1
+    if (response.hovered() || editor.drag.is_some())
+        && let Some(cursor) = stage_cursor(editor, page, response.hover_pos(), modifiers, space_down || middle_down)
+    {
+        ctx.set_cursor_icon(cursor);
+    }
+}
+
+/// The pointer over the canvas says what a press would do: the hand pans, the magnifier
+/// zooms (out with ⌥), the cross draws a range or paints, the move arrows drag a block.
+fn stage_cursor(
+    editor: &Editor,
+    page: &PageRecord,
+    hover: Option<Pos2>,
+    modifiers: Modifiers,
+    panning: bool,
+) -> Option<egui::CursorIcon> {
+    use egui::CursorIcon;
+    let zoom = if modifiers.alt { CursorIcon::ZoomOut } else { CursorIcon::ZoomIn };
+    match &editor.drag {
+        Some(Drag::Pan { .. }) => return Some(CursorIcon::Grabbing),
+        Some(Drag::Zoom { .. }) => return Some(zoom),
+        Some(Drag::Move { .. }) => return Some(CursorIcon::Move),
+        Some(Drag::Resize { handle, .. }) => return Some(handle.cursor()),
+        Some(Drag::Rotate { .. }) => return Some(CursorIcon::Grabbing),
+        Some(Drag::Range { .. } | Drag::BlockRange { .. }) => return Some(CursorIcon::Crosshair),
+        Some(Drag::Paint { .. } | Drag::AutoErase { .. } | Drag::ResultPaint { .. }) => {
+            return Some(CursorIcon::Crosshair);
+        }
+        Some(Drag::Idle) | None => {}
+    }
+    if panning {
+        return Some(CursorIcon::Grab);
+    }
+    let painting_blocked = editor.inpaint_busy() || editor.page_edit_locked();
+    match editor.tool {
+        Tool::Zoom => return Some(zoom),
+        Tool::Range => return Some(CursorIcon::Crosshair),
+        Tool::MaskBrush | Tool::MaskEraser | Tool::MaskAutoEraser | Tool::Result => {
+            // A blocked press pans instead of painting.
+            return Some(if painting_blocked { CursorIcon::Grab } else { CursorIcon::Crosshair });
+        }
+        Tool::Select => {}
+    }
+    if !editor.layer.edits_blocks() || editor.page_edit_locked() {
+        return Some(CursorIcon::Grab);
+    }
+    // Same order as `start_drag`: Alt redraw, rotate knob, resize handles, block, empty.
+    if modifiers.alt && !modifiers.command && !editor.selection.is_empty() {
+        return Some(CursorIcon::Crosshair);
+    }
+    let screen = hover?;
+    if editor.selection.len() == 1
         && let Some(block) = page.blocks.iter().find(|block| block.id == editor.selection[0])
-        && let Some((handle, _)) = handle_positions(block, page)
+    {
+        if editor.view.to_screen(rotate_handle_position(block, page, editor.view.zoom)).distance(screen) <= HANDLE_SIZE
+        {
+            return Some(CursorIcon::Grab);
+        }
+        if let Some((handle, _)) = handle_positions(block, page)
             .into_iter()
             .find(|(_, position)| editor.view.to_screen(*position).distance(screen) <= HANDLE_SIZE)
-    {
-        ctx.set_cursor_icon(handle.cursor());
+        {
+            return Some(handle.cursor());
+        }
     }
+    Some(if hit_block(page, editor.view.to_page(screen)).is_some() { CursorIcon::Move } else { CursorIcon::Grab })
 }
 
 fn start_drag(
@@ -1583,4 +1632,61 @@ fn inpaint_shortcut(editor: &mut Editor, key: InpaintKey) -> bool {
         return true;
     }
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::CursorIcon;
+    use mtt_core::model::{Chapter, TranslationBlock};
+
+    fn editor_with_block() -> Editor {
+        let page = PageRecord {
+            id: "p".into(),
+            width: 1000,
+            height: 1000,
+            blocks: vec![TranslationBlock {
+                id: "b".into(),
+                bbox: BBox::new(100.0, 100.0, 200.0, 100.0),
+                ..TranslationBlock::default()
+            }],
+            ..PageRecord::default()
+        };
+        Editor::new(Chapter { id: "c".into(), page_order: vec!["p".into()], pages: vec![page], ..Chapter::default() })
+    }
+
+    #[test]
+    fn cursor_shows_what_a_press_would_do() {
+        let mut editor = editor_with_block();
+        editor.select_layer_shortcut(2);
+        editor.view.stage_rect = Rect::from_min_size(Pos2::ZERO, Vec2::splat(1200.0));
+        let page = editor.page().cloned().unwrap();
+        let block = block_rect(&page.blocks[0], &page);
+        let on_block = Some(editor.view.to_screen(block.center()));
+        let empty = Some(editor.view.to_screen(block.right_bottom() + Vec2::splat(200.0)));
+        let none = Modifiers::NONE;
+        let cursor =
+            |editor: &Editor, hover, modifiers, panning| stage_cursor(editor, &page, hover, modifiers, panning);
+
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::Move));
+        assert_eq!(cursor(&editor, empty, none, false), Some(CursorIcon::Grab), "empty canvas pans");
+        assert_eq!(cursor(&editor, on_block, none, true), Some(CursorIcon::Grab), "Space pans");
+        editor.selection = vec!["b".into()];
+        assert_eq!(cursor(&editor, empty, Modifiers::ALT, false), Some(CursorIcon::Crosshair), "⌥ redraws the box");
+
+        editor.select_zoom_tool();
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::ZoomIn));
+        assert_eq!(cursor(&editor, on_block, Modifiers::ALT, false), Some(CursorIcon::ZoomOut));
+        editor.select_range_tool();
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::Crosshair));
+
+        editor.select_layer_shortcut(4);
+        editor.select_pointer_tool();
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::Grab), "inpaint pointer pans");
+        editor.select_shared_inpaint_tool(Tool::MaskBrush);
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::Crosshair));
+
+        editor.drag = Some(Drag::Pan { last: Pos2::ZERO });
+        assert_eq!(cursor(&editor, on_block, none, false), Some(CursorIcon::Grabbing));
+    }
 }
