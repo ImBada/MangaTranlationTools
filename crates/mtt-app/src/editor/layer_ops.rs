@@ -7,7 +7,7 @@ use std::time::Instant;
 use eframe::egui;
 use mtt_core::paths::sanitize_file_basename;
 
-use super::assets::PageAssets;
+use super::assets::{LoadedPage, PageAssets};
 use super::history::{Entry, LayerKind, LayerPatch, read_rect};
 use super::{Editor, Layer};
 use crate::services::Services;
@@ -31,11 +31,11 @@ pub struct PsdFiles {
 
 impl Editor {
     pub fn current_mask_has_pixels(&self) -> bool {
-        self.loaded_page().and_then(|page| page.mask.as_ref()).is_some_and(|mask| mask.pixels().any(|p| p[0] > 0))
+        self.loaded_page().is_some_and(LoadedPage::mask_has_pixels)
     }
 
     pub fn current_result_exists(&self) -> bool {
-        self.loaded_page().and_then(|page| page.result.as_ref()).is_some_and(|result| result.pixels().any(|p| p[3] > 0))
+        self.loaded_page().is_some_and(LoadedPage::result_has_pixels)
     }
 
     /// The range in page pixels clamped to the image: `(x, y, width, height)`.
@@ -76,7 +76,7 @@ impl Editor {
             return false;
         }
         loaded.refresh_layer_region(ctx, &page_id, rect.0, rect.1, rect.2, rect.3);
-        let patch = LayerPatch { x: rect.0, y: rect.1, width: rect.2, height: rect.3, before, after };
+        let patch = LayerPatch::new(rect, &before, &after);
         self.history.push(Entry::Layer { page_id: page_id.clone(), layer: kind, patch });
         self.layer_dirty.insert((page_id, kind), Instant::now());
         true

@@ -69,7 +69,7 @@ impl MttApp {
         let mut pending_batch: Option<Vec<String>> = None;
         for event in self.worker.drain() {
             match (event, &mut self.screen) {
-                (AppEvent::PageLoaded(load), Screen::Editor(editor)) => editor.on_page_loaded(ctx, *load),
+                (AppEvent::PageLoaded(load), Screen::Editor(editor)) => editor.on_page_loaded(*load),
                 (AppEvent::Thumbnail(load), Screen::Editor(editor)) => {
                     let chapter_id = editor.chapter.id.clone();
                     editor.thumbnails.on_loaded(ctx, &chapter_id, *load);
@@ -81,7 +81,7 @@ impl MttApp {
                     editor.on_layer_saved(&page_id, error)
                 }
                 (AppEvent::InpaintFinished { chapter_id, page_id, outcome }, Screen::Editor(editor)) => {
-                    editor.on_inpaint_finished(ctx, &chapter_id, &page_id, outcome)
+                    editor.on_inpaint_finished(&chapter_id, &page_id, outcome)
                 }
                 (AppEvent::Translation { chapter_id, event }, Screen::Editor(editor)) => {
                     if let Some(success) = editor.on_translation_event(&chapter_id, event) {
@@ -272,6 +272,7 @@ impl eframe::App for MttApp {
         self.library.import_dialog(&ctx, &mut self.services, &self.worker);
         self.settings.ui(&ctx, &mut self.services, &self.worker, job_active);
         self.run_automation(&ctx);
+        self.services.tick_ui_state(&ctx);
     }
 
     /// Tab / Shift+Tab step through text blocks. egui would otherwise move keyboard focus
@@ -305,6 +306,7 @@ impl eframe::App for MttApp {
         {
             log::error!("final save failed: {error}");
         }
+        self.services.flush_ui_state();
     }
 }
 

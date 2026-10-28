@@ -22,12 +22,13 @@ pub mod translation;
 pub mod widgets;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use eframe::egui;
 use image::{GrayImage, RgbaImage};
 use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block_type_font_presets};
-use mtt_core::library::{PageLayer, resolve_chapter_status};
+use mtt_core::library::resolve_chapter_status;
 use mtt_core::model::{
     BBox, Chapter, InpaintEngine, InpaintSettings, InpaintStatus, PageRecord, StyleKey, TranslationBlock,
 };
@@ -37,7 +38,7 @@ use mtt_render::page::{LayerOpacity, LayerVisibility, PageImages, PageRenderOpti
 use crate::app::AppEvent;
 use crate::services::Services;
 use crate::worker::Worker;
-use assets::{LoadedPage, PageAssets, PageLoad, mask_to_rgba};
+use assets::{LoadedPage, PageAssets, PageLoad};
 use history::{BlocksSnapshot, Entry, History, LayerKind, LayerPatch};
 use overlay::OverlayCache;
 
@@ -236,11 +237,42 @@ pub struct InpaintQueue {
     pub total: usize,
 }
 
+/// A finished inpaint, ready to swap in: the new layers with their textures and the undo
+/// patches, all made on the worker.
 pub struct InpaintOutcome {
-    pub mask: GrayImage,
-    pub result: RgbaImage,
+    pub layers: assets::LayerSet,
+    pub patches: Vec<(LayerKind, LayerPatch)>,
     pub engine: InpaintEngine,
     pub message: String,
+}
+
+struct ComputedInpaint {
+    before_mask: Option<Arc<GrayImage>>,
+    before_result: Option<Arc<RgbaImage>>,
+    mask: GrayImage,
+    result: RgbaImage,
+    engine: InpaintEngine,
+    message: String,
+}
+
+impl ComputedInpaint {
+    fn finish(self, ctx: &egui::Context, page_id: &str) -> InpaintOutcome {
+        let (width, height) = self.mask.dimensions();
+        let mut patches = Vec::new();
+        let mask_before = self.before_mask.as_deref().map_or_else(|| vec![0; self.mask.len()], |m| m.as_raw().clone());
+        if let Some(patch) = history::diff_patch(&mask_before, self.mask.as_raw(), width, height, 1) {
+            patches.push((LayerKind::Mask, patch));
+        }
+        drop(mask_before);
+        let result_before =
+            self.before_result.as_deref().map_or_else(|| vec![0; self.result.len()], |r| r.as_raw().clone());
+        if let Some(patch) = history::diff_patch(&result_before, self.result.as_raw(), width, height, 4) {
+            patches.push((LayerKind::Result, patch));
+        }
+        drop(result_before);
+        let layers = assets::LayerSet::build(ctx, page_id, self.mask, self.result);
+        InpaintOutcome { layers, patches, engine: self.engine, message: self.message }
+    }
 }
 
 #[derive(Default)]
@@ -570,39 +602,49 @@ impl Editor {
         if let Some(index) = queued.and_then(|id| self.chapter.pages.iter().position(|page| page.id == id)) {
             order.push(index);
         }
+        let mut header: Option<Arc<Chapter>> = None;
         for index in order {
-            let page = &self.chapter.pages[index];
-            if self.assets.contains_key(&page.id) {
+            if self.assets.contains_key(&self.chapter.pages[index].id) {
                 continue;
             }
+            let chapter = Arc::clone(header.get_or_insert_with(|| Arc::new(self.chapter_header())));
+            let page = &self.chapter.pages[index];
             self.assets.insert(page.id.clone(), PageAssets::Loading);
             let library = services.library.clone();
-            let chapter = Chapter { pages: Vec::new(), ..self.chapter.clone() };
             let page = page.clone();
-            worker.spawn(move || AppEvent::PageLoaded(Box::new(assets::load_page(&library, &chapter, &page))));
+            let ctx = worker.ctx().clone();
+            worker.spawn(move || AppEvent::PageLoaded(Box::new(assets::load_page(&ctx, &library, &chapter, &page))));
         }
     }
 
-    pub fn on_page_loaded(&mut self, ctx: &egui::Context, load: PageLoad) {
+    /// The chapter without its pages (what path lookups need), without cloning the pages.
+    fn chapter_header(&mut self) -> Chapter {
+        let pages = std::mem::take(&mut self.chapter.pages);
+        let header = self.chapter.clone();
+        self.chapter.pages = pages;
+        header
+    }
+
+    pub fn on_page_loaded(&mut self, load: PageLoad) {
         if load.chapter_id != self.chapter.id || !matches!(self.assets.get(&load.page_id), Some(PageAssets::Loading)) {
             return;
         }
-        let state = match load.source {
-            Ok(source) => {
+        let state = match load.page {
+            Ok(loaded) => {
+                let size = loaded.source.dimensions();
                 if let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == load.page_id)
-                    && (page.width, page.height) != source.dimensions()
+                    && (page.width, page.height) != size
                 {
                     log::warn!(
-                        "page {} size {}x{} differs from image {:?}; using image size",
+                        "page {} size {}x{} differs from image {size:?}; using image size",
                         page.id,
                         page.width,
                         page.height,
-                        source.dimensions()
                     );
-                    (page.width, page.height) = source.dimensions();
+                    (page.width, page.height) = size;
                     self.revision += 1;
                 }
-                PageAssets::Ready(Box::new(LoadedPage::new(ctx, &load.page_id, source, load.mask, load.result)))
+                PageAssets::Ready(loaded)
             }
             Err(error) => {
                 log::error!("page load failed: {error}");
@@ -1041,8 +1083,8 @@ impl Editor {
                 self.touch_page();
             }
             Entry::Layer { page_id, layer, patch } => {
-                let bytes = if undo { &patch.before } else { &patch.after };
-                self.write_layer_patch(ctx, page_id, *layer, patch, bytes);
+                let bytes = if undo { patch.before.unpack() } else { patch.after.unpack() };
+                self.write_layer_patch(ctx, page_id, *layer, patch, &bytes);
             }
             Entry::Presets { before, after, .. } => {
                 self.apply_preset_snapshot(if undo { before } else { after });
@@ -1228,22 +1270,22 @@ impl Editor {
         }
         let (w, h) = (right - x, bottom - y);
         let mask = loaded.ensure_mask();
-        let before = read_patch_gray(mask, x, y, w, h);
+        let before = history::read_rect(mask.as_raw(), width, 1, (x, y, w, h));
         let value = if fill { 255 } else { 0 };
         if before.iter().all(|pixel| *pixel == value) {
             return false;
         }
+        let raw: &mut [u8] = mask;
         for py in y..bottom {
-            for px in x..right {
-                mask.put_pixel(px, py, image::Luma([value]));
-            }
+            let start = (py * width + x) as usize;
+            raw[start..start + w as usize].fill(value);
         }
-        let after = read_patch_gray(mask, x, y, w, h);
+        let after = history::read_rect(mask.as_raw(), width, 1, (x, y, w, h));
         loaded.refresh_layer_region(ctx, &page_id, x, y, w, h);
         self.history.push(Entry::Layer {
             page_id: page_id.clone(),
             layer: LayerKind::Mask,
-            patch: LayerPatch { x, y, width: w, height: h, before, after },
+            patch: LayerPatch::new((x, y, w, h), &before, &after),
         });
         self.layer_dirty.insert((page_id, LayerKind::Mask), Instant::now());
         self.status = if fill {
@@ -1260,18 +1302,14 @@ impl Editor {
         let diameter = self.brush_size;
         let Some(PageAssets::Ready(loaded)) = self.assets.get_mut(&page_id) else { return };
         let mask = loaded.ensure_mask();
-        let before = mask.clone();
+        let Some(bounds) = assets::stroke_bounds(mask.width(), mask.height(), from, to, diameter) else { return };
+        let before = history::read_rect(mask.as_raw(), mask.width(), 1, bounds);
         let Some((x, y, w, h)) = assets::stroke_mask(mask, from, to, diameter, if erase { 0 } else { 255 }) else {
             return;
         };
-        let patch = LayerPatch {
-            x,
-            y,
-            width: w,
-            height: h,
-            before: read_patch_gray(&before, x, y, w, h),
-            after: read_patch_gray(mask, x, y, w, h),
-        };
+        debug_assert_eq!((x, y, w, h), bounds);
+        let after = history::read_rect(mask.as_raw(), mask.width(), 1, bounds);
+        let patch = LayerPatch::new(bounds, &before, &after);
         loaded.refresh_layer_region(ctx, &page_id, x, y, w, h);
         self.history.push(Entry::Layer { page_id: page_id.clone(), layer: LayerKind::Mask, patch });
         self.layer_dirty.insert((page_id, LayerKind::Mask), Instant::now());
@@ -1299,15 +1337,16 @@ impl Editor {
             self.status = "페이지 이미지를 불러오는 중입니다.".into();
             return;
         };
-        let source = std::sync::Arc::clone(&loaded.source);
+        // Shared, not copied: the job copies a layer only if it changes it.
+        let source = Arc::clone(&loaded.source);
         let mask = loaded.mask.clone();
         let result = loaded.result.clone();
+        let has_mask = loaded.mask_has_pixels();
         let range = self.range.and_then(|r| {
             mtt_inpaint::Rect::clamped(r.min.x, r.min.y, r.width(), r.height(), source.width(), source.height())
         });
         let blocks: Vec<TranslationBlock> =
             if scope == InpaintScope::AllBlocks { page.blocks.clone() } else { self.selected_blocks() };
-        let has_mask = mask.as_ref().is_some_and(|mask| mask.pixels().any(|p| p[0] > 0));
         if matches!(scope, InpaintScope::WholeMask | InpaintScope::Range) && !has_mask {
             self.status = "다시 인페인트할 마스크가 없습니다.".into();
             return;
@@ -1349,20 +1388,16 @@ impl Editor {
             record.inpaint_status = Some(InpaintStatus::Running);
         }
         self.status = format!("인페인트 실행 중… ({})", engine_label(engine));
+        let ctx = worker.ctx().clone();
         worker.spawn(move || {
             let outcome =
-                compute_inpaint(scope, &source, mask, result, range, &blocks, engine, &settings, lama.as_ref());
+                compute_inpaint(scope, &source, mask, result, range, &blocks, engine, &settings, lama.as_ref())
+                    .map(|computed| computed.finish(&ctx, &page_id));
             AppEvent::InpaintFinished { chapter_id, page_id, outcome }
         });
     }
 
-    pub fn on_inpaint_finished(
-        &mut self,
-        ctx: &egui::Context,
-        chapter_id: &str,
-        page_id: &str,
-        outcome: Result<InpaintOutcome, String>,
-    ) {
+    pub fn on_inpaint_finished(&mut self, chapter_id: &str, page_id: &str, outcome: Result<InpaintOutcome, String>) {
         if chapter_id != self.chapter.id {
             return;
         }
@@ -1407,24 +1442,14 @@ impl Editor {
             }
             return;
         };
-        let (width, height) = (loaded.width(), loaded.height());
-        let mask_before =
-            loaded.mask.as_ref().map(|m| m.as_raw().clone()).unwrap_or_else(|| vec![0; (width * height) as usize]);
-        let result_before = loaded
-            .result
-            .as_ref()
-            .map(|r| r.as_raw().clone())
-            .unwrap_or_else(|| vec![0; (width * height * 4) as usize]);
-        let mut entries = Vec::new();
-        if let Some(patch) = history::diff_patch(&mask_before, outcome.mask.as_raw(), width, height, 1) {
-            entries.push(Entry::Layer { page_id: page_id.to_owned(), layer: LayerKind::Mask, patch });
-        }
-        if let Some(patch) = history::diff_patch(&result_before, outcome.result.as_raw(), width, height, 4) {
-            entries.push(Entry::Layer { page_id: page_id.to_owned(), layer: LayerKind::Result, patch });
-        }
-        loaded.mask = Some(outcome.mask);
-        loaded.result = Some(outcome.result);
-        loaded.rebuild_layer_textures(ctx, page_id);
+        // Layer edits are locked while an inpaint runs, so the job's diff against the layers
+        // it started from is the change to undo.
+        let entries: Vec<Entry> = outcome
+            .patches
+            .into_iter()
+            .map(|(layer, patch)| Entry::Layer { page_id: page_id.to_owned(), layer, patch })
+            .collect();
+        loaded.install_layers(outcome.layers);
         if !entries.is_empty() {
             self.history.push(Entry::Batch { page_id: page_id.to_owned(), entries });
         }
@@ -1522,10 +1547,10 @@ impl Editor {
         let (width, height) = (loaded.width(), loaded.height());
         let mut source = (*loaded.source).clone();
         source.pixels_mut().for_each(|p| p[3] = 255);
-        let mut result = loaded.result.clone().unwrap_or_else(|| RgbaImage::new(width, height));
+        let mut result = loaded.result.as_deref().cloned().unwrap_or_else(|| RgbaImage::new(width, height));
         if let Some(mask) = &loaded.mask {
-            for (pixel, coverage) in result.pixels_mut().zip(mask.pixels()) {
-                if coverage[0] == 0 {
+            for (pixel, covered) in result.pixels_mut().zip(mask.iter()) {
+                if *covered == 0 {
                     pixel[3] = 0;
                 }
             }
@@ -1572,23 +1597,21 @@ impl Editor {
         };
         let (width, height) = (loaded.width(), loaded.height());
         let (result, mask) = mtt_inpaint::psd::import_inpaint_layers(&document, width, height)?;
-        let mask_before =
-            loaded.mask.as_ref().map(|m| m.as_raw().clone()).unwrap_or_else(|| vec![0; (width * height) as usize]);
-        let result_before = loaded
-            .result
-            .as_ref()
-            .map(|r| r.as_raw().clone())
-            .unwrap_or_else(|| vec![0; (width * height * 4) as usize]);
-        let mut entries = Vec::new();
-        if let Some(patch) = history::diff_patch(&mask_before, mask.as_raw(), width, height, 1) {
-            entries.push(Entry::Layer { page_id: page_id.clone(), layer: LayerKind::Mask, patch });
-        }
-        if let Some(patch) = history::diff_patch(&result_before, result.as_raw(), width, height, 4) {
-            entries.push(Entry::Layer { page_id: page_id.clone(), layer: LayerKind::Result, patch });
-        }
-        loaded.mask = Some(mask);
-        loaded.result = Some(result);
-        loaded.rebuild_layer_textures(ctx, &page_id);
+        let computed = ComputedInpaint {
+            before_mask: loaded.mask.clone(),
+            before_result: loaded.result.clone(),
+            mask,
+            result,
+            engine: InpaintEngine::LocalFillFallback,
+            message: String::new(),
+        };
+        let outcome = computed.finish(ctx, &page_id);
+        let entries: Vec<Entry> = outcome
+            .patches
+            .into_iter()
+            .map(|(layer, patch)| Entry::Layer { page_id: page_id.clone(), layer, patch })
+            .collect();
+        loaded.install_layers(outcome.layers);
         if !entries.is_empty() {
             self.history.push(Entry::Batch { page_id: page_id.clone(), entries });
         }
@@ -1793,6 +1816,22 @@ impl Editor {
         }
     }
 
+    /// How long until `tick` has a save or an undo step to close. egui only runs a frame on
+    /// input, so without a repaint for this an edit would sit unsaved until the mouse moves.
+    /// (A drag's release and a finished save run frames of their own.)
+    fn next_tick_due(&self) -> Option<Duration> {
+        let left = |at: &Instant, delay: Duration| delay.saturating_sub(at.elapsed());
+        let layers = self.layer_dirty.values().map(|at| left(at, LAYER_SAVE_DELAY));
+        let chapter = self
+            .last_change
+            .as_ref()
+            .filter(|_| self.chapter_dirty && !self.save.in_flight)
+            .map(|at| left(at, AUTOSAVE_DELAY));
+        let text = self.last_text_edit.as_ref().filter(|_| self.text_editing).map(|at| left(at, TEXT_COMMIT_DELAY));
+        // Just past the deadline: `tick` compares with `>`/`>=`.
+        layers.chain(chapter).chain(text).min().map(|wait| wait + Duration::from_millis(10))
+    }
+
     fn commit_checkpoint_if_changed(&mut self) {
         if self.preset_checkpoint.is_some() {
             self.commit_checkpoint();
@@ -1907,19 +1946,10 @@ impl Editor {
         let Some(page_index) = self.chapter.pages.iter().position(|page| page.id == page_id) else {
             return;
         };
-        let (path, payload): (_, Option<RgbaImage>) = match layer {
-            LayerKind::Mask => (
-                services.library.inpaint_layer_path(&self.chapter, page_id, PageLayer::InpaintMask),
-                loaded.mask.as_ref().map(mask_to_rgba),
-            ),
-            LayerKind::Result => (
-                services.library.inpaint_layer_path(&self.chapter, page_id, PageLayer::InpaintResult),
-                loaded.result.clone(),
-            ),
-        };
-        let Some(payload) = payload else {
+        let Some(payload) = LayerImage::of(loaded, layer) else {
             return;
         };
+        let path = services.library.inpaint_layer_path(&self.chapter, page_id, layer.page_layer());
         let path_text = path.to_string_lossy().into_owned();
         let page = &mut self.chapter.pages[page_index];
         let field = match layer {
@@ -1936,7 +1966,7 @@ impl Editor {
         let generation = self.write_generation.clone();
         let queued_at = generation.current();
         worker.spawn_serial(move || {
-            let result = encode_png(&payload).and_then(|bytes| {
+            let result = payload.encode().and_then(|bytes| {
                 generation.write_if_current(queued_at, || {
                     mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())
                 })
@@ -1985,13 +2015,9 @@ impl Editor {
             let Some(PageAssets::Ready(loaded)) = self.assets.get(&page_id) else {
                 continue;
             };
-            let (kind, payload) = match layer {
-                LayerKind::Mask => (PageLayer::InpaintMask, loaded.mask.as_ref().map(mask_to_rgba)),
-                LayerKind::Result => (PageLayer::InpaintResult, loaded.result.clone()),
-            };
-            let Some(payload) = payload else { continue };
-            let path = services.library.inpaint_layer_path(&self.chapter, &page_id, kind);
-            let bytes = encode_png(&payload)?;
+            let Some(payload) = LayerImage::of(loaded, layer) else { continue };
+            let path = services.library.inpaint_layer_path(&self.chapter, &page_id, layer.page_layer());
+            let bytes = payload.encode()?;
             mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())?;
             if let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == page_id) {
                 let text = path.to_string_lossy().into_owned();
@@ -2020,11 +2046,10 @@ impl Editor {
         let page = self.page().cloned().ok_or("페이지가 없습니다.")?;
         let loaded = self.loaded_page().ok_or("페이지 이미지가 아직 로드되지 않았습니다.")?;
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
-        let mask = loaded.mask.as_ref().map(mask_to_rgba);
         let images = PageImages {
             source: Some(&loaded.source),
-            inpaint_mask: mask.as_ref(),
-            inpaint_result: loaded.result.as_ref(),
+            inpaint_mask: loaded.mask.as_deref(),
+            inpaint_result: loaded.result.as_deref(),
         };
         let rendered = {
             let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
@@ -2041,6 +2066,8 @@ impl Editor {
     /// `전체 출력 {i}/{n}` progress.
     pub fn export_all(&mut self, services: &mut Services, worker: &Worker<AppEvent>) -> Result<(), String> {
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
+        // Its own font context: rendering every page must not hold the editor's.
+        let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?.fork();
         self.flush(services)?;
         let library = services.library.clone();
         let chapter = self.chapter.clone();
@@ -2052,7 +2079,7 @@ impl Editor {
             let mut errors = Vec::new();
             for (index, page) in chapter.pages.iter().enumerate() {
                 emitter.emit(AppEvent::ExportProgress { current: index, total });
-                let load = assets::load_page(&library, &chapter, page);
+                let load = assets::decode_page(&library, &chapter, page);
                 let source = match load.source {
                     Ok(source) => source,
                     Err(error) => {
@@ -2060,18 +2087,12 @@ impl Editor {
                         continue;
                     }
                 };
-                let mask = load.mask.as_ref().map(mask_to_rgba);
                 let images = PageImages {
                     source: Some(&source),
-                    inpaint_mask: mask.as_ref(),
+                    inpaint_mask: load.mask.as_ref(),
                     inpaint_result: load.result.as_ref(),
                 };
-                let rendered = match fonts.lock() {
-                    Ok(mut fonts) => {
-                        mtt_render::page::render_page(&mut fonts, page, &images, &PageRenderOptions::OUTPUT)
-                    }
-                    Err(_) => None,
-                };
+                let rendered = mtt_render::page::render_page(&mut fonts, page, &images, &PageRenderOptions::OUTPUT);
                 let Some(rendered) = rendered else {
                     errors.push(format!("{}: 렌더링 실패", page.name));
                     continue;
@@ -2097,6 +2118,9 @@ impl Editor {
     ) -> Option<EditorAction> {
         let pointer_down = ui.input(|i| i.pointer.any_down());
         self.tick(services, worker, pointer_down);
+        if let Some(wait) = self.next_tick_due() {
+            ui.ctx().request_repaint_after(wait);
+        }
         let ui_state = &services.ui_state;
         self.widgets.load(&ui_state.widgets, &ui_state.inspector_order, ui_state.widget_canvas);
         self.text_editing = false;
@@ -2187,28 +2211,29 @@ pub fn engine_label(engine: InpaintEngine) -> &'static str {
 fn compute_inpaint(
     scope: InpaintScope,
     source: &RgbaImage,
-    mask: Option<GrayImage>,
-    result: Option<RgbaImage>,
+    before_mask: Option<Arc<GrayImage>>,
+    before_result: Option<Arc<RgbaImage>>,
     range: Option<mtt_inpaint::Rect>,
     blocks: &[TranslationBlock],
     engine: InpaintEngine,
     settings: &InpaintSettings,
     lama: Option<&LamaCommand>,
-) -> Result<InpaintOutcome, String> {
+) -> Result<ComputedInpaint, String> {
     let started = Instant::now();
     let (width, height) = source.dimensions();
-    let has_layers = mask.as_ref().is_some_and(|m| m.pixels().any(|p| p[0] > 0)) || result.is_some();
+    let (mask, result) = (before_mask.as_deref(), before_result.as_deref());
+    let has_layers = mask.is_some_and(|m| m.iter().any(|value| *value > 0)) || result.is_some();
     let patch_mask = match scope {
         InpaintScope::WholeMask => {
-            let mask = mask.clone().ok_or("다시 인페인트할 마스크가 없습니다.")?;
-            if !mask.pixels().any(|p| p[0] > 0) {
+            let mask = mask.ok_or("다시 인페인트할 마스크가 없습니다.")?;
+            if !mask.iter().any(|value| *value > 0) {
                 return Err("다시 인페인트할 마스크가 없습니다.".into());
             }
-            mask
+            mask.clone()
         }
         InpaintScope::Range => {
-            let base = mask.clone().ok_or("다시 인페인트할 마스크가 없습니다.")?;
-            mtt_inpaint::mask_for_selection(&base, range.ok_or("부분 인페인트할 범위를 먼저 선택하세요.")?)
+            let base = mask.ok_or("다시 인페인트할 마스크가 없습니다.")?;
+            mtt_inpaint::mask_for_selection(base, range.ok_or("부분 인페인트할 범위를 먼저 선택하세요.")?)
                 .ok_or("선택 범위 안에 마스크 픽셀이 없습니다.")?
         }
         InpaintScope::SelectedBlocks | InpaintScope::AllBlocks => {
@@ -2227,8 +2252,8 @@ fn compute_inpaint(
     let (mask, result) = if whole {
         (patch_mask, patch_result)
     } else {
-        let merged_result = mtt_inpaint::merge_partial_result(result.as_ref(), &patch_result, &patch_mask);
-        let mut merged_mask = mask.unwrap_or_else(|| GrayImage::new(width, height));
+        let merged_result = mtt_inpaint::merge_partial_result(result, &patch_result, &patch_mask);
+        let mut merged_mask = mask.cloned().unwrap_or_else(|| GrayImage::new(width, height));
         mtt_inpaint::merge_masks(&mut merged_mask, &patch_mask);
         (merged_mask, merged_result)
     };
@@ -2247,7 +2272,7 @@ fn compute_inpaint(
         (InpaintScope::SelectedBlocks, true) => "선택 블록 로컬 인페인트 결과를 저장했습니다.",
     };
     log::info!("inpaint {scope:?} done with {} in {:.1}s", engine_label(engine), started.elapsed().as_secs_f32());
-    Ok(InpaintOutcome { mask, result, engine, message: message.into() })
+    Ok(ComputedInpaint { before_mask, before_result, mask, result, engine, message: message.into() })
 }
 
 fn entry_touches_layers(entry: &Entry) -> bool {
@@ -2260,11 +2285,52 @@ fn entry_touches_layers(entry: &Entry) -> bool {
 
 /// Copy of `block` with a new id, shifted by `(dx, dy)` page pixels in normalized space.
 fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
+    encode_png_raw(image.as_raw(), image.dimensions(), image::ExtendedColorType::Rgba8, false)
+}
+
+/// PNG from raw pixels (no copy into a `DynamicImage`). `fast` trades file size for speed:
+/// layer autosaves run after every stroke.
+fn encode_png_raw(
+    data: &[u8],
+    (width, height): (u32, u32),
+    color: image::ExtendedColorType,
+    fast: bool,
+) -> Result<Vec<u8>, String> {
+    use image::ImageEncoder;
+    use image::codecs::png::{CompressionType, FilterType, PngEncoder};
     let mut bytes = Vec::new();
-    image::DynamicImage::ImageRgba8(image.clone())
-        .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
-        .map_err(|error| error.to_string())?;
+    let encoder = if fast {
+        PngEncoder::new_with_quality(&mut bytes, CompressionType::Fast, FilterType::Adaptive)
+    } else {
+        PngEncoder::new(&mut bytes)
+    };
+    encoder.write_image(data, width, height, color).map_err(|error| error.to_string())?;
     Ok(bytes)
+}
+
+/// A layer handed to the writer thread: shared with the editor, not copied.
+enum LayerImage {
+    Mask(Arc<GrayImage>),
+    Result(Arc<RgbaImage>),
+}
+
+impl LayerImage {
+    fn of(loaded: &LoadedPage, layer: LayerKind) -> Option<Self> {
+        match layer {
+            LayerKind::Mask => loaded.mask.clone().map(Self::Mask),
+            LayerKind::Result => loaded.result.clone().map(Self::Result),
+        }
+    }
+
+    /// Masks are stored as grayscale (both readers also take the older black/white RGBA).
+    fn encode(&self) -> Result<Vec<u8>, String> {
+        match self {
+            Self::Mask(mask) => encode_png_raw(mask.as_raw(), mask.dimensions(), image::ExtendedColorType::L8, true),
+            Self::Result(result) => {
+                encode_png_raw(result.as_raw(), result.dimensions(), image::ExtendedColorType::Rgba8, true)
+            }
+        }
+    }
 }
 
 fn write_patch_gray(image: &mut GrayImage, patch: &LayerPatch, bytes: &[u8]) {
@@ -2295,16 +2361,6 @@ fn write_patch_rgba(image: &mut RgbaImage, patch: &LayerPatch, bytes: &[u8]) {
 }
 
 /// Copies a rect of a gray image into raw bytes.
-pub fn read_patch_gray(image: &GrayImage, x: u32, y: u32, width: u32, height: u32) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity((width * height) as usize);
-    for row in y..y + height {
-        for col in x..x + width {
-            bytes.push(image.get_pixel(col, row)[0]);
-        }
-    }
-    bytes
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2420,8 +2476,8 @@ mod tests {
         let outcome = compute_inpaint(
             InpaintScope::Range,
             &source,
-            Some(mask),
-            Some(existing),
+            Some(Arc::new(mask)),
+            Some(Arc::new(existing)),
             Some(mtt_inpaint::Rect { x: 0, y: 0, width: 30, height: 30 }),
             &[],
             InpaintEngine::LocalFillFallback,
@@ -2436,7 +2492,7 @@ mod tests {
         let empty_range = compute_inpaint(
             InpaintScope::Range,
             &source,
-            Some(GrayImage::new(60, 60)),
+            Some(Arc::new(GrayImage::new(60, 60))),
             None,
             Some(mtt_inpaint::Rect { x: 0, y: 0, width: 10, height: 10 }),
             &[],
@@ -2461,8 +2517,15 @@ mod tests {
         mask.put_pixel(3, 3, image::Luma([255]));
         let mut result = RgbaImage::new(10, 10);
         result.put_pixel(3, 3, image::Rgba([9, 9, 9, 255]));
-        let outcome = InpaintOutcome { mask, result, engine: InpaintEngine::LocalFillFallback, message: "ok".into() };
-        editor.on_inpaint_finished(&ctx, "c", &page_id, Ok(outcome));
+        let computed = ComputedInpaint {
+            before_mask: None,
+            before_result: None,
+            mask,
+            result,
+            engine: InpaintEngine::LocalFillFallback,
+            message: "ok".into(),
+        };
+        editor.on_inpaint_finished("c", &page_id, Ok(computed.finish(&ctx, &page_id)));
         assert!(!editor.inpaint_busy());
         assert_eq!(editor.page().unwrap().inpaint_status, Some(InpaintStatus::Completed));
         editor.undo(&ctx);
@@ -2573,6 +2636,18 @@ mod tests {
         let services = Services::new(&ctx, mtt_core::paths::AppPaths::from_data_root(dir));
         let worker = Worker::new(&ctx, 1);
         (ctx, services, worker)
+    }
+
+    #[test]
+    fn pending_saves_schedule_a_frame() {
+        let mut editor = Editor::new(chapter_with_pages(1));
+        editor.selection = vec!["b0".into()];
+        assert_eq!(editor.next_tick_due(), None, "nothing to save");
+        editor.edit_selected(|block| block.translated_text = "x".into());
+        let wait = editor.next_tick_due().expect("the autosave needs a frame");
+        assert!(wait <= AUTOSAVE_DELAY + Duration::from_millis(10));
+        editor.layer_dirty.insert(("p0".into(), LayerKind::Mask), Instant::now() - LAYER_SAVE_DELAY);
+        assert!(editor.next_tick_due().unwrap() <= Duration::from_millis(10), "an overdue layer save comes first");
     }
 
     #[test]

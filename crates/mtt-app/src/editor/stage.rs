@@ -4,13 +4,12 @@
 use std::collections::HashSet;
 
 use eframe::egui::{self, Color32, Key, Modifiers, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
-use image::GrayImage;
 use mtt_core::geometry::{apply_editable_block_bbox, bbox_to_pixels, editable_block_bbox, resolve_block_rotation_deg};
 use mtt_core::model::{BBox, PageRecord, TranslationBlock};
 
 use super::assets::{PageAssets, stroke_mask};
-use super::history::{Entry, LayerKind, LayerPatch};
-use super::{Editor, Layer, MASK_BRUSH_MAX, MASK_BRUSH_MIN, Tool, read_patch_gray};
+use super::history::{Entry, LayerKind, LayerPatch, StrokeBackup, read_rect};
+use super::{Editor, Layer, MASK_BRUSH_MAX, MASK_BRUSH_MIN, Tool};
 use crate::services::Services;
 use crate::textures::alpha_tint;
 use crate::theme::{self, icon};
@@ -186,19 +185,18 @@ pub enum Drag {
     Paint {
         last: Pos2,
         erase: bool,
-        before: GrayImage,
+        before: StrokeBackup,
         dirty: Option<(u32, u32, u32, u32)>,
     },
+    /// Picks islands into `LoadedPage::mask_selection`; the mask changes on release.
     AutoErase {
         last: Pos2,
-        selected: Vec<u8>,
-        before: GrayImage,
         dirty: Option<(u32, u32, u32, u32)>,
     },
     ResultPaint {
         last: Pos2,
-        before_result: Box<image::RgbaImage>,
-        before_mask: GrayImage,
+        before_result: StrokeBackup,
+        before_mask: StrokeBackup,
         dirty: Option<(u32, u32, u32, u32)>,
         smudge: Option<image::RgbaImage>,
     },
@@ -926,7 +924,7 @@ fn start_drag(
         Tool::Zoom => return Drag::Zoom { start: screen, start_zoom: editor.view.zoom, anchor: screen },
         Tool::MaskBrush | Tool::MaskEraser if editor.layer == Layer::InpaintMask => {
             if let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(&page.id) {
-                let before = loaded.ensure_mask().clone();
+                let before = StrokeBackup::new(loaded.width(), loaded.height(), 1);
                 let mut drag = Drag::Paint { last: point, erase: editor.tool == Tool::MaskEraser, before, dirty: None };
                 paint_to(editor, ctx, &page.id, &mut drag, point);
                 return drag;
@@ -936,9 +934,10 @@ fn start_drag(
         Tool::Range => return Drag::Range { start: point, current: point, additive: modifiers.shift },
         Tool::MaskAutoEraser if editor.layer == Layer::InpaintMask => {
             if let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(&page.id) {
-                let before = loaded.ensure_mask().clone();
-                let selected = vec![0u8; (before.width() * before.height()) as usize];
-                let mut drag = Drag::AutoErase { last: point, selected, before, dirty: None };
+                if loaded.mask.is_some() {
+                    loaded.mask_selection = Some(vec![0u8; (loaded.width() * loaded.height()) as usize]);
+                }
+                let mut drag = Drag::AutoErase { last: point, dirty: None };
                 auto_erase_to(editor, ctx, &page.id, &mut drag, point);
                 return drag;
             }
@@ -951,8 +950,9 @@ fn start_drag(
                     editor.sample_screen(super::color::SampleTarget::ResultBrush, screen);
                     return Drag::Idle;
                 }
-                let before_result = Box::new(loaded.ensure_result().clone());
-                let before_mask = loaded.ensure_mask().clone();
+                let (width, height) = (loaded.width(), loaded.height());
+                let before_result = StrokeBackup::new(width, height, 4);
+                let before_mask = StrokeBackup::new(width, height, 1);
                 let mut drag = Drag::ResultPaint { last: point, before_result, before_mask, dirty: None, smudge: None };
                 paint_result_to(editor, ctx, &page.id, &mut drag, point);
                 return drag;
@@ -1166,11 +1166,16 @@ fn update_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord, scre
 }
 
 fn paint_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
-    let Drag::Paint { last, erase, dirty, .. } = drag else { return };
+    let Drag::Paint { last, erase, before, dirty } = drag else { return };
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
     let diameter = editor.brush_size.clamp(MASK_BRUSH_MIN, MASK_BRUSH_MAX);
     let value = if *erase { 0 } else { 255 };
-    let touched = stroke_mask(loaded.ensure_mask(), (last.x, last.y), (point.x, point.y), diameter, value);
+    let mask = loaded.ensure_mask();
+    let segment = ((last.x, last.y), (point.x, point.y));
+    if let Some(rect) = super::assets::stroke_bounds(mask.width(), mask.height(), segment.0, segment.1, diameter) {
+        before.save(mask.as_raw(), rect);
+    }
+    let touched = stroke_mask(mask, segment.0, segment.1, diameter, value);
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = Some(match *dirty {
@@ -1188,9 +1193,10 @@ fn paint_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut 
 /// Picks islands along the segment (steps of a third of the brush, like the TS app) and
 /// previews them through the mask texture.
 fn auto_erase_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
-    let Drag::AutoErase { last, selected, dirty, .. } = drag else { return };
+    let Drag::AutoErase { last, dirty } = drag else { return };
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
-    let Some(mask) = loaded.mask.as_ref() else { return };
+    let loaded = &mut **loaded;
+    let (Some(mask), Some(selected)) = (loaded.mask.as_deref(), loaded.mask_selection.as_mut()) else { return };
     let diameter = editor.brush_size.clamp(MASK_BRUSH_MIN, MASK_BRUSH_MAX);
     let distance = last.distance(point);
     let steps = (distance / (diameter / 3.0).max(1.0)).ceil().max(1.0) as u32;
@@ -1203,31 +1209,32 @@ fn auto_erase_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: 
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = super::result_tools::union(*dirty, touched);
-        loaded.mask_selection = Some(selected.clone());
         loaded.refresh_layer_region(ctx, page_id, x, y, w, h);
     }
 }
 
 fn paint_result_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
-    let Drag::ResultPaint { last, dirty, smudge, .. } = drag else { return };
+    let Drag::ResultPaint { last, dirty, smudge, before_result, before_mask } = drag else { return };
     if last.distance(point) < 0.5 && dirty.is_some() {
         return;
     }
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
     let (width, height) = (loaded.width(), loaded.height());
-    let mut result = loaded.result.take().unwrap_or_else(|| image::RgbaImage::new(width, height));
-    let mut mask = loaded.mask.take().unwrap_or_else(|| GrayImage::new(width, height));
+    let (result, mask) = loaded.ensure_layers();
+    let segment = ((last.x, last.y), (point.x, point.y));
+    if let Some(rect) = super::result_tools::segment_bounds(segment.0, segment.1, &editor.result_brush, width, height) {
+        before_result.save(result.as_raw(), rect);
+        before_mask.save(mask.as_raw(), rect);
+    }
     let touched = super::result_tools::stroke(
         editor.result_tool,
-        &mut result,
-        &mut mask,
-        (last.x, last.y),
-        (point.x, point.y),
+        result,
+        mask,
+        segment.0,
+        segment.1,
         &editor.result_brush,
         smudge,
     );
-    loaded.result = Some(result);
-    loaded.mask = Some(mask);
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = super::result_tools::union(*dirty, touched);
@@ -1297,59 +1304,53 @@ fn finish_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord) {
             editor.revision += 1;
             editor.commit_checkpoint();
         }
-        Drag::Paint { before, dirty: Some((x, y, width, height)), .. } => {
+        Drag::Paint { before, dirty: Some(rect), .. } => {
             let Some(PageAssets::Ready(loaded)) = editor.assets.get(&page.id) else { return };
             let Some(mask) = &loaded.mask else { return };
-            let patch = LayerPatch {
-                x,
-                y,
-                width,
-                height,
-                before: read_patch_gray(&before, x, y, width, height),
-                after: read_patch_gray(mask, x, y, width, height),
-            };
+            let after = read_rect(mask.as_raw(), loaded.width(), 1, rect);
+            let patch = LayerPatch::new(rect, &before.before(mask.as_raw(), rect), &after);
             editor.history.push(Entry::Layer { page_id: page.id.clone(), layer: LayerKind::Mask, patch });
             editor.layer_dirty.insert((page.id.clone(), LayerKind::Mask), std::time::Instant::now());
         }
-        Drag::AutoErase { selected, before, dirty, .. } => {
+        Drag::AutoErase { dirty, .. } => {
             let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(&page.id) else { return };
-            loaded.mask_selection = None;
-            let Some(rect) = dirty else {
+            let selected = loaded.mask_selection.take();
+            let (Some(rect), Some(selected)) = (dirty, selected) else {
                 return;
             };
-            if let Some(mask) = loaded.mask.as_mut() {
-                for (value, picked) in mask.iter_mut().zip(&selected) {
+            let width = loaded.width();
+            let mask = loaded.ensure_mask();
+            let before = read_rect(mask.as_raw(), width, 1, rect);
+            let raw: &mut [u8] = mask;
+            // Picks only happen inside the touched rect.
+            for row in rect.1..rect.1 + rect.3 {
+                let start = (row * width + rect.0) as usize;
+                let end = start + rect.2 as usize;
+                for (value, picked) in raw[start..end].iter_mut().zip(&selected[start..end]) {
                     if *picked != 0 {
                         *value = 0;
                     }
                 }
             }
+            let after = read_rect(mask.as_raw(), width, 1, rect);
             loaded.refresh_layer_region(ctx, &page.id, rect.0, rect.1, rect.2, rect.3);
-            let Some(mask) = &loaded.mask else { return };
-            let patch = LayerPatch {
-                x: rect.0,
-                y: rect.1,
-                width: rect.2,
-                height: rect.3,
-                before: read_patch_gray(&before, rect.0, rect.1, rect.2, rect.3),
-                after: read_patch_gray(mask, rect.0, rect.1, rect.2, rect.3),
-            };
+            let patch = LayerPatch::new(rect, &before, &after);
             editor.history.push(Entry::Layer { page_id: page.id.clone(), layer: LayerKind::Mask, patch });
             editor.layer_dirty.insert((page.id.clone(), LayerKind::Mask), std::time::Instant::now());
         }
         Drag::ResultPaint { before_result, before_mask, dirty: Some(rect), .. } => {
             let Some(PageAssets::Ready(loaded)) = editor.assets.get(&page.id) else { return };
             let (Some(result), Some(mask)) = (&loaded.result, &loaded.mask) else { return };
-            let read = |data: &[u8], channels: u32| super::history::read_rect(data, loaded.width(), channels, rect);
+            let read = |data: &[u8], channels: u32| read_rect(data, loaded.width(), channels, rect);
             let mut entries = Vec::new();
-            let (before, after) = (read(before_result.as_raw(), 4), read(result.as_raw(), 4));
+            let (before, after) = (before_result.before(result.as_raw(), rect), read(result.as_raw(), 4));
             if before != after {
-                let patch = LayerPatch { x: rect.0, y: rect.1, width: rect.2, height: rect.3, before, after };
+                let patch = LayerPatch::new(rect, &before, &after);
                 entries.push(Entry::Layer { page_id: page.id.clone(), layer: LayerKind::Result, patch });
             }
-            let (before, after) = (read(before_mask.as_raw(), 1), read(mask.as_raw(), 1));
+            let (before, after) = (before_mask.before(mask.as_raw(), rect), read(mask.as_raw(), 1));
             if before != after {
-                let patch = LayerPatch { x: rect.0, y: rect.1, width: rect.2, height: rect.3, before, after };
+                let patch = LayerPatch::new(rect, &before, &after);
                 entries.push(Entry::Layer { page_id: page.id.clone(), layer: LayerKind::Mask, patch });
                 editor.layer_dirty.insert((page.id.clone(), LayerKind::Mask), std::time::Instant::now());
             }

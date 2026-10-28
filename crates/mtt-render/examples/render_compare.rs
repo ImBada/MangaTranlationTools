@@ -54,7 +54,7 @@ fn main() {
                         .map(|i| i.to_rgba8())
                 };
                 let source = load(PageLayer::Source);
-                let mask = load(PageLayer::InpaintMask);
+                let mask = load(PageLayer::InpaintMask).map(|mask| mtt_render::page::coverage_mask(&mask));
                 let result = load(PageLayer::InpaintResult);
                 let started = Instant::now();
                 let images = PageImages {

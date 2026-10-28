@@ -41,14 +41,27 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> CoreResult<()>
     write_bytes_atomic(path, text.as_bytes())
 }
 
+/// Like `write_json_atomic` without the fsync: the file is never half-written, but the
+/// last write may be lost on a power cut. For state that is cheap to lose.
+pub fn write_json_replace<T: Serialize>(path: &Path, value: &T) -> CoreResult<()> {
+    let text = to_pretty_json(value).map_err(|source| CoreError::json(path, source))?;
+    write_bytes(path, text.as_bytes(), false)
+}
+
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> CoreResult<()> {
+    write_bytes(path, bytes, true)
+}
+
+fn write_bytes(path: &Path, bytes: &[u8], sync: bool) -> CoreResult<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|source| CoreError::io(parent, source))?;
     let temp_path = temp_sibling(path);
     let write = || -> std::io::Result<()> {
         let mut file = fs::File::create(&temp_path)?;
         file.write_all(bytes)?;
-        file.sync_all()?;
+        if sync {
+            file.sync_all()?;
+        }
         Ok(())
     };
     if let Err(source) = write() {

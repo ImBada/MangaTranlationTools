@@ -8,7 +8,7 @@ use tiny_skia::Pixmap;
 use crate::canvas::{from_straight_rgba, to_straight_rgba};
 
 /// Approximates CSS `filter: blur(sigma)` with three box blurs (SVG feGaussianBlur rule)
-/// on premultiplied pixels.
+/// on premultiplied pixels. Pixels outside the image count as transparent.
 pub fn gaussian_blur(pixmap: &mut Pixmap, sigma: f64) {
     if sigma <= 0.0 {
         return;
@@ -16,8 +16,6 @@ pub fn gaussian_blur(pixmap: &mut Pixmap, sigma: f64) {
     let width = pixmap.width() as usize;
     let height = pixmap.height() as usize;
     let box_size = ((sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0) + 0.5).floor().max(1.0) as usize;
-    let data = pixmap.data_mut();
-    let mut scratch = vec![0u8; data.len()];
     // Three passes per axis; even box sizes alternate left/right bias as in the SVG spec.
     let passes: [(usize, usize); 3] = if box_size % 2 == 1 {
         let r = box_size / 2;
@@ -26,57 +24,79 @@ pub fn gaussian_blur(pixmap: &mut Pixmap, sigma: f64) {
         let r = box_size / 2;
         [(r, r.saturating_sub(1)), (r.saturating_sub(1), r), (r, r)]
     };
+    let mut scratch = vec![0u8; pixmap.data().len()];
+    // Six passes ping-pong between the two buffers and end back in the pixmap.
+    let (mut src, mut dst): (&mut [u8], &mut [u8]) = (pixmap.data_mut(), &mut scratch);
     for (left, right) in passes {
-        box_blur_horizontal(data, &mut scratch, width, height, left, right);
-        data.copy_from_slice(&scratch);
+        box_blur_horizontal(src, dst, width, left, right);
+        std::mem::swap(&mut src, &mut dst);
     }
-    for (left, right) in passes {
-        box_blur_vertical(data, &mut scratch, width, height, left, right);
-        data.copy_from_slice(&scratch);
+    for (top, bottom) in passes {
+        box_blur_vertical(src, dst, width, height, top, bottom);
+        std::mem::swap(&mut src, &mut dst);
     }
 }
 
-fn box_blur_horizontal(src: &[u8], dst: &mut [u8], width: usize, height: usize, left: usize, right: usize) {
+fn box_blur_horizontal(src: &[u8], dst: &mut [u8], width: usize, left: usize, right: usize) {
+    if width == 0 {
+        return;
+    }
     let window = (left + right + 1) as u32;
-    for y in 0..height {
-        let row = y * width * 4;
-        for channel in 0..4 {
-            let mut sum: u32 = 0;
-            for x in 0..=right.min(width.saturating_sub(1)) {
-                sum += u32::from(src[row + x * 4 + channel]);
+    for (src_row, dst_row) in src.chunks_exact(width * 4).zip(dst.chunks_exact_mut(width * 4)) {
+        let pixel = |x: usize| &src_row[x * 4..x * 4 + 4];
+        let mut sum = [0u32; 4];
+        for x in 0..=right.min(width - 1) {
+            for (total, value) in sum.iter_mut().zip(pixel(x)) {
+                *total += u32::from(*value);
             }
-            for x in 0..width {
-                dst[row + x * 4 + channel] = ((sum + window / 2) / window) as u8;
-                let add = x + right + 1;
-                if add < width {
-                    sum += u32::from(src[row + add * 4 + channel]);
+        }
+        for x in 0..width {
+            for (out, total) in dst_row[x * 4..x * 4 + 4].iter_mut().zip(&sum) {
+                *out = ((total + window / 2) / window) as u8;
+            }
+            let add = x + right + 1;
+            if add < width {
+                for (total, value) in sum.iter_mut().zip(pixel(add)) {
+                    *total += u32::from(*value);
                 }
-                if x >= left {
-                    sum -= u32::from(src[row + (x - left) * 4 + channel]);
+            }
+            if x >= left {
+                for (total, value) in sum.iter_mut().zip(pixel(x - left)) {
+                    *total -= u32::from(*value);
                 }
             }
         }
     }
 }
 
+/// Row by row with a running sum per column and channel (cache friendly, unlike walking
+/// down each column).
 fn box_blur_vertical(src: &[u8], dst: &mut [u8], width: usize, height: usize, top: usize, bottom: usize) {
+    if width == 0 || height == 0 {
+        return;
+    }
+    let stride = width * 4;
     let window = (top + bottom + 1) as u32;
-    for x in 0..width {
-        for channel in 0..4 {
-            let at = |y: usize| (y * width + x) * 4 + channel;
-            let mut sum: u32 = 0;
-            for y in 0..=bottom.min(height.saturating_sub(1)) {
-                sum += u32::from(src[at(y)]);
+    let row = |y: usize| &src[y * stride..(y + 1) * stride];
+    let mut sums = vec![0u32; stride];
+    for y in 0..=bottom.min(height - 1) {
+        for (total, value) in sums.iter_mut().zip(row(y)) {
+            *total += u32::from(*value);
+        }
+    }
+    for (y, dst_row) in dst.chunks_exact_mut(stride).enumerate() {
+        for (out, total) in dst_row.iter_mut().zip(&sums) {
+            *out = ((total + window / 2) / window) as u8;
+        }
+        let add = y + bottom + 1;
+        if add < height {
+            for (total, value) in sums.iter_mut().zip(row(add)) {
+                *total += u32::from(*value);
             }
-            for y in 0..height {
-                dst[at(y)] = ((sum + window / 2) / window) as u8;
-                let add = y + bottom + 1;
-                if add < height {
-                    sum += u32::from(src[at(add)]);
-                }
-                if y >= top {
-                    sum -= u32::from(src[at(y - top)]);
-                }
+        }
+        if y >= top {
+            for (total, value) in sums.iter_mut().zip(row(y - top)) {
+                *total -= u32::from(*value);
             }
         }
     }
@@ -214,8 +234,8 @@ pub fn apply_font_filter_effects(pixmap: &mut Pixmap, block: &TranslationBlock, 
         let intensity = kind.intensity(block);
         let next = match kind {
             FilterKind::Zigzag => zigzag(&pixels, width, height, intensity, font_size),
-            FilterKind::Wave => wave(&pixels, width, height, intensity, font_size),
-            FilterKind::Glitch => glitch(&pixels, width, height, intensity, font_size),
+            FilterKind::Wave => wave(&pixels, width, intensity, font_size),
+            FilterKind::Glitch => glitch(&pixels, width, intensity, font_size),
             FilterKind::Pixelate => pixelate(&pixels, width, height, intensity, font_size),
             FilterKind::Blur => blur_straight(&pixels, width, height, blur_radius_px(font_size, intensity)),
             FilterKind::Noise => noise(&pixels, width, height, intensity, font_size),
@@ -233,24 +253,24 @@ pub fn apply_font_filter_effects(pixmap: &mut Pixmap, block: &TranslationBlock, 
 fn zigzag(source: &[u8], width: usize, height: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
     let displacement = filter_font_size(font_size) * ZIGZAG_DISPLACEMENT_RATIO * intensity;
     (displacement > 0.0).then(|| {
-        horizontal_displacement(source, width, height, |y| {
+        horizontal_displacement(source, width, |y| {
             zigzag_tremble_offset(y + 0.5, height as f64, font_size) * displacement
         })
     })
 }
 
-fn wave(source: &[u8], width: usize, height: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
+fn wave(source: &[u8], width: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
     let displacement = filter_font_size(font_size) * WAVE_DISPLACEMENT_RATIO * intensity;
     if displacement <= 0.0 {
         return None;
     }
     let wave_length = (filter_font_size(font_size) * (1.15 - intensity * 0.45)).max(4.0);
-    Some(horizontal_displacement(source, width, height, |y| {
+    Some(horizontal_displacement(source, width, |y| {
         ((y + 0.5) / wave_length * std::f64::consts::TAU).sin() * displacement
     }))
 }
 
-fn glitch(source: &[u8], width: usize, height: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
+fn glitch(source: &[u8], width: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
     let fs = filter_font_size(font_size);
     let displacement = fs * GLITCH_DISPLACEMENT_RATIO * intensity;
     let split = fs * GLITCH_CHANNEL_SPLIT_RATIO * intensity;
@@ -258,15 +278,14 @@ fn glitch(source: &[u8], width: usize, height: usize, intensity: f64, font_size:
         return None;
     }
     let mut output = vec![0u8; source.len()];
-    for y in 0..height {
+    for (y, (src, out)) in source.chunks_exact(width * 4).zip(output.chunks_exact_mut(width * 4)).enumerate() {
         let row_offset = glitch_row_offset(y as f64 + 0.5, font_size, intensity, displacement);
-        for x in 0..width {
-            let out = (y * width + x) * 4;
+        for (x, pixel) in out.chunks_exact_mut(4).enumerate() {
             let fx = x as f64 + row_offset;
-            output[out] = sample_bilinear(source, width, height, fx + split, y as f64, 0).round() as u8;
-            output[out + 1] = sample_bilinear(source, width, height, fx, y as f64, 1).round() as u8;
-            output[out + 2] = sample_bilinear(source, width, height, fx - split, y as f64, 2).round() as u8;
-            output[out + 3] = sample_bilinear(source, width, height, fx, y as f64, 3).round() as u8;
+            pixel[0] = sample_row(src, width, fx + split, 0).round() as u8;
+            pixel[1] = sample_row(src, width, fx, 1).round() as u8;
+            pixel[2] = sample_row(src, width, fx - split, 2).round() as u8;
+            pixel[3] = sample_row(src, width, fx, 3).round() as u8;
         }
     }
     Some(output)
@@ -293,8 +312,9 @@ fn pixelate(source: &[u8], width: usize, height: usize, intensity: f64, font_siz
     Some(output)
 }
 
+/// Box blur of straight RGBA in premultiplied f32 with clamped (repeated) edges.
 fn blur_straight(source: &[u8], width: usize, height: usize, radius: usize) -> Option<Vec<u8>> {
-    if radius == 0 {
+    if radius == 0 || width == 0 || height == 0 {
         return None;
     }
     let mut premultiplied: Vec<f32> = Vec::with_capacity(source.len());
@@ -307,39 +327,49 @@ fn blur_straight(source: &[u8], width: usize, height: usize, radius: usize) -> O
             f32::from(px[3]),
         ]);
     }
-    let mut horizontal = vec![0f32; source.len()];
-    let mut blurred = vec![0f32; source.len()];
     let window = (radius * 2 + 1) as f32;
+    let reach = radius as isize;
     let clamp_index = |value: isize, max: usize| value.clamp(0, max as isize - 1) as usize;
-    for y in 0..height {
-        for c in 0..4 {
-            let at = |x: usize| (y * width + x) * 4 + c;
-            let mut sum = 0f32;
-            for offset in -(radius as isize)..=(radius as isize) {
-                sum += premultiplied[at(clamp_index(offset, width))];
+    let stride = width * 4;
+    let mut horizontal = vec![0f32; source.len()];
+    for (src, out) in premultiplied.chunks_exact(stride).zip(horizontal.chunks_exact_mut(stride)) {
+        let pixel = |x: isize| &src[clamp_index(x, width) * 4..][..4];
+        let mut sum = [0f32; 4];
+        for offset in -reach..=reach {
+            for (total, value) in sum.iter_mut().zip(pixel(offset)) {
+                *total += value;
             }
-            for x in 0..width {
-                horizontal[at(x)] = sum / window;
-                if x + 1 < width {
-                    sum += premultiplied[at(clamp_index(x as isize + radius as isize + 1, width))]
-                        - premultiplied[at(clamp_index(x as isize - radius as isize, width))];
+        }
+        for x in 0..width {
+            for (value, total) in out[x * 4..x * 4 + 4].iter_mut().zip(&sum) {
+                *value = total / window;
+            }
+            if x + 1 < width {
+                let (add, remove) = (pixel(x as isize + reach + 1), pixel(x as isize - reach));
+                for ((total, add), remove) in sum.iter_mut().zip(add).zip(remove) {
+                    *total += add - remove;
                 }
             }
         }
     }
-    for x in 0..width {
-        for c in 0..4 {
-            let at = |y: usize| (y * width + x) * 4 + c;
-            let mut sum = 0f32;
-            for offset in -(radius as isize)..=(radius as isize) {
-                sum += horizontal[at(clamp_index(offset, height))];
-            }
-            for y in 0..height {
-                blurred[at(y)] = sum / window;
-                if y + 1 < height {
-                    sum += horizontal[at(clamp_index(y as isize + radius as isize + 1, height))]
-                        - horizontal[at(clamp_index(y as isize - radius as isize, height))];
-                }
+    // Vertical pass row by row with a running sum per column (same order of additions per
+    // column as walking down it), written back over the premultiplied buffer.
+    let row = |y: isize| &horizontal[clamp_index(y, height) * stride..][..stride];
+    let mut sums = vec![0f32; stride];
+    for offset in -reach..=reach {
+        for (total, value) in sums.iter_mut().zip(row(offset)) {
+            *total += value;
+        }
+    }
+    let blurred = &mut premultiplied;
+    for (y, out) in blurred.chunks_exact_mut(stride).enumerate() {
+        for (value, total) in out.iter_mut().zip(&sums) {
+            *value = total / window;
+        }
+        if y + 1 < height {
+            let (add, remove) = (row(y as isize + reach + 1), row(y as isize - reach));
+            for ((total, add), remove) in sums.iter_mut().zip(add).zip(remove) {
+                *total += add - remove;
             }
         }
     }
@@ -384,30 +414,41 @@ fn noise(source: &[u8], width: usize, height: usize, intensity: f64, font_size: 
     Some(output)
 }
 
-fn horizontal_displacement(source: &[u8], width: usize, height: usize, offset_x: impl Fn(f64) -> f64) -> Vec<u8> {
+/// Shifts each row by `offset_x(y)` with linear interpolation.
+fn horizontal_displacement(source: &[u8], width: usize, offset_x: impl Fn(f64) -> f64) -> Vec<u8> {
     let mut output = vec![0u8; source.len()];
-    for y in 0..height {
+    if width == 0 {
+        return output;
+    }
+    let max_x = width as f64 - 1.0;
+    for (y, (src, out)) in source.chunks_exact(width * 4).zip(output.chunks_exact_mut(width * 4)).enumerate() {
         let dx = offset_x(y as f64);
-        for x in 0..width {
-            let out = (y * width + x) * 4;
-            for c in 0..4 {
-                output[out + c] = sample_bilinear(source, width, height, x as f64 + dx, y as f64, c).round() as u8;
+        for (x, pixel) in out.chunks_exact_mut(4).enumerate() {
+            let cx = (x as f64 + dx).clamp(0.0, max_x);
+            let x0 = cx.floor() as usize;
+            let x1 = (x0 + 1).min(width - 1);
+            let (left, right) = (&src[x0 * 4..x0 * 4 + 4], &src[x1 * 4..x1 * 4 + 4]);
+            // Fully transparent black on both sides interpolates to the zeros already there.
+            if left == [0; 4] && right == [0; 4] {
+                continue;
+            }
+            let tx = cx - x0 as f64;
+            for ((out, a), b) in pixel.iter_mut().zip(left).zip(right) {
+                *out = (f64::from(*a) * (1.0 - tx) + f64::from(*b) * tx).round() as u8;
             }
         }
     }
     output
 }
 
-fn sample_bilinear(source: &[u8], width: usize, height: usize, x: f64, y: f64, channel: usize) -> f64 {
+/// Linear sample of one channel within a row (`sampleImageDataBilinear` at a whole-pixel
+/// `y`, where the vertical weight is zero).
+fn sample_row(row: &[u8], width: usize, x: f64, channel: usize) -> f64 {
     let cx = x.clamp(0.0, width as f64 - 1.0);
-    let cy = y.clamp(0.0, height as f64 - 1.0);
-    let (x0, y0) = (cx.floor() as usize, cy.floor() as usize);
-    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
-    let (tx, ty) = (cx - x0 as f64, cy - y0 as f64);
-    let px = |x: usize, y: usize| f64::from(source[(y * width + x) * 4 + channel]);
-    let top = px(x0, y0) * (1.0 - tx) + px(x1, y0) * tx;
-    let bottom = px(x0, y1) * (1.0 - tx) + px(x1, y1) * tx;
-    top * (1.0 - ty) + bottom * ty
+    let x0 = cx.floor() as usize;
+    let x1 = (x0 + 1).min(width - 1);
+    let tx = cx - x0 as f64;
+    f64::from(row[x0 * 4 + channel]) * (1.0 - tx) + f64::from(row[x1 * 4 + channel]) * tx
 }
 
 fn zigzag_tremble_offset(y: f64, height: f64, font_size: f64) -> f64 {
@@ -519,28 +560,38 @@ fn fill_outline_interior_gaps(pixels: &mut [u8], width: usize, height: usize, bl
     ) else {
         return;
     };
-    let source = pixels.to_vec();
-    let has_neighbor = |x: usize, y: usize, color: (u8, u8, u8)| {
-        for ny in y - 1..=y + 1 {
-            for nx in x - 1..=x + 1 {
-                if nx == x && ny == y {
-                    continue;
-                }
-                let o = (ny * width + nx) * 4;
-                if source[o + 3] == 255 && (source[o], source[o + 1], source[o + 2]) == color {
-                    return true;
-                }
-            }
-        }
-        false
-    };
+    // Per pixel: bit 1 = opaque outline color, bit 2 = opaque text color, 4 = transparent.
+    const OUTLINE: u8 = 1;
+    const TEXT: u8 = 2;
+    const EMPTY: u8 = 4;
+    let classes: Vec<u8> = pixels
+        .chunks_exact(4)
+        .map(|p| {
+            let color = (p[0], p[1], p[2]);
+            let opaque = p[3] == 255;
+            (if p[3] == 0 { EMPTY } else { 0 })
+                | (if opaque && color == outline { OUTLINE } else { 0 })
+                | (if opaque && color == text { TEXT } else { 0 })
+        })
+        .collect();
     for y in 1..height - 1 {
+        let (above, here, below) = ((y - 1) * width, y * width, (y + 1) * width);
         for x in 1..width - 1 {
-            let o = (y * width + x) * 4;
-            if source[o + 3] != 0 || !has_neighbor(x, y, outline) || !has_neighbor(x, y, text) {
+            if classes[here + x] & EMPTY == 0 {
                 continue;
             }
-            pixels[o..o + 4].copy_from_slice(&[outline.0, outline.1, outline.2, 255]);
+            let around = classes[above + x - 1]
+                | classes[above + x]
+                | classes[above + x + 1]
+                | classes[here + x - 1]
+                | classes[here + x + 1]
+                | classes[below + x - 1]
+                | classes[below + x]
+                | classes[below + x + 1];
+            if around & OUTLINE != 0 && around & TEXT != 0 {
+                let o = (here + x) * 4;
+                pixels[o..o + 4].copy_from_slice(&[outline.0, outline.1, outline.2, 255]);
+            }
         }
     }
 }
@@ -567,6 +618,67 @@ mod tests {
         assert!(center > 0 && center < 255 && near > 0, "center {center} near {near}");
     }
 
+    /// The column-walking blur this module used before (reference output).
+    fn reference_blur(data: &mut [u8], width: usize, height: usize, sigma: f64) {
+        let box_size = ((sigma * 3.0 * (2.0 * std::f64::consts::PI).sqrt() / 4.0) + 0.5).floor().max(1.0) as usize;
+        let r = box_size / 2;
+        let passes: [(usize, usize); 3] =
+            if box_size % 2 == 1 { [(r, r); 3] } else { [(r, r.saturating_sub(1)), (r.saturating_sub(1), r), (r, r)] };
+        let mut scratch = vec![0u8; data.len()];
+        let at_h = |y: usize, x: usize, c: usize| (y * width + x) * 4 + c;
+        for (left, right) in passes {
+            let window = (left + right + 1) as u32;
+            for y in 0..height {
+                for c in 0..4 {
+                    let mut sum: u32 = (0..=right.min(width - 1)).map(|x| u32::from(data[at_h(y, x, c)])).sum();
+                    for x in 0..width {
+                        scratch[at_h(y, x, c)] = ((sum + window / 2) / window) as u8;
+                        if x + right + 1 < width {
+                            sum += u32::from(data[at_h(y, x + right + 1, c)]);
+                        }
+                        if x >= left {
+                            sum -= u32::from(data[at_h(y, x - left, c)]);
+                        }
+                    }
+                }
+            }
+            data.copy_from_slice(&scratch);
+        }
+        for (top, bottom) in passes {
+            let window = (top + bottom + 1) as u32;
+            for x in 0..width {
+                for c in 0..4 {
+                    let mut sum: u32 = (0..=bottom.min(height - 1)).map(|y| u32::from(data[at_h(y, x, c)])).sum();
+                    for y in 0..height {
+                        scratch[at_h(y, x, c)] = ((sum + window / 2) / window) as u8;
+                        if y + bottom + 1 < height {
+                            sum += u32::from(data[at_h(y + bottom + 1, x, c)]);
+                        }
+                        if y >= top {
+                            sum -= u32::from(data[at_h(y - top, x, c)]);
+                        }
+                    }
+                }
+            }
+            data.copy_from_slice(&scratch);
+        }
+    }
+
+    #[test]
+    fn blur_matches_the_reference_exactly() {
+        for (width, height, sigma) in [(37, 23, 2.0), (16, 40, 5.5), (64, 9, 0.6), (3, 3, 9.0)] {
+            let mut pixmap = Pixmap::new(width, height).unwrap();
+            for (index, pixel) in pixmap.pixels_mut().iter_mut().enumerate() {
+                let alpha = (index * 37 % 256) as u8;
+                *pixel = tiny_skia::ColorU8::from_rgba((index * 13 % 256) as u8, 40, 200, alpha).premultiply();
+            }
+            let mut expected = pixmap.data().to_vec();
+            reference_blur(&mut expected, width as usize, height as usize, sigma);
+            gaussian_blur(&mut pixmap, sigma);
+            assert_eq!(pixmap.data(), expected.as_slice(), "{width}x{height} sigma {sigma}");
+        }
+    }
+
     #[test]
     fn harden_snaps_to_palette() {
         let block = TranslationBlock::default();
@@ -591,5 +703,213 @@ mod tests {
         };
         assert!(FilterKind::Pixelate.is_active(&block));
         assert_eq!(filter_effect_margin_px(&block, 40.0), 0.0);
+    }
+
+    // ---- the implementations these replaced, as references ----
+
+    fn reference_glitch(source: &[u8], width: usize, height: usize, intensity: f64, font_size: f64) -> Option<Vec<u8>> {
+        let fs = filter_font_size(font_size);
+        let displacement = fs * GLITCH_DISPLACEMENT_RATIO * intensity;
+        let split = fs * GLITCH_CHANNEL_SPLIT_RATIO * intensity;
+        if intensity <= 0.0 || (displacement <= 0.0 && split <= 0.0) {
+            return None;
+        }
+        let mut output = vec![0u8; source.len()];
+        for y in 0..height {
+            let row_offset = glitch_row_offset(y as f64 + 0.5, font_size, intensity, displacement);
+            for x in 0..width {
+                let out = (y * width + x) * 4;
+                let fx = x as f64 + row_offset;
+                output[out] = reference_sample_bilinear(source, width, height, fx + split, y as f64, 0).round() as u8;
+                output[out + 1] = reference_sample_bilinear(source, width, height, fx, y as f64, 1).round() as u8;
+                output[out + 2] =
+                    reference_sample_bilinear(source, width, height, fx - split, y as f64, 2).round() as u8;
+                output[out + 3] = reference_sample_bilinear(source, width, height, fx, y as f64, 3).round() as u8;
+            }
+        }
+        Some(output)
+    }
+
+    fn reference_blur_straight(source: &[u8], width: usize, height: usize, radius: usize) -> Option<Vec<u8>> {
+        if radius == 0 {
+            return None;
+        }
+        let mut premultiplied: Vec<f32> = Vec::with_capacity(source.len());
+        for px in source.chunks_exact(4) {
+            let alpha = f32::from(px[3]) / 255.0;
+            premultiplied.extend_from_slice(&[
+                f32::from(px[0]) * alpha,
+                f32::from(px[1]) * alpha,
+                f32::from(px[2]) * alpha,
+                f32::from(px[3]),
+            ]);
+        }
+        let mut horizontal = vec![0f32; source.len()];
+        let mut blurred = vec![0f32; source.len()];
+        let window = (radius * 2 + 1) as f32;
+        let clamp_index = |value: isize, max: usize| value.clamp(0, max as isize - 1) as usize;
+        for y in 0..height {
+            for c in 0..4 {
+                let at = |x: usize| (y * width + x) * 4 + c;
+                let mut sum = 0f32;
+                for offset in -(radius as isize)..=(radius as isize) {
+                    sum += premultiplied[at(clamp_index(offset, width))];
+                }
+                for x in 0..width {
+                    horizontal[at(x)] = sum / window;
+                    if x + 1 < width {
+                        sum += premultiplied[at(clamp_index(x as isize + radius as isize + 1, width))]
+                            - premultiplied[at(clamp_index(x as isize - radius as isize, width))];
+                    }
+                }
+            }
+        }
+        for x in 0..width {
+            for c in 0..4 {
+                let at = |y: usize| (y * width + x) * 4 + c;
+                let mut sum = 0f32;
+                for offset in -(radius as isize)..=(radius as isize) {
+                    sum += horizontal[at(clamp_index(offset, height))];
+                }
+                for y in 0..height {
+                    blurred[at(y)] = sum / window;
+                    if y + 1 < height {
+                        sum += horizontal[at(clamp_index(y as isize + radius as isize + 1, height))]
+                            - horizontal[at(clamp_index(y as isize - radius as isize, height))];
+                    }
+                }
+            }
+        }
+        let mut output = vec![0u8; source.len()];
+        for (out, px) in output.chunks_exact_mut(4).zip(blurred.chunks_exact(4)) {
+            let alpha = px[3].clamp(0.0, 255.0);
+            out[3] = alpha.round() as u8;
+            if alpha <= 0.0 {
+                continue;
+            }
+            let ratio = alpha / 255.0;
+            for c in 0..3 {
+                out[c] = (px[c] / ratio).clamp(0.0, 255.0).round() as u8;
+            }
+        }
+        Some(output)
+    }
+
+    fn reference_horizontal_displacement(
+        source: &[u8],
+        width: usize,
+        height: usize,
+        offset_x: impl Fn(f64) -> f64,
+    ) -> Vec<u8> {
+        let mut output = vec![0u8; source.len()];
+        for y in 0..height {
+            let dx = offset_x(y as f64);
+            for x in 0..width {
+                let out = (y * width + x) * 4;
+                for c in 0..4 {
+                    output[out + c] =
+                        reference_sample_bilinear(source, width, height, x as f64 + dx, y as f64, c).round() as u8;
+                }
+            }
+        }
+        output
+    }
+
+    fn reference_sample_bilinear(source: &[u8], width: usize, height: usize, x: f64, y: f64, channel: usize) -> f64 {
+        let cx = x.clamp(0.0, width as f64 - 1.0);
+        let cy = y.clamp(0.0, height as f64 - 1.0);
+        let (x0, y0) = (cx.floor() as usize, cy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+        let (tx, ty) = (cx - x0 as f64, cy - y0 as f64);
+        let px = |x: usize, y: usize| f64::from(source[(y * width + x) * 4 + channel]);
+        let top = px(x0, y0) * (1.0 - tx) + px(x1, y0) * tx;
+        let bottom = px(x0, y1) * (1.0 - tx) + px(x1, y1) * tx;
+        top * (1.0 - ty) + bottom * ty
+    }
+
+    fn reference_fill_gaps(pixels: &mut [u8], width: usize, height: usize, block: &TranslationBlock) {
+        if block.style.outline_width_px.unwrap_or(0.0) <= 0.0 || width < 3 || height < 3 {
+            return;
+        }
+        let (Some(outline), Some(text)) = (
+            parse_hex_color(block.style.outline_color.as_deref().unwrap_or("#000000")),
+            parse_hex_color(block.text_color()),
+        ) else {
+            return;
+        };
+        let source = pixels.to_vec();
+        let has_neighbor = |x: usize, y: usize, color: (u8, u8, u8)| {
+            for ny in y - 1..=y + 1 {
+                for nx in x - 1..=x + 1 {
+                    if nx == x && ny == y {
+                        continue;
+                    }
+                    let o = (ny * width + nx) * 4;
+                    if source[o + 3] == 255 && (source[o], source[o + 1], source[o + 2]) == color {
+                        return true;
+                    }
+                }
+            }
+            false
+        };
+        for y in 1..height - 1 {
+            for x in 1..width - 1 {
+                let o = (y * width + x) * 4;
+                if source[o + 3] != 0 || !has_neighbor(x, y, outline) || !has_neighbor(x, y, text) {
+                    continue;
+                }
+                pixels[o..o + 4].copy_from_slice(&[outline.0, outline.1, outline.2, 255]);
+            }
+        }
+    }
+
+    fn sample_pixels(width: usize, height: usize) -> Vec<u8> {
+        (0..width * height)
+            .flat_map(|i| {
+                let alpha = if i % 7 < 3 { 0 } else { (i * 53 % 256) as u8 };
+                let value = if alpha == 0 && i % 2 == 0 { 0 } else { (i * 31 % 256) as u8 };
+                [value, (i * 17 % 256) as u8 & if alpha == 0 { 0 } else { 255 }, 90, alpha]
+            })
+            .collect()
+    }
+
+    #[test]
+    fn filters_match_their_references() {
+        let (width, height) = (41, 29);
+        let source = sample_pixels(width, height);
+        let offset = |y: f64| (y * 0.37).sin() * 5.3;
+        assert_eq!(
+            horizontal_displacement(&source, width, offset),
+            reference_horizontal_displacement(&source, width, height, offset)
+        );
+        for intensity in [0.3, 1.0] {
+            assert_eq!(
+                glitch(&source, width, intensity, 40.0),
+                reference_glitch(&source, width, height, intensity, 40.0)
+            );
+        }
+        for radius in [1, 3, 30] {
+            assert_eq!(
+                blur_straight(&source, width, height, radius),
+                reference_blur_straight(&source, width, height, radius)
+            );
+        }
+        let mut block = TranslationBlock::default();
+        block.style.outline_width_px = Some(2.0);
+        block.style.outline_color = Some("#000000".into());
+        let mut hard = vec![0u8; width * height * 4];
+        for (i, px) in hard.chunks_exact_mut(4).enumerate() {
+            match i % 5 {
+                0 => px.copy_from_slice(&[0, 0, 0, 255]),
+                1 => px.copy_from_slice(&[0x11, 0x11, 0x11, 255]),
+                _ => {}
+            }
+        }
+        let text = parse_hex_color(block.text_color()).unwrap();
+        hard[4..8].copy_from_slice(&[text.0, text.1, text.2, 255]);
+        let mut expected = hard.clone();
+        reference_fill_gaps(&mut expected, width, height, &block);
+        fill_outline_interior_gaps(&mut hard, width, height, &block);
+        assert_eq!(hard, expected);
     }
 }

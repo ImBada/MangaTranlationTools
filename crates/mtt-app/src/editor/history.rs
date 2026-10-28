@@ -1,9 +1,15 @@
 //! Undo/redo. Block edits are recorded as before/after snapshots of one page's blocks;
-//! layer edits as before/after pixel patches of the stroked rectangle.
+//! layer edits as before/after pixel patches of the changed rectangle, run-length packed
+//! (masks are binary and results transparent outside the mask, so a page-sized inpaint
+//! patch shrinks from tens of MB to well under one).
+
+use std::collections::HashMap;
 
 use mtt_core::model::{PageRecord, TranslationBlock, TranslationBlockGroup};
 
 const HISTORY_LIMIT: usize = 200;
+/// Packed layer bytes kept across undo and redo; the oldest steps go first past it.
+const LAYER_BYTE_BUDGET: usize = 384 * 1024 * 1024;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlocksSnapshot {
@@ -30,14 +36,190 @@ pub enum LayerKind {
     Result,
 }
 
-/// Raw pixels of a rectangle: 1 byte per pixel for masks, 4 (RGBA) for results.
+impl LayerKind {
+    pub fn page_layer(self) -> mtt_core::library::PageLayer {
+        match self {
+            LayerKind::Mask => mtt_core::library::PageLayer::InpaintMask,
+            LayerKind::Result => mtt_core::library::PageLayer::InpaintResult,
+        }
+    }
+}
+
+/// `(x, y, width, height)` in page pixels.
+pub type PixelRect = (u32, u32, u32, u32);
+
+/// Run-length packed bytes. Tokens are a varint `n` followed by `n / 2` literal bytes
+/// (even `n`) or by one byte repeated `n / 2` times (odd `n`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Packed {
+    bytes: Vec<u8>,
+    len: usize,
+}
+
+/// Runs shorter than this stay in a literal (a run token costs up to 6 bytes).
+const MIN_RUN: usize = 8;
+
+fn push_varint(out: &mut Vec<u8>, mut value: usize) {
+    while value >= 0x80 {
+        out.push((value as u8) | 0x80);
+        value >>= 7;
+    }
+    out.push(value as u8);
+}
+
+fn read_varint(bytes: &[u8], at: &mut usize) -> usize {
+    let (mut value, mut shift) = (0usize, 0);
+    loop {
+        let byte = bytes[*at];
+        *at += 1;
+        value |= usize::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return value;
+        }
+        shift += 7;
+    }
+}
+
+impl Packed {
+    pub fn pack(data: &[u8]) -> Self {
+        let mut bytes = Vec::new();
+        let mut literal_start = 0;
+        let mut index = 0;
+        while index < data.len() {
+            let value = data[index];
+            let run = data[index..].iter().take_while(|byte| **byte == value).count();
+            if run >= MIN_RUN {
+                if literal_start < index {
+                    push_varint(&mut bytes, (index - literal_start) << 1);
+                    bytes.extend_from_slice(&data[literal_start..index]);
+                }
+                push_varint(&mut bytes, (run << 1) | 1);
+                bytes.push(value);
+                index += run;
+                literal_start = index;
+            } else {
+                index += run;
+            }
+        }
+        if literal_start < data.len() {
+            push_varint(&mut bytes, (data.len() - literal_start) << 1);
+            bytes.extend_from_slice(&data[literal_start..]);
+        }
+        bytes.shrink_to_fit();
+        Self { bytes, len: data.len() }
+    }
+
+    pub fn unpack(&self) -> Vec<u8> {
+        let mut out = Vec::with_capacity(self.len);
+        let mut at = 0;
+        while at < self.bytes.len() {
+            let token = read_varint(&self.bytes, &mut at);
+            let count = token >> 1;
+            if token & 1 == 1 {
+                out.resize(out.len() + count, self.bytes[at]);
+                at += 1;
+            } else {
+                out.extend_from_slice(&self.bytes[at..at + count]);
+                at += count;
+            }
+        }
+        out
+    }
+
+    /// Memory held.
+    pub fn packed_len(&self) -> usize {
+        self.bytes.len()
+    }
+}
+
+/// Pixels of a rectangle, before and after: 1 byte per pixel for masks, 4 (RGBA) for results.
 pub struct LayerPatch {
     pub x: u32,
     pub y: u32,
     pub width: u32,
     pub height: u32,
-    pub before: Vec<u8>,
-    pub after: Vec<u8>,
+    pub before: Packed,
+    pub after: Packed,
+}
+
+impl LayerPatch {
+    pub fn new(rect: PixelRect, before: &[u8], after: &[u8]) -> Self {
+        let (x, y, width, height) = rect;
+        Self { x, y, width, height, before: Packed::pack(before), after: Packed::pack(after) }
+    }
+
+    fn packed_len(&self) -> usize {
+        self.before.packed_len() + self.after.packed_len()
+    }
+}
+
+/// What a stroke is about to change, saved tile by tile the first time the stroke reaches
+/// it, so pressing a brush doesn't copy the whole layer for its undo step.
+pub struct StrokeBackup {
+    width: u32,
+    height: u32,
+    channels: u32,
+    tiles: HashMap<(u32, u32), Vec<u8>>,
+}
+
+const BACKUP_TILE: u32 = 64;
+
+impl StrokeBackup {
+    pub fn new(width: u32, height: u32, channels: u32) -> Self {
+        Self { width, height, channels, tiles: HashMap::new() }
+    }
+
+    fn tile_rect(&self, tx: u32, ty: u32) -> PixelRect {
+        let (x, y) = (tx * BACKUP_TILE, ty * BACKUP_TILE);
+        (x, y, BACKUP_TILE.min(self.width - x), BACKUP_TILE.min(self.height - y))
+    }
+
+    fn tiles_in(&self, rect: PixelRect) -> impl Iterator<Item = (u32, u32)> + use<> {
+        let (x, y, width, height) = rect;
+        let right = (x + width).min(self.width);
+        let bottom = (y + height).min(self.height);
+        let columns = if x < right { x / BACKUP_TILE..(right - 1) / BACKUP_TILE + 1 } else { 0..0 };
+        let rows = if y < bottom { y / BACKUP_TILE..(bottom - 1) / BACKUP_TILE + 1 } else { 0..0 };
+        rows.flat_map(move |ty| columns.clone().map(move |tx| (tx, ty)))
+    }
+
+    /// Saves the tiles of `rect` not saved yet. Call before `data` changes inside `rect`.
+    pub fn save(&mut self, data: &[u8], rect: PixelRect) {
+        for (tx, ty) in self.tiles_in(rect).collect::<Vec<_>>() {
+            if !self.tiles.contains_key(&(tx, ty)) {
+                let tile = read_rect(data, self.width, self.channels, self.tile_rect(tx, ty));
+                self.tiles.insert((tx, ty), tile);
+            }
+        }
+    }
+
+    /// The pixels of `rect` before the stroke; `data` is the layer now.
+    pub fn before(&self, data: &[u8], rect: PixelRect) -> Vec<u8> {
+        let (x, y, width, height) = rect;
+        let channels = self.channels as usize;
+        let mut out = Vec::with_capacity(width as usize * height as usize * channels);
+        for row in y..y + height {
+            let mut column = x;
+            while column < x + width {
+                let (tx, ty) = (column / BACKUP_TILE, row / BACKUP_TILE);
+                let end = ((tx + 1) * BACKUP_TILE).min(x + width);
+                let count = (end - column) as usize * channels;
+                match self.tiles.get(&(tx, ty)) {
+                    Some(tile) => {
+                        let (tile_x, tile_y, tile_width, _) = self.tile_rect(tx, ty);
+                        let start = (((row - tile_y) * tile_width + column - tile_x) as usize) * channels;
+                        out.extend_from_slice(&tile[start..start + count]);
+                    }
+                    None => {
+                        let start = ((row * self.width + column) as usize) * channels;
+                        out.extend_from_slice(&data[start..start + count]);
+                    }
+                }
+                column = end;
+            }
+        }
+        out
+    }
 }
 
 pub enum Entry {
@@ -65,6 +247,15 @@ pub enum Entry {
 }
 
 impl Entry {
+    /// Packed layer bytes held by this step.
+    fn layer_bytes(&self) -> usize {
+        match self {
+            Entry::Layer { patch, .. } => patch.packed_len(),
+            Entry::Batch { entries, .. } => entries.iter().map(Entry::layer_bytes).sum(),
+            Entry::Blocks { .. } | Entry::Presets { .. } => 0,
+        }
+    }
+
     pub fn page_id(&self) -> &str {
         match self {
             Entry::Blocks { page_id, .. }
@@ -104,7 +295,7 @@ pub fn changed_rect(
 }
 
 /// Copies a rect out of a raw buffer.
-pub fn read_rect(data: &[u8], image_width: u32, channels: u32, rect: (u32, u32, u32, u32)) -> Vec<u8> {
+pub fn read_rect(data: &[u8], image_width: u32, channels: u32, rect: PixelRect) -> Vec<u8> {
     let (x, y, width, height) = rect;
     let mut bytes = Vec::with_capacity((width * height * channels) as usize);
     for row in y..y + height {
@@ -117,14 +308,7 @@ pub fn read_rect(data: &[u8], image_width: u32, channels: u32, rect: (u32, u32, 
 /// Patch for the changed area between two full layers, `None` when identical.
 pub fn diff_patch(before: &[u8], after: &[u8], width: u32, height: u32, channels: u32) -> Option<LayerPatch> {
     let rect = changed_rect(before, after, width, height, channels)?;
-    Some(LayerPatch {
-        x: rect.0,
-        y: rect.1,
-        width: rect.2,
-        height: rect.3,
-        before: read_rect(before, width, channels, rect),
-        after: read_rect(after, width, channels, rect),
-    })
+    Some(LayerPatch::new(rect, &read_rect(before, width, channels, rect), &read_rect(after, width, channels, rect)))
 }
 
 /// Selection state recorded with an undo step and restored with it (the TS snapshot's
@@ -152,6 +336,19 @@ impl History {
             self.undo.remove(0);
         }
         self.redo.clear();
+        self.enforce_budget();
+    }
+
+    /// Drops the oldest steps while the layer patches exceed `LAYER_BYTE_BUDGET` (the
+    /// newest step always stays).
+    fn enforce_budget(&mut self) {
+        let mut total: usize = self.undo.iter().chain(&self.redo).map(|(entry, _)| entry.layer_bytes()).sum();
+        let mut drop = 0;
+        while total > LAYER_BYTE_BUDGET && drop + 1 < self.undo.len() {
+            total -= self.undo[drop].0.layer_bytes();
+            drop += 1;
+        }
+        self.undo.drain(..drop);
     }
 
     pub fn pop_undo(&mut self) -> Option<Recorded> {
@@ -201,7 +398,7 @@ mod tests {
         after[10] = 9;
         let patch = diff_patch(&before, &after, 4, 4, 1).unwrap();
         assert_eq!((patch.x, patch.y, patch.width, patch.height), (1, 1, 2, 2));
-        assert_eq!(patch.after, vec![9, 0, 0, 9]);
+        assert_eq!(patch.after.unpack(), vec![9, 0, 0, 9]);
         assert!(diff_patch(&before, &before, 4, 4, 1).is_none());
     }
 
@@ -218,5 +415,47 @@ mod tests {
             history.push(entry("c"));
         }
         assert_eq!(history.undo.len(), HISTORY_LIMIT);
+    }
+
+    #[test]
+    fn packing_round_trips_and_shrinks_runs() {
+        let mut data = vec![0u8; 100_000];
+        data[5..12].copy_from_slice(&[1, 2, 3, 4, 5, 6, 7]);
+        data[50_000..50_020].fill(255);
+        for sample in [data.clone(), Vec::new(), vec![7], (0..=255).collect::<Vec<u8>>(), vec![3; 9]] {
+            assert_eq!(Packed::pack(&sample).unpack(), sample);
+        }
+        assert!(Packed::pack(&data).packed_len() < 64);
+    }
+
+    #[test]
+    fn layer_budget_drops_the_oldest_steps() {
+        let mut history = History::default();
+        // Incompressible bytes: a little over a third of the budget per step.
+        let noise: Vec<u8> = (0..LAYER_BYTE_BUDGET / 6 + 1).map(|i| (i * 7919 % 251) as u8).collect();
+        for _ in 0..4 {
+            let patch = LayerPatch::new((0, 0, noise.len() as u32, 1), &noise, &noise);
+            history.push(Entry::Layer { page_id: "p".into(), layer: LayerKind::Mask, patch });
+        }
+        assert_eq!(history.undo.len(), 2, "two steps fit the budget");
+    }
+
+    #[test]
+    fn stroke_backup_returns_the_pixels_before_the_stroke() {
+        let (width, height) = (150u32, 70u32);
+        let original: Vec<u8> = (0..width * height).map(|i| (i % 251) as u8).collect();
+        let mut layer = original.clone();
+        let mut backup = StrokeBackup::new(width, height, 1);
+        for rect in [(10, 10, 5, 5), (60, 30, 80, 40), (149, 69, 1, 1)] {
+            backup.save(&layer, rect);
+            for row in rect.1..rect.1 + rect.3 {
+                for column in rect.0..rect.0 + rect.2 {
+                    layer[(row * width + column) as usize] = 0;
+                }
+            }
+        }
+        let rect = (0, 0, width, height);
+        assert_eq!(backup.before(&layer, rect), original);
+        assert_eq!(backup.before(&layer, (62, 20, 70, 30)), read_rect(&original, width, 1, (62, 20, 70, 30)));
     }
 }

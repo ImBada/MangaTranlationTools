@@ -565,11 +565,18 @@ impl<'a> BlockPainter<'a> {
         if distance == 0.0 && blur == 0.0 {
             return;
         }
-        let Some(mut layer) = Canvas::new(canvas.width(), canvas.height()) else {
+        // A wide blur leaves no detail, so at preview scales the shadow is drawn and blurred
+        // at a lower resolution (keeping at least 2 px of blur there) and scaled up. At
+        // scale 1 (export) this is 1 and the output is unchanged.
+        let sigma = blur * self.device_scale;
+        let reduce = (sigma / 2.0).clamp(1.0, self.device_scale.max(1.0));
+        let layer_size = |size: u32| (f64::from(size) / reduce).ceil() as u32;
+        let Some(mut layer) = Canvas::new(layer_size(canvas.width()), layer_size(canvas.height())) else {
             return;
         };
         let angle = block.style.shadow_angle_deg.unwrap_or(45.0).to_radians();
-        layer.transform = canvas.transform;
+        let shrink = (1.0 / reduce) as f32;
+        layer.transform = canvas.transform.post_scale(shrink, shrink);
         layer.translate(angle.cos() * distance, angle.sin() * distance);
         let opaque = hex_color(block.style.shadow_color.as_deref().unwrap_or("#000000"), 1.0);
         let outline = outline_width_px(block, self.font_size);
@@ -592,8 +599,15 @@ impl<'a> BlockPainter<'a> {
                 }
             });
         }
-        gaussian_blur(&mut layer.pixmap, blur * self.device_scale);
-        canvas.draw_pixmap_device(&layer.pixmap, 0, 0, shadow_opacity(block) as f32, None);
+        gaussian_blur(&mut layer.pixmap, sigma / reduce);
+        let opacity = shadow_opacity(block) as f32;
+        if reduce == 1.0 {
+            canvas.draw_pixmap_device(&layer.pixmap, 0, 0, opacity, None);
+        } else {
+            let paint = tiny_skia::PixmapPaint { opacity, quality: FilterQuality::Bilinear, ..Default::default() };
+            let grow = reduce as f32;
+            canvas.pixmap.draw_pixmap(0, 0, layer.pixmap.as_ref(), &paint, Transform::from_scale(grow, grow), None);
+        }
     }
 
     fn draw_outline_phase(&self, canvas: &mut Canvas, geometry: &ItemGeometry) {

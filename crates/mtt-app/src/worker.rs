@@ -91,6 +91,11 @@ impl<R: Send + 'static> Worker<R> {
         self.emitter.clone()
     }
 
+    /// For tasks that build textures (egui textures can be created from any thread).
+    pub fn ctx(&self) -> &egui::Context {
+        &self.emitter.ctx
+    }
+
     pub fn drain(&self) -> Vec<R> {
         self.results.try_iter().collect()
     }

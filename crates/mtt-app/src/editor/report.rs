@@ -1017,6 +1017,11 @@ impl super::Editor {
             self.status = "폰트를 불러오는 중입니다.".into();
             return;
         };
+        // Its own font context, so rendering every page doesn't hold up the editor's.
+        let Ok(mut fonts) = fonts.lock().map(|fonts| fonts.fork()) else {
+            self.status = "폰트 잠금 실패".into();
+            return;
+        };
         if let Err(error) = self.flush(services) {
             self.status = format!("저장 실패: {error}");
             return;
@@ -1031,7 +1036,7 @@ impl super::Editor {
         std::thread::spawn(move || {
             let chapter_id = chapter.id.clone();
             let emit = |event| emitter.emit(crate::app::AppEvent::Report { chapter_id: chapter_id.clone(), event });
-            let result = generate(&library, &chapter, &fonts, focus_url.as_deref(), |progress| {
+            let result = generate(&library, &chapter, &mut fonts, focus_url.as_deref(), |progress| {
                 emit(ReportEvent::Progress(progress))
             });
             emit(ReportEvent::Finished(result));
@@ -1111,7 +1116,7 @@ pub fn open_with_system(path: &std::path::Path) -> std::io::Result<()> {
 pub fn generate(
     library: &mtt_core::library::Library,
     chapter: &mtt_core::model::Chapter,
-    fonts: &crate::services::SharedFonts,
+    fonts: &mut mtt_render::FontContext,
     focus_url: Option<&str>,
     mut progress: impl FnMut(ReportProgress),
 ) -> Result<(std::path::PathBuf, usize), String> {
@@ -1123,20 +1128,16 @@ pub fn generate(
     for (current, (page_index, page)) in pages.into_iter().enumerate() {
         let step = |label: String| ReportProgress { current, total, label };
         progress(step(format!("{} 원본 불러오는 중", page.name)));
-        let load = super::assets::load_page(library, chapter, page);
+        let load = super::assets::decode_page(library, chapter, page);
         let source = load.source?;
         progress(step(format!("{} 최종 아웃풋 렌더 중", page.name)));
-        let mask = load.mask.as_ref().map(super::assets::mask_to_rgba);
         let images = mtt_render::page::PageImages {
             source: Some(&source),
-            inpaint_mask: mask.as_ref(),
+            inpaint_mask: load.mask.as_ref(),
             inpaint_result: load.result.as_ref(),
         };
-        let output = {
-            let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패".to_owned())?;
-            mtt_render::page::render_page(&mut fonts, page, &images, &mtt_render::page::PageRenderOptions::OUTPUT)
-                .ok_or_else(|| format!("{}: 렌더링 실패", page.name))?
-        };
+        let output = mtt_render::page::render_page(fonts, page, &images, &mtt_render::page::PageRenderOptions::OUTPUT)
+            .ok_or_else(|| format!("{}: 렌더링 실패", page.name))?;
         progress(step(format!("{} 블록 이미지 자르는 중", page.name)));
         let first_row_index = rows.len() + 1;
         rows.extend(build_page_rows(page, &source, &output, page_index, first_row_index, presets));

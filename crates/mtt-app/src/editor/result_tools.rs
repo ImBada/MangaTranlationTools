@@ -73,6 +73,22 @@ fn bounds(center: (f32, f32), radius: f32, width: u32, height: u32) -> Option<Di
     (right > x && bottom > y).then_some((x, y, right - x, bottom - y))
 }
 
+/// Every pixel a `stroke` from `from` to `to` may change (with a pixel or two to spare).
+pub fn segment_bounds(
+    from: (f32, f32),
+    to: (f32, f32),
+    settings: &BrushSettings,
+    width: u32,
+    height: u32,
+) -> Option<DirtyRect> {
+    let radius = settings.size.max(RESULT_BRUSH_MIN) / 2.0 + 2.0;
+    let x = (from.0.min(to.0) - radius).floor().max(0.0) as u32;
+    let y = (from.1.min(to.1) - radius).floor().max(0.0) as u32;
+    let right = ((from.0.max(to.0) + radius).ceil().max(0.0) as u32).min(width);
+    let bottom = ((from.1.max(to.1) + radius).ceil().max(0.0) as u32).min(height);
+    (right > x && bottom > y).then_some((x, y, right - x, bottom - y))
+}
+
 fn clamp_byte(value: f32) -> u8 {
     value.round().clamp(0.0, 255.0) as u8
 }

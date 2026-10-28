@@ -161,6 +161,13 @@ impl FontContext {
         Self::from_font_system(FontSystem::new_with_fonts(fonts))
     }
 
+    /// A context of its own over the same font database (cheap: faces are shared), so a
+    /// background job can render without holding the editor's context.
+    pub fn fork(&self) -> Self {
+        let locale = self.font_system.locale().to_owned();
+        Self::from_font_system(FontSystem::new_with_locale_and_db(locale, self.font_system.db().clone()))
+    }
+
     fn from_font_system(mut font_system: FontSystem) -> Self {
         set_browser_generic_families(font_system.db_mut());
         let (families, family_list) = index_families(font_system.db());

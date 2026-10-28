@@ -2,6 +2,7 @@
 
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use mtt_core::library::Library;
 use mtt_core::paths::AppPaths;
@@ -49,6 +50,10 @@ pub struct SavedWidget {
 /// `RECENT_FONT_FAMILY_LIMIT`.
 const RECENT_FONT_LIMIT: usize = 5;
 
+/// How long the UI state has to stay unchanged before it is written (a window resize or
+/// widget drag changes it every frame).
+const UI_STATE_SAVE_DELAY: Duration = Duration::from_millis(500);
+
 enum FontState {
     Loading(Receiver<FontContext>),
     Ready(SharedFonts),
@@ -62,6 +67,8 @@ pub struct Services {
     /// Local URL the result report's "이동" buttons call (see `editor::report`).
     pub report_focus_url: Option<String>,
     pub ui_state: UiState,
+    /// When `ui_state` last changed without being written.
+    ui_state_changed: Option<Instant>,
     fonts: FontState,
 }
 
@@ -93,6 +100,7 @@ impl Services {
             settings,
             report_focus_url: None,
             ui_state,
+            ui_state_changed: None,
             fonts: FontState::Loading(receiver),
         }
     }
@@ -125,10 +133,35 @@ impl Services {
         self.save_ui_state();
     }
 
-    pub fn save_ui_state(&self) {
-        if let Err(error) =
-            mtt_core::json_io::write_json_atomic(&self.paths.data_root.join("native-ui-state.json"), &self.ui_state)
-        {
+    /// Marks the UI state for saving; `tick_ui_state` writes it once it settles.
+    pub fn save_ui_state(&mut self) {
+        self.ui_state_changed = Some(Instant::now());
+    }
+
+    /// Writes the UI state when it has not changed for a moment and no drag is going on.
+    /// Call once per frame.
+    pub fn tick_ui_state(&mut self, ctx: &eframe::egui::Context) {
+        let Some(changed) = self.ui_state_changed else { return };
+        // The release of a drag runs a frame of its own.
+        if ctx.input(|input| input.pointer.any_down()) {
+            return;
+        }
+        let left = UI_STATE_SAVE_DELAY.saturating_sub(changed.elapsed());
+        if left.is_zero() {
+            self.flush_ui_state();
+        } else {
+            ctx.request_repaint_after(left);
+        }
+    }
+
+    /// Writes pending UI state now (on exit).
+    pub fn flush_ui_state(&mut self) {
+        if self.ui_state_changed.take().is_none() {
+            return;
+        }
+        // Not worth a disk flush: losing the last window placement on a crash is harmless.
+        let path = self.paths.data_root.join("native-ui-state.json");
+        if let Err(error) = mtt_core::json_io::write_json_replace(&path, &self.ui_state) {
             log::warn!("ui state save failed: {error}");
         }
     }

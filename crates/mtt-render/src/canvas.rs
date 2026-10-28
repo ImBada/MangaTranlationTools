@@ -22,6 +22,10 @@ impl Canvas {
         })
     }
 
+    pub fn from_pixmap(pixmap: Pixmap) -> Self {
+        Self { pixmap, transform: Transform::identity(), stack: Vec::new() }
+    }
+
     pub fn width(&self) -> u32 {
         self.pixmap.width()
     }
@@ -136,10 +140,15 @@ pub fn circles_path(centers: &[(f64, f64)], radius: f64) -> Option<Path> {
 
 /// Converts tiny-skia's premultiplied pixels to straight RGBA (`getImageData`).
 pub fn to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
-    let mut out = Vec::with_capacity(pixmap.data().len());
-    for pixel in pixmap.pixels() {
-        let color = pixel.demultiply();
-        out.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
+    let mut out = pixmap.data().to_vec();
+    for p in out.chunks_exact_mut(4) {
+        let alpha = p[3];
+        if alpha != 255 {
+            let color = tiny_skia::PremultipliedColorU8::from_rgba(p[0], p[1], p[2], alpha)
+                .expect("premultiplied")
+                .demultiply();
+            p.copy_from_slice(&[color.red(), color.green(), color.blue(), alpha]);
+        }
     }
     out
 }
