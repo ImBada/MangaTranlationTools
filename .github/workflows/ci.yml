@@ -40,6 +40,10 @@ jobs:
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
+        with:
+          # Keep the built dependencies even when a later step fails, so the next run
+          # doesn't compile them all again.
+          cache-on-failure: true
 
       - name: Install Linux build dependencies
         if: runner.os == 'Linux'
