@@ -141,7 +141,7 @@ pub fn circles_path(centers: &[(f64, f64)], radius: f64) -> Option<Path> {
 /// Converts tiny-skia's premultiplied pixels to straight RGBA (`getImageData`).
 pub fn to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
     let mut out = pixmap.data().to_vec();
-    for p in out.chunks_exact_mut(4) {
+    for p in out.as_chunks_mut::<4>().0.iter_mut() {
         let alpha = p[3];
         if alpha != 255 {
             let color = tiny_skia::PremultipliedColorU8::from_rgba(p[0], p[1], p[2], alpha)
@@ -155,7 +155,7 @@ pub fn to_straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
 
 /// Writes straight RGBA back into a premultiplied pixmap (`putImageData`).
 pub fn from_straight_rgba(pixmap: &mut Pixmap, data: &[u8]) {
-    for (pixel, rgba) in pixmap.pixels_mut().iter_mut().zip(data.chunks_exact(4)) {
+    for (pixel, rgba) in pixmap.pixels_mut().iter_mut().zip(data.as_chunks::<4>().0.iter()) {
         *pixel = tiny_skia::ColorU8::from_rgba(rgba[0], rgba[1], rgba[2], rgba[3]).premultiply();
     }
 }

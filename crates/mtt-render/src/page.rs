@@ -114,7 +114,7 @@ pub fn image_to_pixmap(image: &RgbaImage, width: u32, height: u32) -> Option<Pix
     let mut pixmap = Pixmap::new(width, height)?;
     let data = image.as_raw();
     if image.dimensions() == (width, height) {
-        for (out, p) in pixmap.pixels_mut().iter_mut().zip(data.chunks_exact(4)) {
+        for (out, p) in pixmap.pixels_mut().iter_mut().zip(data.as_chunks::<4>().0.iter()) {
             *out = ColorU8::from_rgba(p[0], p[1], p[2], p[3]).premultiply();
         }
     } else {

@@ -280,7 +280,7 @@ fn glitch(source: &[u8], width: usize, intensity: f64, font_size: f64) -> Option
     let mut output = vec![0u8; source.len()];
     for (y, (src, out)) in source.chunks_exact(width * 4).zip(output.chunks_exact_mut(width * 4)).enumerate() {
         let row_offset = glitch_row_offset(y as f64 + 0.5, font_size, intensity, displacement);
-        for (x, pixel) in out.chunks_exact_mut(4).enumerate() {
+        for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let fx = x as f64 + row_offset;
             pixel[0] = sample_row(src, width, fx + split, 0).round() as u8;
             pixel[1] = sample_row(src, width, fx, 1).round() as u8;
@@ -318,7 +318,7 @@ fn blur_straight(source: &[u8], width: usize, height: usize, radius: usize) -> O
         return None;
     }
     let mut premultiplied: Vec<f32> = Vec::with_capacity(source.len());
-    for px in source.chunks_exact(4) {
+    for px in source.as_chunks::<4>().0.iter() {
         let alpha = f32::from(px[3]) / 255.0;
         premultiplied.extend_from_slice(&[
             f32::from(px[0]) * alpha,
@@ -374,7 +374,7 @@ fn blur_straight(source: &[u8], width: usize, height: usize, radius: usize) -> O
         }
     }
     let mut output = vec![0u8; source.len()];
-    for (out, px) in output.chunks_exact_mut(4).zip(blurred.chunks_exact(4)) {
+    for (out, px) in output.as_chunks_mut::<4>().0.iter_mut().zip(blurred.as_chunks::<4>().0.iter()) {
         let alpha = px[3].clamp(0.0, 255.0);
         out[3] = alpha.round() as u8;
         if alpha <= 0.0 {
@@ -423,7 +423,7 @@ fn horizontal_displacement(source: &[u8], width: usize, offset_x: impl Fn(f64) -
     let max_x = width as f64 - 1.0;
     for (y, (src, out)) in source.chunks_exact(width * 4).zip(output.chunks_exact_mut(width * 4)).enumerate() {
         let dx = offset_x(y as f64);
-        for (x, pixel) in out.chunks_exact_mut(4).enumerate() {
+        for (x, pixel) in out.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let cx = (x as f64 + dx).clamp(0.0, max_x);
             let x0 = cx.floor() as usize;
             let x1 = (x0 + 1).min(width - 1);
@@ -510,7 +510,7 @@ pub fn harden_text_pixels(pixmap: &mut Pixmap, block: &TranslationBlock) {
     let height = pixmap.height() as usize;
     let mut pixels = to_straight_rgba(pixmap);
     let palette = hard_text_palette(block);
-    for px in pixels.chunks_exact_mut(4) {
+    for px in pixels.as_chunks_mut::<4>().0.iter_mut() {
         if px[3] < HARD_TEXT_ALPHA_THRESHOLD {
             px.copy_from_slice(&[0, 0, 0, 0]);
             continue;
@@ -565,7 +565,9 @@ fn fill_outline_interior_gaps(pixels: &mut [u8], width: usize, height: usize, bl
     const TEXT: u8 = 2;
     const EMPTY: u8 = 4;
     let classes: Vec<u8> = pixels
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|p| {
             let color = (p[0], p[1], p[2]);
             let opaque = p[3] == 255;
@@ -735,7 +737,7 @@ mod tests {
             return None;
         }
         let mut premultiplied: Vec<f32> = Vec::with_capacity(source.len());
-        for px in source.chunks_exact(4) {
+        for px in source.as_chunks::<4>().0.iter() {
             let alpha = f32::from(px[3]) / 255.0;
             premultiplied.extend_from_slice(&[
                 f32::from(px[0]) * alpha,
@@ -781,7 +783,7 @@ mod tests {
             }
         }
         let mut output = vec![0u8; source.len()];
-        for (out, px) in output.chunks_exact_mut(4).zip(blurred.chunks_exact(4)) {
+        for (out, px) in output.as_chunks_mut::<4>().0.iter_mut().zip(blurred.as_chunks::<4>().0.iter()) {
             let alpha = px[3].clamp(0.0, 255.0);
             out[3] = alpha.round() as u8;
             if alpha <= 0.0 {
@@ -898,7 +900,7 @@ mod tests {
         block.style.outline_width_px = Some(2.0);
         block.style.outline_color = Some("#000000".into());
         let mut hard = vec![0u8; width * height * 4];
-        for (i, px) in hard.chunks_exact_mut(4).enumerate() {
+        for (i, px) in hard.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             match i % 5 {
                 0 => px.copy_from_slice(&[0, 0, 0, 255]),
                 1 => px.copy_from_slice(&[0x11, 0x11, 0x11, 255]),

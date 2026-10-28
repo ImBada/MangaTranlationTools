@@ -51,7 +51,7 @@ pub fn row<'a, T>(data: &'a [T], width: u32, channels: u32, y: u32, xs: &Range<u
 
 /// Straight-alpha RGBA bytes to egui colors.
 pub fn extend_rgba(out: &mut Vec<Color32>, rgba: &[u8]) {
-    out.extend(rgba.chunks_exact(4).map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])));
+    out.extend(rgba.as_chunks::<4>().0.iter().map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])));
 }
 
 impl TiledTexture {

@@ -6,7 +6,7 @@ members = ["crates/*"]
 version = "0.9.31"
 edition = "2024"
 license = "GPL-3.0-or-later"
-rust-version = "1.85"
+rust-version = "1.88"
 
 [workspace.dependencies]
 mtt-core = { path = "crates/mtt-core" }

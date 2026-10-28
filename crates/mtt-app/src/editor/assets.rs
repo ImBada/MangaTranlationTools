@@ -81,7 +81,8 @@ fn binary_mask(image: DynamicImage, width: u32, height: u32) -> GrayImage {
 
 /// Covered where `mask_coverage` > 0: some alpha and some brightness.
 pub fn mask_from_rgba(image: &RgbaImage) -> GrayImage {
-    let pixels = image.as_raw().chunks_exact(4).map(|p| if p[3] > 0 && (p[0] | p[1] | p[2]) > 0 { 255 } else { 0 });
+    let pixels =
+        image.as_raw().as_chunks::<4>().0.iter().map(|p| if p[3] > 0 && (p[0] | p[1] | p[2]) > 0 { 255 } else { 0 });
     GrayImage::from_raw(image.width(), image.height(), pixels.collect()).expect("one byte per pixel")
 }
 
@@ -123,7 +124,7 @@ fn any_mask_pixel(mask: &[u8]) -> bool {
 }
 
 fn any_result_pixel(rgba: &[u8]) -> bool {
-    rgba.chunks_exact(4).any(|p| p[3] > 0)
+    rgba.as_chunks::<4>().0.iter().any(|p| p[3] > 0)
 }
 
 impl LoadedPage {
@@ -345,9 +346,15 @@ fn masked_result_row(
     let Some(result) = result else { return transparent(out, xs.len()) };
     let rgba = row(result.as_raw(), width, 4, y, &xs);
     match mask {
-        Some(mask) => out.extend(rgba.chunks_exact(4).zip(row(mask.as_raw(), width, 1, y, &xs)).map(|(p, covered)| {
-            if *covered == 0 { Color32::TRANSPARENT } else { Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3]) }
-        })),
+        Some(mask) => {
+            out.extend(rgba.as_chunks::<4>().0.iter().zip(row(mask.as_raw(), width, 1, y, &xs)).map(|(p, covered)| {
+                if *covered == 0 {
+                    Color32::TRANSPARENT
+                } else {
+                    Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])
+                }
+            }))
+        }
         None => extend_rgba(out, rgba),
     }
 }

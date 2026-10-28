@@ -136,11 +136,11 @@ pub fn normalize_layers_in(mask: &mut GrayImage, result: &mut RgbaImage, region:
     let width = result.width();
     // Transparent pixels outside the region already rule out "fully opaque".
     let opaque = region.covers(width, result.height())
-        && region_rows(region, width, 4).all(|row| result.as_raw()[row].chunks_exact(4).all(|p| p[3] == 255));
+        && region_rows(region, width, 4).all(|row| result.as_raw()[row].as_chunks::<4>().0.iter().all(|p| p[3] == 255));
     let (mask, result): (&mut [u8], &mut [u8]) = (mask, result);
     for (mask_row, result_row) in region_rows(region, width, 1).zip(region_rows(region, width, 4)) {
         let (mask_row, result_row) = (&mut mask[mask_row], &mut result[result_row]);
-        for (coverage, pixel) in mask_row.iter_mut().zip(result_row.chunks_exact_mut(4)) {
+        for (coverage, pixel) in mask_row.iter_mut().zip(result_row.as_chunks_mut::<4>().0.iter_mut()) {
             if opaque {
                 pixel[3] = if *coverage > 0 { 255 } else { 0 };
             }
@@ -167,8 +167,8 @@ pub fn merge_partial_result_in(
     let mut merged = base.cloned().unwrap_or_else(|| RgbaImage::new(width, patch.height()));
     let target_raw: &mut [u8] = &mut merged;
     for (rgba, gray) in region_rows(region, width, 4).zip(region_rows(region, width, 1)) {
-        let target = target_raw[rgba.clone()].chunks_exact_mut(4);
-        let source = patch.as_raw()[rgba].chunks_exact(4);
+        let target = target_raw[rgba.clone()].as_chunks_mut::<4>().0.iter_mut();
+        let source = patch.as_raw()[rgba].as_chunks::<4>().0.iter();
         for ((target, source), coverage) in target.zip(source).zip(&patch_mask.as_raw()[gray]) {
             if *coverage == 0 && source[3] == 0 {
                 continue;

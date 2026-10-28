@@ -328,8 +328,13 @@ fn parse_extra(reader: &mut Reader<'_>, record: &mut LayerRecord, length: usize)
         match key.as_slice() {
             b"luni" if block.len() >= 4 => {
                 let count = u32::from_be_bytes([block[0], block[1], block[2], block[3]]) as usize;
-                let units: Vec<u16> =
-                    block[4..].chunks_exact(2).take(count).map(|c| u16::from_be_bytes([c[0], c[1]])).collect();
+                let units: Vec<u16> = block[4..]
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .take(count)
+                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .collect();
                 record.name = String::from_utf16_lossy(&units);
             }
             b"lsct" | b"lsdk" if block.len() >= 4 => {
