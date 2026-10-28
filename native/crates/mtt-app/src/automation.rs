@@ -39,6 +39,8 @@ pub enum Step {
     PresetEdit(String),
     /// Opens the shortcut sheet.
     ShortcutSheet,
+    /// Presses (`down`) or releases (`up`) Space as a real key event.
+    Space(bool),
     Sample([f32; 2]),
     WaitTranslation,
     Window([f32; 2]),
@@ -51,6 +53,8 @@ pub struct Automation {
     steps: VecDeque<Step>,
     wait_frames: u32,
     screenshot_done: Option<Arc<AtomicBool>>,
+    /// Key events fed to egui by `MttApp::raw_input_hook` on the next frame.
+    injected: Vec<egui::Event>,
 }
 
 pub enum Request {
@@ -110,6 +114,7 @@ impl Automation {
                     "report-wait" => Step::WaitReport,
                     "preset-edit" => Step::PresetEdit(arg.to_owned()),
                     "shortcuts" => Step::ShortcutSheet,
+                    "space" => Step::Space(arg == "down"),
                     "sample" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Sample([v[0], v[1]]))?
@@ -130,7 +135,11 @@ impl Automation {
                 })
             })
             .collect();
-        Some(Self { steps, wait_frames: 2, screenshot_done: None })
+        Some(Self { steps, wait_frames: 2, screenshot_done: None, injected: Vec::new() })
+    }
+
+    pub fn take_injected_events(&mut self) -> Vec<egui::Event> {
+        std::mem::take(&mut self.injected)
     }
 
     /// Runs at most one step per frame. Returns a request the app must perform.
@@ -274,6 +283,16 @@ impl Automation {
                 self.wait_frames = 10;
             }
             (Step::Wait(frames), _) => self.wait_frames = *frames,
+            (Step::Space(pressed), _) => {
+                self.injected.push(egui::Event::Key {
+                    key: egui::Key::Space,
+                    physical_key: Some(egui::Key::Space),
+                    pressed: *pressed,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                });
+                self.wait_frames = 3;
+            }
             (Step::Screenshot(path), _) => {
                 let path = path.clone();
                 let done = Arc::new(AtomicBool::new(false));

@@ -278,6 +278,9 @@ impl eframe::App for MttApp {
     /// to the first button (which Space, the pan key, then presses), so the key is taken
     /// out before egui sees it unless a text field or dialog has focus.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        if let Some(automation) = &mut self.automation {
+            raw_input.events.extend(automation.take_injected_events());
+        }
         let Screen::Editor(editor) = &mut self.screen else { return };
         if self.settings.is_open() || self.library.import_open() || ctx.memory(|memory| memory.focused().is_some()) {
             return;

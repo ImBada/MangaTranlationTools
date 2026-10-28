@@ -65,6 +65,13 @@ pub mod icon {
     pub const MINUS: &str = "\u{E32A}";
     pub const PLUS: &str = "\u{E3D4}";
     pub const KEYBOARD: &str = "\u{E2D8}";
+    pub const X: &str = "\u{E4F6}";
+    pub const FILE_ZIP: &str = "\u{E958}";
+    pub const PAINT_ROLLER: &str = "\u{E6F4}";
+    pub const TEXT_AA: &str = "\u{E6EE}";
+    pub const TEXT_ALIGN_CENTER: &str = "\u{E480}";
+    pub const TEXT_ALIGN_LEFT: &str = "\u{E484}";
+    pub const TEXT_ALIGN_RIGHT: &str = "\u{E486}";
 }
 
 /// Adds the icon font as its own family.
@@ -354,6 +361,28 @@ pub fn pill(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
 /// Weak explanatory text.
 pub fn hint(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).small().color(TEXT_WEAK));
+}
+
+/// Shows `window` as a dialog: everything behind it is dimmed and blocked.
+pub fn modal<R>(
+    ctx: &egui::Context,
+    window: egui::Window<'_>,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> Option<egui::InnerResponse<Option<R>>> {
+    let screen = ctx.content_rect();
+    egui::Area::new(egui::Id::unique("modal-backdrop")).order(egui::Order::Middle).fixed_pos(screen.min).show(
+        ctx,
+        |ui| {
+            ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(140));
+            ui.allocate_rect(screen, egui::Sense::click_and_drag());
+        },
+    );
+    let response = window.show(ctx, add_contents);
+    // The backdrop shares the window's layer order; keep the window above it.
+    if let Some(response) = &response {
+        ctx.move_to_top(response.response.layer_id);
+    }
+    response
 }
 
 /// System confirm dialog (`window.mangaApi.confirm` in the TS app).

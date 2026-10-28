@@ -13,6 +13,7 @@ use super::history::{Entry, LayerKind, LayerPatch};
 use super::{Editor, Layer, MASK_BRUSH_MAX, MASK_BRUSH_MIN, Tool, read_patch_gray};
 use crate::services::Services;
 use crate::textures::alpha_tint;
+use crate::theme::{self, icon};
 
 /// `MIN_STAGE_VIEW_SCALE` / `MAX_STAGE_VIEW_SCALE` / `MAX_STAGE_WIDTH_PX`.
 const MIN_ZOOM: f32 = 0.1;
@@ -357,15 +358,40 @@ pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
         paint_layers(editor, &painter, &page, page_rect);
         paint_overlay(editor, ui, services, &painter, &page);
         paint_decorations(editor, ui, &painter, &page);
+        canvas_notice(editor, &painter, rect);
         handle_view_input(editor, ui, &response);
         handle_pointer(editor, ui, &response, &page);
         block_quick_controls(editor, ui, &page);
     });
 }
 
-/// `OverlayBlock` controls around the single selected block on the overlay layer:
-/// alignment (좌/중/우), favourite preset tags, "자동 맞춤 OFF" or the individual size
-/// stepper (press and hold repeats), and COPY.
+/// One line at the top of the canvas saying what is shown when it isn't the mode's
+/// normal view, or what to do first.
+fn canvas_notice(editor: &Editor, painter: &egui::Painter, stage: Rect) {
+    let text = if editor.final_output_preview() {
+        "최종 결과 미리보기 (Space를 떼면 돌아갑니다)"
+    } else if editor.source_view() {
+        "원본 이미지 보기 중 · 5를 누르면 돌아갑니다"
+    } else if editor.mode() == super::Mode::Inpaint
+        && editor.is_page_decoded()
+        && !editor.inpaint_busy()
+        && !editor.current_result_exists()
+        && !editor.current_mask_has_pixels()
+    {
+        "아직 인페인트하지 않은 페이지입니다 · 오른쪽 '이 페이지 인페인트'로 원문 글자를 지우세요"
+    } else {
+        return;
+    };
+    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::proportional(13.0), Color32::WHITE);
+    let size = galley.size() + egui::vec2(24.0, 12.0);
+    let pill = Rect::from_center_size(egui::pos2(stage.center().x, stage.top() + 12.0 + size.y / 2.0), size);
+    painter.rect_filled(pill, size.y / 2.0, Color32::from_black_alpha(190));
+    painter.galley(pill.min + egui::vec2(12.0, 6.0), galley, Color32::WHITE);
+}
+
+/// `OverlayBlock` controls for the single selected block on the overlay layer, in one
+/// row: alignment, favourite presets, auto size or the individual size stepper (press
+/// and hold repeats), and copying the font settings.
 fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecord) {
     // Areas draw above windows, so stay out of the way while a dialog is open.
     let dialog_open = editor.shortcut_sheet
@@ -374,6 +400,7 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
         || editor.preset_backup_dialog.is_some()
         || editor.character_dialog.is_some();
     if editor.layer != Layer::Overlay
+        || editor.final_output_preview()
         || editor.selection.len() != 1
         || editor.drag.is_some()
         || editor.inline_edit.is_some()
@@ -391,7 +418,8 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
         return;
     }
     let ctx = ui.ctx().clone();
-    let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 2));
+    let stage = editor.view.stage_rect();
+    let frame = egui::Frame::popup(ui.style()).inner_margin(egui::Margin::symmetric(4, 3));
     let favorites: Vec<mtt_core::model::FontPreset> = editor
         .chapter
         .favorite_font_preset_ids
@@ -399,49 +427,58 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
         .flatten()
         .filter_map(|id| editor.chapter.font_presets.iter().flatten().find(|preset| &preset.id == id).cloned())
         .collect();
-    egui::Area::new(egui::Id::unique("block-quick-top"))
-        .fixed_pos(rect.left_top() - egui::vec2(0.0, 30.0 + ROTATE_HANDLE_OFFSET))
+    // One row above the block (below it when there is no room), kept inside the canvas.
+    let above = rect.top() - 36.0 - ROTATE_HANDLE_OFFSET;
+    let y = if above >= stage.top() + 4.0 { above } else { rect.bottom() + 8.0 };
+    egui::Area::new(egui::Id::unique("block-quick-controls"))
+        .fixed_pos(egui::pos2(rect.left(), y))
+        .constrain_to(stage)
         .order(egui::Order::Foreground)
         .show(&ctx, |ui| {
             frame.show(ui, |ui| {
                 ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    ui.spacing_mut().button_padding.x = 6.0;
                     use mtt_core::model::TextAlign;
-                    for (align, label, hint) in [
-                        (TextAlign::Left, "좌", "좌측 정렬"),
-                        (TextAlign::Center, "중", "가운데 정렬"),
-                        (TextAlign::Right, "우", "우측 정렬"),
+                    for (align, glyph, hint) in [
+                        (TextAlign::Left, icon::TEXT_ALIGN_LEFT, "왼쪽 정렬"),
+                        (TextAlign::Center, icon::TEXT_ALIGN_CENTER, "가운데 정렬"),
+                        (TextAlign::Right, icon::TEXT_ALIGN_RIGHT, "오른쪽 정렬"),
                     ] {
-                        if ui.selectable_label(block.text_align == align, label).on_hover_text(hint).clicked() {
+                        if theme::icon_tool(ui, true, block.text_align == align, glyph, "", hint).clicked() {
                             editor.edit_style(|b| b.text_align = align);
                         }
                     }
+                    if !favorites.is_empty() {
+                        ui.separator();
+                    }
                     for preset in &favorites {
                         let active = block.font_preset_id.as_deref() == Some(preset.id.as_str());
-                        if ui
-                            .selectable_label(active, &preset.name)
-                            .on_hover_text(format!("{} 적용", preset.name))
-                            .clicked()
+                        let name = super::presets::display_name(&preset.name);
+                        if ui.selectable_label(active, name).on_hover_text(format!("{name} 프리셋 적용")).clicked()
                         {
                             editor.select_preset(preset);
                         }
                     }
-                });
-            });
-        });
-    egui::Area::new(egui::Id::unique("block-quick-left"))
-        .fixed_pos(rect.left_top() - egui::vec2(76.0, 0.0))
-        .order(egui::Order::Foreground)
-        .show(&ctx, |ui| {
-            frame.show(ui, |ui| {
-                ui.set_width(64.0);
-                ui.vertical_centered(|ui| {
+                    ui.separator();
                     if block.style.auto_fit_text != Some(false) {
-                        if ui.button("자동\n맞춤\nOFF").on_hover_text("자동 맞춤 끄기").clicked() {
+                        if ui
+                            .button(theme::icon_text(icon::TEXT_AA, "자동 크기"))
+                            .on_hover_text(
+                                "블록에 맞춰 글자 크기를 자동으로 정하는 중입니다. 누르면 크기를 직접 정합니다",
+                            )
+                            .clicked()
+                        {
                             editor.disable_auto_fit();
                         }
                     } else {
                         let size = block.font_size_px();
-                        let plus = ui.add_enabled(size < super::OVERLAY_FONT_SIZE_MAX, egui::Button::new("+"));
+                        let minus = ui
+                            .add_enabled(
+                                size > super::OVERLAY_FONT_SIZE_MIN,
+                                egui::Button::new(theme::icon(icon::MINUS)),
+                            )
+                            .on_hover_text("글자 작게 (누르고 있으면 계속)");
                         let mut value = size.round();
                         if ui
                             .add(
@@ -453,7 +490,12 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                         {
                             editor.set_individual_font_size(value);
                         }
-                        let minus = ui.add_enabled(size > super::OVERLAY_FONT_SIZE_MIN, egui::Button::new("-"));
+                        let plus = ui
+                            .add_enabled(
+                                size < super::OVERLAY_FONT_SIZE_MAX,
+                                egui::Button::new(theme::icon(icon::PLUS)),
+                            )
+                            .on_hover_text("글자 크게 (누르고 있으면 계속)");
                         let held = if plus.is_pointer_button_down_on() {
                             Some(1.0)
                         } else if minus.is_pointer_button_down_on() {
@@ -463,7 +505,12 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                         };
                         repeat_size_step(editor, &ctx, held, size);
                     }
-                    if ui.small_button("COPY").on_hover_text("현재 폰트 설정 복사").clicked() {
+                    ui.separator();
+                    let copy_hint = format!(
+                        "이 블록의 글꼴 설정 복사\n다른 블록을 고르고 {}로 붙여넣습니다",
+                        crate::shortcuts::keys("⌘V")
+                    );
+                    if theme::icon_tool(ui, true, false, icon::PAINT_ROLLER, "", &copy_hint).clicked() {
                         editor.copy_font_settings(&ctx);
                     }
                 });
@@ -497,7 +544,9 @@ fn paint_layers(editor: &Editor, painter: &egui::Painter, page: &PageRecord, pag
     let (visibility, opacity) = editor.preview_layers();
     match editor.assets.get(&page.id) {
         Some(PageAssets::Ready(loaded)) => {
-            painter.rect_filled(page_rect, 0.0, Color32::WHITE);
+            // A faded original sits on black so the mask and erased areas stand out.
+            let dimmed = visibility.image && opacity.image < 1.0;
+            painter.rect_filled(page_rect, 0.0, if dimmed { Color32::BLACK } else { Color32::WHITE });
             if visibility.image && opacity.image > 0.0 {
                 loaded.source_texture.paint(painter, page_rect, alpha_tint(opacity.image));
             }
@@ -575,7 +624,8 @@ fn paint_overlay(
     }
 
     let tint = alpha_tint(opacity.overlay);
-    if editor.layer == Layer::Overlay {
+    // Block backgrounds are an editing aid, not part of the output.
+    if editor.layer == Layer::Overlay && !editor.final_output_preview() {
         for block in
             page.blocks.iter().filter(|block| block.render_direction != mtt_core::model::RenderTextDirection::Hidden)
         {
@@ -602,7 +652,8 @@ fn paint_overlay(
 
 fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, page: &PageRecord) {
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|pos| editor.view.stage_rect.contains(*pos));
-    if editor.layer.edits_blocks() {
+    // The final preview shows the page as exported: no outlines, handles or overflow marks.
+    if editor.layer.edits_blocks() && !editor.final_output_preview() {
         let hovered = hover.and_then(|pos| hit_block(page, editor.view.to_page(pos))).map(|block| block.id.clone());
         for block in &page.blocks {
             let selected = editor.selection.contains(&block.id);
@@ -693,8 +744,9 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
         );
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
     }
-    if matches!(editor.tool, Tool::MaskBrush | Tool::MaskEraser | Tool::MaskAutoEraser)
-        || (editor.tool == Tool::Result && editor.result_tool != super::result_tools::ResultTool::ColorPicker)
+    if !editor.final_preview
+        && (matches!(editor.tool, Tool::MaskBrush | Tool::MaskEraser | Tool::MaskAutoEraser)
+            || (editor.tool == Tool::Result && editor.result_tool != super::result_tools::ResultTool::ColorPicker))
     {
         let Some(pos) = hover else { return };
         let size = if editor.tool == Tool::Result { editor.result_brush.size } else { editor.brush_size };
@@ -753,7 +805,13 @@ fn handle_pointer(editor: &mut Editor, ui: &egui::Ui, response: &egui::Response,
         finish_drag(editor, &ctx, page);
     }
 
-    if response.double_clicked()
+    // Space held only pans: clicks don't select or start editing blocks.
+    if space_down {
+        if response.hovered() || matches!(editor.drag, Some(Drag::Pan { .. })) {
+            let grabbing = matches!(editor.drag, Some(Drag::Pan { .. }));
+            ctx.set_cursor_icon(if grabbing { egui::CursorIcon::Grabbing } else { egui::CursorIcon::Grab });
+        }
+    } else if response.double_clicked()
         && editor.layer.edits_blocks()
         && let Some(screen) = pointer_pos
         && let Some(block) = hit_block(page, editor.view.to_page(screen))
@@ -767,6 +825,7 @@ fn handle_pointer(editor: &mut Editor, ui: &egui::Ui, response: &egui::Response,
     }
 
     if editor.layer.edits_blocks()
+        && !space_down
         && editor.drag.is_none()
         && let Some(screen) = response.hover_pos()
         && editor.selection.len() == 1
@@ -1281,8 +1340,6 @@ type ShortcutAction = Box<dyn FnOnce(&mut Editor, &mut Services)>;
 pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Services) {
     let one_hand = services.settings.one_hand_mode;
     let mut actions: Vec<ShortcutAction> = Vec::new();
-    // Space held: temporary pan + final output preview (`temporaryPanActive`).
-    editor.final_preview = ctx.input(|input| input.key_down(Key::Space) && !input.modifiers.any());
     ctx.input_mut(|input| {
         let command = Modifiers::COMMAND;
         let command_shift = Modifiers::COMMAND | Modifiers::SHIFT;
@@ -1404,6 +1461,7 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
             actions.push(Box::new(|editor, _| {
                 if !inpaint_shortcut(editor, InpaintKey::Eraser)
                     && editor.layer == Layer::Overlay
+                    && !editor.final_preview
                     && editor.selection.len() == 1
                 {
                     // `BLOCK_INLINE_EDIT_SHORTCUT` on the overlay layer.

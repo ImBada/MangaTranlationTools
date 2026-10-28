@@ -78,6 +78,8 @@ pub struct SettingsView {
     test_endpoint: Option<String>,
     reset_message: Option<String>,
     lama_requested: bool,
+    /// The library's LaMa notice was closed (until the next launch).
+    lama_banner_dismissed: bool,
 }
 
 impl SettingsView {
@@ -213,54 +215,63 @@ impl SettingsView {
         });
     }
 
-    /// The empty-state "LaMa 인페인트 준비" card (`WorkspaceEmptyState`), shown until Python,
-    /// the runtime and the model are all ready. Returns whether it was drawn.
+    /// One-line notice on the library screen while LaMa isn't ready (local fill is used
+    /// meanwhile): opens the 인페인트 settings tab, or can be dismissed for the session.
+    /// Returns whether it was drawn.
     pub fn lama_empty_card(&mut self, ui: &mut egui::Ui, services: &Services, worker: &Worker<AppEvent>) -> bool {
         if !self.lama_requested {
             self.lama_requested = true;
             self.refresh_lama_status(services, worker);
         }
         let Some(status) = self.lama_status.clone() else { return false };
-        if status.python_available && status.runtime_ready && status.model_exists {
+        if self.lama_banner_dismissed || (status.python_available && status.runtime_ready && status.model_exists) {
             return false;
         }
-        egui::Frame::group(ui.style()).inner_margin(12.0).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.heading("LaMa 인페인트 준비");
-                if ui.button("새로고침").clicked() {
-                    self.refresh_lama_status(services, worker);
-                }
-            });
-            ui.horizontal(|ui| {
-                runtime_state(ui, "Python", status.python_available, false);
-                runtime_state(ui, "런타임", status.runtime_ready, self.lama_preparing);
-                runtime_state(ui, "모델", status.model_exists, self.lama_downloading);
-            });
-            if !status.python_available {
-                python_help(ui);
-            }
-            ui.horizontal(|ui| {
-                let label = if self.lama_preparing { "환경 준비 중" } else { "환경 준비" };
-                if ui.add_enabled(!self.lama_preparing, egui::Button::new(label)).clicked() {
-                    self.prepare_lama(services, worker);
-                }
-                let label = if self.lama_downloading { "모델 다운로드 중" } else { "모델 다운로드" };
-                if ui.add_enabled(!self.lama_downloading, egui::Button::new(label)).clicked() {
-                    self.download_lama_model(services, worker);
-                }
-            });
-            ui.label(RichText::new(format!("모델 경로: {}", status.model_path.display())).weak().small());
-            if let Some(progress) = self.lama_progress.as_ref().filter(|_| self.lama_preparing || self.lama_downloading)
-            {
+        let busy = self.lama_preparing || self.lama_downloading;
+        let mut open_settings = false;
+        egui::Frame::new()
+            .fill(theme::CARD_BG)
+            .stroke(egui::Stroke::new(1.0, theme::BORDER))
+            .corner_radius(8)
+            .inner_margin(egui::Margin::symmetric(12, 8))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.spinner();
-                    ui.label(RichText::new(progress).small());
+                    ui.label(theme::icon(theme::icon::BANDAIDS).color(theme::ACCENT));
+                    if busy {
+                        ui.spinner();
+                        let progress = self.lama_progress.clone().unwrap_or_else(|| "LaMa 준비 중".into());
+                        ui.add(egui::Label::new(RichText::new(progress).small()).truncate());
+                    } else {
+                        ui.add(
+                            egui::Label::new(
+                                RichText::new("LaMa 인페인트가 아직 준비되지 않아 로컬 채우기로 지웁니다.").small(),
+                            )
+                            .truncate(),
+                        );
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui
+                            .add(egui::Button::new(theme::icon(theme::icon::X).size(13.0)).frame_when_inactive(false))
+                            .on_hover_text("이번 실행 동안 숨기기")
+                            .clicked()
+                        {
+                            self.lama_banner_dismissed = true;
+                        }
+                        if ui
+                            .button("준비하기…")
+                            .on_hover_text("설정 › 인페인트에서 환경 준비와 모델 다운로드")
+                            .clicked()
+                        {
+                            open_settings = true;
+                        }
+                    });
                 });
-            }
-            if let Some((_, message)) = &self.lama_action {
-                ui.label(RichText::new(message).weak());
-            }
-        });
+            });
+        if open_settings {
+            self.open(services, worker);
+            self.tab = SettingsTab::Inpaint;
+        }
         true
     }
 
@@ -350,16 +361,16 @@ impl SettingsView {
         ui.add_space(6.0);
         ui.label(RichText::new("번역 모드").strong());
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Fast, "빠름");
-            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Accuracy, "정확성");
+            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Fast, "빠르게");
+            ui.selectable_value(&mut draft.translation_mode, TranslationMode::Accuracy, "정확하게");
         });
         theme::hint(ui, translation_mode_description(draft.translation_mode));
         ui.add_space(10.0);
 
         ui.label(RichText::new("번역 엔진").strong());
         ui.horizontal(|ui| {
-            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCodex, "OpenAI API");
-            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCompatible, "커스텀");
+            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCodex, "OpenAI (Codex 로그인)");
+            ui.selectable_value(&mut draft.model_provider, ModelProvider::OpenAiCompatible, "OpenAI 호환 서버");
         });
         theme::hint(ui, provider_description(draft.model_provider));
         ui.add_space(4.0);
@@ -517,14 +528,16 @@ impl SettingsView {
             ModelProvider::OpenAiCodex => !draft.codex.model.trim().is_empty(),
             ModelProvider::OpenAiCompatible => base_url_valid && !draft.openai_compatible.model.trim().is_empty(),
         };
-        let max_height = (ctx.content_rect().height() - 220.0).clamp(240.0, 560.0);
-        egui::Window::new("설정")
-            .open(&mut open)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .fixed_size([560.0, max_height + 110.0])
-            .show(ctx, |ui| {
+        let max_height = (ctx.content_rect().height() - 220.0).clamp(240.0, 470.0);
+        theme::modal(
+            ctx,
+            egui::Window::new("설정")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .fixed_size([560.0, max_height + 110.0]),
+            |ui| {
                 if let Some(tab) = theme::segmented(
                     ui,
                     self.tab,
@@ -579,7 +592,11 @@ impl SettingsView {
                     theme::hint(ui, message);
                 }
                 ui.horizontal(|ui| {
-                    if ui.button("기본값 복원").on_hover_text("모든 설정을 기본값으로 되돌리고 바로 저장합니다").clicked() {
+                    if ui
+                        .button("기본값 복원")
+                        .on_hover_text("모든 설정을 기본값으로 되돌리고 바로 저장합니다")
+                        .clicked()
+                    {
                         reset = true;
                     }
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -594,8 +611,15 @@ impl SettingsView {
                         }
                     });
                 });
-            });
-        if reset {
+            },
+        );
+        if reset
+            && theme::confirm(
+                "기본값 복원",
+                "모든 설정을 기본값으로 되돌릴까요?",
+                "Base URL, API Key, 모델 이름도 지워지고 바로 저장됩니다. 취소로 되돌릴 수 없습니다.",
+            )
+        {
             // `resetAppSettings` writes the defaults right away.
             let defaults = AppSettings::env_defaults();
             match services.save_settings(defaults) {
@@ -634,12 +658,7 @@ impl SettingsView {
 }
 
 fn toggle_row(ui: &mut egui::Ui, label: &str, value: &mut bool) {
-    ui.horizontal(|ui| {
-        ui.label(label);
-        if ui.selectable_label(*value, if *value { "켜짐" } else { "꺼짐" }).clicked() {
-            *value = !*value;
-        }
-    });
+    ui.checkbox(value, label);
 }
 
 /// `TRANSLATION_MODE_OPTIONS` descriptions.

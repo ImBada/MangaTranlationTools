@@ -95,9 +95,10 @@ fn selection(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
     let blocks = editor.selected_blocks();
     if let Some(group) = mtt_core::groups::selected_group(&page, &editor.selection) {
         theme::card(ui, &format!("그룹 · {}개 블록", group.block_ids.len()), |ui| {
+            selection_actions(editor, ui, worker, blocks.len());
+            ui.add_space(4.0);
             panels::group_settings(editor, ui, &group);
         });
-        selection_actions(editor, ui, worker, blocks.len());
         return;
     }
     match blocks.as_slice() {
@@ -108,19 +109,18 @@ fn selection(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
             if busy {
                 theme::hint(ui, "인페인트가 끝날 때까지 문장과 배치는 잠깁니다.");
             }
-            ui.add_enabled_ui(!busy, |ui| sentence_card(editor, ui, block, &page));
+            ui.add_enabled_ui(!busy, |ui| sentence_card(editor, ui, block, &page, worker));
             preset_card(editor, ui, block, services);
             ui.add_enabled_ui(!busy, |ui| placement_card(editor, ui, block));
             style_card(editor, ui, block, services);
-            selection_actions(editor, ui, worker, 1);
         }
         [first, ..] => {
             theme::card(ui, &format!("{}개 블록 선택", blocks.len()), |ui| {
+                selection_actions(editor, ui, worker, blocks.len());
                 theme::hint(ui, "아래 프리셋과 스타일은 선택한 블록 모두에 적용됩니다.");
             });
             preset_card(editor, ui, first, services);
             style_card(editor, ui, first, services);
-            selection_actions(editor, ui, worker, blocks.len());
         }
     }
 }
@@ -140,7 +140,7 @@ fn nothing_selected(
                 editor.create_empty_block();
             }
             if ui
-                .add_enabled(!busy && !page.blocks.is_empty(), egui::Button::new("모든 블록 인페인트"))
+                .add_enabled(!busy && !page.blocks.is_empty(), egui::Button::new("이 페이지 인페인트"))
                 .on_hover_text("이 페이지 블록 안의 원문 글자를 모두 지웁니다")
                 .clicked()
             {
@@ -151,7 +151,14 @@ fn nothing_selected(
 }
 
 /// Translation first: the text the reader sees, then the OCR source.
-fn sentence_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlock, page: &mtt_core::model::PageRecord) {
+/// The block's text first, with its actions right under it.
+fn sentence_card(
+    editor: &mut Editor,
+    ui: &mut egui::Ui,
+    block: &TranslationBlock,
+    page: &mtt_core::model::PageRecord,
+    worker: &Worker<AppEvent>,
+) {
     let index = page.blocks.iter().position(|b| b.id == block.id).unwrap_or(0);
     let total = page.blocks.len();
     let mut step = None;
@@ -211,6 +218,8 @@ fn sentence_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBloc
             if response.changed() {
                 editor.edit_selected(|b| b.source_text = source.clone());
             }
+            ui.add_space(4.0);
+            selection_actions(editor, ui, worker, 1);
         },
     );
     if let Some(step) = step {
@@ -327,11 +336,15 @@ fn style_card(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, 
 
 fn selection_actions(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>, count: usize) {
     let busy = editor.inpaint_busy();
-    ui.horizontal(|ui| {
-        let label = if count > 1 { "선택 블록 인페인트" } else { "이 블록 인페인트" };
+    ui.horizontal_wrapped(|ui| {
+        let label = "인페인트";
         if ui
             .add_enabled(!busy, theme::icon_button(theme::icon::BANDAIDS, label))
-            .on_hover_text("블록 안의 원문 글자를 지웁니다")
+            .on_hover_text(if count > 1 {
+                "선택한 블록들 안의 원문 글자를 지웁니다"
+            } else {
+                "블록 안의 원문 글자를 지웁니다"
+            })
             .clicked()
         {
             editor.start_inpaint(InpaintScope::SelectedBlocks, worker);
@@ -359,7 +372,14 @@ fn presets_tab(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) 
     let proxy = editor.preset_proxy_block();
     let editing_name = proxy.as_ref().and_then(|block| {
         let id = block.font_preset_id.as_deref()?;
-        editor.chapter.font_presets.as_deref().unwrap_or(&[]).iter().find(|p| p.id == id).map(|p| p.name.clone())
+        editor
+            .chapter
+            .font_presets
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .find(|p| p.id == id)
+            .map(|p| super::presets::display_name(&p.name).to_owned())
     });
     theme::card(ui, "글꼴 프리셋", |ui| {
         theme::hint(ui, "프리셋을 누르면 아래에서 편집합니다. 바꾼 값은 이 프리셋이 연결된 모든 블록에 반영됩니다.");
@@ -417,17 +437,14 @@ fn run_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>) {
         },
         |ui| {
             if ui
-                .add_enabled(
-                    !busy && has_blocks,
-                    theme::primary_icon(theme::icon::BANDAIDS, "이 페이지 블록 글자 지우기"),
-                )
+                .add_enabled(!busy && has_blocks, theme::primary_icon(theme::icon::BANDAIDS, "이 페이지 인페인트"))
                 .on_hover_text("블록 안의 원문 글자로 마스크를 새로 만들고 지웁니다 (기존 마스크·결과는 바뀜)")
                 .clicked()
             {
                 editor.start_inpaint(InpaintScope::AllBlocks, worker);
             }
             if ui
-                .add_enabled(!busy && has_mask, egui::Button::new("지금 마스크로 다시 지우기"))
+                .add_enabled(!busy && has_mask, egui::Button::new("마스크대로 다시 인페인트"))
                 .on_hover_text("직접 칠한 마스크 영역 전체를 다시 인페인트합니다")
                 .clicked()
             {
@@ -437,9 +454,9 @@ fn run_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>) {
             if ui
                 .add_enabled(
                     !busy && chapter_ready && !editor.translation_running(),
-                    egui::Button::new("모든 페이지 블록 글자 지우기"),
+                    egui::Button::new("모든 페이지 인페인트"),
                 )
-                .on_hover_text("완료 표시하지 않은 모든 페이지를 차례로 인페인트합니다")
+                .on_hover_text("검수 완료하지 않은 모든 페이지를 차례로 인페인트합니다")
                 .clicked()
             {
                 editor.start_inpaint_all_pages();
@@ -564,7 +581,7 @@ fn range_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>)
                 }
             }
             if ui
-                .add_enabled(has_mask && !locked, egui::Button::new("범위만 다시 지우기"))
+                .add_enabled(has_mask && !locked, egui::Button::new("범위만 다시 인페인트"))
                 .on_hover_text("범위 안의 마스크만 다시 인페인트합니다")
                 .clicked()
             {
@@ -657,7 +674,7 @@ fn psd_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
 
 fn review(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
     ui.label(RichText::new("검수 · 출력").heading());
-    theme::hint(ui, "최종 결과를 넘겨 보며 끝난 페이지를 완료로 표시하고, 이미지로 출력합니다.");
+    theme::hint(ui, "최종 결과를 넘겨 보며 끝난 페이지를 검수 완료로 표시하고, 이미지로 출력합니다.");
     ui.add_space(6.0);
     egui::ScrollArea::vertical().id_salt("review-inspector").auto_shrink(false).show(ui, |ui| {
         page_card(editor, ui, services);
@@ -691,11 +708,11 @@ fn page_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
         ui.horizontal(|ui| {
             let done = page.is_completed();
             let button = if done {
-                egui::Button::new((RichText::new("완료 표시 해제"), theme::key_hint("₩", false)))
+                egui::Button::new((RichText::new("검수 완료 해제"), theme::key_hint("₩", false)))
             } else {
                 egui::Button::new((
                     theme::icon(theme::icon::CHECK).color(egui::Color32::WHITE),
-                    RichText::new("완료로 표시").strong().color(egui::Color32::WHITE),
+                    RichText::new("검수 완료로 표시").strong().color(egui::Color32::WHITE),
                     theme::key_hint("₩", true),
                 ))
                 .fill(theme::ACCENT_DIM)
@@ -715,7 +732,7 @@ fn page_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
             }
         });
         if page.is_completed() {
-            theme::hint(ui, "완료한 페이지는 AI 번역과 전체 인페인트에서 건너뜁니다.");
+            theme::hint(ui, "검수 완료한 페이지는 AI 번역과 모든 페이지 인페인트에서 건너뜁니다.");
         }
     });
 }
@@ -730,13 +747,22 @@ fn chapter_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
     let render_busy = editor.export_progress.is_some();
     let inpaint_disabled =
         pages.iter().all(|page| page.blocks.is_empty() || page.is_completed()) || job_active || editor.inpaint_busy();
-    theme::card(ui, &format!("이 화 · {}", editor.chapter.title), |ui| {
-        for (label, count) in [("번역", translated), ("인페인트", inpainted), ("완료", completed)] {
+    theme::card(ui, &format!("{} 전체", editor.chapter.title), |ui| {
+        for (label, count) in [("번역", translated), ("인페인트", inpainted), ("검수 완료", completed)] {
             ui.horizontal(|ui| {
-                ui.add_sized(egui::vec2(56.0, 16.0), egui::Label::new(RichText::new(label).small()));
+                // Left-aligned label column, then the bar (green once everything is done).
+                let (rect, _) = ui.allocate_exact_size(egui::vec2(64.0, 16.0), egui::Sense::hover());
+                ui.painter().text(
+                    rect.left_center(),
+                    egui::Align2::LEFT_CENTER,
+                    label,
+                    egui::FontId::proportional(12.0),
+                    theme::TEXT,
+                );
                 let ratio = if total == 0 { 0.0 } else { count as f32 / total as f32 };
                 let bar = (ui.available_width() - 64.0).clamp(60.0, 180.0);
-                ui.add(egui::ProgressBar::new(ratio).desired_width(bar).desired_height(6.0));
+                let color = if total > 0 && count == total { theme::SUCCESS } else { theme::ACCENT };
+                ui.add(egui::ProgressBar::new(ratio).desired_width(bar).desired_height(6.0).fill(color));
                 ui.label(RichText::new(format!("{count}/{total}")).small().color(theme::TEXT_WEAK));
             });
         }
@@ -755,8 +781,11 @@ fn chapter_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
                     Err(error) => format!("출력 실패: {error}"),
                 };
             }
-            let inpaint_label =
-                if editor.inpaint_queue.is_some() { "전체 인페인트 중" } else { "전체 인페인트" };
+            let inpaint_label = if editor.inpaint_queue.is_some() {
+                "모든 페이지 인페인트 중"
+            } else {
+                "모든 페이지 인페인트"
+            };
             if ui
                 .add_enabled(!inpaint_disabled, egui::Button::new(inpaint_label))
                 .on_hover_text("완료하지 않은 모든 페이지의 블록 글자를 지웁니다")

@@ -19,7 +19,7 @@ use crate::worker::Worker;
 pub const MODES: [theme::Segment<'static, Mode>; 3] = [
     (Mode::Translate, icon::TRANSLATE, "번역", "2", "문장과 글꼴 편집"),
     (Mode::Inpaint, icon::BANDAIDS, "인페인트", "3·4", "원문 지우기와 보정 (3 결과 · 4 마스크)"),
-    (Mode::Review, icon::CHECK_CIRCLE, "검수 · 출력", "1", "최종 결과 확인, 완료 표시, 출력"),
+    (Mode::Review, icon::CHECK_CIRCLE, "검수 · 출력", "1", "최종 결과 확인, 검수 완료 표시, 출력"),
 ];
 
 /// `text` cut to `max` characters with an ellipsis.
@@ -119,7 +119,7 @@ fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
                     let current = chapter.id == editor.chapter.id;
                     let button = egui::Button::selectable(current, &chapter.title).right_text(
                         RichText::new(format!(
-                            "{}/{}p · {}",
+                            "검수 {}/{} · {}",
                             chapter.completed_page_count,
                             chapter.page_count,
                             crate::library_view::status_label(chapter.status)
@@ -190,7 +190,7 @@ fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, 
             if ui.button("번역 안 된 페이지 이어서 번역").clicked() {
                 run = Some(RunMode::Pending);
             }
-            if ui.button("완료 표시 안 된 페이지 모두 다시 번역").clicked() {
+            if ui.button("검수 완료 안 된 페이지 모두 다시 번역").clicked() {
                 run = Some(RunMode::All);
             }
             ui.separator();
@@ -201,13 +201,25 @@ fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, 
         .response
         .on_hover_text("번역 범위 선택");
     });
-    let primary = egui::Button::new((
-        theme::icon(icon::SPARKLE).color(Color32::WHITE),
-        RichText::new("AI 번역").strong().color(Color32::WHITE),
-    ))
-    .fill(theme::ACCENT_DIM);
-    if ui.add_enabled(has_pages, primary).on_hover_text("아직 번역하지 않은 페이지를 이어서 번역합니다").clicked()
-    {
+    // Accent only while there is something left to translate.
+    let current = editor.page().map(|page| page.id.clone()).unwrap_or_default();
+    let pending =
+        editor.chapter.pages.iter().any(|page| super::translation::is_target(page, RunMode::Pending, &current));
+    let primary = if pending {
+        egui::Button::new((
+            theme::icon(icon::SPARKLE).color(Color32::WHITE),
+            RichText::new("AI 번역").strong().color(Color32::WHITE),
+        ))
+        .fill(theme::ACCENT_DIM)
+    } else {
+        egui::Button::new((theme::icon(icon::SPARKLE), RichText::new("AI 번역")))
+    };
+    let hint = if pending {
+        "아직 번역하지 않은 페이지를 이어서 번역합니다"
+    } else {
+        "번역할 페이지가 남지 않았습니다. 다시 번역은 옆의 메뉴에서 고르세요"
+    };
+    if ui.add_enabled(has_pages, primary).on_hover_text(hint).clicked() {
         run = Some(RunMode::Pending);
     }
     match run {
@@ -218,6 +230,15 @@ fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, 
                 "기존 번역 결과와 수정 내용이 이 페이지에서 덮어써집니다.",
             ) {
                 editor.start_translation(RunMode::CurrentPage, services, worker);
+            }
+        }
+        Some(RunMode::All) => {
+            if theme::confirm(
+                "전체 다시 번역",
+                "검수 완료로 표시하지 않은 모든 페이지를 다시 번역할까요?",
+                "그 페이지들의 기존 번역과 직접 고친 내용이 새 번역으로 바뀝니다. 지킬 페이지는 먼저 검수 완료로 표시하세요.",
+            ) {
+                editor.start_translation(RunMode::All, services, worker);
             }
         }
         Some(mode) => editor.start_translation(mode, services, worker),
@@ -338,7 +359,7 @@ fn jobs(editor: &Editor, ui: &mut egui::Ui) {
     }
     if let Some(queue) = &editor.inpaint_queue {
         let done = queue.total.saturating_sub(queue.pages.len());
-        job(ui, &format!("전체 인페인트 {done}/{}", queue.total), ratio(done, queue.total));
+        job(ui, &format!("모든 페이지 인페인트 {done}/{}", queue.total), ratio(done, queue.total));
     } else if editor.inpaint_busy() {
         ui.label(RichText::new("인페인트 중").small());
         ui.spinner();
@@ -369,7 +390,7 @@ const THUMB_SIZE: egui::Vec2 = egui::vec2(46.0, 62.0);
 pub fn page_strip(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
     egui::Panel::left("editor-pages")
         .resizable(true)
-        .default_size(196.0)
+        .default_size(210.0)
         .size_range(180.0..=300.0)
         .frame(theme::side_frame())
         .show(ui, |ui| {
@@ -392,7 +413,7 @@ pub fn page_strip(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Service
                 });
             });
             ui.horizontal(|ui| {
-                let label = RichText::new(format!("완료 {completed}/{total}")).small().color(theme::TEXT_WEAK);
+                let label = RichText::new(format!("검수 {completed}/{total}")).small().color(theme::TEXT_WEAK);
                 let width = (ui.available_width() - 64.0).max(40.0);
                 ui.add(egui::ProgressBar::new(ratio(completed, total)).desired_width(width).desired_height(4.0));
                 ui.label(label);
@@ -441,7 +462,7 @@ fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
                 Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(22.0, 22.0));
             let check_response = ui
                 .interact(check, response.id.with("done"), Sense::click())
-                .on_hover_text(if completed { "완료 표시 해제 (₩)" } else { "완료로 표시 (₩)" });
+                .on_hover_text(if completed { "검수 완료 해제 (₩)" } else { "검수 완료로 표시 (₩)" });
             paint_check(ui, check, completed, check_response.hovered());
             if check_response.clicked() {
                 toggle = Some(index);
@@ -452,7 +473,7 @@ fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
                 response.scroll_to_me(None);
             }
             response.context_menu(|ui| {
-                if ui.button(if completed { "완료 표시 해제" } else { "완료로 표시" }).clicked() {
+                if ui.button(if completed { "검수 완료 해제" } else { "검수 완료로 표시" }).clicked() {
                     toggle = Some(index);
                     ui.close();
                 }
@@ -566,21 +587,25 @@ fn paint_page_row(
     let name = painter.layout_job(job);
     painter.galley(egui::pos2(text_left, rect.top() + 30.0), name, theme::TEXT_WEAK);
 
-    let (translate_color, translate_hint) = match page.analysis_status {
-        PageAnalysisStatus::Completed => (theme::SUCCESS, "번역됨"),
-        PageAnalysisStatus::Running => (theme::ACCENT, "번역 중"),
-        PageAnalysisStatus::Failed => (theme::DANGER, "번역 실패"),
-        PageAnalysisStatus::Idle => (theme::IDLE, "번역 전"),
+    let (translate_color, translate_label, translate_hint) = match page.analysis_status {
+        PageAnalysisStatus::Completed => (theme::SUCCESS, "번역", "번역됨"),
+        PageAnalysisStatus::Running => (theme::ACCENT, "번역 중", "번역 중"),
+        PageAnalysisStatus::Failed => (theme::DANGER, "번역 실패", "번역 실패"),
+        PageAnalysisStatus::Idle => (theme::IDLE, "", "번역 전"),
     };
-    let (inpaint_color, inpaint_hint) = match page.inpaint_status {
-        Some(InpaintStatus::Completed) => (theme::SUCCESS, "인페인트됨"),
-        Some(InpaintStatus::Running) => (theme::ACCENT, "인페인트 중"),
-        Some(InpaintStatus::Failed) => (theme::DANGER, "인페인트 실패"),
-        _ => (theme::IDLE, "인페인트 전"),
+    let (inpaint_color, inpaint_label, inpaint_hint) = match page.inpaint_status {
+        Some(InpaintStatus::Completed) => (theme::SUCCESS, "인페인트", "인페인트됨"),
+        Some(InpaintStatus::Running) => (theme::ACCENT, "인페인트 중", "인페인트 중"),
+        Some(InpaintStatus::Failed) => (theme::DANGER, "인페인트 실패", "인페인트 실패"),
+        _ => (theme::IDLE, "", "인페인트 전"),
     };
+    // Only what has happened gets a chip; a fresh page shows none.
     let mut x = text_left;
     let y = rect.top() + 52.0;
-    for (label, color) in [("번역", translate_color), ("지움", inpaint_color)] {
+    for (label, color) in [(translate_label, translate_color), (inpaint_label, inpaint_color)] {
+        if label.is_empty() {
+            continue;
+        }
         let galley = painter.layout_no_wrap(label.into(), egui::FontId::proportional(10.5), color);
         let chip = Rect::from_min_size(egui::pos2(x, y - 1.0), galley.size() + egui::vec2(10.0, 2.0));
         painter.rect_filled(chip, 6.0, color.gamma_multiply(0.18));
@@ -728,7 +753,7 @@ fn inpaint_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
     ui.separator();
     // Painting waits for a running inpaint (its result replaces the layers).
     let paint = !locked && !editor.inpaint_busy() && !editor.source_view();
-    pointer_tools(editor, ui, !paint, "선택 · 화면 이동", "범위 선택\n범위 안만 채우기·비우기·다시 지우기");
+    pointer_tools(editor, ui, !paint, "선택 · 화면 이동", "범위 선택\n범위 안만 채우기·비우기·다시 인페인트");
     ui.separator();
     if editor.inpaint_layer == Layer::InpaintMask {
         for (tool, glyph, key, hint) in [
@@ -801,8 +826,9 @@ fn review_tools(editor: &mut Editor, ui: &mut egui::Ui) {
     }
     ui.separator();
     let Some(done) = editor.page().map(|page| page.is_completed()) else { return };
-    let (glyph, label) = if done { (icon::CHECK_CIRCLE, "완료됨") } else { (icon::CHECK, "완료로 표시") };
-    if theme::icon_text_toggle(ui, true, done, glyph, label, "₩", "이 페이지 작업 완료 표시 (` 도 됨)").clicked()
+    let (glyph, label) =
+        if done { (icon::CHECK_CIRCLE, "검수 완료") } else { (icon::CHECK, "검수 완료로 표시") };
+    if theme::icon_text_toggle(ui, true, done, glyph, label, "₩", "이 페이지를 검수 완료로 표시 (` 도 됨)").clicked()
     {
         editor.toggle_page_completed();
     }

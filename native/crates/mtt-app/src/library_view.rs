@@ -182,11 +182,13 @@ impl LibraryView {
         let mut close = false;
         let mut start = false;
         let title = if dialog.preview.batch { "작품 일괄 번역 준비" } else { "보관함에 추가" };
-        egui::Window::new(title)
-            .collapsible(false)
-            .default_width(520.0)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ctx, |ui| {
+        theme::modal(
+            ctx,
+            egui::Window::new(title)
+                .collapsible(false)
+                .default_width(520.0)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]),
+            |ui| {
                 let running = dialog.running.is_some();
                 let batch = dialog.preview.batch;
                 ui.add_enabled_ui(!running, |ui| {
@@ -255,7 +257,8 @@ impl LibraryView {
                         }
                     }
                 });
-            });
+            },
+        );
         if start {
             self.start_import(services, worker);
         }
@@ -466,7 +469,7 @@ impl LibraryView {
                     ui.colored_label(theme::DANGER, "시스템 폰트를 불러오지 못했습니다.");
                 }
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                    ui.set_max_width(880.0);
+                    ui.set_max_width(ui.available_width().min(880.0));
                     // `WorkspaceEmptyState`: the LaMa setup card until it is ready.
                     if lama_card(ui, services) {
                         ui.add_space(12.0);
@@ -504,7 +507,7 @@ impl LibraryView {
         });
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
-        theme::hint(ui, &format!("{}화 · {pages}페이지 중 {done}페이지 완료", work.chapters.len()));
+        theme::hint(ui, &format!("{}화 · {pages}페이지 중 {done}페이지 검수 완료", work.chapters.len()));
         ui.add_space(10.0);
         if work.chapters.is_empty() {
             theme::hint(ui, "이 작품에는 아직 화가 없습니다.");
@@ -583,11 +586,14 @@ impl LibraryView {
         let mut save = false;
         let mut delete = false;
         let heading = if pending.work { "작품 이름 변경" } else { "화 이름 변경" };
-        egui::Window::new(heading)
-            .collapsible(false)
-            .resizable(false)
-            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-            .show(ui.ctx(), |ui| {
+        let ctx = ui.ctx().clone();
+        theme::modal(
+            &ctx,
+            egui::Window::new(heading)
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]),
+            |ui| {
                 ui.label("새 이름");
                 let response = ui.text_edit_singleline(&mut pending.title);
                 let trimmed = pending.title.trim().to_owned();
@@ -615,7 +621,8 @@ impl LibraryView {
                         save = true;
                     }
                 });
-            });
+            },
+        );
         if save {
             let title = pending.title.trim().to_owned();
             let result = if pending.work {
@@ -756,21 +763,36 @@ fn welcome(ui: &mut egui::Ui, view: &mut LibraryView) {
         ui.label(RichText::new("만화 원고를 가져와서 시작하세요").size(22.0).strong());
         ui.add_space(4.0);
         theme::hint(ui, "작품과 화 단위로 보관해 두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.");
-        theme::hint(ui, "이미지 여러 장, 폴더, ZIP을 이 창에 끌어다 놓아도 됩니다.");
-        ui.add_space(12.0);
+        ui.add_space(14.0);
+        let primary = theme::primary_icon(theme::icon::FOLDER_OPEN, "폴더 가져오기").min_size(egui::vec2(200.0, 40.0));
+        if ui.add(primary).on_hover_text("이미지가 든 폴더 하나를 한 화로 가져옵니다").clicked() {
+            view.pick_import(ImportMode::Folder);
+        }
+        ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let width: f32 = 4.0 * 130.0;
+            let width: f32 = 2.0 * 140.0 + 8.0;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            for (mode, label, hint) in IMPORT_MODES {
-                if ui
-                    .add(egui::Button::new(label.trim_end_matches('…')).min_size(egui::vec2(120.0, 34.0)))
-                    .on_hover_text(hint)
-                    .clicked()
-                {
+            for (mode, glyph, label) in [
+                (ImportMode::Images, theme::icon::IMAGE, "이미지 파일"),
+                (ImportMode::Zip, theme::icon::FILE_ZIP, "압축파일"),
+            ] {
+                if ui.add(theme::icon_button(glyph, label).min_size(egui::vec2(140.0, 32.0))).clicked() {
                     view.pick_import(mode);
                 }
             }
         });
+        ui.add_space(10.0);
+        theme::hint(ui, "이 창에 이미지·폴더·ZIP을 끌어다 놓아도 됩니다.");
+        if ui
+            .add(
+                egui::Button::new(RichText::new("여러 화를 한 번에 가져와 번역하기…").small())
+                    .frame_when_inactive(false),
+            )
+            .on_hover_text("폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다")
+            .clicked()
+        {
+            view.pick_import(ImportMode::ZipFolder);
+        }
     });
 }
 
@@ -801,7 +823,7 @@ fn work_row(ui: &mut egui::Ui, work: &WorkSummary, selected: bool) -> egui::Resp
         painter.galley(inner.min, title, theme::TEXT);
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
-        let meta = format!("{}화 · 완료 {done}/{pages}p", work.chapters.len());
+        let meta = format!("{}화 · 검수 {done}/{pages}p", work.chapters.len());
         let meta = truncated(ui, &meta, 11.5, theme::TEXT_WEAK, inner.width());
         painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
     }
@@ -822,7 +844,7 @@ fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
         let ratio =
             if chapter.page_count == 0 { 0.0 } else { chapter.completed_page_count as f32 / chapter.page_count as f32 };
         let count = painter.layout_no_wrap(
-            format!("완료 {}/{}", chapter.completed_page_count, chapter.page_count),
+            format!("검수 {}/{}", chapter.completed_page_count, chapter.page_count),
             egui::FontId::proportional(12.0),
             theme::TEXT_WEAK,
         );

@@ -31,6 +31,18 @@ pub struct PresetSnapshot {
     pub pages: Vec<(String, Vec<TranslationBlock>)>,
 }
 
+/// Name shown for a preset: the four built-in block-type presets keep their stored English
+/// names (shared with the TS app) but show in Korean until renamed.
+pub fn display_name(name: &str) -> &str {
+    match name {
+        "speech" => "말풍선",
+        "sfx" => "효과음",
+        "caption" => "자막",
+        "other" => "기타",
+        other => other,
+    }
+}
+
 impl Editor {
     pub(super) fn preset_snapshot(&self) -> PresetSnapshot {
         PresetSnapshot {

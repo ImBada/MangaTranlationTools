@@ -127,9 +127,11 @@ fn focus_opacity(layer: Layer, current: LayerOpacity) -> LayerOpacity {
     match layer {
         Layer::Output => return DEFAULT_LAYER_OPACITY,
         Layer::Image => set(Some(1.0), Some(0.0), Some(0.0), Some(0.0), Some(0.0)),
-        Layer::InpaintResult => set(Some(0.5), Some(1.0), Some(1.0), Some(0.0), Some(0.5)),
-        Layer::InpaintMask => set(Some(0.5), Some(1.0), Some(0.0), Some(1.0), Some(0.5)),
-        Layer::Overlay => set(Some(1.0), Some(0.2), Some(0.2), Some(0.0), Some(1.0)),
+        // Inpaint modes show what they work on over a half-faded original, without the
+        // translation on top; translate mode shows the page as the reader will see it.
+        Layer::InpaintResult => set(Some(0.5), Some(1.0), Some(1.0), Some(0.0), Some(0.0)),
+        Layer::InpaintMask => set(Some(0.5), Some(1.0), Some(0.0), Some(1.0), Some(0.0)),
+        Layer::Overlay => set(Some(1.0), Some(1.0), Some(1.0), Some(0.0), Some(1.0)),
     }
     next
 }
@@ -1373,7 +1375,7 @@ impl Editor {
                 };
                 let (title, message) = match self.last_inpaint {
                     Some(LastInpaint::AllPages) => {
-                        ("전체 인페인트 실패", "완료된 페이지는 유지됩니다. 실패한 페이지부터 다시 실행하세요.")
+                        ("모든 페이지 인페인트 실패", "완료된 페이지는 유지됩니다. 실패한 페이지부터 다시 실행하세요.")
                     }
                     Some(LastInpaint::Page(InpaintScope::Range)) => {
                         ("부분 인페인트 실패", "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요.")
@@ -1443,7 +1445,7 @@ impl Editor {
             let name = self.chapter.pages.iter().find(|page| page.id == page_id).map(|p| p.name.clone());
             self.status = format!("{done}/{} {} 인페인트 완료", queue.total, name.unwrap_or_default());
             if queue.pages.is_empty() {
-                self.status = format!("전체 인페인트 완료: {}p", queue.total);
+                self.status = format!("모든 페이지 인페인트 완료: {}p", queue.total);
                 self.inpaint_queue = None;
             }
         }
@@ -1466,7 +1468,7 @@ impl Editor {
             self.status = "인페인트할 미완료 페이지가 없습니다.".into();
             return;
         }
-        self.status = format!("전체 인페인트 시작: {}p", pages.len());
+        self.status = format!("모든 페이지 인페인트 시작: {}p", pages.len());
         self.last_inpaint = Some(LastInpaint::AllPages);
         self.inpaint_queue = Some(InpaintQueue { total: pages.len(), pages });
     }
@@ -1484,7 +1486,7 @@ impl Editor {
             if let Some(queue) = &mut self.inpaint_queue {
                 queue.pages.pop_front();
                 if queue.pages.is_empty() {
-                    self.status = format!("전체 인페인트 완료: {}p", queue.total);
+                    self.status = format!("모든 페이지 인페인트 완료: {}p", queue.total);
                     self.inpaint_queue = None;
                 }
             }
@@ -2097,6 +2099,12 @@ impl Editor {
         if step != 0 && !dialog_open && self.mode() == Mode::Translate {
             self.select_adjacent_block(step);
         }
+        // Space held: temporary pan + final output preview (`temporaryPanActive`), decided
+        // before drawing so the canvas switches on the same frame. A focused text field
+        // gets the space instead.
+        self.final_preview = !dialog_open
+            && !ui.ctx().text_edit_focused()
+            && ui.input(|input| input.key_down(egui::Key::Space) && !input.modifiers.any());
         let action = chrome::top_bar(self, ui, services, worker);
         chrome::status_bar(self, ui);
         chrome::page_strip(self, ui, services, worker);
@@ -2108,16 +2116,21 @@ impl Editor {
         stage::inline_editor(self, ui);
         if self.shortcut_sheet {
             let mut open = true;
-            egui::Window::new("단축키")
-                .open(&mut open)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                .default_width(760.0)
-                .show(&ui.ctx().clone(), |ui| {
-                    crate::shortcuts::sheet(ui, 2);
+            let ctx = ui.ctx().clone();
+            let max_height = (ctx.content_rect().height() - 180.0).max(200.0);
+            crate::theme::modal(
+                &ctx,
+                egui::Window::new("단축키")
+                    .open(&mut open)
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .default_width(760.0),
+                |ui| {
+                    egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| crate::shortcuts::sheet(ui, 2));
                     crate::theme::hint(ui, "? 또는 Esc로 닫습니다. 버튼 옆의 작은 글자도 단축키입니다.");
-                });
+                },
+            );
             self.shortcut_sheet = open;
         }
         panels::find_replace_window(self, ui);

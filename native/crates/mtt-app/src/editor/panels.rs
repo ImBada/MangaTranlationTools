@@ -86,10 +86,6 @@ fn highlighted(ui: &egui::Ui, text: &str, highlight: &str) -> egui::text::Layout
 
 /// `TranslationBlockGroupToolSection.tsx`.
 pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt_core::model::TranslationBlockGroup) {
-    ui.horizontal(|ui| {
-        ui.label("선택 그룹");
-        ui.label(RichText::new(format!("{}개 블록", group.block_ids.len())).strong());
-    });
     let Some(page) = editor.page() else { return };
     let rows: Vec<(usize, TranslationBlock)> = group
         .block_ids
@@ -97,11 +93,15 @@ pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt
         .filter_map(|id| page.blocks.iter().position(|block| &block.id == id).map(|i| (i, page.blocks[i].clone())))
         .collect();
     if !rows.is_empty() {
-        ui.horizontal(|ui| {
-            ui.label("그룹 블록");
-            ui.label(RichText::new(rows.len().to_string()).strong());
-        });
         let reorder = rows.len() > 1 && !editor.page_edit_locked();
+        crate::theme::hint(
+            ui,
+            if reorder {
+                "블록을 누르면 하나만 편집, 끌면 그룹 안 순서 변경"
+            } else {
+                "블록을 누르면 하나만 편집"
+            },
+        );
         let mut dropped: Option<(String, String, mtt_core::library::DropPosition)> = None;
         for (index, block) in &rows {
             let hidden = block.render_direction == RenderTextDirection::Hidden;
@@ -147,24 +147,32 @@ pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt
     let mut enabled = effect.is_some_and(|e| e.enabled);
     let mut settings = mtt_core::groups::drop_shadow_settings(effect);
     ui.separator();
-    let mut changed = ui.checkbox(&mut enabled, "그림자").changed();
-    egui::Grid::new("group-shadow").num_columns(2).show(ui, |ui| {
-        ui.label("색");
-        if let Some(hex) = super::color::color_field(editor, ui, "group-shadow", &settings.color) {
-            settings.color = hex;
-            changed = true;
-        }
-        ui.end_row();
-        for (label, value, range) in [
-            ("불투명도", &mut settings.opacity, 0.0..=1.0),
-            ("흐림", &mut settings.blur_px, 0.0..=80.0),
-            ("각도", &mut settings.angle_deg, -360.0..=360.0),
-            ("거리", &mut settings.distance_px, 0.0..=80.0),
-        ] {
-            ui.label(label);
-            changed |= ui.add(egui::DragValue::new(value).range(range).speed(0.5)).changed();
+    let mut changed = ui.checkbox(&mut enabled, "그룹 그림자").changed();
+    ui.add_enabled_ui(enabled, |ui| {
+        egui::Grid::new("group-shadow").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+            ui.label("색");
+            if let Some(hex) = super::color::color_field(editor, ui, "group-shadow", &settings.color) {
+                settings.color = hex;
+                changed = true;
+            }
             ui.end_row();
-        }
+            ui.label("불투명도");
+            let mut percent = settings.opacity * 100.0;
+            if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix("%")).changed() {
+                settings.opacity = percent / 100.0;
+                changed = true;
+            }
+            ui.end_row();
+            for (label, value, range, suffix) in [
+                ("흐림", &mut settings.blur_px, 0.0..=80.0, "px"),
+                ("각도", &mut settings.angle_deg, -360.0..=360.0, "°"),
+                ("거리", &mut settings.distance_px, 0.0..=80.0, "px"),
+            ] {
+                ui.label(label);
+                changed |= ui.add(egui::DragValue::new(value).range(range).speed(0.5).suffix(suffix)).changed();
+                ui.end_row();
+            }
+        });
     });
     if changed {
         editor.set_group_drop_shadow(enabled, &settings);
@@ -187,6 +195,9 @@ pub(super) fn block_type_label(value: BlockType) -> &'static str {
         BlockType::Other => "기타",
     }
 }
+
+/// Height of a preset tag's sample (or name) inside the tag.
+const TAG_CONTENT_HEIGHT: f32 = 22.0;
 
 /// Rename state of a preset tag (`renamingFontPresetId`).
 #[derive(Clone, Default)]
@@ -228,22 +239,27 @@ pub(super) fn preset_panel(
             let active = active_id.as_deref() == Some(preset.id.as_str());
             let renaming = rename.as_ref().is_some_and(|r| r.id == preset.id);
             let favorite_index = favorites.iter().position(|id| id == &preset.id);
-            let resolved = resolve_font_preset(preset, &size_presets);
+            let name = super::presets::display_name(&preset.name);
+            let mut resolved = resolve_font_preset(preset, &size_presets);
+            resolved.name = name.to_owned();
             let texture = (!renaming).then(|| editor.font_previews.preset_tag(ui.ctx(), services, &resolved)).flatten();
             // A tag's size must be known up front so the wrapping row can break before it
-            // (a frame of unknown width never wraps and widens the whole panel).
+            // (a frame of unknown width never wraps and widens the whole panel). Every tag
+            // is one height; a tall font sample is scaled down to fit.
             let content = if renaming {
-                egui::vec2(110.0, 20.0)
+                egui::vec2(110.0, TAG_CONTENT_HEIGHT)
             } else if let Some(texture) = &texture {
-                texture.size_vec2() / ppp
+                let size = texture.size_vec2() / ppp;
+                size * (TAG_CONTENT_HEIGHT / size.y.max(1.0)).min(1.0)
             } else {
                 ui.painter()
-                    .layout_no_wrap(preset.name.clone(), egui::TextStyle::Body.resolve(ui.style()), Color32::BLACK)
+                    .layout_no_wrap(name.to_owned(), egui::TextStyle::Body.resolve(ui.style()), Color32::BLACK)
                     .size()
             };
             let spacing = ui.spacing().item_spacing.x;
-            let extras = if favorite_index.is_some() { 14.0 + spacing } else { 0.0 } + 18.0 + spacing;
-            let tag_size = egui::vec2(content.x + extras + 16.0, content.y.max(18.0) + 10.0);
+            let close_width = if manage { 18.0 + spacing } else { 0.0 };
+            let extras = if favorite_index.is_some() { 14.0 + spacing } else { 0.0 } + close_width;
+            let tag_size = egui::vec2(content.x + extras + 16.0, TAG_CONTENT_HEIGHT + 10.0);
             // Tags are paper-coloured samples of the preset's font.
             let fill = if active { Color32::from_rgb(214, 228, 255) } else { Color32::from_gray(232) };
             // Same stroke width either way: a frame's stroke takes room, so selecting a tag
@@ -269,19 +285,18 @@ pub(super) fn preset_panel(
                             return;
                         }
                         let hint = if active {
-                            format!("{} 이름 변경", preset.name)
+                            format!("{name} 이름 변경")
                         } else if has_selection {
-                            format!("{} 적용", preset.name)
+                            format!("{name} 적용 (우클릭: 즐겨찾기)")
                         } else {
-                            format!("{} 편집", preset.name)
+                            format!("{name} 편집 (우클릭: 즐겨찾기)")
                         };
                         let response = match &texture {
-                            Some(texture) => ui.add(
-                                egui::Image::new((texture.id(), texture.size_vec2() / ppp)).sense(egui::Sense::click()),
-                            ),
+                            Some(texture) => {
+                                ui.add(egui::Image::new((texture.id(), content)).sense(egui::Sense::click()))
+                            }
                             None => ui.add(
-                                egui::Label::new(RichText::new(&preset.name).color(Color32::BLACK))
-                                    .sense(egui::Sense::click()),
+                                egui::Label::new(RichText::new(name).color(Color32::BLACK)).sense(egui::Sense::click()),
                             ),
                         }
                         .on_hover_text(hint);
@@ -303,9 +318,13 @@ pub(super) fn preset_panel(
                                     .color(Color32::from_rgb(217, 119, 6)),
                             );
                         }
-                        let close = egui::Button::new(RichText::new("×").color(Color32::from_gray(90))).frame(false);
-                        if ui.add(close).on_hover_text(format!("{} 삭제", preset.name)).clicked() {
-                            delete = Some(preset.clone());
+                        // Deleting is preset management: only on the preset tab.
+                        if manage {
+                            let close =
+                                egui::Button::new(RichText::new("×").color(Color32::from_gray(90))).frame(false);
+                            if ui.add(close).on_hover_text(format!("{name} 삭제")).clicked() {
+                                delete = Some(preset.clone());
+                            }
                         }
                     });
             });
@@ -318,7 +337,15 @@ pub(super) fn preset_panel(
         {
             editor.clear_selected_preset();
         }
-        if !has_selection && editor.editing_preset_id.is_some() && ui.button("편집 끝내기").clicked() {
+        if !has_selection
+            && editor.editing_preset_id.is_some()
+            && ui
+                .add(
+                    egui::Button::new(crate::theme::icon_text(crate::theme::icon::X, "편집 끝내기"))
+                        .frame_when_inactive(false),
+                )
+                .clicked()
+        {
             editor.editing_preset_id = None;
         }
     });
@@ -369,7 +396,7 @@ pub(super) fn preset_panel(
     if let Some(preset) = delete
         && crate::theme::confirm(
             "폰트 프리셋 삭제",
-            &format!("\"{}\" 프리셋을 삭제할까요?", preset.name),
+            &format!("\"{}\" 프리셋을 삭제할까요?", super::presets::display_name(&preset.name)),
             "이 프리셋이 적용된 텍스트 블록에서는 프리셋 연결만 해제됩니다.",
         )
     {
