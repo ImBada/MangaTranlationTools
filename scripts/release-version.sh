@@ -13,8 +13,8 @@ Examples:
   scripts/release-version.sh 0.9.14
   scripts/release-version.sh --dry-run
 
-Creates a version commit, annotated vX.Y.Z tag, and pushes both to origin.
-Only package.json and package-lock.json are included in the release commit.
+Creates a version commit, annotated vX.Y.Z tag, and pushes both to origin; the tag starts
+the Release workflow. Only Cargo.toml and Cargo.lock are included in the release commit.
 EOF
 }
 
@@ -51,8 +51,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 command -v git >/dev/null 2>&1 || die "git is required"
-command -v npm >/dev/null 2>&1 || die "npm is required"
-command -v node >/dev/null 2>&1 || die "node is required"
+command -v cargo >/dev/null 2>&1 || die "cargo is required"
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"
@@ -61,46 +60,29 @@ branch="$(git symbolic-ref --quiet --short HEAD)" || die "not on a branch"
 remote="${REMOTE:-origin}"
 remote_ref="$remote/$branch"
 
-current_version="$(node -p "require('./package.json').version")"
+# The workspace version: the first `version = "..."` line of Cargo.toml ([workspace.package]).
+current_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+[[ "$current_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || die "invalid workspace version: $current_version"
 
 if [[ "$bump" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   next_version="$bump"
 else
-  next_version="$(
-    node -e '
-      const current = process.argv[1];
-      const bump = process.argv[2];
-      const parts = current.split(".").map(Number);
-      if (parts.length !== 3 || parts.some((part) => !Number.isInteger(part) || part < 0)) {
-        console.error(`Invalid package version: ${current}`);
-        process.exit(1);
-      }
-      if (bump === "major") {
-        parts[0] += 1;
-        parts[1] = 0;
-        parts[2] = 0;
-      } else if (bump === "minor") {
-        parts[1] += 1;
-        parts[2] = 0;
-      } else if (bump === "patch") {
-        parts[2] += 1;
-      } else {
-        console.error(`Invalid bump type: ${bump}`);
-        process.exit(1);
-      }
-      console.log(parts.join("."));
-    ' "$current_version" "$bump"
-  )"
+  IFS=. read -r major minor patch <<<"$current_version"
+  case "$bump" in
+    major) next_version="$((major + 1)).0.0" ;;
+    minor) next_version="$major.$((minor + 1)).0" ;;
+    patch) next_version="$major.$minor.$((patch + 1))" ;;
+  esac
 fi
 
 tag="v$next_version"
 
-if ! git diff --quiet -- package.json package-lock.json; then
-  die "package.json or package-lock.json already has unstaged changes"
+if ! git diff --quiet -- Cargo.toml Cargo.lock; then
+  die "Cargo.toml or Cargo.lock already has unstaged changes"
 fi
 
-if ! git diff --cached --quiet -- package.json package-lock.json; then
-  die "package.json or package-lock.json already has staged changes"
+if ! git diff --cached --quiet -- Cargo.toml Cargo.lock; then
+  die "Cargo.toml or Cargo.lock already has staged changes"
 fi
 
 run git fetch "$remote" --tags
@@ -136,8 +118,11 @@ if [[ "$dry_run" == true ]]; then
   exit 0
 fi
 
-run npm version "$next_version" --no-git-tag-version
-run git add package.json package-lock.json
+# Only the first match: the workspace version, not dependency versions.
+run perl -0pi -e "s/^version = \"[^\"]*\"/version = \"$next_version\"/m" Cargo.toml
+# Updates the workspace crates' entries in Cargo.lock without touching dependencies.
+run cargo update --workspace --offline
+run git add Cargo.toml Cargo.lock
 run git commit -m "Bump version to $next_version"
 run git tag -a "$tag" -m "$tag"
 run git push "$remote" "$branch"

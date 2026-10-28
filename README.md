@@ -1,224 +1,139 @@
 # MangaTranslationTools
 
-만화 이미지를 브라우저에서 불러와 한국어로 번역하고, 번역된 문장을 식질할 수 있는 웹앱입니다.
+만화 이미지를 불러와 한국어로 번역하고, 번역된 문장을 식질해 이미지로 출력하는 데스크톱 앱입니다.
+Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 macOS · Windows · Linux에서 돌아갑니다.
+(예전 웹/Electron 버전은 `v0.9.31`까지이며, 같은 보관함 데이터를 그대로 읽고 씁니다.)
 
 ## 주요 기능
 
-- 보관함: 이미지, 폴더, 압축파일, 압축파일 폴더 구조를 작품/화 단위로 가져오고 이어서 작업할 수 있습니다.
-- AI 번역: OpenAI API 또는 OpenAI 호환 `/v1/chat/completions` 엔드포인트를 사용하며, 빠름/정확성 모드와 병렬 번역을 설정할 수 있습니다.
-- 진행 관리: 페이지별 작업 완료 체크를 지원하며, 완료된 페이지는 이후 일괄 번역과 전체 인페인트 대상에서 제외됩니다.
-- 식질 편집: 번역 블록 생성, 삭제, 복제, 다중 선택, 범위 선택, 인라인 텍스트 수정, 찾아바꾸기, 텍스트 선택 분할 복제를 지원합니다.
-- 폰트 도구: 시스템 폰트 선택, 굵기/기울임/밑줄, 폰트 크기 프리셋, 블록 타입별 폰트 프리셋, 즐겨찾기 태그, 프리셋 백업/복원을 지원합니다.
-- 레이어 편집: 원본, 인페인트, 인페인트 결과, 인페인트 마스크, 번역 오버레이, 최종 출력 레이어를 따로 보고 편집할 수 있습니다.
-- 인페인트/PSD: 마스크와 결과 레이어를 분리 저장하고, 부분 재인페인트, 결과 레이어 보정, PSD 내보내기/가져오기를 지원합니다.
-- 출력: 현재 페이지 또는 전체 페이지를 최종 PNG로 저장할 수 있습니다.
+- 보관함: 이미지, 폴더, 압축파일, 압축파일 폴더 구조를 작품/화 단위로 가져오고 이어서 작업합니다. 창에 끌어다 놓아도 됩니다.
+- AI 번역: ChatGPT(Codex) 계정 또는 OpenAI 호환 `/v1/chat/completions` 엔드포인트(ollama 등 로컬 모델 포함)를 쓰며, 빠르게/정확하게 모드와 병렬 번역을 설정합니다.
+- 진행 관리: 페이지별 검수 완료 표시. 검수 완료한 페이지는 이후 일괄 번역과 모든 페이지 인페인트에서 건너뜁니다.
+- 식질 편집: 블록 만들기·삭제·복제, 여러 개 선택, 범위 선택, 캔버스에서 바로 고치기, 찾아 바꾸기, 블록 그룹(그룹 그림자).
+- 글꼴: 시스템 글꼴, 굵기/기울임/밑줄, 크기 프리셋, 블록 종류별 글꼴 프리셋, 즐겨찾기, 글자별 글꼴, 프리셋 백업/복원.
+- 인페인트: 로컬 채우기 또는 LaMa로 원문 글자를 지우고, 마스크·결과 레이어를 브러시/지우개/스마트 브러시/흐림·선명·뭉개기로 다듬습니다. PSD 내보내기/가져오기.
+- 출력: 현재 페이지 또는 전체 페이지를 최종 PNG로 저장하고, 블록별 원문·결과를 비교하는 HTML 보고서를 만듭니다.
 
-## 먼저 알아둘 점
+## 설치 / 실행
 
-기본은 Node 서버와 브라우저 UI로 동작하는 웹앱입니다. 같은 빌드 결과물을 Electron으로 감싼 데스크톱 앱 패키지도 만들 수 있습니다. 번역은 로컬 모델을 실행하지 않고 Codex 혹은 OpenAI 호환 API 엔드포인트로 보냅니다.
+- **배포판**: [Releases](https://github.com/ImBada/MangaTranlationTools/releases)에서 macOS(dmg, zip) 또는 Windows(설치 파일, zip)를 받습니다.
+- **소스에서 바로 실행 (더블클릭)**: Rust가 없다면 먼저 <https://rustup.rs>에서 설치하세요.
+  - macOS: Finder에서 `run-macos.command`를 더블클릭합니다. 터미널 창이 열리고 앱을 빌드한 뒤(처음엔 몇 분, 이후엔 바뀐 부분만) 실행합니다.
+    앱이 이미 실행 중이면 종료하고 새로 빌드할지 묻습니다(변경 내용은 저장됨). 실행된 뒤에는 터미널 창을 닫아도 됩니다.
+    만들어진 앱은 `target/bundle/MangaTranslationTools.app`이며, 직접 더블클릭하거나 응용 프로그램 폴더로 옮겨 써도 됩니다.
+  - Windows: 탐색기에서 `run-windows.bat`을 더블클릭합니다.
 
-로컬 모델은 OpenAI 호환 API 엔드포인트로 셋팅해서 사용하면 됩니다. (ollama 등)
+## 사용 순서
 
-## 사용자용 설치/사용법
+1. 보관함에서 `가져오기 ▾`(이미지 · 폴더 · 압축파일 · 여러 화 일괄 번역)를 누르거나 파일을 창에 끌어다 놓습니다.
+2. 새 작품을 만들지 기존 작품에 넣을지 고르고, 화 제목을 확인해 가져옵니다. 가져오면 AI 번역이 바로 시작됩니다.
+3. **번역** 모드(`2`)에서 블록을 눌러 문장, 프리셋, 배치, 스타일을 고칩니다. `Tab`으로 다음 블록, `D`/`F`로 페이지를 넘깁니다.
+4. **인페인트** 모드(`3` 결과 / `4` 마스크)에서 `이 페이지 인페인트` 또는 `모든 페이지 인페인트`로 원문 글자를 지우고, 남은 자국을 다듬습니다.
+5. **검수 · 출력** 모드(`1`)에서 최종 결과를 넘겨 보며 `₩`로 검수 완료 표시(다음 검수할 페이지로 넘어감)를 하고, 페이지나 전체를 출력합니다.
 
-1. 서버를 실행합니다.
-2. 브라우저에서 표시된 주소를 엽니다.
-3. 오른쪽 위 설정에서 모델과 생각 수준을 확인합니다.
-4. `이미지 열기`, `폴더 열기`, `압축파일 열기`, `작품 일괄 번역` 중 하나를 선택합니다.
-5. 새 작품을 만들지, 기존 작품에 추가할지 선택합니다.
-6. 화 제목을 확인한 뒤 보관함에 추가합니다.
-7. 번역이 끝나면 페이지를 열어 텍스트, 폰트, 위치, 인페인트 결과를 수정합니다.
-8. 검수가 끝난 페이지는 작업 완료로 표시하고, 필요한 페이지나 전체 페이지를 출력합니다.
+`Space`를 누르고 있으면 어느 모드에서든 최종 결과를 미리 보고 끌어서 화면을 옮깁니다. 단축키 전체는 `?`로 봅니다.
 
-### 웹 서버로 실행
+## 화면 구성
 
-```powershell
-npm install
-npm run build
-npm start
-```
+- **보관함**: 왼쪽 작품 목록, 오른쪽 선택한 작품의 화 목록(번역 상태, 검수한 페이지 수). 화를 누르면 열리고, 끌어서 순서를 바꾸고, 우클릭으로 이름 변경·삭제합니다.
+- **편집 화면**
+  - 상단 바: `← 보관함`, 작품 › 화 메뉴(다른 화 열기, 새로 가져오기), 모드 탭, `AI 번역`(번역 안 된 페이지 이어서, `▾`로 전체 다시/이 페이지만), 설정
+  - 모드 탭: **번역**(`2`) · **인페인트**(결과 `3` / 마스크 `4`) · **검수 · 출력**(`1`). `5`는 원본 이미지 보기를 켜고 끕니다.
+  - 왼쪽 페이지 목록: 썸네일, 번역·인페인트 상태, 오른쪽 동그라미로 검수 완료 표시. 우클릭으로 다시 번역·삭제, 끌어서 순서 변경.
+  - 캔버스 위 툴바: 모드별 도구(아이콘, 마우스를 올리면 이름과 단축키), `원본`, `보기 ▾`(레이어 표시·투명도, 위젯), 배율.
+  - 오른쪽 인스펙터: 번역 모드는 블록 목록 + 선택한 블록(블록 → 프리셋 → 배치 → 스타일)과 `프리셋 편집` 탭, 인페인트 모드는 실행·브러시·범위·PSD, 검수 모드는 검수 완료·출력·보고서.
+    블록 · 프리셋 · 배치 · 스타일 카드는 제목 왼쪽 `⠿`를 끌어 순서를 바꿉니다.
+  - 하단 상태 바: 저장 상태, 페이지 정보, 최근 메시지(누르면 기록), 진행 중인 작업, 단축키 표.
+  - 위젯: **페이지**, **텍스트 블록**, **블록**, **프리셋**, **이 페이지**는 머리글 오른쪽 `⇱`로 따로 창으로 띄워 원하는 곳에 두고 `⇲`로 다시 붙입니다
+    (`보기 ▾`에서도 켜고 끔, `위젯 배치 초기화`로 처음 상태로). 창 위치는 다음 실행에도 그대로이고, 앱 창 크기가 바뀌면 가까운 캔버스 가장자리와의 거리를 유지합니다.
+  - 단축키가 있는 버튼에는 옆에 작은 글자로 키가 붙어 있습니다. 아이콘은 [Phosphor Icons](https://phosphoricons.com)(MIT) 글꼴입니다.
 
-빌드 후에는 Node 서버가 `out/client`의 정적 파일을 직접 제공합니다. 브라우저에서 표시된 주소를 열면 됩니다.
+## 저장 위치
 
-### 데스크톱 앱 빌드
-
-배포용 앱 패키지를 만들려면:
-
-```powershell
-npm run app:build
-```
-
-패키징 결과물은 `dist-app/`에 생성됩니다.
-
-### 저장 위치
-
-웹 서버와 데스크톱 앱 모두 기본 저장 데이터는 사용자 문서 폴더 아래에 만들어집니다.
-
-- 기본 위치: `~/Documents/MangaTranslationTools/`
-- 보관함: `~/Documents/MangaTranslationTools/library/`
-- 로그: `~/Documents/MangaTranslationTools/logs/app.log`
-- 설정: `~/Documents/MangaTranslationTools/settings.json`
-
-다른 위치를 쓰려면 실행 전에 `MANGA_TRANSLATOR_DATA_DIR` 환경 변수를 지정하세요.
-
-### 인페인트 디버그 로그
-
-인페인트 브러시, 지우개, 되돌리기, 저장 큐, 글자 블록 드래그 버벅임 문제를 추적할 때는 브라우저 개발자 도구 콘솔에서 아래 값을 켜고 새로고침하세요.
-
-```js
-localStorage.setItem("mangaTranslationTools.inpaintDebugLogs", "1")
-```
-
-로그는 `~/Documents/MangaTranslationTools/logs/app.log`에 기록됩니다. 끄려면 아래 값을 실행하고 새로고침하세요.
-
-```js
-localStorage.removeItem("mangaTranslationTools.inpaintDebugLogs")
-```
-
-임시로 한 번만 켜려면 URL에 `?inpaintDebug=1`을 붙여도 됩니다.
-
-글자 블록을 움직일 때는 `translation-block-drag:*`, `overlay-layer:*`, `overlay-render-canvas:*`, `chapter-autosave:*` 로그가 같은 드래그 `debugId`로 묶여 기록됩니다.
+- 데이터 폴더: `~/Documents/MangaTranslationTools/` (`MANGA_TRANSLATOR_DATA_DIR`로 변경)
+  - 보관함 `library/`, 설정 `settings.json`, 로그 `logs/native-app.log`(`MANGA_TRANSLATOR_LOG_PATH`로 변경)
+  - 위젯 배치·카드 순서·최근 글꼴 같은 화면 상태 `native-ui-state.json`
+  - LaMa 런타임 `tools/`, 모델 `models/`
+- 웹 버전이 쓰던 `chapter.json`을 처음 덮어쓸 때 `chapter.json.native-backup`을 한 번 만들어 둡니다.
+- 같은 데이터 폴더로 두 번 실행하면 이미 열린 창을 앞으로 가져오고 새 프로세스는 끝납니다.
 
 ## 설정
 
-- 한손모드: 편집 화면에서 `Q` 키를 삭제 키처럼 사용
-- 번역 모드: `빠름`, `정확성`
-- 번역 엔진: `OpenAI API`, `커스텀`
-- Codex 모델: 기본값 `gpt-5.5`
-- openai-oauth 포트: 기본값 `10531`
-- 커스텀 OpenAI 호환 엔드포인트: 기본값 `http://127.0.0.1:11434/v1`
-- 커스텀 모델: 사용할 OpenAI 호환 모델명
-- 생각 수준: `없음`, `낮음`, `보통`, `높음`, `최고`
-- AI 번역 병렬 처리: 최대 동시 번역 수 `1`~`8`
-- `NSFW 모드`: 성인향 이미지 번역을 허용하는 설정
-- 모델 테스트: 설정한 엔드포인트가 간단한 텍스트 요청에 응답하는지 확인
-
-## 편집 단축키
-
-- `1`~`5`: 출력, 번역 오버레이, 인페인트 결과, 인페인트 마스크, 원본 이미지 레이어 선택
-- `3`/`4`: 인페인트 결과 또는 마스크 레이어가 선택된 상태에서 한 번 더 누르면 인페인트 그룹 레이어로 이동
-- `A`: 일반 마우스, `T`: 범위 선택, `Z`: 줌 도구(드래그 오른쪽 확대, 왼쪽 축소), `Space`: 임시 패닝
-- `D`/`F` 또는 방향키: 이전/다음 페이지 이동
-- `E`: 선택한 번역 블록 인라인 수정
-- `Ctrl/Cmd+F`: 찾아바꾸기
-- `Ctrl/Cmd+C`: 선택 블록 복사
-- `Ctrl/Cmd+V`: 복사한 폰트 설정이 있으면 선택 블록에 적용하고, 없으면 블록 붙여넣기
-- `Ctrl/Cmd+클릭`: 번역 블록 복제
-- `Shift+클릭`/`Shift+드래그`: 블록 다중 선택 토글
-- `Alt+드래그`: 선택 블록의 렌더 범위 변경
-- `Shift+드래그`: 선택 블록 이동 중 세로 위치 고정
-- `Delete`/`Backspace`: 선택 블록 또는 선택 범위 삭제
-- `₩`, `` ` ``, `\`: 현재 페이지 작업 완료 토글
-- 인페인트 마스크 레이어에서 `B`: 마스크 브러시, `E`: 지우개, `Alt+E`: 자동 지우개
-- 인페인트 결과 레이어 도구: `B` 브러시(마스크 레이어 제외), `Alt+B` 스마트 브러시, `I` 색상 추출. 다른 레이어에서는 `3 인페인트 결과` 레이어를 표시/선택한 뒤 적용
+- 번역 엔진: `OpenAI (Codex 로그인)` 또는 `OpenAI 호환 서버`(기본 `http://127.0.0.1:11434/v1`, 모델명 지정)
+  - Codex 로그인은 로컬 `openai-oauth` 프록시에 접속합니다(기본 포트 `10531`). 터미널에서 `npx openai-oauth`를 실행해 두세요. 기본 모델 `gpt-5.5`, 생각 수준 없음~최고.
+- 번역 모드: `빠르게`, `정확하게`
+- AI 번역 병렬 처리: 최대 동시 번역 수
+- 모델 테스트: 설정한 엔드포인트가 간단한 요청에 응답하는지 확인
+- 한손모드: 편집 화면에서 `Q`를 삭제 키처럼 사용
+- 설정 › 편집 탭에서 단축키 전체를 볼 수 있습니다.
 
 ## LaMa 인페인트
 
-기본 인페인트는 앱 내장 `local-fill-fallback`으로 동작합니다. LaMa용 Python 환경과 Er0mangaInpaint 코드는 `~/Documents/MangaTranslationTools/tools/` 아래에 준비됩니다.
-
-인페인트 마스크와 결과 레이어는 별도로 저장됩니다. 마스크 레이어에서는 브러시, 지우개, 자동 지우개, 선택 범위 채우기/비우기, 선택 범위 재인페인트를 사용할 수 있습니다. 결과 레이어에서는 브러시, 지우개, 흐림, 선명, 뭉개기, 마스크 유지 재인페인트, 선택 범위 재인페인트를 사용할 수 있습니다.
-
-PSD 내보내기/가져오기는 인페인트 도구의 PSD 섹션에서 사용할 수 있습니다. PSD 내보내기는 원본, 인페인트 마스크, 인페인트 결과, 번역 블록 레이어를 포함합니다. PSD를 다시 가져오면 인페인트 마스크와 결과 레이어를 현재 페이지에 반영합니다.
-
-모델 파일은 앱 시작 시 자동 다운로드하지 않습니다. 설정의 `LaMa 인페인트 > 모델 다운로드` 버튼으로 받을 수 있으며, 직접 다운로드해서 아래 경로에 저장해도 됩니다.
+기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `환경 준비`(파이썬 가상환경 + 패키지 + Er0mangaInpaint 코드, 데이터 폴더의 `tools/`)와 `모델 다운로드`를 합니다.
+모델은 직접 받아 둬도 됩니다.
 
 - 다운로드: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`
 - 저장 경로: `~/Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`
 
-웹 개발 환경에서 직접 준비하려면:
+다른 LaMa 실행 방식을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다.
 
-```powershell
-npm run lama:prepare
-```
+## 환경 변수
 
-기존 저장소 내부 `tools/`를 쓰고 싶다면 서버 실행 전에 아래 환경 변수를 지정하세요.
+| 변수 | 내용 |
+|---|---|
+| `MANGA_TRANSLATOR_DATA_DIR` | 데이터 폴더 |
+| `MANGA_TRANSLATOR_MODEL_PROVIDER`, `_CODEX_MODEL`, `_CODEX_REASONING_EFFORT`, `_CODEX_OAUTH_PORT` | 설정 기본값 |
+| `MANGA_TRANSLATOR_OPENAI_COMPATIBLE_BASE_URL`, `_API_KEY`, `_MODEL` | 설정 기본값 |
+| `MANGA_TRANSLATOR_PARALLEL_ENABLED`, `_PARALLEL_MAX_CONCURRENCY` | 설정 기본값 |
+| `MANGA_TRANSLATOR_TEMPERATURE`, `_TOP_P`, `_MAX_TOKENS`, `_PAGE_RETRIES` | 번역 요청 |
+| `MANGA_TRANSLATOR_DOWNLOADS_DIR` | PSD 내보내기 위치 (기본 `~/Downloads`) |
+| `MANGA_TRANSLATOR_LOG_PATH` | 로그 파일 |
+| `MANGA_TRANSLATOR_LAMA_COMMAND`, `_LAMA_ARGS` | LaMa 실행 명령 직접 지정 |
 
-```powershell
-./scripts/prepare-lama-manga-inpaint.sh
-$env:MANGA_TRANSLATOR_LAMA_COMMAND = "tools/lama-manga-venv/bin/python"
-$env:MANGA_TRANSLATOR_LAMA_ARGS = '["scripts/lama-inpaint.py","--input","{source}","--mask","{mask}","--output","{output}","--weights","tools/inpaint-models/mayocream-lama-manga/lama-manga.safetensors"]'
-npm run dev
-```
-
-macOS/Linux에서는 아래 스크립트로 환경 변수 설정과 개발 서버 실행을 한 번에 할 수 있습니다.
+## 개발
 
 ```bash
-./scripts/prepare-lama-manga-inpaint.sh
-./scripts/use-lama-manga-inpaint.sh
+cargo run --release -p mtt-app                # 개발 실행
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all
 ```
 
-`{source}`, `{mask}`, `{output}`은 앱이 만든 임시 PNG 경로로 자동 치환됩니다. `scripts/lama-inpaint.py`는 `mayocream/lama-manga`의 `lama-manga.safetensors`를 직접 로드합니다.
+| 크레이트 | 내용 |
+|---|---|
+| `crates/mtt-core` | 데이터 모델(모르는 JSON 필드 보존), 보관함, 설정, 가져오기, 글꼴 프리셋, 블록 그룹 |
+| `crates/mtt-render` | 텍스트 레이아웃/렌더링(cosmic-text + tiny-skia), 페이지 합성 |
+| `crates/mtt-inpaint` | 로컬 채우기 인페인트, LaMa 사이드카, 블록 글자 마스크, PSD 읽기/쓰기 |
+| `crates/mtt-translate` | OpenAI 호환 / Responses API 번역, 응답 파서 |
+| `crates/mtt-app` | egui 편집기 (앱 아이콘·글꼴은 `assets/`) |
 
-## 개발자용 구조/환경 변수
+### 패키징 / 배포
 
-### 개발 실행
-
-개발/CI 기준 Node.js 버전은 22입니다.
-
-```powershell
-npm install
-npm run dev
+```bash
+./scripts/bundle-macos.sh                      # macOS 앱 번들: target/bundle/MangaTranslationTools.app
+./scripts/bundle-macos.sh --dist               # + dmg, zip
+./scripts/package-linux.sh                     # Linux: tar.gz(AppDir), appimagetool/dpkg-deb가 있으면 AppImage/deb
+powershell -File scripts/package-windows.ps1   # Windows: zip, makensis가 있으면 설치 파일
+scripts/release-version.sh [patch|minor|major|x.y.z]   # 버전 커밋 + vX.Y.Z 태그를 push → Release 워크플로가 배포판을 올림
 ```
 
-기본 주소:
+Windows/Linux 패키지는 각 OS에서 빌드해야 합니다(`ring` 등 C 의존성 때문에 macOS에서 교차 빌드 불가).
+CI는 Linux · macOS · Windows에서 포맷 검사(Linux), clippy, 테스트를 돌립니다.
 
-- UI: `http://127.0.0.1:5173`
-- API: `http://127.0.0.1:3000`
+### 검증 도구
 
-개발 중 앱 창으로 확인하려면:
-
-```powershell
-npm run app:dev
+```bash
+cargo run -p mtt-core --example library_compat              # 보관함 왕복 직렬화 검사 (읽기 전용)
+cargo run -p mtt-render --example make_test_pages -- DIR 3   # 합성 테스트 페이지 생성
+MANGA_TRANSLATOR_DATA_DIR=/tmp/x MTT_AUTOMATION="import:DIR;wait-editor;ready;shot:/tmp/a.png;quit" \
+  cargo run --release -p mtt-app                             # UI 자동화 + 스크린샷 (단계 목록은 crates/mtt-app/src/automation.rs)
 ```
 
-### 경로 구조
-
-- 앱 루트: 기본값은 저장소 루트입니다. `MANGA_TRANSLATOR_APP_ROOT`로 지정할 수 있습니다.
-- 런타임 파일: `<앱 루트>/out/app-runtime/`
-- 도구 파일: `<앱 루트>/tools/`
-- 저장 데이터: 기본값은 `~/Documents/MangaTranslationTools/`입니다. `MANGA_TRANSLATOR_DATA_DIR`로 지정할 수 있습니다.
-
-### 주요 환경 변수
-
-- `MANGA_TRANSLATOR_DATA_DIR`: 보관함, 로그, 설정 파일 저장 위치
-- `MANGA_TRANSLATOR_APP_ROOT`: 빌드 결과물과 런타임 도구를 찾을 앱 루트
-- `MANGA_TRANSLATOR_PORT`: 웹 서버 포트
-- `MANGA_TRANSLATOR_MODEL_PROVIDER`: 기본 모델 제공자
-- `MANGA_TRANSLATOR_CODEX_MODEL`: Codex 사용 시 기본 모델
-- `MANGA_TRANSLATOR_CODEX_REASONING_EFFORT`: Codex 사용 시 기본 생각 수준
-- `MANGA_TRANSLATOR_CODEX_OAUTH_PORT`: Codex OAuth 엔드포인트 포트
-- `MANGA_TRANSLATOR_OPENAI_COMPATIBLE_BASE_URL`: OpenAI 호환 API 주소
-- `MANGA_TRANSLATOR_OPENAI_COMPATIBLE_API_KEY`: OpenAI 호환 API 키
-- `MANGA_TRANSLATOR_OPENAI_COMPATIBLE_MODEL`: OpenAI 호환 API 모델명
-- `MANGA_TRANSLATOR_PARALLEL_ENABLED`: AI 번역 병렬 처리 기본값
-- `MANGA_TRANSLATOR_PARALLEL_MAX_CONCURRENCY`: AI 번역 최대 동시 처리 수
-- `MANGA_TRANSLATOR_PAGE_RETRIES`: 페이지별 번역 재시도 횟수
-- `MANGA_TRANSLATOR_TEMPERATURE`: 번역 요청 temperature
-- `MANGA_TRANSLATOR_TOP_P`: 번역 요청 top_p
-- `MANGA_TRANSLATOR_MAX_TOKENS`: 번역 응답 토큰 예산
-- `MANGA_TRANSLATOR_IMAGE_MIN_TOKENS`: 이미지 입력 최소 토큰 예산
-- `MANGA_TRANSLATOR_IMAGE_MAX_TOKENS`: 이미지 입력 최대 토큰 예산
-- `MANGA_TRANSLATOR_LAMA_COMMAND`: LaMa 인페인트 실행 명령
-- `MANGA_TRANSLATOR_LAMA_ARGS`: LaMa 인페인트 실행 인자 JSON
-- `MANGA_TRANSLATOR_LAMA_CODE_DIR`: LaMa 인페인트 코드 위치
-- `MANGA_TRANSLATOR_LAMA_WEIGHTS`: LaMa 모델 파일 위치
+이전 작업 기록과 남은 일은 [TODO.md](TODO.md)에 있습니다.
 
 ## 라이선스
 
 이 프로젝트는 **GNU General Public License v3.0 (or later)** 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
-
-## 테스트
-
-```powershell
-npm run audit -- --omit=dev
-npm run format:check
-npm run lint
-npm run typecheck
-npm test
-npm run test:e2e
-```
-
-CI에서는 프로덕션 의존성 audit, 포맷 검사, lint, typecheck, 빌드, Vitest, Electron 패키징 스모크 테스트를 실행합니다. Electron E2E는 `main`/`master` push, 매일 03:00 KST nightly, 수동 실행, 또는 `run-e2e` 라벨이 붙은 PR에서 실행됩니다.
 
 ## 참고 프로젝트
 

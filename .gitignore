@@ -1,24 +1,26 @@
+# Rust build output (also holds the app bundles from scripts/)
+/target/
+
+# App data and runtimes when the repository folder is used as the data folder
+library/
+uploads/
+models/
+tools/
+logs/
+settings.json
+native-ui-state.json
+
+# Output of the former web/Electron build, if still around locally
 node_modules/
 out/
 dist/
 dist-app/
+
+# Scratch and OS files
 .tmp/
+tmp/
+tmp-*.png
 *.log
-.venv-glmocr/
 .env
 .env.local
-scripts/__pycache__/
-tmp-tiles/
-tmp-*.png
-tmp/
-tools/Er0mangaInpaint/
-tools/inpaint-models/
-tools/lama-manga-venv/
-models/
-testProject1/
-logs/*
-logs/app.log
-library/
-settings.json
 .DS_Store
-uploads/

@@ -6,107 +6,53 @@ on:
       - main
       - master
   pull_request:
-    types:
-      - opened
-      - synchronize
-      - reopened
-      - labeled
-      - unlabeled
-  schedule:
-    - cron: "0 18 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
 
+env:
+  CARGO_TERM_COLOR: always
+
 jobs:
-  web:
-    name: Web build and tests
-    runs-on: ubuntu-latest
+  check:
+    name: Check (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Linux
+            os: ubuntu-latest
+          - name: macOS
+            os: macos-latest
+          - name: Windows
+            os: windows-latest
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: 22
-          cache: npm
+          components: rustfmt, clippy
 
-      - name: Install dependencies
-        run: npm ci
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
 
-      - name: Audit production dependencies
-        run: npm run audit -- --omit=dev
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev
 
       - name: Check formatting
-        run: npm run format:check
+        if: runner.os == 'Linux'
+        run: cargo fmt --all -- --check
 
-      - name: Lint
-        run: npm run lint
-
-      - name: Typecheck
-        run: npm run typecheck
-
-      - name: Build web app and server
-        run: npm run build
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
-        run: npm test
-
-  desktop:
-    name: Electron package smoke test
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Package Electron app
-        run: npm run app:pack
-
-  e2e:
-    name: Electron E2E
-    runs-on: ubuntu-latest
-    if: >-
-      github.event_name == 'push' ||
-      github.event_name == 'schedule' ||
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'pull_request' && contains(github.event.pull_request.labels.*.name, 'run-e2e'))
-
-    steps:
-      - name: Check out repository
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install browser system dependencies
-        run: npx playwright install-deps chromium
-
-      - name: Run Electron E2E
-        run: npm run test:e2e:ci
-
-      - name: Upload Playwright artifacts
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: playwright-results
-          path: .tmp/playwright-results
-          if-no-files-found: ignore
+        run: cargo test --workspace
