@@ -371,6 +371,7 @@ mod tests {
     }
 
     /// Speaks the `--serve` protocol: copies the source to the output.
+    #[cfg(unix)]
     const STUB_SERVER: &str = r#"
 import json, shutil, sys
 print("library chatter before the model is ready")
