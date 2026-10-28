@@ -1,9 +1,11 @@
 //! OpenAI-compatible `/chat/completions` and Responses API (`/responses`, SSE) requests
 //! (`simple-page-translate.cjs`).
 
+use std::sync::mpsc::{RecvTimeoutError, channel};
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde::Serialize;
+use serde_json::Value;
 
 use crate::images::{ImageVariant, variant_caption};
 
@@ -26,8 +28,58 @@ pub enum Api {
 
 fn agent(timeout: Duration) -> ureq::Agent {
     ureq::Agent::new_with_config(
-        ureq::Agent::config_builder().http_status_as_error(false).timeout_global(Some(timeout)).build(),
+        ureq::Agent::config_builder()
+            .http_status_as_error(false)
+            .timeout_global(Some(timeout))
+            .timeout_connect(Some(CONNECT_TIMEOUT))
+            .build(),
     )
+}
+
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// One agent for a whole job: its requests share connections (and TLS sessions).
+pub fn job_agent(timeout: Duration) -> ureq::Agent {
+    agent(timeout)
+}
+
+/// Whether a failed request is worth repeating, and when.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retry {
+    /// It will fail the same way (bad key, wrong URL, rejected request).
+    No,
+    /// Right away (the model's answer could not be used; ask again).
+    Now,
+    /// After a pause; the server asked for one with `Retry-After`.
+    Later(Option<Duration>),
+    /// The job was cancelled.
+    Cancelled,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SendError {
+    pub message: String,
+    pub retry: Retry,
+}
+
+impl SendError {
+    fn new(message: impl Into<String>, retry: Retry) -> Self {
+        Self { message: message.into(), retry }
+    }
+}
+
+/// How an HTTP error status should be retried.
+pub fn retry_for_status(status: u16, retry_after: Option<Duration>) -> Retry {
+    match status {
+        408 | 409 | 425 | 429 | 500..=599 => Retry::Later(retry_after),
+        _ => Retry::No,
+    }
+}
+
+/// `Retry-After` in seconds (the HTTP-date form is rare for APIs and ignored).
+fn retry_after(response: &ureq::http::Response<ureq::Body>) -> Option<Duration> {
+    let value = response.headers().get("retry-after")?.to_str().ok()?;
+    value.trim().parse::<u64>().ok().map(Duration::from_secs)
 }
 
 /// `isOllamaCompatibleEndpoint`: Ollama accepts extra flags to disable thinking.
@@ -38,97 +90,204 @@ pub fn is_ollama(base_url: &str) -> bool {
     hostname == "ollama.com" || hostname.ends_with(".ollama.com") || port == Some("11434")
 }
 
-pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images: &[ImageVariant]) -> Value {
-    let mut user: Vec<Value> = images
-        .iter()
-        .enumerate()
-        .flat_map(|(index, image)| {
-            [
-                json!({ "type": "text", "text": variant_caption(image.role, index) }),
-                json!({ "type": "image_url", "image_url": { "url": image.data_url } }),
-            ]
-        })
-        .collect();
-    user.push(json!({ "type": "text", "text": prompt }));
-    let messages = json!([
-        { "role": "system", "content": [{ "type": "text", "text": system }] },
-        { "role": "user", "content": user }
-    ]);
-    match &endpoint.api {
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ChatPart<'a> {
+    Text { text: &'a str },
+    ImageUrl { image_url: ImageUrl<'a> },
+}
+
+#[derive(Serialize)]
+struct ImageUrl<'a> {
+    url: &'a str,
+}
+
+#[derive(Serialize)]
+struct ChatMessage<'a> {
+    role: &'static str,
+    content: Vec<ChatPart<'a>>,
+}
+
+#[derive(Serialize)]
+struct OllamaFlags {
+    reasoning_budget: u8,
+    enable_thinking: bool,
+    think: bool,
+    reasoning_effort: &'static str,
+}
+
+#[derive(Serialize)]
+struct ChatBody<'a> {
+    model: &'a str,
+    temperature: f64,
+    top_p: f64,
+    presence_penalty: u8,
+    frequency_penalty: u8,
+    max_tokens: u32,
+    messages: [ChatMessage<'a>; 2],
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    ollama: Option<OllamaFlags>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum InputPart<'a> {
+    InputText { text: &'a str },
+    InputImage { image_url: &'a str },
+}
+
+#[derive(Serialize)]
+struct InputMessage<'a> {
+    role: &'static str,
+    content: Vec<InputPart<'a>>,
+}
+
+#[derive(Serialize)]
+struct Reasoning<'a> {
+    effort: &'a str,
+}
+
+#[derive(Serialize)]
+struct ResponsesBody<'a> {
+    model: &'a str,
+    instructions: &'a str,
+    input: [InputMessage<'a>; 1],
+    reasoning: Reasoning<'a>,
+    stream: bool,
+    store: bool,
+}
+
+/// The request body, borrowing the (multi-megabyte) image data instead of copying it.
+pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images: &[ImageVariant]) -> Vec<u8> {
+    let captions: Vec<String> =
+        images.iter().enumerate().map(|(index, image)| variant_caption(image.role, index)).collect();
+    let body = match &endpoint.api {
         Api::ChatCompletions { temperature, top_p, max_tokens } => {
-            let mut body = json!({
-                "model": endpoint.model,
-                "temperature": temperature,
-                "top_p": top_p,
-                "presence_penalty": 0,
-                "frequency_penalty": 0,
-                "max_tokens": max_tokens,
-                "messages": messages,
-            });
-            if is_ollama(&endpoint.base_url) {
-                body["reasoning_budget"] = json!(0);
-                body["enable_thinking"] = json!(false);
-                body["think"] = json!(false);
-                body["reasoning_effort"] = json!("none");
-            }
-            body
-        }
-        Api::Responses { reasoning_effort } => {
-            let mut content: Vec<Value> = images
+            let mut user: Vec<ChatPart<'_>> = images
                 .iter()
-                .enumerate()
-                .flat_map(|(index, image)| {
+                .zip(&captions)
+                .flat_map(|(image, caption)| {
                     [
-                        json!({ "type": "input_text", "text": variant_caption(image.role, index) }),
-                        json!({ "type": "input_image", "image_url": image.data_url }),
+                        ChatPart::Text { text: caption },
+                        ChatPart::ImageUrl { image_url: ImageUrl { url: &image.data_url } },
                     ]
                 })
                 .collect();
-            content.push(json!({ "type": "input_text", "text": prompt }));
-            json!({
-                "model": endpoint.model,
-                "instructions": system,
-                "input": [{ "role": "user", "content": content }],
-                "reasoning": { "effort": reasoning_effort },
-                "stream": true,
-                "store": false,
+            user.push(ChatPart::Text { text: prompt });
+            serde_json::to_vec(&ChatBody {
+                model: &endpoint.model,
+                temperature: *temperature,
+                top_p: *top_p,
+                presence_penalty: 0,
+                frequency_penalty: 0,
+                max_tokens: *max_tokens,
+                messages: [
+                    ChatMessage { role: "system", content: vec![ChatPart::Text { text: system }] },
+                    ChatMessage { role: "user", content: user },
+                ],
+                ollama: is_ollama(&endpoint.base_url).then_some(OllamaFlags {
+                    reasoning_budget: 0,
+                    enable_thinking: false,
+                    think: false,
+                    reasoning_effort: "none",
+                }),
             })
+        }
+        Api::Responses { reasoning_effort } => {
+            let mut content: Vec<InputPart<'_>> = images
+                .iter()
+                .zip(&captions)
+                .flat_map(|(image, caption)| {
+                    [InputPart::InputText { text: caption }, InputPart::InputImage { image_url: &image.data_url }]
+                })
+                .collect();
+            content.push(InputPart::InputText { text: prompt });
+            serde_json::to_vec(&ResponsesBody {
+                model: &endpoint.model,
+                instructions: system,
+                input: [InputMessage { role: "user", content }],
+                reasoning: Reasoning { effort: reasoning_effort },
+                stream: true,
+                store: false,
+            })
+        }
+    };
+    body.expect("request bodies serialize")
+}
+
+/// Sends a request and returns the model's text output (settings' model test).
+pub fn send(endpoint: &Endpoint, body: &Value, timeout: Duration) -> Result<String, String> {
+    let bytes = serde_json::to_vec(body).map_err(|error| error.to_string())?;
+    send_bytes(&agent(timeout), endpoint, &bytes).map_err(|error| error.message)
+}
+
+/// `send_bytes` on a helper thread, returning as soon as `cancelled` says so (checked every
+/// 100 ms). A cancelled request finishes on its own thread and its answer is dropped, so
+/// cancelling never waits for the model.
+pub fn send_cancellable(
+    agent: &ureq::Agent,
+    endpoint: &Endpoint,
+    body: Vec<u8>,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<String, SendError> {
+    let (sender, receiver) = channel();
+    let (agent, endpoint) = (agent.clone(), endpoint.clone());
+    std::thread::Builder::new()
+        .name("mtt-request".into())
+        .spawn(move || {
+            let _ = sender.send(send_bytes(&agent, &endpoint, &body));
+        })
+        .map_err(|error| SendError::new(format!("요청 스레드를 만들지 못했습니다: {error}"), Retry::Later(None)))?;
+    loop {
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(result) => return result,
+            Err(RecvTimeoutError::Timeout) if cancelled() => return Err(SendError::new("취소됨", Retry::Cancelled)),
+            Err(RecvTimeoutError::Timeout) => {}
+            Err(RecvTimeoutError::Disconnected) => {
+                return Err(SendError::new("요청이 중간에 끊겼습니다.", Retry::Later(None)));
+            }
         }
     }
 }
 
-/// Sends a request and returns the model's text output.
-pub fn send(endpoint: &Endpoint, body: &Value, timeout: Duration) -> Result<String, String> {
+/// Posts a JSON body and returns the model's text output.
+pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<String, SendError> {
     let path = match endpoint.api {
         Api::ChatCompletions { .. } => "chat/completions",
         Api::Responses { .. } => "responses",
     };
     let url = format!("{}/{path}", endpoint.base_url.trim_end_matches('/'));
-    let mut request = agent(timeout).post(&url).header("Content-Type", "application/json");
+    let mut request = agent.post(&url).header("Content-Type", "application/json");
     if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
         request = request.header("Authorization", &format!("Bearer {}", key.trim()));
     }
-    let mut response = request.send_json(body).map_err(|e| format!("요청 전송 실패 ({url}): {e}"))?;
+    let mut response =
+        request.send(body).map_err(|e| SendError::new(format!("요청 전송 실패 ({url}): {e}"), Retry::Later(None)))?;
     let status = response.status();
+    let wait = retry_after(&response);
     let text = response
         .body_mut()
         .with_config()
         .limit(64 * 1024 * 1024)
         .read_to_string()
-        .map_err(|e| format!("응답을 읽지 못했습니다: {e}"))?;
+        .map_err(|e| SendError::new(format!("응답을 읽지 못했습니다: {e}"), Retry::Later(None)))?;
     if !status.is_success() {
-        return Err(format!("요청 실패 ({}): {}", status.as_u16(), preview(&text, 600)));
+        return Err(SendError::new(
+            format!("요청 실패 ({}): {}", status.as_u16(), preview(&text, 600)),
+            retry_for_status(status.as_u16(), wait),
+        ));
     }
     let output = match endpoint.api {
         Api::Responses { .. } => parse_responses_sse(&text),
         Api::ChatCompletions { .. } => {
-            let parsed: Value = serde_json::from_str(&text)
-                .map_err(|e| format!("응답 JSON 파싱 실패: {e}: {}", preview(&text, 400)))?;
+            let parsed: Value = serde_json::from_str(&text).map_err(|e| {
+                SendError::new(format!("응답 JSON 파싱 실패: {e}: {}", preview(&text, 400)), Retry::Now)
+            })?;
             extract_output_text(&parsed)
         }
     };
     if output.trim().is_empty() {
-        return Err(format!("모델이 빈 응답을 반환했습니다: {}", preview(&text, 400)));
+        return Err(SendError::new(format!("모델이 빈 응답을 반환했습니다: {}", preview(&text, 400)), Retry::Now));
     }
     Ok(output.trim().to_owned())
 }
@@ -234,6 +393,7 @@ pub fn preview(text: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn ollama_detection() {
@@ -253,11 +413,44 @@ mod tests {
         };
         let images =
             [ImageVariant { role: crate::images::VariantRole::Original, data_url: "data:image/png;base64,AA".into() }];
-        let body = chat_request_body(&endpoint, "sys", "prompt", &images);
+        let body: Value = serde_json::from_slice(&chat_request_body(&endpoint, "sys", "prompt", &images)).unwrap();
+        assert_eq!(body["messages"][0]["content"][0]["type"], "text");
+        assert_eq!(body["messages"][1]["content"][0]["text"], variant_caption(crate::images::VariantRole::Original, 0));
+        assert_eq!(body["messages"][1]["content"][1]["type"], "image_url");
         assert_eq!(body["messages"][1]["content"][1]["image_url"]["url"], "data:image/png;base64,AA");
         assert_eq!(body["messages"][1]["content"][2]["text"], "prompt");
         assert_eq!(body["think"], false);
         assert_eq!(body["max_tokens"], 900);
+    }
+
+    #[test]
+    fn responses_body_matches_the_api_shape() {
+        let endpoint = Endpoint {
+            base_url: "http://127.0.0.1:10531/v1".into(),
+            api_key: None,
+            model: "gpt".into(),
+            api: Api::Responses { reasoning_effort: "low".into() },
+        };
+        let images =
+            [ImageVariant { role: crate::images::VariantRole::Original, data_url: "data:image/png;base64,AA".into() }];
+        let body: Value = serde_json::from_slice(&chat_request_body(&endpoint, "sys", "p", &images)).unwrap();
+        assert_eq!(body["instructions"], "sys");
+        assert_eq!(
+            body["input"][0]["content"][1],
+            json!({ "type": "input_image", "image_url": "data:image/png;base64,AA" })
+        );
+        assert_eq!(body["input"][0]["content"][2], json!({ "type": "input_text", "text": "p" }));
+        assert_eq!(body["reasoning"]["effort"], "low");
+        assert_eq!((body["stream"].clone(), body["store"].clone()), (json!(true), json!(false)));
+        assert!(body.get("think").is_none());
+    }
+
+    #[test]
+    fn statuses_that_cannot_succeed_are_not_retried() {
+        assert_eq!(retry_for_status(401, None), Retry::No);
+        assert_eq!(retry_for_status(400, None), Retry::No);
+        assert_eq!(retry_for_status(429, Some(Duration::from_secs(3))), Retry::Later(Some(Duration::from_secs(3))));
+        assert_eq!(retry_for_status(503, None), Retry::Later(None));
     }
 
     #[test]

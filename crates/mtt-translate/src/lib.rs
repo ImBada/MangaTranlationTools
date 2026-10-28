@@ -18,7 +18,7 @@ use mtt_core::model::{
 };
 use mtt_core::settings::{AppSettings, ModelProvider, ReasoningEffort};
 
-pub use client::{Api, Endpoint};
+pub use client::{Api, Endpoint, Retry, SendError};
 pub use parser::OverlayItem;
 
 pub const PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
@@ -98,6 +98,29 @@ pub struct TranslationConfig {
     pub include_enhanced_variant: bool,
     pub attempts: u32,
     pub concurrency: usize,
+    /// Shared by the job's requests (connection reuse).
+    pub agent: ureq::Agent,
+}
+
+/// Pause before retrying after a server or network error: 1 s doubling to 20 s, or what
+/// the server asked for (up to 2 minutes).
+fn retry_delay(attempt: u32, asked: Option<Duration>) -> Duration {
+    asked.map_or_else(
+        || Duration::from_secs(1 << (attempt - 1).min(5)).min(Duration::from_secs(20)),
+        |asked| asked.min(Duration::from_secs(120)),
+    )
+}
+
+/// Sleeps in short steps; `false` when cancelled meanwhile.
+fn wait_unless_cancelled(duration: Duration, cancelled: &dyn Fn() -> bool) -> bool {
+    let until = std::time::Instant::now() + duration;
+    while std::time::Instant::now() < until {
+        if cancelled() {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(100).min(until - std::time::Instant::now()));
+    }
+    !cancelled()
 }
 
 /// `readNumberEnv`: a finite number from the environment.
@@ -148,6 +171,7 @@ impl TranslationConfig {
             // `readNumberEnv("MANGA_TRANSLATOR_PAGE_RETRIES", 5)`, at least one attempt.
             attempts: env_number("MANGA_TRANSLATOR_PAGE_RETRIES").map_or(DEFAULT_PAGE_ATTEMPTS, |v| v.max(1.0) as u32),
             concurrency,
+            agent: client::job_agent(REQUEST_TIMEOUT),
         }
     }
 
@@ -167,38 +191,60 @@ pub fn verify_endpoint(config: &TranslationConfig) -> Result<(), String> {
     })
 }
 
-/// One request/parse attempt for a page image.
-pub fn translate_once(config: &TranslationConfig, image_path: &Path, retry: bool) -> Result<Vec<OverlayItem>, String> {
-    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
+/// One request/parse attempt with the page's prepared images.
+fn translate_attempt(
+    config: &TranslationConfig,
+    variants: &[images::ImageVariant],
+    retry: bool,
+    cancelled: &dyn Fn() -> bool,
+) -> Result<Vec<OverlayItem>, SendError> {
     let prompt = if retry { RETRY_PROMPT } else { PROMPT };
-    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, prompt, &variants);
-    let output = client::send(&config.endpoint, &body, REQUEST_TIMEOUT)?;
-    parser::parse_items(&output).map_err(|error| format!("{error} 응답 미리보기: {}", client::preview(&output, 240)))
+    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, prompt, variants);
+    let output = client::send_cancellable(&config.agent, &config.endpoint, body, cancelled)?;
+    parser::parse_items(&output).map_err(|error| SendError {
+        message: format!("{error} 응답 미리보기: {}", client::preview(&output, 240)),
+        retry: Retry::Now,
+    })
 }
 
-/// Translates a page with retries. `on_attempt(attempt, error)` reports failed attempts;
-/// `cancelled` aborts between attempts.
+/// Translates a page with retries. `on_attempt(attempt, error)` reports failed attempts.
+/// `cancelled` stops waiting for a request in flight, a pause, or the next attempt.
+/// Errors that would repeat (a bad key, a rejected request) are not retried.
 pub fn translate_page(
     config: &TranslationConfig,
     image_path: &Path,
     mut on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<OverlayItem>, String> {
+    // The images (and their base64) are the same for every attempt.
+    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
+    let attempts = config.attempts.max(1);
     let mut last_error = String::new();
-    for attempt in 1..=config.attempts.max(1) {
+    for attempt in 1..=attempts {
         if cancelled() {
             return Err("취소됨".into());
         }
-        match translate_once(config, image_path, attempt > 1) {
+        let error = match translate_attempt(config, &variants, attempt > 1, &cancelled) {
             Ok(items) => return Ok(items),
-            Err(error) => {
-                log::warn!("translation attempt {attempt} failed: {error}");
-                on_attempt(attempt, &error);
-                last_error = error;
+            Err(error) => error,
+        };
+        if error.retry == Retry::Cancelled {
+            return Err("취소됨".into());
+        }
+        log::warn!("translation attempt {attempt} failed: {}", error.message);
+        on_attempt(attempt, &error.message);
+        last_error = error.message;
+        match error.retry {
+            Retry::No => return Err(format!("다시 시도해도 같은 오류라 멈췄습니다: {last_error}")),
+            Retry::Later(asked)
+                if attempt < attempts && !wait_unless_cancelled(retry_delay(attempt, asked), &cancelled) =>
+            {
+                return Err("취소됨".into());
             }
+            _ => {}
         }
     }
-    Err(format!("{}회 시도 후 실패: {last_error}", config.attempts))
+    Err(format!("{attempts}회 시도 후 실패: {last_error}"))
 }
 
 /// `mapOverlayType`.
@@ -317,6 +363,15 @@ mod tests {
         assert!(compatible.include_enhanced_variant);
         assert_eq!(compatible.concurrency, 4);
         assert!(matches!(compatible.endpoint.api, Api::ChatCompletions { max_tokens: 1400, .. }));
+    }
+
+    #[test]
+    fn retry_delays_back_off_and_follow_the_server() {
+        assert_eq!(retry_delay(1, None), Duration::from_secs(1));
+        assert_eq!(retry_delay(3, None), Duration::from_secs(4));
+        assert_eq!(retry_delay(9, None), Duration::from_secs(20));
+        assert_eq!(retry_delay(1, Some(Duration::from_secs(7))), Duration::from_secs(7));
+        assert_eq!(retry_delay(1, Some(Duration::from_secs(900))), Duration::from_secs(120));
     }
 
     #[test]

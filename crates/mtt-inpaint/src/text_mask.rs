@@ -39,9 +39,27 @@ impl Component {
 pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: Option<&GrayImage>) -> GrayImage {
     let (width, height) = source.dimensions();
     let mut mask = base.cloned().unwrap_or_else(|| GrayImage::new(width, height));
-    let mut added = vec![0u8; (width * height) as usize];
-    for block in blocks {
-        let Some(rect) = scan_rect(block, width, height) else { continue };
+    let rects: Vec<Rect> = blocks.iter().filter_map(|block| scan_rect(block, width, height)).collect();
+    // Everything happens inside the blocks' boxes, plus a pixel for the 1px growth.
+    let Some(area) = rects.iter().copied().reduce(|a, b| {
+        let (x, y) = (a.x.min(b.x), a.y.min(b.y));
+        let (right, bottom) = ((a.x + a.width).max(b.x + b.width), (a.y + a.height).max(b.y + b.height));
+        Rect { x, y, width: right - x, height: bottom - y }
+    }) else {
+        return mask;
+    };
+    let area = Rect::clamped(
+        area.x as f32 - 1.0,
+        area.y as f32 - 1.0,
+        area.width as f32 + 2.0,
+        area.height as f32 + 2.0,
+        width,
+        height,
+    )
+    .unwrap_or(area);
+    let area_width = area.width as usize;
+    let mut added = vec![0u8; area_width * area.height as usize];
+    for rect in rects {
         let (rw, rh) = (rect.width as usize, rect.height as usize);
         let mut candidates = vec![0u8; rw * rh];
         for y in 0..rh {
@@ -56,15 +74,19 @@ pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: O
         let filtered = retain_centered_components(&filter_candidates(&candidates, rw, rh), rw, rh);
         for (index, value) in filtered.iter().enumerate() {
             if *value > 0 {
-                let (x, y) = (rect.x as usize + index % rw, rect.y as usize + index / rw);
-                added[y * width as usize + x] = 255;
+                let (x, y) = ((rect.x - area.x) as usize + index % rw, (rect.y - area.y) as usize + index / rw);
+                added[y * area_width + x] = 255;
             }
         }
     }
-    let expanded = dilate(&added, width as usize, height as usize, 1);
-    for (coverage, value) in mask.pixels_mut().zip(expanded) {
-        if value > 0 {
-            coverage[0] = 255;
+    let expanded = dilate(&added, area_width, area.height as usize, 1);
+    for (index, value) in expanded.iter().enumerate() {
+        if *value > 0 {
+            mask.put_pixel(
+                area.x + (index % area_width) as u32,
+                area.y + (index / area_width) as u32,
+                image::Luma([255]),
+            );
         }
     }
     mask

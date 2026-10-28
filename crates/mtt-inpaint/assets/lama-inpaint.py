@@ -4,6 +4,13 @@
 Expected contract:
   python scripts/lama-inpaint.py --input source.png --mask mask.png --output output.png
 
+Server mode (the model stays loaded between requests):
+  python scripts/lama-inpaint.py --serve --weights lama-manga.safetensors
+  reads one JSON request per stdin line, {"input": ..., "mask": ..., "output": ...},
+  and answers each with one stdout line "MTT-LAMA {"ok": true}" (or "ok": false and
+  "error"). It first prints "MTT-LAMA {"ready": true}" once the model is loaded, and
+  exits at the end of stdin.
+
 Default model:
   tools/inpaint-models/mayocream-lama-manga/lama-manga.safetensors
 """
@@ -11,6 +18,7 @@ Default model:
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -38,19 +46,25 @@ from saicinpainting.training.modules.ffc import FFCResNetGenerator  # noqa: E402
 
 
 _MODEL_CACHE: dict[tuple[str, str], torch.nn.Module] = {}
+PROTOCOL_PREFIX = "MTT-LAMA "
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Run mayocream/lama-manga inpainting for one image and mask.")
-    parser.add_argument("--input", "--image_path", dest="input_path", required=True, help="Source image path.")
-    parser.add_argument("--mask", "--mask_path", dest="mask_path", required=True, help="Mask image path. White means inpaint.")
-    parser.add_argument("--output", dest="output_path", required=True, help="Output PNG path.")
+    parser.add_argument("--input", "--image_path", dest="input_path", help="Source image path.")
+    parser.add_argument("--mask", "--mask_path", dest="mask_path", help="Mask image path. White means inpaint.")
+    parser.add_argument("--output", dest="output_path", help="Output PNG path.")
+    parser.add_argument("--serve", action="store_true", help="Answer requests from stdin with the model loaded once.")
     parser.add_argument("--weights", default=str(DEFAULT_WEIGHTS), help="lama-manga.safetensors path.")
     parser.add_argument("--device", default="auto", help="auto, cpu, mps, cuda, or cuda:0.")
     parser.add_argument("--threshold", type=int, default=8, help="Mask luma threshold from 0 to 255.")
     parser.add_argument("--dilate", type=int, default=0, help="Odd-pixel mask dilation kernel. Use 0 or 1 to disable.")
     parser.add_argument("--crop-margin", type=int, default=128, help="Context margin around each connected mask window.")
     args = parser.parse_args()
+    if args.serve:
+        return serve(args)
+    if not (args.input_path and args.mask_path and args.output_path):
+        parser.error("--input, --mask and --output are required without --serve")
 
     weights_path = Path(args.weights)
     if not weights_path.exists():
@@ -59,13 +73,47 @@ def main() -> int:
 
     device = resolve_device(args.device)
     model = load_model(weights_path, device)
-    image = Image.open(args.input_path).convert("RGB")
-    mask = prepare_mask(Path(args.mask_path), image.size, args.threshold, args.dilate)
+    run_request(model, device, args, args.input_path, args.mask_path, args.output_path)
+    return 0
 
+
+def run_request(model: torch.nn.Module, device: torch.device, args, input_path: str, mask_path: str, output_path: str) -> None:
+    image = Image.open(input_path).convert("RGB")
+    mask = prepare_mask(Path(mask_path), image.size, args.threshold, args.dilate)
     result = inpaint(model, image, mask, device, args.crop_margin)
-    output_path = Path(args.output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    result.save(output_path)
+    output = Path(output_path)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    result.save(output)
+
+
+def serve(args) -> int:
+    # Replies go to the original stdout; anything else printed (by libraries too, at the C
+    # level) goes to stderr so it can't be mistaken for a reply.
+    protocol = os.fdopen(os.dup(sys.stdout.fileno()), "w", buffering=1, encoding="utf-8")
+    os.dup2(sys.stderr.fileno(), sys.stdout.fileno())
+    sys.stdout = sys.stderr
+
+    def reply(message: dict) -> None:
+        protocol.write(PROTOCOL_PREFIX + json.dumps(message, ensure_ascii=False) + "\n")
+        protocol.flush()
+
+    weights_path = Path(args.weights)
+    if not weights_path.exists():
+        reply({"ready": False, "error": f"LaMa manga weights not found: {weights_path}"})
+        return 2
+    device = resolve_device(args.device)
+    model = load_model(weights_path, device)
+    reply({"ready": True})
+    for line in sys.stdin:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            request = json.loads(line)
+            run_request(model, device, args, request["input"], request["mask"], request["output"])
+            reply({"ok": True})
+        except Exception as error:  # noqa: BLE001 - every failure is reported to the app
+            reply({"ok": False, "error": f"{type(error).__name__}: {error}"})
     return 0
 
 

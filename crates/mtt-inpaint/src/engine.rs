@@ -49,19 +49,43 @@ pub fn prepare_mask(mask: &GrayImage, settings: &InpaintSettings) -> GrayImage {
 }
 
 pub fn mask_bounds(mask: &GrayImage) -> Option<Rect> {
-    let (width, height) = mask.dimensions();
-    let (mut min_x, mut min_y, mut max_x, mut max_y) = (width, height, 0, 0);
-    let mut any = false;
-    for (x, y, value) in mask.enumerate_pixels() {
-        if value[0] > 0 {
-            any = true;
-            min_x = min_x.min(x);
-            min_y = min_y.min(y);
-            max_x = max_x.max(x);
-            max_y = max_y.max(y);
-        }
+    bounds_above(mask, 0)
+}
+
+/// Bounds of the pixels above `threshold`, row by row.
+fn bounds_above(mask: &GrayImage, threshold: u8) -> Option<Rect> {
+    let width = mask.width() as usize;
+    let (mut min_x, mut min_y, mut max_x, mut max_y) = (usize::MAX, usize::MAX, 0, 0);
+    for (y, row) in mask.as_raw().chunks_exact(width.max(1)).enumerate() {
+        let Some(first) = row.iter().position(|value| *value > threshold) else { continue };
+        let last = row.iter().rposition(|value| *value > threshold).unwrap_or(first);
+        (min_x, max_x) = (min_x.min(first), max_x.max(last));
+        (min_y, max_y) = (min_y.min(y), max_y.max(y));
     }
-    any.then(|| Rect { x: min_x, y: min_y, width: max_x - min_x + 1, height: max_y - min_y + 1 })
+    (min_y != usize::MAX).then(|| Rect {
+        x: min_x as u32,
+        y: min_y as u32,
+        width: (max_x - min_x + 1) as u32,
+        height: (max_y - min_y + 1) as u32,
+    })
+}
+
+/// `prepare_mask` worked out only around the mask, offset to where it sits on the page.
+/// The window reaches past the thresholded pixels by the padding plus twice the feather, so
+/// the edge-normalized blur inside it equals the full-page one. `None` when nothing is
+/// covered.
+fn prepare_mask_window(mask: &GrayImage, settings: &InpaintSettings) -> Option<(Rect, GrayImage)> {
+    let (width, height) = mask.dimensions();
+    let threshold = (MASK_ACTIVE_THRESHOLD * 255.0) as u8;
+    let raw = bounds_above(mask, threshold)?;
+    let reach = settings.padding_px as u32 + settings.feather_px as u32 * 2 + 1;
+    let x = raw.x.saturating_sub(reach);
+    let y = raw.y.saturating_sub(reach);
+    let right = (raw.x + raw.width + reach).min(width);
+    let bottom = (raw.y + raw.height + reach).min(height);
+    let window = Rect { x, y, width: right - x, height: bottom - y };
+    let crop = image::imageops::crop_imm(mask, window.x, window.y, window.width, window.height).to_image();
+    Some((window, prepare_mask(&crop, settings)))
 }
 
 /// Context margin around the masked area handed to the engine (`cropRectForBounds`).
@@ -85,24 +109,49 @@ pub fn run_inpaint(
     settings: &InpaintSettings,
     lama: Option<&LamaCommand>,
 ) -> Result<RgbaImage, String> {
+    run_inpaint_in(source, mask, engine, settings, lama).map(|(result, _)| result)
+}
+
+/// `run_inpaint`, also returning the region the result can differ from transparent in
+/// (`None`: nowhere), so follow-up steps can stay inside it.
+pub fn run_inpaint_in(
+    source: &RgbaImage,
+    mask: &GrayImage,
+    engine: InpaintEngine,
+    settings: &InpaintSettings,
+    lama: Option<&LamaCommand>,
+) -> Result<(RgbaImage, Option<Rect>), String> {
     let settings = normalize_settings(engine, settings);
     let (width, height) = source.dimensions();
     if mask.dimensions() != source.dimensions() {
         return Err(format!("마스크 크기 {:?}가 원본 {:?}와 다릅니다.", mask.dimensions(), source.dimensions()));
     }
-    let mask = prepare_mask(mask, &settings);
-    let Some(bounds) = mask_bounds(&mask) else {
-        return Ok(RgbaImage::new(width, height));
+    let Some((window, prepared)) = prepare_mask_window(mask, &settings) else {
+        return Ok((RgbaImage::new(width, height), None));
+    };
+    let Some(local) = mask_bounds(&prepared) else {
+        return Ok((RgbaImage::new(width, height), None));
     };
     if engine == InpaintEngine::MaskFillFallback {
-        return Ok(RgbaImage::from_fn(width, height, |x, y| {
-            let v = mask.get_pixel(x, y)[0];
-            image::Rgba([v, v, v, 255])
-        }));
+        let mut image = RgbaImage::from_pixel(width, height, image::Rgba([0, 0, 0, 255]));
+        for (x, y, value) in prepared.enumerate_pixels() {
+            let v = value[0];
+            image.put_pixel(window.x + x, window.y + y, image::Rgba([v, v, v, 255]));
+        }
+        let full = Rect { x: 0, y: 0, width, height };
+        return Ok((image, Some(full)));
     }
+    let bounds = Rect { x: window.x + local.x, y: window.y + local.y, ..local };
     let rect = crop_rect_for_bounds(bounds, width, height, &settings);
     let source_crop = image::imageops::crop_imm(source, rect.x, rect.y, rect.width, rect.height).to_image();
-    let mask_crop = image::imageops::crop_imm(&mask, rect.x, rect.y, rect.width, rect.height).to_image();
+    // The prepared mask is zero outside its window.
+    let mut mask_crop = GrayImage::new(rect.width, rect.height);
+    for (x, y, value) in prepared.enumerate_pixels() {
+        let (px, py) = (window.x + x, window.y + y);
+        if rect.contains(px, py) {
+            mask_crop.put_pixel(px - rect.x, py - rect.y, *value);
+        }
+    }
     let inpainted = match (engine, lama) {
         (InpaintEngine::Lama, Some(lama)) => lama.run(&source_crop, &mask_crop)?,
         (InpaintEngine::Lama, None) => return Err("LaMa 인페인트 명령이 설정되지 않았습니다.".into()),
@@ -111,7 +160,7 @@ pub fn run_inpaint(
     if inpainted.dimensions() != source_crop.dimensions() {
         return Err("인페인트 결과 크기가 맞지 않습니다.".into());
     }
-    Ok(masked_result_layer(source, &inpainted, &mask_crop, rect, &settings))
+    Ok((masked_result_layer(source, &inpainted, &mask_crop, rect, &settings), Some(rect)))
 }
 
 /// Breadth-first fill from the mask border inward with the average of known neighbours
@@ -382,6 +431,25 @@ mod tests {
         let empty =
             run_inpaint(&source, &GrayImage::new(40, 40), InpaintEngine::LocalFillFallback, &settings, None).unwrap();
         assert!(empty.pixels().all(|p| p[3] == 0));
+    }
+
+    #[test]
+    fn windowed_mask_preparation_matches_the_full_page() {
+        let mut mask = GrayImage::new(120, 90);
+        for (x, y) in [(40, 30), (41, 30), (70, 60), (3, 2), (60, 45)] {
+            mask.put_pixel(x, y, image::Luma([255]));
+        }
+        mask.put_pixel(90, 80, image::Luma([5])); // below the threshold
+        for (padding, feather) in [(0.0, 0.0), (3.0, 0.0), (0.0, 4.0), (2.0, 6.0)] {
+            let settings = InpaintSettings { padding_px: padding, feather_px: feather, ..InpaintSettings::default() };
+            let full = prepare_mask(&mask, &settings);
+            let (window, prepared) = prepare_mask_window(&mask, &settings).unwrap();
+            for (x, y, value) in full.enumerate_pixels() {
+                let inside = window.contains(x, y);
+                let windowed = if inside { prepared.get_pixel(x - window.x, y - window.y)[0] } else { 0 };
+                assert_eq!(value[0], windowed, "({x}, {y}) padding {padding} feather {feather}");
+            }
+        }
     }
 
     #[test]

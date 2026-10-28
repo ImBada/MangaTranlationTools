@@ -198,7 +198,7 @@ impl Editor {
     pub fn cancel_translation(&mut self) {
         if let Some(job) = &self.translation {
             job.cancel.store(true, Ordering::SeqCst);
-            self.status = "번역 취소 중… (진행 중인 요청이 끝나면 멈춥니다)".into();
+            self.status = "번역 취소 중…".into();
         }
     }
 

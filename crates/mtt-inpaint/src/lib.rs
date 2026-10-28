@@ -12,7 +12,7 @@ pub mod text_mask;
 
 use image::{GrayImage, RgbaImage};
 
-pub use engine::run_inpaint;
+pub use engine::{run_inpaint, run_inpaint_in};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Rect {
@@ -35,6 +35,18 @@ impl Rect {
     pub fn contains(&self, x: u32, y: u32) -> bool {
         x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
     }
+
+    pub fn covers(&self, width: u32, height: u32) -> bool {
+        self.x == 0 && self.y == 0 && self.width >= width && self.height >= height
+    }
+}
+
+/// Byte ranges of `region`'s rows in an image `width` pixels wide with `channels` per pixel.
+fn region_rows(region: Rect, width: u32, channels: usize) -> impl Iterator<Item = std::ops::Range<usize>> {
+    (region.y..region.y + region.height).map(move |y| {
+        let start = (y as usize * width as usize + region.x as usize) * channels;
+        start..start + region.width as usize * channels
+    })
 }
 
 /// Square dilation by `radius` (`dilateMask` / `expandMask`).
@@ -114,25 +126,55 @@ pub fn box_blur(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<
 /// `normalizeInpaintLayerDataUrls`: a fully opaque result is clipped to the mask, and the
 /// mask grows to cover every visible result pixel.
 pub fn normalize_layers(mask: &mut GrayImage, result: &mut RgbaImage) {
-    if result.pixels().all(|p| p[3] == 255) {
-        for (pixel, coverage) in result.pixels_mut().zip(mask.pixels()) {
-            pixel[3] = if coverage[0] > 0 { 255 } else { 0 };
+    let full = Rect { x: 0, y: 0, width: result.width(), height: result.height() };
+    normalize_layers_in(mask, result, full);
+}
+
+/// `normalize_layers` for a result that is transparent and a mask that is binary outside
+/// `region` (an engine result and its patch mask).
+pub fn normalize_layers_in(mask: &mut GrayImage, result: &mut RgbaImage, region: Rect) {
+    let width = result.width();
+    // Transparent pixels outside the region already rule out "fully opaque".
+    let opaque = region.covers(width, result.height())
+        && region_rows(region, width, 4).all(|row| result.as_raw()[row].chunks_exact(4).all(|p| p[3] == 255));
+    let (mask, result): (&mut [u8], &mut [u8]) = (mask, result);
+    for (mask_row, result_row) in region_rows(region, width, 1).zip(region_rows(region, width, 4)) {
+        let (mask_row, result_row) = (&mut mask[mask_row], &mut result[result_row]);
+        for (coverage, pixel) in mask_row.iter_mut().zip(result_row.chunks_exact_mut(4)) {
+            if opaque {
+                pixel[3] = if *coverage > 0 { 255 } else { 0 };
+            }
+            *coverage = if *coverage > 0 || pixel[3] > 0 { 255 } else { 0 };
         }
-    }
-    for (coverage, pixel) in mask.pixels_mut().zip(result.pixels()) {
-        coverage[0] = if coverage[0] > 0 || pixel[3] > 0 { 255 } else { 0 };
     }
 }
 
 /// `mergePartialInpaintResult`: patch pixels replace the base where the patch mask
 /// covers or the patch has content.
 pub fn merge_partial_result(base: Option<&RgbaImage>, patch: &RgbaImage, patch_mask: &GrayImage) -> RgbaImage {
-    let mut merged = base.cloned().unwrap_or_else(|| RgbaImage::new(patch.width(), patch.height()));
-    for ((target, source), coverage) in merged.pixels_mut().zip(patch.pixels()).zip(patch_mask.pixels()) {
-        if coverage[0] == 0 && source[3] == 0 {
-            continue;
+    let full = Rect { x: 0, y: 0, width: patch.width(), height: patch.height() };
+    merge_partial_result_in(base, patch, patch_mask, full)
+}
+
+/// `merge_partial_result` for a patch that is empty outside `region`.
+pub fn merge_partial_result_in(
+    base: Option<&RgbaImage>,
+    patch: &RgbaImage,
+    patch_mask: &GrayImage,
+    region: Rect,
+) -> RgbaImage {
+    let width = patch.width();
+    let mut merged = base.cloned().unwrap_or_else(|| RgbaImage::new(width, patch.height()));
+    let target_raw: &mut [u8] = &mut merged;
+    for (rgba, gray) in region_rows(region, width, 4).zip(region_rows(region, width, 1)) {
+        let target = target_raw[rgba.clone()].chunks_exact_mut(4);
+        let source = patch.as_raw()[rgba].chunks_exact(4);
+        for ((target, source), coverage) in target.zip(source).zip(&patch_mask.as_raw()[gray]) {
+            if *coverage == 0 && source[3] == 0 {
+                continue;
+            }
+            target.copy_from_slice(source);
         }
-        *target = *source;
     }
     merged
 }
@@ -144,15 +186,39 @@ pub fn merge_masks(base: &mut GrayImage, patch: &GrayImage) {
     }
 }
 
+/// `merge_masks` for a patch that is empty outside `region` and a binary base.
+pub fn merge_masks_in(base: &mut GrayImage, patch: &GrayImage, region: Rect) {
+    let width = base.width();
+    let base: &mut [u8] = base;
+    for row in region_rows(region, width, 1) {
+        for (target, source) in base[row.clone()].iter_mut().zip(&patch.as_raw()[row]) {
+            *target = if *target > 0 || *source > 0 { 255 } else { 0 };
+        }
+    }
+}
+
 /// Mask restricted to `rect` (`maskDataUrlForSelection`); `None` when nothing is covered.
 pub fn mask_for_selection(mask: &GrayImage, rect: Rect) -> Option<GrayImage> {
     let threshold = (0.03 * 255.0) as u8;
+    let mut selected = GrayImage::new(mask.width(), mask.height());
+    let rect = Rect::clamped(
+        rect.x as f32,
+        rect.y as f32,
+        rect.width as f32,
+        rect.height as f32,
+        mask.width(),
+        mask.height(),
+    )?;
     let mut any = false;
-    let selected = GrayImage::from_fn(mask.width(), mask.height(), |x, y| {
-        let active = rect.contains(x, y) && mask.get_pixel(x, y)[0] > threshold;
-        any |= active;
-        image::Luma([if active { 255 } else { 0 }])
-    });
+    let selected_raw: &mut [u8] = &mut selected;
+    for row in region_rows(rect, mask.width(), 1) {
+        for (target, value) in selected_raw[row.clone()].iter_mut().zip(&mask.as_raw()[row]) {
+            if *value > threshold {
+                *target = 255;
+                any = true;
+            }
+        }
+    }
     any.then_some(selected)
 }
 

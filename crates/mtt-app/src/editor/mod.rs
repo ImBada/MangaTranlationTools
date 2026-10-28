@@ -2396,15 +2396,18 @@ fn compute_inpaint(
         }
     };
     let mut patch_mask = patch_mask;
-    let mut patch_result = mtt_inpaint::run_inpaint(source, &patch_mask, engine, settings, lama)?;
-    mtt_inpaint::normalize_layers(&mut patch_mask, &mut patch_result);
+    let (mut patch_result, region) = mtt_inpaint::run_inpaint_in(source, &patch_mask, engine, settings, lama)?;
+    // Outside the engine's region the patch is empty and the masks are binary, so the
+    // follow-up steps only look inside it.
+    let region = region.unwrap_or(mtt_inpaint::Rect { x: 0, y: 0, width: 0, height: 0 });
+    mtt_inpaint::normalize_layers_in(&mut patch_mask, &mut patch_result, region);
     let whole = matches!(scope, InpaintScope::WholeMask | InpaintScope::AllBlocks) || !has_layers;
     let (mask, result) = if whole {
         (patch_mask, patch_result)
     } else {
-        let merged_result = mtt_inpaint::merge_partial_result(result, &patch_result, &patch_mask);
+        let merged_result = mtt_inpaint::merge_partial_result_in(result, &patch_result, &patch_mask, region);
         let mut merged_mask = mask.cloned().unwrap_or_else(|| GrayImage::new(width, height));
-        mtt_inpaint::merge_masks(&mut merged_mask, &patch_mask);
+        mtt_inpaint::merge_masks_in(&mut merged_mask, &patch_mask, region);
         (merged_mask, merged_result)
     };
     let local = engine == InpaintEngine::LocalFillFallback;

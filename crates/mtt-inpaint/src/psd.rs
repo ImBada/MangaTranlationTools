@@ -69,10 +69,61 @@ fn unicode_name_block(name: &str) -> Vec<u8> {
     out
 }
 
+/// PackBits (Apple RLE, what PSD calls compression 1): runs of 3+ equal bytes as
+/// `257 - n, byte`, everything else as `n - 1, bytes…`, each at most 128 long.
+fn pack_bits(row: &[u8], out: &mut Vec<u8>) {
+    let mut index = 0;
+    let mut literal_start = 0;
+    let flush_literal = |out: &mut Vec<u8>, bytes: &[u8]| {
+        for chunk in bytes.chunks(128) {
+            out.push((chunk.len() - 1) as u8);
+            out.extend_from_slice(chunk);
+        }
+    };
+    while index < row.len() {
+        let value = row[index];
+        let run = row[index..].iter().take(128).take_while(|byte| **byte == value).count();
+        if run >= 3 {
+            flush_literal(out, &row[literal_start..index]);
+            out.push((257 - run) as u8);
+            out.push(value);
+            index += run;
+            literal_start = index;
+        } else {
+            index += run;
+        }
+    }
+    flush_literal(out, &row[literal_start..]);
+}
+
+/// One image's channels, PackBits per row: the per-row byte counts of every channel, then
+/// the packed rows (`channels` picks byte offsets within RGBA pixels).
+fn packed_channels(image: &RgbaImage, channels: &[usize]) -> Vec<(Vec<u16>, Vec<u8>)> {
+    let (width, height) = (image.width() as usize, image.height() as usize);
+    let mut row = Vec::with_capacity(width);
+    channels
+        .iter()
+        .map(|channel| {
+            let mut counts = Vec::with_capacity(height);
+            let mut data = Vec::new();
+            for pixels in image.as_raw().chunks_exact(width * 4) {
+                row.clear();
+                row.extend(pixels.iter().skip(*channel).step_by(4));
+                let start = data.len();
+                pack_bits(&row, &mut data);
+                counts.push((data.len() - start) as u16);
+            }
+            (counts, data)
+        })
+        .collect()
+}
+
 /// Writes a PSD; `layers` are bottom to top. The composite is `composite` (opaque RGB).
+/// Channels are RLE compressed: result and translation layers are mostly transparent.
 pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[ExportLayer<'_>]) -> Vec<u8> {
-    let pixels = (width * height) as usize;
-    let mut out = Vec::with_capacity(pixels * 4 * (layers.len() + 1) + 1024);
+    let layer_channels: Vec<Vec<(Vec<u16>, Vec<u8>)>> =
+        layers.iter().map(|layer| packed_channels(layer.image, &[3, 0, 1, 2])).collect();
+    let mut out = Vec::with_capacity(1024);
     out.extend_from_slice(b"8BPS");
     push_u16(&mut out, 1);
     out.extend_from_slice(&[0; 6]);
@@ -86,16 +137,16 @@ pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[Expor
 
     let mut layer_info = Vec::new();
     push_u16(&mut layer_info, layers.len() as u16);
-    for layer in layers {
+    for (index, layer) in layers.iter().enumerate() {
         push_i32(&mut layer_info, 0);
         push_i32(&mut layer_info, 0);
         push_i32(&mut layer_info, height as i32);
         push_i32(&mut layer_info, width as i32);
         push_u16(&mut layer_info, 4);
         // Transparency first, like Photoshop.
-        for id in [-1i16, 0, 1, 2] {
+        for (id, (counts, data)) in [-1i16, 0, 1, 2].into_iter().zip(&layer_channels[index]) {
             layer_info.extend_from_slice(&id.to_be_bytes());
-            push_u32(&mut layer_info, 2 + pixels as u32);
+            push_u32(&mut layer_info, (2 + counts.len() * 2 + data.len()) as u32);
         }
         layer_info.extend_from_slice(b"8BIMnorm");
         layer_info.extend_from_slice(&[255, 0, if layer.hidden { 2 } else { 0 }, 0]);
@@ -112,10 +163,11 @@ pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[Expor
         push_u32(&mut layer_info, extra.len() as u32);
         layer_info.extend(extra);
     }
-    for layer in layers {
-        for channel in [3usize, 0, 1, 2] {
-            push_u16(&mut layer_info, 0);
-            layer_info.extend(layer.image.as_raw().iter().skip(channel).step_by(4));
+    for channels in &layer_channels {
+        for (counts, data) in channels {
+            push_u16(&mut layer_info, 1);
+            counts.iter().for_each(|count| push_u16(&mut layer_info, *count));
+            layer_info.extend_from_slice(data);
         }
     }
     if layer_info.len() % 2 != 0 {
@@ -126,9 +178,14 @@ pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[Expor
     out.extend(layer_info);
     push_u32(&mut out, 0); // global layer mask
 
-    push_u16(&mut out, 0);
-    for channel in 0..3 {
-        out.extend(composite.as_raw().iter().skip(channel).step_by(4));
+    // The composite: all row counts first, then all rows.
+    let composite_channels = packed_channels(composite, &[0, 1, 2]);
+    push_u16(&mut out, 1);
+    for (counts, _) in &composite_channels {
+        counts.iter().for_each(|count| push_u16(&mut out, *count));
+    }
+    for (_, data) in &composite_channels {
+        out.extend_from_slice(data);
     }
     out
 }
@@ -469,6 +526,21 @@ mod tests {
         assert_eq!(merged.get_pixel(0, 0)[3], 0, "background and hidden layers excluded");
         assert_eq!(mask.get_pixel(1, 1)[0], 255);
         assert!(import_inpaint_layers(&document, 5, 3).is_err());
+    }
+
+    #[test]
+    fn packbits_round_trips_and_shrinks_flat_rows() {
+        let mut row: Vec<u8> = (0..700).map(|i| (i * 37 % 251) as u8).collect();
+        row[100..400].fill(0);
+        row[500..502].fill(9);
+        for sample in [row.clone(), vec![0; 1000], vec![5], vec![1, 1], vec![1, 1, 1], Vec::new()] {
+            let mut packed = Vec::new();
+            pack_bits(&sample, &mut packed);
+            assert_eq!(unpack_bits(&packed, sample.len()).unwrap(), sample);
+        }
+        let mut packed = Vec::new();
+        pack_bits(&[0; 1000], &mut packed);
+        assert!(packed.len() <= 16, "{} bytes", packed.len());
     }
 
     #[test]
