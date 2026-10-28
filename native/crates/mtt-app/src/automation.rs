@@ -41,6 +41,10 @@ pub enum Step {
     ShortcutSheet,
     /// Presses (`down`) or releases (`up`) Space as a real key event.
     Space(bool),
+    /// `float:<widget>` pops a widget out as a window, `dock:<widget>` puts it back.
+    Widget(crate::editor::widgets::Widget, bool),
+    /// `card-drag:<card>><target>` drags an inspector card's grip onto the top of another.
+    CardDrag(crate::editor::widgets::Card, crate::editor::widgets::Card),
     Sample([f32; 2]),
     WaitTranslation,
     Window([f32; 2]),
@@ -53,8 +57,8 @@ pub struct Automation {
     steps: VecDeque<Step>,
     wait_frames: u32,
     screenshot_done: Option<Arc<AtomicBool>>,
-    /// Key events fed to egui by `MttApp::raw_input_hook` on the next frame.
-    injected: Vec<egui::Event>,
+    /// Input fed to egui by `MttApp::raw_input_hook`, one batch per frame.
+    injected: VecDeque<Vec<egui::Event>>,
 }
 
 pub enum Request {
@@ -115,6 +119,12 @@ impl Automation {
                     "preset-edit" => Step::PresetEdit(arg.to_owned()),
                     "shortcuts" => Step::ShortcutSheet,
                     "space" => Step::Space(arg == "down"),
+                    "float" | "dock" => Step::Widget(crate::editor::widgets::Widget::from_key(arg)?, name == "float"),
+                    "card-drag" => {
+                        let (card, target) = arg.split_once('>')?;
+                        let parse = crate::editor::widgets::Card::from_key;
+                        Step::CardDrag(parse(card)?, parse(target)?)
+                    }
                     "sample" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Sample([v[0], v[1]]))?
@@ -135,11 +145,11 @@ impl Automation {
                 })
             })
             .collect();
-        Some(Self { steps, wait_frames: 2, screenshot_done: None, injected: Vec::new() })
+        Some(Self { steps, wait_frames: 2, screenshot_done: None, injected: VecDeque::new() })
     }
 
     pub fn take_injected_events(&mut self) -> Vec<egui::Event> {
-        std::mem::take(&mut self.injected)
+        self.injected.pop_front().unwrap_or_default()
     }
 
     /// Runs at most one step per frame. Returns a request the app must perform.
@@ -206,6 +216,7 @@ impl Automation {
             }
             (Step::Ready, None) => return None,
             (Step::Page(index), Some(editor)) => editor.go_to_page(*index),
+            (Step::Widget(widget, floating), Some(editor)) => editor.widgets.set_floating(*widget, *floating, None),
             (Step::Layer(layer), Some(editor)) => editor.select_layer_shortcut(*layer),
             (Step::SelectFirst, Some(editor)) => {
                 editor.selection = editor
@@ -284,14 +295,39 @@ impl Automation {
             }
             (Step::Wait(frames), _) => self.wait_frames = *frames,
             (Step::Space(pressed), _) => {
-                self.injected.push(egui::Event::Key {
+                self.injected.push_back(vec![egui::Event::Key {
                     key: egui::Key::Space,
                     physical_key: Some(egui::Key::Space),
                     pressed: *pressed,
                     repeat: false,
                     modifiers: egui::Modifiers::NONE,
-                });
+                }]);
                 self.wait_frames = 3;
+            }
+            (Step::CardDrag(card, target), Some(_)) => {
+                let grip =
+                    |card: crate::editor::widgets::Card| ctx.read_response(card.grip_id()).map(|r| r.rect.center());
+                match (grip(*card), grip(*target)) {
+                    (Some(from), Some(to)) => {
+                        // Press on the grip, move past the drag threshold in steps, release
+                        // in the top half of the target card.
+                        let to = to - egui::vec2(0.0, 12.0);
+                        let button = |pos, pressed| egui::Event::PointerButton {
+                            pos,
+                            button: egui::PointerButton::Primary,
+                            pressed,
+                            modifiers: egui::Modifiers::NONE,
+                        };
+                        self.injected.push_back(vec![egui::Event::PointerMoved(from)]);
+                        self.injected.push_back(vec![button(from, true)]);
+                        for t in [0.1, 0.4, 0.7, 1.0, 1.0] {
+                            self.injected.push_back(vec![egui::Event::PointerMoved(from.lerp(to, t))]);
+                        }
+                        self.injected.push_back(vec![button(to, false)]);
+                        self.wait_frames = self.injected.len() as u32 + 3;
+                    }
+                    _ => log::warn!("automation: card grip not on screen"),
+                }
             }
             (Step::Screenshot(path), _) => {
                 let path = path.clone();

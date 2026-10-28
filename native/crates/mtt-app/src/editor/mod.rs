@@ -19,6 +19,7 @@ pub mod result_tools;
 mod stage;
 pub mod thumbnails;
 pub mod translation;
+pub mod widgets;
 
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
@@ -317,6 +318,8 @@ pub struct Editor {
     pub inpaint_queue: Option<InpaintQueue>,
     pub notifications: notifications::Notifications,
     pub block_list_collapsed: bool,
+    /// Which widgets float as their own window (`widgets`).
+    pub widgets: widgets::Layout,
     pub character_dialog: Option<panels::CharacterOverrideDialog>,
     /// Settings or import dialog open (set by the app each frame).
     pub app_modal_open: bool,
@@ -440,6 +443,7 @@ impl Editor {
             write_generation: WriteGeneration::default(),
             layers_queued: HashSet::new(),
             block_list_collapsed: false,
+            widgets: widgets::Layout::default(),
             character_dialog: None,
             app_modal_open: false,
             eyedropper: None,
@@ -2086,6 +2090,7 @@ impl Editor {
     ) -> Option<EditorAction> {
         let pointer_down = ui.input(|i| i.pointer.any_down());
         self.tick(services, worker, pointer_down);
+        self.widgets.load(&services.ui_state.widgets, &services.ui_state.inspector_order);
         self.text_editing = false;
         self.font_previews.begin_frame();
         self.eyedropper_frame(&ui.ctx().clone());
@@ -2114,6 +2119,7 @@ impl Editor {
         let stage_rect = self.view.stage_rect();
         self.notifications_ui(&ui.ctx().clone(), stage_rect, services, worker);
         stage::inline_editor(self, ui);
+        widgets::floating_windows(self, &ui.ctx().clone(), services, worker);
         if self.shortcut_sheet {
             let mut open = true;
             let ctx = ui.ctx().clone();
@@ -2143,6 +2149,10 @@ impl Editor {
             || self.character_dialog.is_some();
         if !self.text_editing && !modal_open {
             stage::shortcuts(self, &ui.ctx().clone(), services);
+        }
+        let ui_state = &mut services.ui_state;
+        if self.widgets.store(&mut ui_state.widgets, &mut ui_state.inspector_order) {
+            services.save_ui_state();
         }
         action
     }

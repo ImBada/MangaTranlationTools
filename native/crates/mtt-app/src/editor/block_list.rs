@@ -10,6 +10,7 @@ use mtt_core::model::{PageRecord, RenderTextDirection, TranslationBlock};
 
 use super::Editor;
 use super::panels::{block_preview_text, block_type_label};
+use super::widgets::{self, Host, Widget};
 use crate::theme;
 
 /// What a row drags: a page unit (`block:` / `group:` id) or a block within its group.
@@ -150,8 +151,17 @@ impl Editor {
 
 /// The outline card at the top of the translate inspector; the list scrolls inside
 /// `max_height`.
-pub fn block_outline(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) {
+/// The page's text blocks in output order (`Widget::Blocks`): select, group and reorder.
+pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
     let Some(page) = editor.page().cloned() else { return };
+    // In the inspector the list takes a slice of the panel and can fold away; as a window
+    // it fills whatever size it was given.
+    let collapsible = host == Host::Panel;
+    let collapsed = collapsible && editor.block_list_collapsed;
+    let list_height = match host {
+        Host::Panel => (ui.available_height() * 0.3).clamp(110.0, 280.0),
+        Host::Window => (ui.available_height() - 64.0).max(60.0),
+    };
     let locked = editor.page_edit_locked();
     let units = page_units(&page);
     let page_reorder = !locked && units.len() > 1;
@@ -161,13 +171,17 @@ pub fn block_outline(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) {
     let mut group_action = None;
     let mut toggle_collapsed = false;
     let title = format!("텍스트 블록 {}", page.blocks.len());
-    theme::card_with(
+    let (_, toggle) = widgets::frame(
         ui,
+        host,
+        Widget::Blocks,
         &title,
         |ui| {
-            let arrow = if editor.block_list_collapsed { "펼치기" } else { "접기" };
-            if ui.add(egui::Button::new(RichText::new(arrow).small()).frame_when_inactive(false)).clicked() {
-                toggle_collapsed = true;
+            if collapsible {
+                let arrow = if collapsed { "펼치기" } else { "접기" };
+                if ui.add(egui::Button::new(RichText::new(arrow).small()).frame_when_inactive(false)).clicked() {
+                    toggle_collapsed = true;
+                }
             }
             let group = mtt_core::groups::selected_group(&page, &editor.selection);
             let any_grouped = editor.selection.iter().any(|id| mtt_core::groups::group_block_ids(&page, id).is_some());
@@ -193,13 +207,13 @@ pub fn block_outline(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) {
             }
         },
         |ui| {
-            if editor.block_list_collapsed {
+            if collapsed {
                 return;
             }
             egui::ScrollArea::vertical()
                 .id_salt("block-outline")
-                .max_height(max_height)
-                .auto_shrink([false, true])
+                .max_height(list_height)
+                .auto_shrink([false, host == Host::Panel])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
                     if page.blocks.is_empty() {
@@ -271,6 +285,7 @@ pub fn block_outline(editor: &mut Editor, ui: &mut egui::Ui, max_height: f32) {
             );
         },
     );
+    widgets::toggled(editor, Widget::Blocks, host, toggle);
     if toggle_collapsed {
         editor.block_list_collapsed = !editor.block_list_collapsed;
     }

@@ -8,6 +8,7 @@ use mtt_core::model::{InpaintStatus, PageAnalysisStatus, PageRecord};
 
 use super::result_tools::ResultTool;
 use super::translation::RunMode;
+use super::widgets::{self, Host, Widget};
 use super::{Editor, EditorAction, Layer, Mode, Tool};
 use crate::app::AppEvent;
 use crate::library_view::ImportMode;
@@ -388,30 +389,47 @@ const ROW_HEIGHT: f32 = 74.0;
 const THUMB_SIZE: egui::Vec2 = egui::vec2(46.0, 62.0);
 
 pub fn page_strip(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
+    if editor.widgets.floating(Widget::Pages) {
+        return;
+    }
     egui::Panel::left("editor-pages")
         .resizable(true)
         .default_size(210.0)
         .size_range(180.0..=300.0)
         .frame(theme::side_frame())
-        .show(ui, |ui| {
-            let completed = editor.chapter.pages.iter().filter(|page| page.is_completed()).count();
-            let total = editor.page_count();
-            ui.horizontal(|ui| {
-                ui.label(RichText::new("페이지").strong());
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.x = 4.0;
-                    let has_next = editor.current + 1 < total;
-                    let next = egui::Button::new((theme::icon(icon::CARET_RIGHT), theme::key_hint("F", false)));
-                    if ui.add_enabled(has_next, next).on_hover_text("다음 페이지 (→ 도 됨)").clicked() {
-                        editor.next_page();
-                    }
-                    let previous = egui::Button::new((theme::icon(icon::CARET_LEFT), theme::key_hint("D", false)));
-                    if ui.add_enabled(editor.current > 0, previous).on_hover_text("이전 페이지 (← 도 됨)").clicked()
-                    {
-                        editor.previous_page();
-                    }
-                });
-            });
+        .show(ui, |ui| pages_widget(editor, ui, services, worker, Host::Panel));
+}
+
+/// The page list (`Widget::Pages`): page navigation, review progress and one row per page.
+pub(super) fn pages_widget(
+    editor: &mut Editor,
+    ui: &mut egui::Ui,
+    services: &mut Services,
+    worker: &Worker<AppEvent>,
+    host: Host,
+) {
+    let completed = editor.chapter.pages.iter().filter(|page| page.is_completed()).count();
+    let total = editor.page_count();
+    let has_previous = editor.current > 0;
+    let has_next = editor.current + 1 < total;
+    let mut step = 0;
+    let (_, toggle) = widgets::frame(
+        ui,
+        host,
+        Widget::Pages,
+        "페이지",
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 4.0;
+            let next = egui::Button::new((theme::icon(icon::CARET_RIGHT), theme::key_hint("F", false)));
+            if ui.add_enabled(has_next, next).on_hover_text("다음 페이지 (→ 도 됨)").clicked() {
+                step = 1;
+            }
+            let previous = egui::Button::new((theme::icon(icon::CARET_LEFT), theme::key_hint("D", false)));
+            if ui.add_enabled(has_previous, previous).on_hover_text("이전 페이지 (← 도 됨)").clicked() {
+                step = -1;
+            }
+        },
+        |ui| {
             ui.horizontal(|ui| {
                 let label = RichText::new(format!("검수 {completed}/{total}")).small().color(theme::TEXT_WEAK);
                 let width = (ui.available_width() - 64.0).max(40.0);
@@ -424,7 +442,14 @@ pub fn page_strip(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Service
                 return;
             }
             page_rows(editor, ui, services, worker);
-        });
+        },
+    );
+    match step {
+        1 => editor.next_page(),
+        -1 => editor.previous_page(),
+        _ => {}
+    }
+    widgets::toggled(editor, Widget::Pages, host, toggle);
 }
 
 fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
@@ -941,8 +966,10 @@ fn view_menu(editor: &mut Editor, ui: &mut egui::Ui, compact: bool) {
                 overlay: true,
             };
         }
+        ui.separator();
+        super::widgets::menu(editor, ui);
     });
-    response.response.on_hover_text("보기: 레이어 표시와 투명도");
+    response.response.on_hover_text("보기: 레이어 표시와 투명도, 위젯");
 }
 
 fn layer_row(ui: &mut egui::Ui, label: &str, visible: &mut bool, opacity: &mut f32) {

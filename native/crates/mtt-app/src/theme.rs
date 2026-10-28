@@ -29,6 +29,9 @@ const ICON_FAMILY: &str = "phosphor";
 /// Phosphor icon codepoints (`assets/fonts/Phosphor.ttf`, regular weight).
 pub mod icon {
     pub const ARROW_LEFT: &str = "\u{E058}";
+    pub const ARROW_SQUARE_IN: &str = "\u{E5DC}";
+    pub const ARROW_SQUARE_OUT: &str = "\u{E5DE}";
+    pub const DOTS_SIX_VERTICAL: &str = "\u{EAE2}";
     pub const CARET_DOWN: &str = "\u{E136}";
     pub const CARET_LEFT: &str = "\u{E138}";
     pub const CARET_RIGHT: &str = "\u{E13A}";
@@ -197,6 +200,18 @@ pub fn card_with<R>(
     header_right: impl FnOnce(&mut egui::Ui),
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    card_full(ui, title, None, header_right, add_contents)
+}
+
+/// A card that can also carry a `⠿` grip left of its title; the grip senses drags under
+/// `grip` (read it back with `Context::read_response`).
+pub fn card_full<R>(
+    ui: &mut egui::Ui,
+    title: &str,
+    grip: Option<egui::Id>,
+    header_right: impl FnOnce(&mut egui::Ui),
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
     let inner = egui::Frame::new()
         .fill(CARD_BG)
         .stroke(Stroke::new(1.0, BORDER))
@@ -211,6 +226,9 @@ pub fn card_with<R>(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         header_right(ui);
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if let Some(id) = grip {
+                                grip_handle(ui, id);
+                            }
                             ui.add(egui::Label::new(RichText::new(title).strong().color(TEXT)).truncate());
                         });
                     });
@@ -222,6 +240,24 @@ pub fn card_with<R>(
         .inner;
     ui.add_space(8.0);
     inner
+}
+
+/// The `⠿` drag grip of a reorderable card.
+fn grip_handle(ui: &mut egui::Ui, id: egui::Id) {
+    ui.spacing_mut().item_spacing.x = 4.0;
+    let (_, rect) = ui.allocate_space(egui::vec2(12.0, 18.0));
+    let response = ui.interact(rect, id, egui::Sense::drag()).on_hover_text("끌어서 카드 순서 바꾸기");
+    let color = if response.hovered() || response.dragged() { TEXT } else { TEXT_WEAK };
+    ui.painter().text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon::DOTS_SIX_VERTICAL,
+        FontId::new(14.0, FontFamily::Name(ICON_FAMILY.into())),
+        color,
+    );
+    if response.hovered() && !response.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+    }
 }
 
 /// Segmented control: one selectable button per option; returns the clicked option.
@@ -370,15 +406,17 @@ pub fn modal<R>(
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> Option<egui::InnerResponse<Option<R>>> {
     let screen = ctx.content_rect();
-    egui::Area::new(egui::Id::unique("modal-backdrop")).order(egui::Order::Middle).fixed_pos(screen.min).show(
-        ctx,
-        |ui| {
+    let backdrop = egui::Area::new(egui::Id::unique("modal-backdrop"))
+        .order(egui::Order::Middle)
+        .fixed_pos(screen.min)
+        .show(ctx, |ui| {
             ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(140));
             ui.allocate_rect(screen, egui::Sense::click_and_drag());
-        },
-    );
+        });
     let response = window.show(ctx, add_contents);
-    // The backdrop shares the window's layer order; keep the window above it.
+    // The backdrop shares the layer order of other windows (the editor's floating
+    // widgets too): put it over them, and the dialog over it.
+    ctx.move_to_top(backdrop.response.layer_id);
     if let Some(response) = &response {
         ctx.move_to_top(response.response.layer_id);
     }

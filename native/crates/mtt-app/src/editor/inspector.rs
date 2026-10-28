@@ -11,6 +11,7 @@ use mtt_core::model::{
 };
 
 use super::result_tools::ResultTool;
+use super::widgets::{self, Card, CardDrag, Host, Widget};
 use super::{Editor, InpaintScope, InspectorTab, Layer, LayerKind, Mode, Tool, block_list, engine_label, panels};
 use crate::app::AppEvent;
 use crate::services::Services;
@@ -73,8 +74,9 @@ fn translate(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
     let locked = locked_notice(editor, ui);
     match editor.inspector_tab {
         InspectorTab::Blocks => {
-            let outline_height = (ui.available_height() * 0.3).clamp(110.0, 280.0);
-            block_list::block_outline(editor, ui, outline_height);
+            if !editor.widgets.floating(Widget::Blocks) {
+                block_list::blocks_widget(editor, ui, Host::Panel);
+            }
             egui::ScrollArea::vertical().id_salt("block-inspector").auto_shrink(false).show(ui, |ui| {
                 ui.add_enabled_ui(!locked, |ui| selection(editor, ui, services, worker));
             });
@@ -101,70 +103,223 @@ fn selection(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
         });
         return;
     }
-    match blocks.as_slice() {
-        [] => nothing_selected(editor, ui, worker, &page),
-        [block] => {
-            // Like the TS block panel: text and placement wait for a running inpaint.
-            let busy = editor.inpaint_busy();
-            if busy {
-                theme::hint(ui, "인페인트가 끝날 때까지 문장과 배치는 잠깁니다.");
+    let (single, first) = match blocks.as_slice() {
+        [] => {
+            if editor.widgets.floating(Widget::Page) {
+                theme::hint(ui, PICK_A_BLOCK);
+            } else {
+                page_widget(editor, ui, services, worker, Host::Panel);
             }
-            ui.add_enabled_ui(!busy, |ui| sentence_card(editor, ui, block, &page, worker));
-            preset_card(editor, ui, block, services);
-            ui.add_enabled_ui(!busy, |ui| placement_card(editor, ui, block));
-            style_card(editor, ui, block, services);
+            return;
         }
-        [first, ..] => {
-            theme::card(ui, &format!("{}개 블록 선택", blocks.len()), |ui| {
-                selection_actions(editor, ui, worker, blocks.len());
-                theme::hint(ui, "아래 프리셋과 스타일은 선택한 블록 모두에 적용됩니다.");
-            });
-            preset_card(editor, ui, first, services);
-            style_card(editor, ui, first, services);
+        [block] => (true, block),
+        [first, ..] => (false, first),
+    };
+    // Like the TS block panel: text and placement wait for a running inpaint.
+    let busy = editor.inpaint_busy();
+    if busy && single {
+        theme::hint(ui, "인페인트가 끝날 때까지 문장과 배치는 잠깁니다.");
+    }
+    // The cards in the user's order (each one's `⠿` grip drags it), skipping widgets that
+    // float as windows and placement with several blocks selected.
+    let mut drawn = Vec::new();
+    for card in editor.widgets.cards().to_vec() {
+        let top = ui.cursor().min.y;
+        match card {
+            Card::Block if !editor.widgets.floating(Widget::Block) => block_widget(editor, ui, worker, Host::Panel),
+            Card::Presets if !editor.widgets.floating(Widget::Presets) => {
+                presets_widget(editor, ui, services, Host::Panel)
+            }
+            Card::Placement if single => {
+                ui.add_enabled_ui(!busy, |ui| placement_card(editor, ui, first));
+            }
+            Card::Style => style_card(editor, ui, first, services),
+            _ => continue,
         }
+        if let Some(grip) = ui.ctx().read_response(card.grip_id()) {
+            crate::dnd::drag_source(ui, grip, CardDrag(card), card.label());
+        }
+        drawn.push((card, egui::Rect::from_x_y_ranges(ui.max_rect().x_range(), top..=ui.cursor().min.y)));
+    }
+    reorder_cards(editor, ui, &drawn);
+}
+
+/// Drop target for a dragged card: a line where it would land, moved there on release.
+fn reorder_cards(editor: &mut Editor, ui: &egui::Ui, cards: &[(Card, egui::Rect)]) {
+    let Some(dragged) = egui::DragAndDrop::payload::<CardDrag>(ui.ctx()) else { return };
+    let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return };
+    let Some(&(target, rect)) = cards.iter().find(|(_, rect)| rect.contains(pointer)) else { return };
+    let after = pointer.y > rect.center().y;
+    // Each card is followed by 8pt of space; the line sits in that gap.
+    let y = if after { rect.bottom() - 4.0 } else { rect.top() - 4.0 };
+    ui.painter().hline(rect.x_range(), y, egui::Stroke::new(2.0, theme::ACCENT));
+    if ui.input(|i| i.pointer.any_released()) {
+        editor.widgets.move_card(dragged.0, target, after);
     }
 }
 
-fn nothing_selected(
+const PICK_A_BLOCK: &str =
+    "블록을 누르면 문장과 스타일을 고칠 수 있습니다. Tab / Shift+Tab으로 블록을 차례로 넘깁니다.";
+
+/// "이 페이지" (`Widget::Page`): the page's state and what can be done to it in this mode.
+/// Docked it shows in 번역 with nothing selected and at the top of 검수 · 출력.
+pub(super) fn page_widget(
     editor: &mut Editor,
     ui: &mut egui::Ui,
+    services: &mut Services,
     worker: &Worker<AppEvent>,
-    page: &mtt_core::model::PageRecord,
+    host: Host,
 ) {
-    theme::card(ui, "이 페이지", |ui| {
-        theme::hint(ui, "블록을 누르면 문장과 스타일을 고칠 수 있습니다. Tab / Shift+Tab으로 블록을 차례로 넘깁니다.");
-        ui.add_space(4.0);
-        let busy = editor.inpaint_busy();
-        ui.horizontal(|ui| {
-            if ui.add_enabled(!busy, egui::Button::new("블록 추가")).clicked() {
-                editor.create_empty_block();
+    let Some(page) = editor.page().cloned() else { return };
+    let mode = editor.mode();
+    let busy = editor.inpaint_busy();
+    let locked = editor.page_edit_locked();
+    let export_busy = editor.translation_running() || editor.export_progress.is_some();
+    let title = format!("이 페이지 · {}", page.name);
+    let mut add_block = false;
+    let mut inpaint = false;
+    let mut toggle_completed = false;
+    let mut export = false;
+    let (_, toggle) = widgets::frame(
+        ui,
+        host,
+        Widget::Page,
+        &title,
+        |_| {},
+        |ui| {
+            if host == Host::Panel && mode == Mode::Translate {
+                theme::hint(ui, PICK_A_BLOCK);
+                ui.add_space(4.0);
             }
-            if ui
-                .add_enabled(!busy && !page.blocks.is_empty(), egui::Button::new("이 페이지 인페인트"))
-                .on_hover_text("이 페이지 블록 안의 원문 글자를 모두 지웁니다")
-                .clicked()
-            {
-                editor.start_inpaint(InpaintScope::AllBlocks, worker);
+            ui.horizontal_wrapped(|ui| {
+                let (translate, color) = match page.analysis_status {
+                    PageAnalysisStatus::Completed => ("번역됨", theme::SUCCESS),
+                    PageAnalysisStatus::Running => ("번역 중", theme::ACCENT),
+                    PageAnalysisStatus::Failed => ("번역 실패", theme::DANGER),
+                    PageAnalysisStatus::Idle => ("번역 전", theme::IDLE),
+                };
+                theme::pill(ui, translate, color);
+                let (inpainted, color) = match page.inpaint_status {
+                    Some(InpaintStatus::Completed) => ("인페인트됨", theme::SUCCESS),
+                    Some(InpaintStatus::Running) => ("인페인트 중", theme::ACCENT),
+                    Some(InpaintStatus::Failed) => ("인페인트 실패", theme::DANGER),
+                    _ => ("인페인트 전", theme::IDLE),
+                };
+                theme::pill(ui, inpainted, color);
+                theme::pill(ui, &format!("블록 {}", page.blocks.len()), theme::IDLE);
+            });
+            ui.add_space(4.0);
+            ui.horizontal_wrapped(|ui| {
+                if mode == Mode::Translate {
+                    add_block = ui.add_enabled(!busy && !locked, egui::Button::new("블록 추가")).clicked();
+                }
+                if mode != Mode::Review {
+                    inpaint = ui
+                        .add_enabled(
+                            !busy && !locked && !page.blocks.is_empty(),
+                            theme::icon_button(theme::icon::BANDAIDS, "이 페이지 인페인트"),
+                        )
+                        .on_hover_text("이 페이지 블록 안의 원문 글자를 모두 지웁니다")
+                        .clicked();
+                }
+                let button = if page.is_completed() {
+                    egui::Button::new((RichText::new("검수 완료 해제"), theme::key_hint("₩", false)))
+                } else if mode == Mode::Review {
+                    egui::Button::new((
+                        theme::icon(theme::icon::CHECK).color(egui::Color32::WHITE),
+                        RichText::new("검수 완료로 표시").strong().color(egui::Color32::WHITE),
+                        theme::key_hint("₩", true),
+                    ))
+                    .fill(theme::ACCENT_DIM)
+                } else {
+                    egui::Button::new((theme::icon(theme::icon::CHECK), "검수 완료", theme::key_hint("₩", false)))
+                };
+                toggle_completed = ui.add(button).on_hover_text("` 도 됨").clicked();
+                export = ui
+                    .add_enabled(!export_busy, theme::icon_button(theme::icon::EXPORT, "이 페이지 출력"))
+                    .on_hover_text("PNG로 저장")
+                    .clicked();
+            });
+            if page.is_completed() && mode == Mode::Review {
+                theme::hint(ui, "검수 완료한 페이지는 AI 번역과 모든 페이지 인페인트에서 건너뜁니다.");
             }
-        });
-    });
+        },
+    );
+    if add_block {
+        editor.create_empty_block();
+    }
+    if inpaint {
+        editor.start_inpaint(InpaintScope::AllBlocks, worker);
+    }
+    if toggle_completed {
+        editor.toggle_page_completed();
+    }
+    if export {
+        editor.status = match editor.export_current(services) {
+            Ok(path) => format!("페이지 렌더 저장: {}", path.display()),
+            Err(error) => format!("출력 실패: {error}"),
+        };
+    }
+    widgets::toggled(editor, Widget::Page, host, toggle);
 }
 
-/// Translation first: the text the reader sees, then the OCR source.
-/// The block's text first, with its actions right under it.
+/// "블록" (`Widget::Block`): the selected block's text and actions, or with several
+/// selected what applies to all of them. Groups stay in the inspector (group settings).
+pub(super) fn block_widget(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>, host: Host) {
+    let Some(page) = editor.page().cloned() else { return };
+    let blocks = editor.selected_blocks();
+    let grouped = mtt_core::groups::selected_group(&page, &editor.selection).is_some();
+    let locked = editor.page_edit_locked();
+    let toggle = match blocks.as_slice() {
+        [block] if !grouped => {
+            // Like the TS block panel: the text waits for a running inpaint.
+            let enabled = !locked && !editor.inpaint_busy();
+            sentence_card(editor, ui, block, &page, worker, host, enabled)
+        }
+        [_, _, ..] if !grouped => {
+            let title = format!("{}개 블록 선택", blocks.len());
+            widgets::frame(
+                ui,
+                host,
+                Widget::Block,
+                &title,
+                |_| {},
+                |ui| {
+                    ui.add_enabled_ui(!locked, |ui| {
+                        selection_actions(editor, ui, worker, blocks.len());
+                        theme::hint(ui, "프리셋과 스타일은 선택한 블록 모두에 적용됩니다.");
+                    });
+                },
+            )
+            .1
+        }
+        _ => {
+            let note = if grouped { "그룹은 오른쪽 그룹 카드에서 고칩니다." } else { PICK_A_BLOCK };
+            widgets::frame(ui, host, Widget::Block, "블록", |_| {}, |ui| theme::hint(ui, note)).1
+        }
+    };
+    widgets::toggled(editor, Widget::Block, host, toggle);
+}
+
+/// Translation first: the text the reader sees, then the OCR source, with the block's
+/// actions right under it. Returns the widget button press.
 fn sentence_card(
     editor: &mut Editor,
     ui: &mut egui::Ui,
     block: &TranslationBlock,
     page: &mtt_core::model::PageRecord,
     worker: &Worker<AppEvent>,
-) {
+    host: Host,
+    enabled: bool,
+) -> Option<egui::Pos2> {
     let index = page.blocks.iter().position(|b| b.id == block.id).unwrap_or(0);
     let total = page.blocks.len();
     let mut step = None;
     let title = format!("블록 {} / {}", index + 1, total);
-    theme::card_with(
+    let (_, toggle) = widgets::frame(
         ui,
+        host,
+        Widget::Block,
         &title,
         |ui| {
             if ui
@@ -189,49 +344,64 @@ fn sentence_card(
             }
         },
         |ui| {
-            ui.label(RichText::new("번역").small().color(theme::TEXT_WEAK));
-            let mut translated = block.translated_text.clone();
-            let response =
-                ui.add(egui::TextEdit::multiline(&mut translated).desired_rows(3).desired_width(f32::INFINITY));
-            if editor.focus_text_requested {
-                response.request_focus();
-                editor.focus_text_requested = false;
-            }
-            if response.has_focus() {
-                editor.text_editing = true;
-            }
-            if response.changed() {
-                editor.edit_selected(|b| b.translated_text = translated.clone());
-            }
-            ui.add_space(2.0);
-            ui.label(RichText::new("원문 (OCR)").small().color(theme::TEXT_WEAK));
-            let mut source = block.source_text.clone();
-            let response = ui.add(
-                egui::TextEdit::multiline(&mut source)
-                    .desired_rows(2)
-                    .desired_width(f32::INFINITY)
-                    .text_color(theme::TEXT_WEAK),
-            );
-            if response.has_focus() {
-                editor.text_editing = true;
-            }
-            if response.changed() {
-                editor.edit_selected(|b| b.source_text = source.clone());
-            }
-            ui.add_space(4.0);
-            selection_actions(editor, ui, worker, 1);
+            ui.add_enabled_ui(enabled, |ui| sentence_fields(editor, ui, block, worker));
         },
     );
     if let Some(step) = step {
         editor.select_adjacent_block(step);
     }
+    toggle
 }
 
-fn preset_card(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, services: &mut Services) {
-    let has_preset = first.font_preset_id.is_some();
+fn sentence_fields(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlock, worker: &Worker<AppEvent>) {
+    ui.label(RichText::new("번역").small().color(theme::TEXT_WEAK));
+    let mut translated = block.translated_text.clone();
+    let response = ui.add(egui::TextEdit::multiline(&mut translated).desired_rows(3).desired_width(f32::INFINITY));
+    if editor.focus_text_requested {
+        response.request_focus();
+        editor.focus_text_requested = false;
+    }
+    if response.has_focus() {
+        editor.text_editing = true;
+    }
+    if response.changed() {
+        editor.edit_selected(|b| b.translated_text = translated.clone());
+    }
+    ui.add_space(2.0);
+    ui.label(RichText::new("원문 (OCR)").small().color(theme::TEXT_WEAK));
+    let mut source = block.source_text.clone();
+    let response = ui.add(
+        egui::TextEdit::multiline(&mut source)
+            .desired_rows(2)
+            .desired_width(f32::INFINITY)
+            .text_color(theme::TEXT_WEAK),
+    );
+    if response.has_focus() {
+        editor.text_editing = true;
+    }
+    if response.changed() {
+        editor.edit_selected(|b| b.source_text = source.clone());
+    }
+    ui.add_space(4.0);
+    selection_actions(editor, ui, worker, 1);
+}
+
+/// The preset palette for the selected blocks (`Widget::Presets`).
+pub(super) fn presets_widget(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, host: Host) {
+    let grouped = editor.page().and_then(|page| mtt_core::groups::selected_group(page, &editor.selection)).is_some();
+    // Groups keep their own settings, and the preset tab edits presets instead.
+    let first = editor
+        .selected_blocks()
+        .into_iter()
+        .next()
+        .filter(|_| !grouped && editor.inspector_tab == InspectorTab::Blocks);
+    let has_preset = first.as_ref().is_some_and(|block| block.font_preset_id.is_some());
+    let locked = editor.page_edit_locked();
     let mut overrides = false;
-    theme::card_with(
+    let (_, toggle) = widgets::frame(
         ui,
+        host,
+        Widget::Presets,
         "프리셋",
         |ui| {
             overrides = ui
@@ -240,98 +410,117 @@ fn preset_card(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock,
                 .on_disabled_hover_text("프리셋이 연결된 블록에서 쓸 수 있습니다")
                 .clicked();
         },
-        |ui| {
-            panels::preset_panel(editor, ui, first, services, false);
-            theme::hint(ui, "누르면 적용, 적용된 프리셋을 다시 누르면 이름 변경, 우클릭은 즐겨찾기");
+        |ui| match &first {
+            Some(block) => {
+                ui.add_enabled_ui(!locked, |ui| {
+                    panels::preset_panel(editor, ui, block, services, false);
+                    theme::hint(ui, "누르면 적용, 적용된 프리셋을 다시 누르면 이름 변경, 우클릭은 즐겨찾기");
+                });
+            }
+            None if grouped => theme::hint(ui, "그룹은 오른쪽 그룹 설정에서 꾸밉니다."),
+            None => theme::hint(ui, "블록을 고르면 누르는 프리셋이 바로 적용됩니다."),
         },
     );
     if overrides {
         panels::open_character_overrides(editor);
     }
+    widgets::toggled(editor, Widget::Presets, host, toggle);
 }
 
 /// Block type, writing direction, rotation, padding and background.
 fn placement_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlock) {
-    theme::card(ui, "배치", |ui| {
-        egui::Grid::new("block-placement").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
-            ui.label("종류");
-            let mut block_type = block.block_type;
-            egui::ComboBox::from_id_salt("block-type").selected_text(panels::block_type_label(block_type)).show_ui(
-                ui,
-                |ui| {
-                    for value in BlockType::ALL {
-                        ui.selectable_value(&mut block_type, *value, panels::block_type_label(*value));
+    theme::card_full(
+        ui,
+        "배치",
+        Some(Card::Placement.grip_id()),
+        |_| {},
+        |ui| {
+            egui::Grid::new("block-placement").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
+                ui.label("종류");
+                let mut block_type = block.block_type;
+                egui::ComboBox::from_id_salt("block-type").selected_text(panels::block_type_label(block_type)).show_ui(
+                    ui,
+                    |ui| {
+                        for value in BlockType::ALL {
+                            ui.selectable_value(&mut block_type, *value, panels::block_type_label(*value));
+                        }
+                    },
+                );
+                if block_type != block.block_type {
+                    editor.edit_selected(|b| b.block_type = block_type);
+                }
+                ui.end_row();
+
+                ui.label("방향");
+                let mut direction = block.render_direction;
+                ui.horizontal(|ui| {
+                    for (value, label) in [
+                        (RenderTextDirection::Horizontal, "가로"),
+                        (RenderTextDirection::Vertical, "세로"),
+                        (RenderTextDirection::Hidden, "숨김"),
+                    ] {
+                        ui.selectable_value(&mut direction, value, label);
                     }
-                },
-            );
-            if block_type != block.block_type {
-                editor.edit_selected(|b| b.block_type = block_type);
-            }
-            ui.end_row();
-
-            ui.label("방향");
-            let mut direction = block.render_direction;
-            ui.horizontal(|ui| {
-                for (value, label) in [
-                    (RenderTextDirection::Horizontal, "가로"),
-                    (RenderTextDirection::Vertical, "세로"),
-                    (RenderTextDirection::Hidden, "숨김"),
-                ] {
-                    ui.selectable_value(&mut direction, value, label);
+                });
+                if direction != block.render_direction {
+                    editor.edit_selected(|b| b.render_direction = direction);
                 }
+                ui.end_row();
+
+                ui.label("회전");
+                let rotation = (mtt_core::geometry::resolve_block_rotation_deg(block) * 10.0).round() / 10.0;
+                let mut value = rotation;
+                ui.horizontal(|ui| {
+                    let number = ui.add(egui::DragValue::new(&mut value).range(-180.0..=180.0).speed(1.0).suffix("°"));
+                    if number.changed() {
+                        editor.edit_selected(|b| b.rotation_deg = Some(value));
+                    }
+                    if rotation != 0.0 && ui.button("초기화").clicked() {
+                        editor.edit_selected(|b| b.rotation_deg = Some(0.0));
+                    }
+                });
+                ui.end_row();
+
+                ui.label("안쪽 여백");
+                ui.horizontal(|ui| {
+                    let auto = block.text_padding_px.is_none();
+                    if ui.selectable_label(auto, "자동").clicked() && !auto {
+                        editor.edit_selected(|b| b.text_padding_px = None);
+                    }
+                    let mut padding = block.text_padding_px.unwrap_or(0.0);
+                    if ui.add(egui::DragValue::new(&mut padding).range(0.0..=80.0).suffix("px")).changed() {
+                        editor.edit_selected(|b| b.text_padding_px = Some(padding));
+                    }
+                });
+                ui.end_row();
+
+                ui.label("블록 배경");
+                if let Some(hex) = super::color::color_field(editor, ui, "block-background", &block.background_color) {
+                    editor.edit_selected(|b| b.background_color = hex.clone());
+                }
+                ui.end_row();
             });
-            if direction != block.render_direction {
-                editor.edit_selected(|b| b.render_direction = direction);
-            }
-            ui.end_row();
-
-            ui.label("회전");
-            let rotation = (mtt_core::geometry::resolve_block_rotation_deg(block) * 10.0).round() / 10.0;
-            let mut value = rotation;
-            ui.horizontal(|ui| {
-                let number = ui.add(egui::DragValue::new(&mut value).range(-180.0..=180.0).speed(1.0).suffix("°"));
-                if number.changed() {
-                    editor.edit_selected(|b| b.rotation_deg = Some(value));
-                }
-                if rotation != 0.0 && ui.button("초기화").clicked() {
-                    editor.edit_selected(|b| b.rotation_deg = Some(0.0));
-                }
-            });
-            ui.end_row();
-
-            ui.label("안쪽 여백");
-            ui.horizontal(|ui| {
-                let auto = block.text_padding_px.is_none();
-                if ui.selectable_label(auto, "자동").clicked() && !auto {
-                    editor.edit_selected(|b| b.text_padding_px = None);
-                }
-                let mut padding = block.text_padding_px.unwrap_or(0.0);
-                if ui.add(egui::DragValue::new(&mut padding).range(0.0..=80.0).suffix("px")).changed() {
-                    editor.edit_selected(|b| b.text_padding_px = Some(padding));
-                }
-            });
-            ui.end_row();
-
-            ui.label("블록 배경");
-            if let Some(hex) = super::color::color_field(editor, ui, "block-background", &block.background_color) {
-                editor.edit_selected(|b| b.background_color = hex.clone());
-            }
-            ui.end_row();
-        });
-    });
+        },
+    );
 }
 
 fn style_card(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, services: &mut Services) {
-    theme::card(ui, "스타일", |ui| {
-        if first.font_preset_id.is_some() {
-            theme::hint(ui, "🔗 표시 값은 프리셋과 연결되어 같은 프리셋의 블록이 함께 바뀝니다.");
-        }
-        panels::font_section(editor, ui, first, services);
-        panels::outline_section(editor, ui, first);
-        panels::shadow_section(editor, ui, first);
-        panels::background_section(editor, ui, first);
-        panels::effect_section(editor, ui, first);
-    });
+    theme::card_full(
+        ui,
+        "스타일",
+        Some(Card::Style.grip_id()),
+        |_| {},
+        |ui| {
+            if first.font_preset_id.is_some() {
+                theme::hint(ui, "🔗 표시 값은 프리셋과 연결되어 같은 프리셋의 블록이 함께 바뀝니다.");
+            }
+            panels::font_section(editor, ui, first, services);
+            panels::outline_section(editor, ui, first);
+            panels::shadow_section(editor, ui, first);
+            panels::background_section(editor, ui, first);
+            panels::effect_section(editor, ui, first);
+        },
+    );
 }
 
 fn selection_actions(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>, count: usize) {
@@ -677,63 +866,11 @@ fn review(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worke
     theme::hint(ui, "최종 결과를 넘겨 보며 끝난 페이지를 검수 완료로 표시하고, 이미지로 출력합니다.");
     ui.add_space(6.0);
     egui::ScrollArea::vertical().id_salt("review-inspector").auto_shrink(false).show(ui, |ui| {
-        page_card(editor, ui, services);
+        if !editor.widgets.floating(Widget::Page) {
+            page_widget(editor, ui, services, worker, Host::Panel);
+        }
         chapter_card(editor, ui, services, worker);
         report_card(editor, ui, services, worker);
-    });
-}
-
-fn page_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
-    let Some(page) = editor.page().cloned() else { return };
-    let busy = editor.translation_running() || editor.export_progress.is_some();
-    theme::card(ui, &format!("이 페이지 · {}", page.name), |ui| {
-        ui.horizontal(|ui| {
-            let (translate, color) = match page.analysis_status {
-                PageAnalysisStatus::Completed => ("번역됨", theme::SUCCESS),
-                PageAnalysisStatus::Running => ("번역 중", theme::ACCENT),
-                PageAnalysisStatus::Failed => ("번역 실패", theme::DANGER),
-                PageAnalysisStatus::Idle => ("번역 전", theme::IDLE),
-            };
-            theme::pill(ui, translate, color);
-            let (inpaint, color) = match page.inpaint_status {
-                Some(InpaintStatus::Completed) => ("인페인트됨", theme::SUCCESS),
-                Some(InpaintStatus::Running) => ("인페인트 중", theme::ACCENT),
-                Some(InpaintStatus::Failed) => ("인페인트 실패", theme::DANGER),
-                _ => ("인페인트 전", theme::IDLE),
-            };
-            theme::pill(ui, inpaint, color);
-            theme::pill(ui, &format!("블록 {}", page.blocks.len()), theme::IDLE);
-        });
-        ui.add_space(4.0);
-        ui.horizontal(|ui| {
-            let done = page.is_completed();
-            let button = if done {
-                egui::Button::new((RichText::new("검수 완료 해제"), theme::key_hint("₩", false)))
-            } else {
-                egui::Button::new((
-                    theme::icon(theme::icon::CHECK).color(egui::Color32::WHITE),
-                    RichText::new("검수 완료로 표시").strong().color(egui::Color32::WHITE),
-                    theme::key_hint("₩", true),
-                ))
-                .fill(theme::ACCENT_DIM)
-            };
-            if ui.add(button).on_hover_text("` 도 됨").clicked() {
-                editor.toggle_page_completed();
-            }
-            if ui
-                .add_enabled(!busy, theme::icon_button(theme::icon::EXPORT, "이 페이지 출력"))
-                .on_hover_text("PNG로 저장")
-                .clicked()
-            {
-                editor.status = match editor.export_current(services) {
-                    Ok(path) => format!("페이지 렌더 저장: {}", path.display()),
-                    Err(error) => format!("출력 실패: {error}"),
-                };
-            }
-        });
-        if page.is_completed() {
-            theme::hint(ui, "검수 완료한 페이지는 AI 번역과 모든 페이지 인페인트에서 건너뜁니다.");
-        }
     });
 }
 

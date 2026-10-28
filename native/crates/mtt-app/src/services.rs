@@ -23,6 +23,23 @@ pub struct RecentFont {
 pub struct UiState {
     #[serde(default)]
     pub recent_font_families: Vec<RecentFont>,
+    /// Editor widgets by key (`editor::widgets`): docked or floating, and the window's
+    /// last place.
+    #[serde(default)]
+    pub widgets: std::collections::BTreeMap<String, SavedWidget>,
+    /// Order of the selection cards in the inspector (`editor::widgets::Card` keys).
+    #[serde(default)]
+    pub inspector_order: Vec<String>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SavedWidget {
+    #[serde(default)]
+    pub floating: bool,
+    /// `[x, y, width, height]` of the floating window in points.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rect: Option<[f32; 4]>,
 }
 
 /// `RECENT_FONT_FAMILY_LIMIT`.
@@ -101,6 +118,10 @@ impl Services {
         recent.retain(|font| font.value != value);
         recent.insert(0, RecentFont { label: label.to_owned(), value: value.to_owned() });
         recent.truncate(RECENT_FONT_LIMIT);
+        self.save_ui_state();
+    }
+
+    pub fn save_ui_state(&self) {
         if let Err(error) =
             mtt_core::json_io::write_json_atomic(&self.paths.data_root.join("native-ui-state.json"), &self.ui_state)
         {
