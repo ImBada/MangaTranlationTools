@@ -460,8 +460,11 @@ mod tests {
         assert_eq!(listed[0].work.title, "src", "suggested title used");
         let chapter = library.open_chapter(&result.chapter_ids[2]).unwrap();
         assert_eq!((chapter.pages[0].width, chapter.pages[0].height), (7, 8));
-        assert!(Path::new(&chapter.pages[0].image_path).is_file());
-        assert!(chapter.pages[0].image_path.contains("/pages/001-"));
+        let image_path = Path::new(&chapter.pages[0].image_path);
+        assert!(image_path.is_file());
+        // Separator-agnostic: Windows stores `\pages\001-…`.
+        assert_eq!(image_path.parent().and_then(Path::file_name), Some(std::ffi::OsStr::new("pages")));
+        assert!(image_path.file_name().unwrap().to_string_lossy().starts_with("001-"));
     }
 
     #[test]
