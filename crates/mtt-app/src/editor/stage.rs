@@ -381,15 +381,16 @@ fn canvas_notice(editor: &Editor, painter: &egui::Painter, stage: Rect) {
         && !editor.current_result_exists()
         && !editor.current_mask_has_pixels()
     {
-        "아직 인페인트하지 않은 페이지입니다 · 오른쪽 '이 페이지 인페인트'로 원문 글자를 지우세요"
+        "아직 인페인트하지 않은 페이지"
     } else {
         return;
     };
-    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::proportional(13.0), Color32::WHITE);
+    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::proportional(12.0), crate::theme::TEXT);
     let size = galley.size() + egui::vec2(24.0, 12.0);
-    let pill = Rect::from_center_size(egui::pos2(stage.center().x, stage.top() + 12.0 + size.y / 2.0), size);
-    painter.rect_filled(pill, size.y / 2.0, Color32::from_black_alpha(190));
-    painter.galley(pill.min + egui::vec2(12.0, 6.0), galley, Color32::WHITE);
+    let pill = Rect::from_center_size(egui::pos2(stage.center().x, stage.top() + 14.0 + size.y / 2.0), size);
+    painter.rect_filled(pill, 6.0, crate::theme::CARD_BG.gamma_multiply(0.94));
+    painter.rect_stroke(pill, 6.0, egui::Stroke::new(1.0, crate::theme::BORDER), egui::StrokeKind::Inside);
+    painter.galley(pill.min + egui::vec2(12.0, 6.0), galley, crate::theme::TEXT);
 }
 
 /// `OverlayBlock` controls for the single selected block on the overlay layer, in one

@@ -44,20 +44,24 @@ pub fn top_bar(
     egui::Panel::top("editor-top-bar").frame(theme::bar_frame(theme::APP_BG, 7)).show(ui, |ui| {
         let bar = ui.max_rect();
         ui.horizontal(|ui| {
-            if ui
-                .button(theme::icon_text(icon::ARROW_LEFT, "보관함"))
-                .on_hover_text("저장하고 보관함으로 돌아갑니다")
-                .clicked()
-            {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            let back = egui::Button::new((
+                theme::icon(icon::ARROW_LEFT).color(theme::TEXT_WEAK),
+                RichText::new("보관함").color(theme::TEXT_WEAK),
+            ))
+            .frame_when_inactive(false);
+            if ui.add(back).on_hover_text("저장하고 보관함으로 돌아갑니다").clicked() {
                 action = Some(EditorAction::Close);
             }
+            let chevron = || egui::Label::new(theme::icon(icon::CARET_RIGHT).size(11.0).color(theme::TEXT_FAINT));
+            ui.add(chevron());
             if !editor.work_title.is_empty() {
                 ui.scope(|ui| {
-                    ui.set_max_width(150.0);
+                    ui.set_max_width(160.0);
                     ui.add(egui::Label::new(RichText::new(&editor.work_title).color(theme::TEXT_WEAK)).truncate())
                         .on_hover_text(&editor.work_title);
                 });
-                ui.label(RichText::new("›").color(theme::TEXT_WEAK));
+                ui.add(chevron());
             }
             chapter_menu(editor, ui, services, &mut action);
             let left_end = ui.min_rect().right();
@@ -65,11 +69,10 @@ pub fn top_bar(
 
             let right_start = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(egui::Button::new(theme::icon(icon::GEAR_SIX).size(18.0)).min_size(egui::vec2(32.0, 28.0)))
-                        .on_hover_text("설정: 번역 엔진, LaMa, 단축키")
-                        .clicked()
-                    {
+                    let gear = egui::Button::new(theme::icon(icon::GEAR_SIX).size(17.0).color(theme::TEXT_WEAK))
+                        .frame_when_inactive(false)
+                        .min_size(egui::vec2(28.0, 28.0));
+                    if ui.add(gear).on_hover_text("설정").clicked() {
                         action = Some(EditorAction::OpenSettings);
                     }
                     ai_controls(editor, ui, services, worker);
@@ -106,8 +109,10 @@ pub fn top_bar(
 
 /// Chapter title as a menu: every work's chapters, and the import entries.
 fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, action: &mut Option<EditorAction>) {
-    let title = RichText::new(ellipsize(&editor.chapter.title, 18)).strong();
-    let response = ui.menu_button((title, theme::icon(icon::CARET_DOWN).size(12.0)), |ui| {
+    let title = theme::semibold(ellipsize(&editor.chapter.title, 18));
+    let button = egui::Button::new((title, theme::icon(icon::CARET_DOWN).size(11.0).color(theme::TEXT_WEAK)))
+        .frame_when_inactive(false);
+    let response = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
         if editor.library_cache.is_none() {
             editor.library_cache = Some(services.library.list().unwrap_or_default());
         }
@@ -159,71 +164,80 @@ fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
             });
         });
     });
-    if response.inner.is_none() {
+    response.0.on_hover_text("다른 화 열기 · 새로 가져오기");
+    if response.1.is_none() {
         // Read the library again the next time the menu opens.
         editor.library_cache = None;
     }
 }
 
-/// "AI 번역" (pending pages) with a menu for the other runs, or the running job.
+/// "AI 번역" (pending pages) as a split button whose caret holds the other runs, or the
+/// running job (right-to-left order).
 fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
     if let Some(job) = &editor.translation {
         // One counter on the bar; what is happening right now goes in the tooltip.
         let hover = format!("{}\n{}\n{}", job.phase_label(), job.endpoint, job.last_message);
-        let text = format!("번역 중 · {}/{} 완료", job.done, job.total);
+        let text = format!("번역 중 {}/{}", job.done, job.total);
         let progress = job.progress();
-        if ui
-            .add(egui::Button::new((
-                theme::icon(icon::X).color(theme::DANGER),
-                RichText::new("취소").color(theme::DANGER),
-            )))
-            .on_hover_text("AI 번역 취소")
-            .clicked()
-        {
+        let cancel = egui::Button::new((theme::icon(icon::X).size(14.0), RichText::new("취소")));
+        if ui.add(cancel).on_hover_text("AI 번역 취소").clicked() {
             editor.cancel_translation();
         }
-        ui.add(egui::ProgressBar::new(progress).desired_width(170.0).text(text)).on_hover_text(hover);
+        ui.add_space(4.0);
+        theme::progress(ui, progress, 120.0, theme::ACCENT).on_hover_text(&hover);
+        ui.label(RichText::new(text).small().color(theme::TEXT)).on_hover_text(hover);
+        ui.add(egui::Spinner::new().size(12.0));
         return;
     }
     let has_pages = editor.page_count() > 0;
     let mut run = None;
-    ui.add_enabled_ui(has_pages, |ui| {
-        ui.menu_button(theme::icon(icon::CARET_DOWN).size(13.0), |ui| {
-            if ui.button("번역 안 된 페이지 이어서 번역").clicked() {
-                run = Some(RunMode::Pending);
-            }
-            if ui.button("검수 완료 안 된 페이지 모두 다시 번역").clicked() {
-                run = Some(RunMode::All);
-            }
-            ui.separator();
-            if ui.button("이 페이지만 다시 번역…").clicked() {
-                run = Some(RunMode::CurrentPage);
-            }
-        })
-        .response
-        .on_hover_text("번역 범위 선택");
-    });
     // Accent only while there is something left to translate.
     let current = editor.page().map(|page| page.id.clone()).unwrap_or_default();
     let pending =
         editor.chapter.pages.iter().any(|page| super::translation::is_target(page, RunMode::Pending, &current));
-    let primary = if pending {
-        egui::Button::new((
-            theme::icon(icon::SPARKLE).color(Color32::WHITE),
-            RichText::new("AI 번역").strong().color(Color32::WHITE),
-        ))
-        .fill(theme::ACCENT_DIM)
-    } else {
-        egui::Button::new((theme::icon(icon::SPARKLE), RichText::new("AI 번역")))
+    let (fill, fg) = if pending { (Some(theme::PRIMARY), Color32::WHITE) } else { (None, theme::TEXT) };
+    let with_fill = |button: egui::Button<'static>| match fill {
+        Some(fill) => button.fill(fill),
+        None => button,
     };
-    let hint = if pending {
-        "아직 번역하지 않은 페이지를 이어서 번역합니다"
-    } else {
-        "번역할 페이지가 남지 않았습니다. 다시 번역은 옆의 메뉴에서 고르세요"
-    };
-    if ui.add_enabled(has_pages, primary).on_hover_text(hint).clicked() {
-        run = Some(RunMode::Pending);
-    }
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        let caret = with_fill(
+            egui::Button::new(theme::icon(icon::CARET_DOWN).size(12.0).color(fg))
+                .corner_radius(egui::CornerRadius { nw: 0, sw: 0, ne: 5, se: 5 })
+                .min_size(egui::vec2(24.0, 26.0)),
+        );
+        ui.add_enabled_ui(has_pages, |ui| {
+            egui::containers::menu::MenuButton::from_button(caret)
+                .ui(ui, |ui| {
+                    if ui.button("번역 안 된 페이지 이어서 번역").clicked() {
+                        run = Some(RunMode::Pending);
+                    }
+                    if ui.button("검수 완료 안 된 페이지 모두 다시 번역…").clicked() {
+                        run = Some(RunMode::All);
+                    }
+                    ui.separator();
+                    if ui.button("이 페이지만 다시 번역…").clicked() {
+                        run = Some(RunMode::CurrentPage);
+                    }
+                })
+                .0
+                .on_hover_text("번역 범위 선택");
+        });
+        let primary = with_fill(
+            egui::Button::new((theme::icon(icon::SPARKLE).size(15.0).color(fg), RichText::new("AI 번역").color(fg)))
+                .corner_radius(egui::CornerRadius { nw: 5, sw: 5, ne: 0, se: 0 })
+                .min_size(egui::vec2(0.0, 26.0)),
+        );
+        let hint = if pending {
+            "아직 번역하지 않은 페이지를 이어서 번역합니다"
+        } else {
+            "번역할 페이지가 남지 않았습니다\n다시 번역하려면 옆의 메뉴에서 고르세요"
+        };
+        if theme::tip(ui.add_enabled(has_pages, primary), hint, "").clicked() {
+            run = Some(RunMode::Pending);
+        }
+    });
     match run {
         Some(RunMode::CurrentPage) => {
             if theme::confirm(
@@ -255,8 +269,11 @@ pub fn status_bar(editor: &mut Editor, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 10.0;
             let (color, label) = save_state(editor);
-            theme::status_dot(ui, color);
-            ui.label(RichText::new(label).small());
+            ui.scope(|ui| {
+                ui.spacing_mut().item_spacing.x = 5.0;
+                theme::status_dot(ui, color);
+                ui.label(RichText::new(label).small().color(theme::TEXT_WEAK));
+            });
             ui.separator();
             if let Some(page) = editor.page() {
                 ui.label(
@@ -279,12 +296,12 @@ pub fn status_bar(editor: &mut Editor, ui: &mut egui::Ui) {
             let right = ui
                 .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let sheet = egui::Button::new((
-                        theme::icon(icon::KEYBOARD).size(14.0),
-                        RichText::new("단축키").small(),
+                        theme::icon(icon::KEYBOARD).size(14.0).color(theme::TEXT_WEAK),
+                        RichText::new("단축키").small().color(theme::TEXT_WEAK),
                         theme::key_hint("?", false),
                     ))
                     .frame_when_inactive(false);
-                    if ui.add(sheet).on_hover_text("단축키 전체 보기").clicked() {
+                    if theme::tip(ui.add(sheet), "단축키 전체 보기", "?").clicked() {
                         editor.shortcut_sheet = !editor.shortcut_sheet;
                     }
                     ui.separator();
@@ -340,7 +357,7 @@ fn status_line(editor: &mut Editor, ui: &mut egui::Ui) {
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
             ui.set_width(360.0);
-            ui.label(RichText::new("상태 기록").strong());
+            ui.label(theme::semibold("상태 기록"));
             ui.add_space(2.0);
             egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
                 let lines = editor.notifications.lines();
@@ -376,7 +393,7 @@ fn ratio(done: usize, total: usize) -> f32 {
 }
 
 fn job(ui: &mut egui::Ui, label: &str, progress: f32) {
-    ui.add(egui::ProgressBar::new(progress).desired_width(90.0).desired_height(8.0));
+    theme::progress(ui, progress, 90.0, theme::ACCENT);
     ui.label(RichText::new(label).small());
 }
 
@@ -386,8 +403,8 @@ fn job(ui: &mut egui::Ui, label: &str, progress: f32) {
 #[derive(Clone)]
 struct PageDrag(String);
 
-const ROW_HEIGHT: f32 = 74.0;
-const THUMB_SIZE: egui::Vec2 = egui::vec2(46.0, 62.0);
+const ROW_HEIGHT: f32 = 70.0;
+const THUMB_SIZE: egui::Vec2 = egui::vec2(42.0, 58.0);
 
 pub fn page_strip(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
     if editor.widgets.floating(Widget::Pages) {
@@ -420,13 +437,19 @@ pub(super) fn pages_widget(
         Widget::Pages,
         "페이지",
         |ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let next = egui::Button::new((theme::icon(icon::CARET_RIGHT), theme::key_hint("F", false)));
-            if ui.add_enabled(has_next, next).on_hover_text("다음 페이지 (→ 도 됨)").clicked() {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            if theme::tip(ui.add_enabled(has_next, theme::ghost_icon_key(icon::CARET_RIGHT, "F")), "다음 페이지", "F")
+                .clicked()
+            {
                 step = 1;
             }
-            let previous = egui::Button::new((theme::icon(icon::CARET_LEFT), theme::key_hint("D", false)));
-            if ui.add_enabled(has_previous, previous).on_hover_text("이전 페이지 (← 도 됨)").clicked() {
+            if theme::tip(
+                ui.add_enabled(has_previous, theme::ghost_icon_key(icon::CARET_LEFT, "D")),
+                "이전 페이지",
+                "D",
+            )
+            .clicked()
+            {
                 step = -1;
             }
         },
@@ -434,10 +457,11 @@ pub(super) fn pages_widget(
             ui.horizontal(|ui| {
                 let label = RichText::new(format!("검수 {completed}/{total}")).small().color(theme::TEXT_WEAK);
                 let width = (ui.available_width() - 64.0).max(40.0);
-                ui.add(egui::ProgressBar::new(ratio(completed, total)).desired_width(width).desired_height(4.0));
+                let color = if total > 0 && completed == total { theme::SUCCESS } else { theme::ACCENT };
+                theme::progress(ui, ratio(completed, total), width, color);
                 ui.label(label);
             });
-            ui.add_space(4.0);
+            ui.add_space(6.0);
             if total == 0 {
                 theme::hint(ui, "불러온 페이지가 없습니다.");
                 return;
@@ -492,9 +516,11 @@ fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
             // Completion check on the right edge of the row.
             let check =
                 Rect::from_center_size(egui::pos2(rect.right() - 16.0, rect.center().y), egui::vec2(22.0, 22.0));
-            let check_response = ui
-                .interact(check, response.id.with("done"), Sense::click())
-                .on_hover_text(if completed { "검수 완료 해제 (₩)" } else { "검수 완료로 표시 (₩)" });
+            let check_response = theme::tip(
+                ui.interact(check, response.id.with("done"), Sense::click()),
+                if completed { "검수 완료 해제" } else { "검수 완료로 표시" },
+                "₩",
+            );
             paint_check(ui, check, completed, check_response.hovered());
             if check_response.clicked() {
                 toggle = Some(index);
@@ -576,9 +602,9 @@ fn paint_page_row(
 ) {
     let painter = ui.painter();
     let fill = if selected {
-        theme::ACCENT_DIM
+        theme::SELECTED
     } else if response.hovered() {
-        Color32::from_rgb(40, 44, 50)
+        theme::ROW_HOVER
     } else {
         Color32::TRANSPARENT
     };
@@ -587,7 +613,7 @@ fn paint_page_row(
         painter.rect_stroke(rect, 6.0, Stroke::new(1.0, theme::ACCENT), egui::StrokeKind::Inside);
     }
 
-    // Thumbnail fitted into its box.
+    // Thumbnail fitted into its box, with a hairline so white pages keep an edge.
     let slot = Rect::from_min_size(rect.left_top() + egui::vec2(6.0, (rect.height() - THUMB_SIZE.y) / 2.0), THUMB_SIZE);
     match editor.thumbnails.texture(&page.id) {
         Some(texture) => {
@@ -596,20 +622,22 @@ fn paint_page_row(
             let image = Rect::from_center_size(slot.center(), size * scale);
             painter.image(texture.id(), image, Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0)), Color32::WHITE);
             if page.is_completed() {
-                painter.rect_filled(image, 2.0, Color32::from_black_alpha(90));
+                painter.rect_filled(image, 0.0, Color32::from_black_alpha(90));
             }
+            let edge = if selected { theme::ACCENT } else { Color32::from_white_alpha(18) };
+            painter.rect_stroke(image, 0.0, Stroke::new(1.0, edge), egui::StrokeKind::Outside);
         }
         None => {
-            painter.rect_filled(slot, 3.0, Color32::from_rgb(46, 50, 57));
+            painter.rect_filled(slot, 2.0, theme::CARD_BG);
         }
     }
 
-    // Number, name and the two status chips.
+    // Number, name and what has happened to the page.
     let text_left = slot.right() + 10.0;
     let text_width = (rect.right() - 34.0 - text_left).max(10.0);
     let number = painter.layout_no_wrap(
         format!("{}", index + 1),
-        egui::FontId::proportional(15.0),
+        theme::semibold_font(13.0),
         if selected { Color32::WHITE } else { theme::TEXT },
     );
     painter.galley(egui::pos2(text_left, rect.top() + 10.0), number, theme::TEXT);
@@ -631,18 +659,18 @@ fn paint_page_row(
         Some(InpaintStatus::Failed) => (theme::DANGER, "인페인트 실패", "인페인트 실패"),
         _ => (theme::IDLE, "", "인페인트 전"),
     };
-    // Only what has happened gets a chip; a fresh page shows none.
+    // Only what has happened gets a mark; a fresh page shows none.
     let mut x = text_left;
-    let y = rect.top() + 52.0;
+    let y = rect.top() + 55.0;
     for (label, color) in [(translate_label, translate_color), (inpaint_label, inpaint_color)] {
         if label.is_empty() {
             continue;
         }
-        let galley = painter.layout_no_wrap(label.into(), egui::FontId::proportional(10.5), color);
-        let chip = Rect::from_min_size(egui::pos2(x, y - 1.0), galley.size() + egui::vec2(10.0, 2.0));
-        painter.rect_filled(chip, 6.0, color.gamma_multiply(0.18));
-        painter.galley(chip.min + egui::vec2(5.0, 1.0), galley, color);
-        x = chip.right() + 4.0;
+        painter.circle_filled(egui::pos2(x + 3.0, y), 3.0, color);
+        let galley = painter.layout_no_wrap(label.into(), egui::FontId::proportional(11.0), theme::TEXT_WEAK);
+        let width = galley.size().x;
+        painter.galley(egui::pos2(x + 10.0, y - galley.size().y / 2.0), galley, theme::TEXT_WEAK);
+        x += 10.0 + width + 10.0;
     }
     if response.hovered() && !response.dragged() {
         response.clone().on_hover_text(format!("{} · {translate_hint} · {inpaint_hint}", page.name));
@@ -653,12 +681,12 @@ fn paint_check(ui: &egui::Ui, rect: Rect, done: bool, hovered: bool) {
     let painter = ui.painter();
     let center = rect.center();
     if done {
-        painter.circle_filled(center, 9.0, theme::SUCCESS);
-        let points = [center + egui::vec2(-4.0, 0.0), center + egui::vec2(-1.0, 3.0), center + egui::vec2(4.5, -3.5)];
-        painter.line(points.to_vec(), Stroke::new(2.0, Color32::WHITE));
+        painter.circle_filled(center, 8.0, theme::SUCCESS);
+        let points = [center + egui::vec2(-3.5, 0.0), center + egui::vec2(-1.0, 2.5), center + egui::vec2(4.0, -3.0)];
+        painter.line(points.to_vec(), Stroke::new(1.6, Color32::WHITE));
     } else {
-        let color = if hovered { theme::TEXT } else { Color32::from_rgb(85, 92, 102) };
-        painter.circle_stroke(center, 8.0, Stroke::new(1.5, color));
+        let color = if hovered { theme::TEXT_WEAK } else { theme::TEXT_FAINT };
+        painter.circle_stroke(center, 7.5, Stroke::new(1.2, color));
     }
 }
 
@@ -667,7 +695,7 @@ fn paint_check(ui: &egui::Ui, rect: Rect, done: bool, hovered: bool) {
 /// Tools of the mode on the left (wrapping onto a second row when the canvas is narrow),
 /// view and zoom on the right.
 pub fn canvas_toolbar(editor: &mut Editor, ui: &mut egui::Ui) {
-    egui::Panel::top("canvas-toolbar").frame(theme::bar_frame(theme::CARD_BG, 5)).show(ui, |ui| {
+    egui::Panel::top("canvas-toolbar").frame(theme::bar_frame(theme::APP_BG, 5)).show(ui, |ui| {
         // One row high: separators and wrapping are measured against this, not the
         // panel's whole available height.
         let row_height = ui.spacing().interact_size.y + 6.0;
@@ -709,7 +737,6 @@ pub fn canvas_toolbar(editor: &mut Editor, ui: &mut egui::Ui) {
                 .layout(egui::Layout::left_to_right(egui::Align::Center).with_main_wrap(true)),
             |ui| {
                 ui.spacing_mut().item_spacing = egui::vec2(3.0, 4.0);
-                // Tight buttons: every tool carries its shortcut beside the icon.
                 ui.spacing_mut().button_padding.x = 7.0;
                 let locked = editor.page_edit_locked();
                 match editor.mode() {
@@ -750,33 +777,31 @@ fn translate_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool, compact
     pointer_tools(editor, ui, locked, &hint, "범위 선택\n끈 사각형에 걸친 블록을 모두 고릅니다");
     ui.separator();
     let page_ready = editor.page().is_some() && !locked && !editor.inpaint_busy();
-    let add = if compact {
-        egui::Button::new(theme::icon(icon::PLUS_SQUARE))
-    } else {
-        egui::Button::new(theme::icon_text(icon::PLUS_SQUARE, "블록 추가"))
+    // `compact` (narrow canvas): the name moves to the tooltip, the shortcut stays.
+    let label = |glyph, name, key: &str| match (compact, key.is_empty()) {
+        (true, true) => egui::Button::new(theme::icon(glyph)),
+        (true, false) => egui::Button::new((theme::icon(glyph), theme::key_hint(key, false))),
+        (false, true) => theme::icon_button(glyph, name),
+        (false, false) => theme::icon_button_key(glyph, name, key),
     };
-    if ui.add_enabled(page_ready, add).on_hover_text("블록 추가: 빈 텍스트 블록 만들기").clicked() {
+    let add = label(icon::PLUS_SQUARE, "블록 추가", "").frame_when_inactive(false);
+    if theme::tip(ui.add_enabled(page_ready, add), "블록 추가\n빈 텍스트 블록을 만듭니다", "").clicked()
+    {
         editor.create_empty_block();
     }
     let single = editor.selection.len() == 1;
-    let label = |glyph, name, key| {
-        if compact {
-            egui::Button::new((theme::icon(glyph), theme::key_hint(key, false)))
-        } else {
-            theme::icon_button_key(glyph, name, key)
-        }
+    let hint = if single {
+        "직접 입력\n캔버스에서 문장을 바로 고칩니다 (더블클릭도 됨)"
+    } else {
+        "직접 입력\n블록 하나를 고르면 캔버스에서 바로 고칠 수 있습니다"
     };
-    if ui
-        .add_enabled(single && !locked, label(icon::CURSOR_TEXT, "직접 입력", "E"))
-        .on_hover_text("직접 입력: 캔버스에서 문장 바로 고치기 (더블클릭도 됨)")
-        .on_disabled_hover_text("블록 하나를 고르면 캔버스에서 바로 고칠 수 있습니다")
-        .clicked()
-    {
+    let inline = label(icon::CURSOR_TEXT, "직접 입력", "E").frame_when_inactive(false);
+    if theme::tip(ui.add_enabled(single && !locked, inline), hint, "E").clicked() {
         let id = editor.selection[0].clone();
         editor.start_inline_edit(&id);
     }
-    if ui.add(label(icon::BINOCULARS, "찾기", "⌘F")).on_hover_text("찾기: 화 전체에서 찾아 바꾸기").clicked()
-    {
+    let find = label(icon::BINOCULARS, "찾기", "⌘F").frame_when_inactive(false);
+    if theme::tip(ui.add(find), "찾아 바꾸기\n화 전체에서 찾아 바꿉니다", "⌘F").clicked() {
         editor.find.open = true;
     }
 }
@@ -827,11 +852,11 @@ fn inpaint_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
         let color = if current.is_some() { Color32::WHITE } else { theme::TEXT };
         let label = current.map_or("보정", |(_, label)| label);
         let button = egui::Button::new((
-            theme::icon(icon::DROP).size(18.0).color(color),
+            theme::icon(icon::DROP).size(17.0).color(color),
             RichText::new(label).color(color),
             theme::icon(icon::CARET_DOWN).size(11.0).color(color),
         ));
-        let button = if current.is_some() { button.fill(theme::ACCENT_DIM) } else { button.frame_when_inactive(false) };
+        let button = if current.is_some() { button.fill(theme::SELECTED) } else { button.frame_when_inactive(false) };
         egui::containers::menu::MenuButton::from_button(button)
             .ui(ui, |ui| {
                 for (tool, label) in adjust {
@@ -881,12 +906,13 @@ fn zoom_controls(editor: &mut Editor, ui: &mut egui::Ui) {
     let size = editor.page().map(|page| (page.width as f32, page.height as f32));
     let small =
         |glyph| egui::Button::new(theme::icon(glyph)).min_size(egui::vec2(28.0, 26.0)).frame_when_inactive(false);
-    if ui.add(small(icon::PLUS)).on_hover_text(format!("확대 ({})", shortcuts::keys("⌘+"))).clicked() {
+    if theme::tip(ui.add(small(icon::PLUS)), "확대", "⌘+").clicked() {
         editor.zoom_step(true);
     }
     let label =
         (RichText::new(format!("{}%", (editor.view.zoom * 100.0).round())).monospace(), theme::key_hint("⌘0", false));
-    ui.menu_button(label, |ui| {
+    let button = egui::Button::new(label).frame_when_inactive(false).min_size(egui::vec2(52.0, 26.0));
+    let menu = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
         let fit = egui::Button::new(theme::icon_text(icon::FRAME_CORNERS, "화면에 맞춤"))
             .shortcut_text(shortcuts::keys("⌘0"));
         if ui.add(fit).clicked() {
@@ -899,10 +925,9 @@ fn zoom_controls(editor: &mut Editor, ui: &mut egui::Ui) {
             editor.view.original_size(width, height);
             ui.close();
         }
-    })
-    .response
-    .on_hover_text("배율: 화면에 맞춤 / 100%");
-    if ui.add(small(icon::MINUS)).on_hover_text(format!("축소 ({})", shortcuts::keys("⌘-"))).clicked() {
+    });
+    theme::tip(menu.0, "배율\n눌러서 화면에 맞춤 또는 100%", "⌘0");
+    if theme::tip(ui.add(small(icon::MINUS)), "축소", "⌘-").clicked() {
         editor.zoom_step(false);
     }
 }
@@ -916,7 +941,8 @@ fn view_menu(editor: &mut Editor, ui: &mut egui::Ui, compact: bool) {
     } else {
         (theme::icon(icon::STACK), RichText::new("보기"), caret).into_atoms()
     };
-    let response = ui.menu_button(atoms, |ui| {
+    let button = egui::Button::new(atoms).frame_when_inactive(false);
+    let response = egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
         ui.set_width(280.0);
         ui.checkbox(&mut editor.focus_mode, "모드를 바꾸면 레이어 투명도 자동 조정")
             .on_hover_text("FOCUS MODE: 작업 중인 레이어가 잘 보이게 나머지를 흐리게 합니다");
@@ -986,7 +1012,7 @@ fn view_menu(editor: &mut Editor, ui: &mut egui::Ui, compact: bool) {
         ui.separator();
         super::widgets::menu(editor, ui);
     });
-    response.response.on_hover_text("보기: 레이어 표시와 투명도, 위젯");
+    response.0.on_hover_text("보기: 레이어 표시와 투명도, 위젯");
 }
 
 fn layer_row(ui: &mut egui::Ui, label: &str, visible: &mut bool, opacity: &mut f32) {

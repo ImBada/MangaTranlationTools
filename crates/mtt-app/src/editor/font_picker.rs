@@ -403,7 +403,7 @@ pub fn picker_with_id(
                 for option in filtered {
                     if last_group != Some(option.group) {
                         last_group = Some(option.group);
-                        ui.label(RichText::new(option.group.label()).small().strong());
+                        ui.label(RichText::new(option.group.label()).small().color(crate::theme::TEXT_WEAK));
                     }
                     if option_row(ui, services, previews, &option.option, current) {
                         chosen = Some(option.option.clone());

@@ -1,30 +1,59 @@
 //! Look of the app: one dark palette, spacing and text sizes, the Phosphor icon font, plus
-//! the small widgets the screens share (cards, segmented controls, tool buttons, status
-//! pills, confirm dialogs).
+//! the small widgets the screens share (sections, segmented controls, tool buttons, status
+//! labels, progress bars, tooltips, confirm dialogs).
+//!
+//! The palette is mostly neutral grays. Accent blue is kept for the one main action of a
+//! screen, focus, selection and drop indicators; selected list rows get a muted tint.
+//! Controls with a shortcut show it in small muted type beside their label, and again in
+//! the tooltip with what the control does.
+
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui::{self, Color32, CornerRadius, FontFamily, FontId, Margin, RichText, Stroke, TextStyle};
 
-pub const APP_BG: Color32 = Color32::from_rgb(27, 29, 33);
-pub const CANVAS_BG: Color32 = Color32::from_rgb(18, 19, 22);
-pub const CARD_BG: Color32 = Color32::from_rgb(34, 37, 42);
-pub const INPUT_BG: Color32 = Color32::from_rgb(20, 22, 25);
-pub const BORDER: Color32 = Color32::from_rgb(48, 52, 59);
-pub const TEXT: Color32 = Color32::from_rgb(228, 231, 235);
-pub const TEXT_WEAK: Color32 = Color32::from_rgb(150, 157, 167);
+/// Panels and bars.
+pub const APP_BG: Color32 = Color32::from_rgb(30, 31, 34);
+/// Behind the page (canvas) and the library's content area.
+pub const CANVAS_BG: Color32 = Color32::from_rgb(20, 21, 23);
+/// Raised surfaces: windows, menus, tooltips, notices.
+pub const CARD_BG: Color32 = Color32::from_rgb(38, 40, 44);
+pub const INPUT_BG: Color32 = Color32::from_rgb(22, 23, 26);
+/// Hairlines between sections and around raised surfaces.
+pub const BORDER: Color32 = Color32::from_rgb(48, 50, 55);
+pub const TEXT: Color32 = Color32::from_rgb(230, 231, 234);
+pub const TEXT_WEAK: Color32 = Color32::from_rgb(150, 154, 162);
+/// Tertiary text and idle icons (grips, empty checks).
+pub const TEXT_FAINT: Color32 = Color32::from_rgb(102, 106, 114);
 pub const ACCENT: Color32 = Color32::from_rgb(76, 141, 255);
-pub const ACCENT_DIM: Color32 = Color32::from_rgb(40, 74, 134);
-pub const SUCCESS: Color32 = Color32::from_rgb(63, 185, 80);
-pub const WARNING: Color32 = Color32::from_rgb(214, 158, 46);
-pub const DANGER: Color32 = Color32::from_rgb(248, 96, 88);
-pub const IDLE: Color32 = Color32::from_rgb(110, 117, 128);
+/// Fill of the main action button.
+pub const PRIMARY: Color32 = Color32::from_rgb(46, 108, 224);
+/// Muted accent behind selected rows, active tools and text selection.
+pub const SELECTED: Color32 = Color32::from_rgb(41, 59, 92);
+/// Hover fill of rows drawn by hand (page list, library lists).
+pub const ROW_HOVER: Color32 = Color32::from_rgb(38, 40, 45);
+pub const SUCCESS: Color32 = Color32::from_rgb(64, 182, 107);
+pub const WARNING: Color32 = Color32::from_rgb(220, 164, 56);
+pub const DANGER: Color32 = Color32::from_rgb(240, 98, 90);
+pub const IDLE: Color32 = Color32::from_rgb(96, 100, 108);
 
-const BUTTON_BG: Color32 = Color32::from_rgb(44, 48, 55);
-const BUTTON_HOVER: Color32 = Color32::from_rgb(54, 59, 67);
-const BUTTON_ACTIVE: Color32 = Color32::from_rgb(64, 70, 80);
+const BUTTON_BG: Color32 = Color32::from_rgb(46, 48, 53);
+const BUTTON_HOVER: Color32 = Color32::from_rgb(55, 58, 64);
+const BUTTON_ACTIVE: Color32 = Color32::from_rgb(63, 66, 73);
+/// The chosen segment of a segmented control (a raised neutral chip).
+const SEGMENT_ON: Color32 = Color32::from_rgb(64, 67, 75);
+/// Text of selected rows and the focus ring of text fields.
+const ACCENT_TEXT: Color32 = Color32::from_rgb(150, 188, 255);
+const TRACK: Color32 = Color32::from_rgb(52, 55, 61);
+/// Shortcut letters beside a control, and on a filled (selected or primary) one.
+const KEY_HINT: Color32 = Color32::from_rgb(124, 129, 138);
+const KEY_HINT_ON_FILL: Color32 = Color32::from_rgb(184, 198, 224);
 
 /// Font family holding only the icon font (its codepoints are in the Private Use Area,
 /// where egui's emoji font has glyphs of its own, so icons never share a family).
 const ICON_FAMILY: &str = "phosphor";
+/// Semibold UI face for titles, installed by `main.rs` when the system has one.
+pub const SEMIBOLD_FAMILY: &str = "ui-semibold";
+static SEMIBOLD_READY: AtomicBool = AtomicBool::new(false);
 
 /// Phosphor icon codepoints (`assets/fonts/Phosphor.ttf`, regular weight).
 pub mod icon {
@@ -35,6 +64,7 @@ pub mod icon {
     pub const CARET_DOWN: &str = "\u{E136}";
     pub const CARET_LEFT: &str = "\u{E138}";
     pub const CARET_RIGHT: &str = "\u{E13A}";
+    pub const CARET_UP: &str = "\u{E13C}";
     pub const CHECK_CIRCLE: &str = "\u{E184}";
     pub const CLOCK_COUNTER_CLOCKWISE: &str = "\u{E1A0}";
     pub const COPY: &str = "\u{E1CA}";
@@ -51,6 +81,9 @@ pub mod icon {
     pub const GEAR_SIX: &str = "\u{E272}";
     pub const HAND: &str = "\u{E298}";
     pub const IMAGE: &str = "\u{E2CA}";
+    pub const INFO: &str = "\u{E2CE}";
+    pub const LINK_SIMPLE: &str = "\u{E2E6}";
+    pub const LINK_SIMPLE_BREAK: &str = "\u{E2E8}";
     pub const MAGIC_WAND: &str = "\u{E6B6}";
     pub const MAGNIFYING_GLASS: &str = "\u{E30C}";
     pub const PAINT_BRUSH: &str = "\u{E6F0}";
@@ -89,6 +122,26 @@ pub fn install_icon_font(ctx: &egui::Context) {
     });
 }
 
+/// Records that [`SEMIBOLD_FAMILY`] has a font, so [`semibold`] can use it.
+pub fn set_semibold_ready() {
+    SEMIBOLD_READY.store(true, Ordering::Relaxed);
+}
+
+/// Text in the semibold UI face (titles); just brighter text when there is none.
+pub fn semibold(text: impl Into<String>) -> RichText {
+    let text = RichText::new(text).color(TEXT);
+    if SEMIBOLD_READY.load(Ordering::Relaxed) { text.family(FontFamily::Name(SEMIBOLD_FAMILY.into())) } else { text }
+}
+
+/// The semibold face as a `FontId` for painter text.
+pub fn semibold_font(size: f32) -> FontId {
+    if SEMIBOLD_READY.load(Ordering::Relaxed) {
+        FontId::new(size, FontFamily::Name(SEMIBOLD_FAMILY.into()))
+    } else {
+        FontId::proportional(size)
+    }
+}
+
 /// An icon glyph as text (16 pt unless resized).
 pub fn icon(glyph: &str) -> RichText {
     RichText::new(glyph).family(FontFamily::Name(ICON_FAMILY.into())).size(16.0)
@@ -107,22 +160,23 @@ pub fn apply(ctx: &egui::Context) {
     ctx.set_visuals_of(egui::Theme::Light, visuals());
     ctx.all_styles_mut(|style| {
         style.text_styles = [
-            (TextStyle::Heading, FontId::new(18.0, FontFamily::Proportional)),
-            (TextStyle::Body, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Button, FontId::new(14.0, FontFamily::Proportional)),
-            (TextStyle::Small, FontId::new(12.0, FontFamily::Proportional)),
-            (TextStyle::Monospace, FontId::new(13.0, FontFamily::Monospace)),
+            (TextStyle::Heading, FontId::new(17.0, FontFamily::Proportional)),
+            (TextStyle::Body, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Button, FontId::new(13.0, FontFamily::Proportional)),
+            (TextStyle::Small, FontId::new(11.5, FontFamily::Proportional)),
+            (TextStyle::Monospace, FontId::new(12.5, FontFamily::Monospace)),
         ]
         .into();
         let spacing = &mut style.spacing;
         spacing.item_spacing = egui::vec2(8.0, 6.0);
-        spacing.button_padding = egui::vec2(10.0, 4.0);
-        spacing.interact_size.y = 26.0;
-        spacing.window_margin = Margin::same(14);
-        spacing.menu_margin = Margin::same(6);
+        spacing.button_padding = egui::vec2(9.0, 3.0);
+        spacing.interact_size.y = 24.0;
+        spacing.window_margin = Margin::same(16);
+        spacing.menu_margin = Margin::same(5);
         spacing.combo_height = 320.0;
         spacing.slider_width = 140.0;
-        spacing.indent = 16.0;
+        spacing.indent = 14.0;
+        spacing.tooltip_width = 320.0;
     });
 }
 
@@ -132,21 +186,23 @@ fn visuals() -> egui::Visuals {
     visuals.window_fill = CARD_BG;
     visuals.window_stroke = Stroke::new(1.0, BORDER);
     visuals.window_corner_radius = CornerRadius::same(10);
-    visuals.menu_corner_radius = CornerRadius::same(8);
+    visuals.window_shadow = egui::Shadow { offset: [0, 8], blur: 24, spread: 0, color: Color32::from_black_alpha(110) };
+    visuals.popup_shadow = egui::Shadow { offset: [0, 4], blur: 12, spread: 0, color: Color32::from_black_alpha(90) };
+    visuals.menu_corner_radius = CornerRadius::same(7);
     visuals.extreme_bg_color = INPUT_BG;
-    visuals.faint_bg_color = Color32::from_rgb(38, 41, 47);
+    visuals.faint_bg_color = ROW_HOVER;
     visuals.code_bg_color = INPUT_BG;
     visuals.hyperlink_color = ACCENT;
     visuals.warn_fg_color = WARNING;
     visuals.error_fg_color = DANGER;
     visuals.override_text_color = None;
-    visuals.selection.bg_fill = ACCENT_DIM;
-    visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+    visuals.selection.bg_fill = SELECTED;
+    visuals.selection.stroke = Stroke::new(1.0, ACCENT_TEXT);
     visuals.collapsing_header_frame = false;
     visuals.slider_trailing_fill = true;
     visuals.striped = false;
 
-    let radius = CornerRadius::same(6);
+    let radius = CornerRadius::same(5);
     let widgets = &mut visuals.widgets;
     widgets.noninteractive.bg_fill = CARD_BG;
     widgets.noninteractive.weak_bg_fill = CARD_BG;
@@ -160,19 +216,21 @@ fn visuals() -> egui::Visuals {
     widgets.inactive.corner_radius = radius;
     widgets.hovered.bg_fill = BUTTON_HOVER;
     widgets.hovered.weak_bg_fill = BUTTON_HOVER;
-    widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(78, 84, 94));
-    widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
+    widgets.hovered.bg_stroke = Stroke::NONE;
+    widgets.hovered.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     widgets.hovered.corner_radius = radius;
     widgets.hovered.expansion = 0.0;
     widgets.active.bg_fill = BUTTON_ACTIVE;
     widgets.active.weak_bg_fill = BUTTON_ACTIVE;
-    widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
+    widgets.active.bg_stroke = Stroke::NONE;
     widgets.active.fg_stroke = Stroke::new(1.0, Color32::WHITE);
     widgets.active.corner_radius = radius;
     widgets.active.expansion = 0.0;
+    // `open` also fills the title bar of the focused window: keep it the window's colour
+    // so dialogs don't get a separate header strip.
     widgets.open.bg_fill = BUTTON_ACTIVE;
-    widgets.open.weak_bg_fill = BUTTON_ACTIVE;
-    widgets.open.bg_stroke = Stroke::new(1.0, BORDER);
+    widgets.open.weak_bg_fill = CARD_BG;
+    widgets.open.bg_stroke = Stroke::NONE;
     widgets.open.fg_stroke = Stroke::new(1.0, TEXT);
     widgets.open.corner_radius = radius;
     visuals
@@ -185,15 +243,15 @@ pub fn bar_frame(fill: Color32, vertical_margin: i8) -> egui::Frame {
 
 /// Frame of a side panel.
 pub fn side_frame() -> egui::Frame {
-    egui::Frame::new().fill(APP_BG).inner_margin(Margin::symmetric(10, 10))
+    egui::Frame::new().fill(APP_BG).inner_margin(Margin::symmetric(12, 10))
 }
 
-/// A titled card in the inspector.
+/// A titled section of a side panel: a hairline above, a semibold title, the contents.
 pub fn card<R>(ui: &mut egui::Ui, title: &str, add_contents: impl FnOnce(&mut egui::Ui) -> R) -> R {
     card_with(ui, title, |_| {}, add_contents)
 }
 
-/// A card with extra controls on the right of the title.
+/// A section with extra controls on the right of the title.
 pub fn card_with<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -203,8 +261,9 @@ pub fn card_with<R>(
     card_full(ui, title, None, header_right, add_contents)
 }
 
-/// A card that can also carry a `⠿` grip left of its title; the grip senses drags under
-/// `grip` (read it back with `Context::read_response`).
+/// A section that can also carry a `⠿` grip left of its title; the grip senses drags under
+/// `grip` (read it back with `Context::read_response`). The section starts at its hairline,
+/// so a drop line for reordering belongs at its top or bottom edge.
 pub fn card_full<R>(
     ui: &mut egui::Ui,
     title: &str,
@@ -212,52 +271,66 @@ pub fn card_full<R>(
     header_right: impl FnOnce(&mut egui::Ui),
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    let inner = egui::Frame::new()
-        .fill(CARD_BG)
-        .stroke(Stroke::new(1.0, BORDER))
-        .corner_radius(8)
-        .inner_margin(Margin::same(10))
-        .show(ui, |ui| {
-            ui.set_width(ui.available_width());
-            if !title.is_empty() {
-                // Controls first from the right, then the title truncated into what is left,
-                // so a long page or preset name never widens the panel.
-                ui.horizontal(|ui| {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        header_right(ui);
-                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            if let Some(id) = grip {
-                                grip_handle(ui, id);
-                            }
-                            ui.add(egui::Label::new(RichText::new(title).strong().color(TEXT)).truncate());
-                        });
-                    });
+    let top = ui.cursor().top();
+    ui.painter().hline(ui.max_rect().x_range(), top, Stroke::new(1.0, BORDER));
+    ui.add_space(10.0);
+    if !title.is_empty() {
+        // Controls first from the right, then the title truncated into what is left,
+        // so a long page or preset name never widens the panel.
+        ui.horizontal(|ui| {
+            ui.set_min_height(22.0);
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                header_right(ui);
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    if let Some(id) = grip {
+                        grip_handle(ui, id);
+                    }
+                    ui.add(egui::Label::new(semibold(title)).truncate().selectable(false));
                 });
-                ui.add_space(2.0);
-            }
-            add_contents(ui)
-        })
-        .inner;
-    ui.add_space(8.0);
+            });
+        });
+        ui.add_space(4.0);
+    }
+    let inner = add_contents(ui);
+    ui.add_space(12.0);
     inner
 }
 
-/// The `⠿` drag grip of a reorderable card.
+/// The `⠿` drag grip of a reorderable section.
 fn grip_handle(ui: &mut egui::Ui, id: egui::Id) {
-    ui.spacing_mut().item_spacing.x = 4.0;
+    ui.spacing_mut().item_spacing.x = 2.0;
     let (_, rect) = ui.allocate_space(egui::vec2(12.0, 18.0));
-    let response = ui.interact(rect, id, egui::Sense::drag()).on_hover_text("끌어서 카드 순서 바꾸기");
-    let color = if response.hovered() || response.dragged() { TEXT } else { TEXT_WEAK };
+    let response = ui.interact(rect, id, egui::Sense::drag()).on_hover_text("끌어서 순서 바꾸기");
+    let color = if response.hovered() || response.dragged() { TEXT } else { TEXT_FAINT };
     ui.painter().text(
         rect.center(),
         egui::Align2::CENTER_CENTER,
         icon::DOTS_SIX_VERTICAL,
-        FontId::new(14.0, FontFamily::Name(ICON_FAMILY.into())),
+        FontId::new(13.0, FontFamily::Name(ICON_FAMILY.into())),
         color,
     );
     if response.hovered() && !response.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
     }
+}
+
+/// Small frameless icon button for section headers and bars.
+pub fn ghost_icon(glyph: &str) -> egui::Button<'static> {
+    egui::Button::new(icon(glyph).size(15.0).color(TEXT_WEAK)).frame_when_inactive(false)
+}
+
+/// [`ghost_icon`] with its shortcut beside the icon.
+pub fn ghost_icon_key(glyph: &str, key: &str) -> egui::Button<'static> {
+    egui::Button::new((icon(glyph).size(15.0).color(TEXT_WEAK), key_hint(key, false)))
+        .gap(2.0)
+        .frame_when_inactive(false)
+}
+
+/// Small shortcut label next to a control (`mac` spelling, see [`crate::shortcuts::keys`]);
+/// `on_fill` for a selected or accent-filled control.
+pub fn key_hint(mac: &str, on_fill: bool) -> RichText {
+    RichText::new(crate::shortcuts::keys(mac)).size(11.0).color(if on_fill { KEY_HINT_ON_FILL } else { KEY_HINT })
 }
 
 /// Segmented control: one selectable button per option; returns the clicked option.
@@ -272,27 +345,24 @@ pub type Segment<'a, T> = (T, &'a str, &'a str, &'a str, &'a str);
 /// [`segmented`] with an icon before and a small shortcut after each label.
 pub fn segmented_icons<T: Copy + PartialEq>(ui: &mut egui::Ui, current: T, options: &[Segment<'_, T>]) -> Option<T> {
     let mut picked = None;
-    egui::Frame::new().fill(INPUT_BG).corner_radius(8).inner_margin(Margin::same(3)).show(ui, |ui| {
+    egui::Frame::new().fill(INPUT_BG).corner_radius(7).inner_margin(Margin::same(2)).show(ui, |ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         ui.horizontal(|ui| {
             for (value, glyph, label, key, hint) in options {
                 let selected = *value == current;
-                let color = if selected { Color32::WHITE } else { TEXT };
-                let text = RichText::new(*label).color(color);
+                let color = if selected { Color32::WHITE } else { TEXT_WEAK };
                 let mut atoms = egui::Atoms::default();
                 if !glyph.is_empty() {
-                    atoms.push_right(icon(glyph).color(color));
+                    atoms.push_right(icon(glyph).size(15.0).color(color));
                 }
-                atoms.push_right(text);
+                atoms.push_right(RichText::new(*label).color(color));
                 if !key.is_empty() {
                     atoms.push_right(key_hint(key, selected));
                 }
-                let button = egui::Button::new(atoms);
-                let button = button.corner_radius(6);
+                let button = egui::Button::new(atoms).corner_radius(5);
                 // Unselected segments show a frame only while hovered.
-                let button = if selected { button.fill(ACCENT_DIM) } else { button.frame_when_inactive(false) };
-                let response = ui.add(button);
-                let response = if hint.is_empty() { response } else { response.on_hover_text(*hint) };
+                let button = if selected { button.fill(SEGMENT_ON) } else { button.frame_when_inactive(false) };
+                let response = tip(ui.add(button), hint, key);
                 if response.clicked() && !selected {
                     picked = Some(*value);
                 }
@@ -302,24 +372,43 @@ pub fn segmented_icons<T: Copy + PartialEq>(ui: &mut egui::Ui, current: T, optio
     picked
 }
 
-/// Small shortcut label next to a control (`mac` spelling, see [`crate::shortcuts::keys`]).
-pub fn key_hint(mac: &str, on_accent: bool) -> RichText {
-    let color = if on_accent { Color32::from_rgb(190, 208, 245) } else { KEY_HINT };
-    RichText::new(crate::shortcuts::keys(mac)).size(11.0).color(color)
+/// Tooltip with the control's name and its shortcut (`mac` spelling, see
+/// [`crate::shortcuts::keys`]) on the first line and the rest of `hint` below it in
+/// weaker type. Shown on disabled controls too.
+pub fn tip(response: egui::Response, hint: &str, key: &str) -> egui::Response {
+    if hint.is_empty() && key.is_empty() {
+        return response;
+    }
+    response.on_hover_ui(|ui| tooltip_body(ui, hint, key)).on_disabled_hover_ui(|ui| tooltip_body(ui, hint, key))
 }
 
-const KEY_HINT: Color32 = Color32::from_rgb(138, 146, 158);
+fn tooltip_body(ui: &mut egui::Ui, hint: &str, key: &str) {
+    let mut lines = hint.lines();
+    let title = lines.next().unwrap_or("");
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 10.0;
+        if !title.is_empty() {
+            ui.label(RichText::new(title).color(TEXT));
+        }
+        if !key.is_empty() {
+            ui.label(RichText::new(crate::shortcuts::keys(key)).color(TEXT_WEAK));
+        }
+    });
+    for line in lines {
+        ui.label(RichText::new(line).small().color(TEXT_WEAK));
+    }
+}
 
 /// Toolbar toggle: an icon with its shortcut in small type beside it (the tooltip
 /// carries the name).
 pub fn icon_tool(ui: &mut egui::Ui, enabled: bool, active: bool, glyph: &str, key: &str, hint: &str) -> egui::Response {
-    let glyph = if active { icon(glyph).size(18.0).color(Color32::WHITE) } else { icon(glyph).size(18.0) };
+    let glyph = icon(glyph).size(17.0).color(if active { Color32::WHITE } else { TEXT });
     let button = if key.is_empty() {
         egui::Button::new(glyph)
     } else {
         egui::Button::new((glyph, key_hint(key, active))).gap(2.0)
     };
-    toggle(ui, enabled, active, button.min_size(egui::vec2(30.0, 30.0)), hint)
+    toggle(ui, enabled, active, button.min_size(egui::vec2(28.0, 28.0)), hint, key)
 }
 
 /// Toolbar toggle with an icon, a label and its shortcut.
@@ -335,36 +424,37 @@ pub fn icon_text_toggle(
     let color = if active { Color32::WHITE } else { TEXT };
     let button =
         egui::Button::new((icon(glyph).color(color), RichText::new(label).color(color), key_hint(key, active)));
-    toggle(ui, enabled, active, button, hint)
+    toggle(ui, enabled, active, button, hint, key)
+}
+
+/// Tinted when active; inactive shows no frame until hovered (egui keeps the frame's
+/// spacing either way, so nothing moves).
+fn toggle(
+    ui: &mut egui::Ui,
+    enabled: bool,
+    active: bool,
+    button: egui::Button<'_>,
+    hint: &str,
+    key: &str,
+) -> egui::Response {
+    let button = if active { button.fill(SELECTED) } else { button.frame_when_inactive(false) };
+    tip(ui.add_enabled(enabled, button), hint, key)
+}
+
+/// Accent-filled main action button.
+pub fn primary(label: impl Into<String>) -> egui::Button<'static> {
+    egui::Button::new(RichText::new(label.into()).color(Color32::WHITE)).fill(PRIMARY)
+}
+
+/// [`primary`] with an icon.
+pub fn primary_icon(glyph: &str, label: impl Into<String>) -> egui::Button<'static> {
+    egui::Button::new((icon(glyph).color(Color32::WHITE), RichText::new(label.into()).color(Color32::WHITE)))
+        .fill(PRIMARY)
 }
 
 /// Plain button with an icon, a label and its shortcut.
 pub fn icon_button_key(glyph: &str, label: impl Into<String>, key: &str) -> egui::Button<'static> {
     egui::Button::new((icon(glyph), RichText::new(label.into()), key_hint(key, false)))
-}
-
-/// Highlighted when active. The accent outline is painted over the button instead of
-/// set as its stroke: an overridden stroke is not compensated in the layout, so the
-/// button (and everything after it) would shift by a pixel on hover.
-fn toggle(ui: &mut egui::Ui, enabled: bool, active: bool, button: egui::Button<'_>, hint: &str) -> egui::Response {
-    // Inactive: no frame until hovered (egui keeps the frame's spacing either way).
-    let button = if active { button.fill(ACCENT_DIM) } else { button.frame_when_inactive(false) };
-    let response = ui.add_enabled(enabled, button).on_hover_text(hint).on_disabled_hover_text(hint);
-    if active {
-        ui.painter().rect_stroke(response.rect, 6.0, Stroke::new(1.0, ACCENT), egui::StrokeKind::Inside);
-    }
-    response
-}
-
-/// Accent-filled main action button.
-pub fn primary(label: impl Into<String>) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(label.into()).strong().color(Color32::WHITE)).fill(ACCENT_DIM)
-}
-
-/// [`primary`] with an icon.
-pub fn primary_icon(glyph: &str, label: impl Into<String>) -> egui::Button<'static> {
-    egui::Button::new((icon(glyph).color(Color32::WHITE), RichText::new(label.into()).strong().color(Color32::WHITE)))
-        .fill(ACCENT_DIM)
 }
 
 /// Plain button with an icon.
@@ -377,25 +467,68 @@ pub fn danger(label: impl Into<String>) -> egui::Button<'static> {
     egui::Button::new(RichText::new(label.into()).color(DANGER))
 }
 
-/// Small coloured dot followed by a label.
+/// Adds `button` stretched over the available width, its label centred.
+pub fn wide(ui: &mut egui::Ui, enabled: bool, button: egui::Button<'_>) -> egui::Response {
+    let height = ui.spacing().interact_size.y + 2.0;
+    ui.with_layout(egui::Layout::top_down_justified(egui::Align::Center), |ui| {
+        ui.add_enabled(enabled, button.min_size(egui::vec2(0.0, height)))
+    })
+    .inner
+}
+
+/// Buttons sharing a row in equal widths.
+pub fn button_row(ui: &mut egui::Ui, count: usize, add: impl FnOnce(&mut egui::Ui, egui::Vec2)) {
+    let spacing = 6.0;
+    let width = ((ui.available_width() - spacing * (count.max(1) - 1) as f32) / count.max(1) as f32).floor();
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = spacing;
+        add(ui, egui::vec2(width, ui.spacing().interact_size.y + 2.0));
+    });
+}
+
+/// Small coloured dot.
 pub fn status_dot(ui: &mut egui::Ui, color: Color32) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(10.0, 16.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, color);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(8.0, 16.0), egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(), 3.5, color);
     response
 }
 
-/// Rounded label with a tinted background.
-pub fn pill(ui: &mut egui::Ui, text: &str, color: Color32) -> egui::Response {
-    egui::Frame::new()
-        .fill(color.gamma_multiply(0.18))
-        .corner_radius(10)
-        .inner_margin(Margin::symmetric(7, 1))
-        .show(ui, |ui| ui.label(RichText::new(text).small().color(color)))
-        .inner
+/// A coloured dot and a label: a state such as "번역됨" or "인페인트 전".
+pub fn status(ui: &mut egui::Ui, label: &str, color: Color32) -> egui::Response {
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        status_dot(ui, color);
+        let text = if color == IDLE { TEXT_WEAK } else { TEXT };
+        ui.label(RichText::new(label).small().color(text));
+    })
+    .response
+}
+
+/// Thin progress bar (nothing filled at 0).
+pub fn progress(ui: &mut egui::Ui, ratio: f32, width: f32, color: Color32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, 12.0), egui::Sense::hover());
+    paint_progress(ui.painter(), egui::Rect::from_center_size(rect.center(), egui::vec2(width, 4.0)), ratio, color);
+    response
+}
+
+/// Paints a thin progress bar into `rect`.
+pub fn paint_progress(painter: &egui::Painter, rect: egui::Rect, ratio: f32, color: Color32) {
+    let radius = rect.height() / 2.0;
+    painter.rect_filled(rect, radius, TRACK);
+    let ratio = ratio.clamp(0.0, 1.0);
+    if ratio > 0.0 {
+        let width = (rect.width() * ratio).max(rect.height());
+        painter.rect_filled(egui::Rect::from_min_size(rect.min, egui::vec2(width, rect.height())), radius, color);
+    }
 }
 
 /// Weak explanatory text.
 pub fn hint(ui: &mut egui::Ui, text: &str) {
+    ui.label(RichText::new(text).small().color(TEXT_WEAK));
+}
+
+/// Small weak caption above a field.
+pub fn caption(ui: &mut egui::Ui, text: &str) {
     ui.label(RichText::new(text).small().color(TEXT_WEAK));
 }
 
@@ -410,7 +543,7 @@ pub fn modal<R>(
         .order(egui::Order::Middle)
         .fixed_pos(screen.min)
         .show(ctx, |ui| {
-            ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(140));
+            ui.painter().rect_filled(screen, 0.0, Color32::from_black_alpha(130));
             ui.allocate_rect(screen, egui::Sense::click_and_drag());
         });
     let response = window.show(ctx, add_contents);
@@ -437,7 +570,7 @@ pub fn confirm(title: &str, message: &str, detail: &str) -> bool {
 mod tests {
     use super::*;
 
-    /// Width a card takes in a `width`-wide panel with a long title.
+    /// Width a section takes in a `width`-wide panel with a long title.
     fn card_width(width: f32, title: &str) -> f32 {
         let ctx = egui::Context::default();
         let mut measured = 0.0;

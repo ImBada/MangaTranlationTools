@@ -18,6 +18,7 @@ const DEFAULT_SECONDARY_OUTLINE_WIDTH_PX: f64 = 2.0;
 
 use super::{Editor, Layer};
 use crate::services::Services;
+use crate::theme;
 
 #[derive(Default)]
 pub struct FindState {
@@ -116,14 +117,6 @@ pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt
         .collect();
     if !rows.is_empty() {
         let reorder = rows.len() > 1 && !editor.page_edit_locked();
-        crate::theme::hint(
-            ui,
-            if reorder {
-                "블록을 누르면 하나만 편집, 끌면 그룹 안 순서 변경"
-            } else {
-                "블록을 누르면 하나만 편집"
-            },
-        );
         let mut dropped: Option<(String, String, mtt_core::library::DropPosition)> = None;
         for (index, block) in &rows {
             let hidden = block.render_direction == RenderTextDirection::Hidden;
@@ -136,9 +129,9 @@ pub(super) fn group_settings(editor: &mut Editor, ui: &mut egui::Ui, group: &mtt
             );
             let row = crate::dnd::drag_button(ui, egui::Button::new(text.clone()).truncate(), block.id.clone(), &text)
                 .on_hover_text(if reorder {
-                    "드래그해서 순서 변경, 클릭해서 개별 설정"
+                    "눌러서 이 블록만 편집 · 끌어서 그룹 안 순서 변경"
                 } else {
-                    "개별 설정"
+                    "눌러서 이 블록만 편집"
                 });
             if row.clicked() {
                 editor.selection = vec![block.id.clone()];
@@ -219,7 +212,7 @@ pub(super) fn block_type_label(value: BlockType) -> &'static str {
 }
 
 /// Height of a preset tag's sample (or name) inside the tag.
-const TAG_CONTENT_HEIGHT: f32 = 22.0;
+const TAG_CONTENT_HEIGHT: f32 = 18.0;
 
 /// Rename state of a preset tag (`renamingFontPresetId`).
 #[derive(Clone, Default)]
@@ -283,7 +276,7 @@ pub(super) fn preset_panel(
             let extras = if favorite_index.is_some() { 14.0 + spacing } else { 0.0 } + close_width;
             let tag_size = egui::vec2(content.x + extras + 16.0, TAG_CONTENT_HEIGHT + 10.0);
             // Tags are paper-coloured samples of the preset's font.
-            let fill = if active { Color32::from_rgb(214, 228, 255) } else { Color32::from_gray(232) };
+            let fill = if active { Color32::from_rgb(222, 233, 255) } else { Color32::from_gray(218) };
             // Same stroke width either way: a frame's stroke takes room, so selecting a tag
             // must not resize it and shift the others.
             let stroke = egui::Stroke::new(2.0, if active { crate::theme::ACCENT } else { Color32::TRANSPARENT });
@@ -291,7 +284,7 @@ pub(super) fn preset_panel(
                 egui::Frame::new()
                     .fill(fill)
                     .stroke(stroke)
-                    .corner_radius(6.0)
+                    .corner_radius(5.0)
                     .inner_margin(egui::Margin::symmetric(6, 3))
                     .show(ui, |ui| {
                         if renaming {
@@ -452,15 +445,24 @@ fn link_toggle(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock,
         return;
     }
     let linked = mtt_core::font_presets::is_value_linked(first, key);
-    let text = if linked { RichText::new("🔗") } else { RichText::new("🔗").weak().strikethrough() };
     let hint = if linked {
-        "프리셋과 연결됨: 수정하면 같은 프리셋의 모든 블록이 바뀝니다. 눌러서 해제"
+        "프리셋과 연결됨\n고치면 같은 프리셋의 모든 블록이 바뀝니다. 눌러서 이 블록만 따로 두기"
     } else {
-        "이 블록만의 값. 눌러서 프리셋 값으로 다시 연결"
+        "이 블록만의 값\n눌러서 프리셋 값으로 다시 연결"
     };
-    if ui.selectable_label(linked, text).on_hover_text(hint).clicked() {
+    if theme::tip(ui.add(link_button(linked)), hint, "").clicked() {
         editor.toggle_link(key);
     }
+}
+
+/// Small link icon: whole while the value follows the preset, broken when it doesn't.
+fn link_button(linked: bool) -> egui::Button<'static> {
+    let (glyph, color) = if linked {
+        (theme::icon::LINK_SIMPLE, theme::ACCENT)
+    } else {
+        (theme::icon::LINK_SIMPLE_BREAK, theme::TEXT_FAINT)
+    };
+    egui::Button::new(theme::icon(glyph).size(14.0).color(color)).frame_when_inactive(false)
 }
 
 /// Size preset picker under the size field (`FontToolSection` 크기 프리셋 select and +/- button).
@@ -562,8 +564,12 @@ fn link_group_toggle(editor: &mut Editor, ui: &mut egui::Ui, first: &Translation
         return;
     }
     let linked = keys.iter().all(|key| mtt_core::font_presets::is_value_linked(first, *key));
-    let text = if linked { RichText::new("🔗") } else { RichText::new("🔗").weak().strikethrough() };
-    if ui.selectable_label(linked, text).on_hover_text("스타일 프리셋 연결").clicked() {
+    let hint = if linked {
+        "프리셋과 연결됨\n눌러서 이 블록만 따로 두기"
+    } else {
+        "이 블록만의 값\n눌러서 프리셋 값으로 다시 연결"
+    };
+    if theme::tip(ui.add(link_button(linked)), hint, "").clicked() {
         editor.toggle_link_group(keys);
     }
 }
@@ -728,9 +734,14 @@ pub(super) fn font_section(editor: &mut Editor, ui: &mut egui::Ui, first: &Trans
             ui.label("정렬");
             let mut align = first.text_align;
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut align, TextAlign::Left, "좌").on_hover_text("왼쪽 정렬");
-                ui.selectable_value(&mut align, TextAlign::Center, "중").on_hover_text("가운데 정렬");
-                ui.selectable_value(&mut align, TextAlign::Right, "우").on_hover_text("오른쪽 정렬");
+                ui.spacing_mut().item_spacing.x = 2.0;
+                for (value, glyph, hint) in [
+                    (TextAlign::Left, theme::icon::TEXT_ALIGN_LEFT, "왼쪽 정렬"),
+                    (TextAlign::Center, theme::icon::TEXT_ALIGN_CENTER, "가운데 정렬"),
+                    (TextAlign::Right, theme::icon::TEXT_ALIGN_RIGHT, "오른쪽 정렬"),
+                ] {
+                    ui.selectable_value(&mut align, value, theme::icon(glyph).size(15.0)).on_hover_text(hint);
+                }
             });
             if align != first.text_align {
                 editor.edit_style(|b| b.text_align = align);
@@ -827,7 +838,7 @@ pub fn character_override_window(editor: &mut Editor, ui: &mut egui::Ui, service
     egui::Window::new("고급 설정").open(&mut open).collapsible(false).default_width(460.0).show(ui.ctx(), |ui| {
         ui.horizontal(|ui| {
             ui.label("프리셋");
-            ui.label(RichText::new(&dialog.preset_name).strong());
+            ui.label(theme::semibold(&dialog.preset_name));
         });
         ui.separator();
         let mut text_editing = editor.text_editing;
@@ -1491,7 +1502,7 @@ pub fn find_replace_window(editor: &mut Editor, ui: &mut egui::Ui) {
         ui.separator();
         let total: usize = matches.iter().map(|m| m.occurrences).sum();
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("{}개 문장", matches.len())).strong());
+            ui.label(theme::semibold(format!("{}개 문장", matches.len())));
             ui.label(format!("{total}개 일치"));
         });
         if matches.is_empty() {
@@ -1503,7 +1514,7 @@ pub fn find_replace_window(editor: &mut Editor, ui: &mut egui::Ui) {
                 egui::Frame::group(ui.style()).show(ui, |ui| {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
-                        ui.label(RichText::new(&found.page_name).strong());
+                        ui.label(theme::semibold(&found.page_name));
                         ui.label(format!("블록 {} · {}회", found.block_index + 1, found.occurrences));
                     });
                     ui.columns(2, |columns| {

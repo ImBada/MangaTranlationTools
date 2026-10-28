@@ -170,7 +170,7 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
     let mut group_drop: Option<(String, String, String, DropPosition)> = None;
     let mut group_action = None;
     let mut toggle_collapsed = false;
-    let title = format!("텍스트 블록 · {}개", page.blocks.len());
+    let title = format!("텍스트 블록 · {}", page.blocks.len());
     let (_, toggle) = widgets::frame(
         ui,
         host,
@@ -178,8 +178,9 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
         &title,
         |ui| {
             if collapsible {
-                let arrow = if collapsed { "펼치기" } else { "접기" };
-                if ui.add(egui::Button::new(RichText::new(arrow).small()).frame_when_inactive(false)).clicked() {
+                let (glyph, tip) =
+                    if collapsed { (theme::icon::CARET_DOWN, "펼치기") } else { (theme::icon::CARET_UP, "접기") };
+                if ui.add(theme::ghost_icon(glyph)).on_hover_text(tip).clicked() {
                     toggle_collapsed = true;
                 }
             }
@@ -191,7 +192,11 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
                 } else {
                     "선택한 텍스트 블록 그룹 해제"
                 };
-                if ui.add_enabled(!locked, egui::Button::new("그룹 해제").small()).on_hover_text(tip).clicked() {
+                if ui
+                    .add_enabled(!locked, egui::Button::new(RichText::new("그룹 해제").small()))
+                    .on_hover_text(tip)
+                    .clicked()
+                {
                     group_action = Some(false);
                 }
             } else if editor.selection.len() >= 2 {
@@ -200,7 +205,10 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
                 } else {
                     "선택한 텍스트 블록 그룹화"
                 };
-                if ui.add_enabled(!locked, egui::Button::new("그룹으로 묶기").small()).on_hover_text(tip).clicked()
+                if ui
+                    .add_enabled(!locked, egui::Button::new(RichText::new("그룹으로 묶기").small()))
+                    .on_hover_text(tip)
+                    .clicked()
                 {
                     group_action = Some(true);
                 }
@@ -235,7 +243,7 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
                             ListItem::Group { group, blocks } => {
                                 let selected = blocks.iter().all(|(_, block)| editor.selection.contains(&block.id));
                                 let drag = DragItem::Page(group_unit(&group.id));
-                                let label = RichText::new(format!("그룹 · {}개", blocks.len())).strong();
+                                let label = theme::semibold(format!("그룹 · {}개", blocks.len()));
                                 let header = crate::dnd::drag_button(
                                     ui,
                                     egui::Button::selectable(selected, label)
@@ -277,14 +285,6 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
                         }
                     }
                 });
-            theme::hint(
-                ui,
-                &format!(
-                    "{} / {} 클릭으로 여러 개 선택, 드래그로 출력 순서 변경",
-                    crate::shortcuts::keys("⇧"),
-                    crate::shortcuts::keys("⌘")
-                ),
-            );
         },
     );
     widgets::toggled(editor, Widget::Blocks, host, toggle);
@@ -337,15 +337,21 @@ fn block_row(
     let selected = editor.selection.contains(&block.id);
     let hidden = block.render_direction == RenderTextDirection::Hidden;
     let meta = format!("{}{}", block_type_label(block.block_type), if hidden { " · 숨김" } else { "" });
-    let label = format!("{:>2}  {}", index + 1, block_preview_text(block));
-    let text = if hidden { RichText::new(label).color(theme::TEXT_WEAK) } else { RichText::new(label) };
-    let button = egui::Button::selectable(selected, text)
+    let number = RichText::new(format!("{:>2}", index + 1)).monospace().color(theme::TEXT_FAINT);
+    let preview = block_preview_text(block);
+    let text = if hidden { RichText::new(preview).color(theme::TEXT_WEAK) } else { RichText::new(preview) };
+    let button = egui::Button::selectable(selected, (number, text))
         .right_text(RichText::new(meta).small().color(theme::TEXT_WEAK))
         .truncate()
         .min_size(egui::vec2(ui.available_width(), 0.0));
     let response = if reorder {
         let ghost = block_preview_text(block);
-        let row = crate::dnd::drag_button(ui, button, drag.clone(), &ghost).on_hover_text("드래그해서 순서 변경");
+        let hint = format!(
+            "{}/{} 클릭으로 여러 개 선택 · 끌어서 출력 순서 변경",
+            crate::shortcuts::keys("⇧"),
+            crate::shortcuts::keys("⌘")
+        );
+        let row = crate::dnd::drag_button(ui, button, drag.clone(), &ghost).on_hover_text(hint);
         if row.clicked() {
             *select = Some((block.id.clone(), ui.input(|i| i.modifiers)));
         }

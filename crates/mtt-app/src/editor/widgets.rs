@@ -387,9 +387,7 @@ pub fn frame<R>(
                                 .selectable(false),
                         );
                     }
-                    ui.add(
-                        egui::Label::new(RichText::new(title).strong().color(theme::TEXT)).truncate().selectable(false),
-                    );
+                    ui.add(egui::Label::new(theme::semibold(title)).truncate().selectable(false));
                 });
             });
         });

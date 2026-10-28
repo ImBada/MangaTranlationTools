@@ -259,8 +259,8 @@ impl LibraryView {
                             }
                         });
                     }
-                    ui.separator();
-                    ui.label(RichText::new(if batch { "생성할 화" } else { "화 제목" }).strong());
+                    ui.add_space(6.0);
+                    ui.label(theme::semibold(if batch { "생성할 화" } else { "화 제목" }));
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for chapter in &mut dialog.preview.chapters {
                             ui.horizontal(|ui| {
@@ -280,28 +280,35 @@ impl LibraryView {
                 if let Some(error) = &dialog.error {
                     ui.colored_label(theme::DANGER, error);
                 }
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
                     if let Some((done, total)) = dialog.running {
-                        ui.add(
-                            egui::ProgressBar::new(if total == 0 { 0.0 } else { done as f32 / total as f32 })
-                                .desired_width(260.0)
-                                .text(format!("{done}/{total}")),
+                        theme::progress(
+                            ui,
+                            if total == 0 { 0.0 } else { done as f32 / total as f32 },
+                            260.0,
+                            theme::ACCENT,
                         );
-                        if ui.button(RichText::new("가져오기 중단").color(theme::DANGER)).clicked() {
-                            dialog.cancel.store(true, Ordering::SeqCst);
-                        }
+                        ui.label(RichText::new(format!("{done}/{total}")).small().color(theme::TEXT_WEAK));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add(theme::danger("가져오기 중단")).clicked() {
+                                dialog.cancel.store(true, Ordering::SeqCst);
+                            }
+                        });
                     } else {
-                        if ui.button("취소").clicked() {
-                            close = true;
-                        }
                         // `isSubmittable`: a title for a new work and at least one titled chapter.
                         let submittable = (!dialog.new_work || !dialog.new_title.trim().is_empty())
                             && (dialog.new_work || dialog.existing_work.is_some())
                             && dialog.preview.chapters.iter().any(|c| c.enabled && !c.title.trim().is_empty());
                         let label = if batch { "생성 후 번역 시작" } else { "보관함에 추가" };
-                        if ui.add_enabled(submittable, egui::Button::new(label)).clicked() {
-                            start = true;
-                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.add_enabled(submittable, theme::primary(label)).clicked() {
+                                start = true;
+                            }
+                            if ui.button("취소").clicked() {
+                                close = true;
+                            }
+                        });
                     }
                 });
             },
@@ -423,24 +430,31 @@ impl LibraryView {
 
         egui::Panel::top("library-header").frame(theme::bar_frame(theme::APP_BG, 8)).show(ui, |ui| {
             ui.horizontal(|ui| {
-                ui.label(RichText::new("보관함").heading().strong())
+                ui.label(theme::semibold("보관함").size(15.0))
                     .on_hover_text(services.paths.library_dir.display().to_string());
                 let chapters: usize = self.works.iter().map(|work| work.chapters.len()).sum();
-                theme::pill(ui, &format!("작품 {} · 화 {chapters}", self.works.len()), theme::IDLE);
-                ui.add_space(12.0);
-                ui.add(egui::TextEdit::singleline(&mut self.filter).hint_text("작품·화 검색").desired_width(240.0));
+                ui.label(
+                    RichText::new(format!("작품 {} · 화 {chapters}", self.works.len())).small().color(theme::TEXT_WEAK),
+                );
+                ui.add_space(16.0);
+                ui.add(
+                    egui::TextEdit::singleline(&mut self.filter)
+                        .prefix(theme::icon(theme::icon::MAGNIFYING_GLASS).size(14.0).color(theme::TEXT_FAINT))
+                        .hint_text("작품·화 검색")
+                        .desired_width(260.0),
+                );
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(
-                            egui::Button::new(theme::icon(theme::icon::GEAR_SIX).size(18.0))
-                                .min_size(egui::vec2(32.0, 28.0)),
-                        )
-                        .on_hover_text("설정")
-                        .clicked()
-                    {
+                    let gear = egui::Button::new(theme::icon(theme::icon::GEAR_SIX).size(17.0).color(theme::TEXT_WEAK))
+                        .frame_when_inactive(false)
+                        .min_size(egui::vec2(28.0, 28.0));
+                    if ui.add(gear).on_hover_text("설정").clicked() {
                         action = Some(LibraryAction::OpenSettings);
                     }
-                    ui.menu_button(theme::icon(theme::icon::DOTS_THREE).size(18.0), |ui| {
+                    let more =
+                        egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
+                            .frame_when_inactive(false)
+                            .min_size(egui::vec2(28.0, 28.0));
+                    egui::containers::menu::MenuButton::from_button(more).ui(ui, |ui| {
                         if ui.button("새로고침").clicked() {
                             self.refresh(services);
                             ui.close();
@@ -452,12 +466,13 @@ impl LibraryView {
                             ui.close();
                         }
                     });
+                    ui.add_space(4.0);
                     let import = egui::Button::new((
-                        theme::icon(theme::icon::DOWNLOAD_SIMPLE).color(egui::Color32::WHITE),
-                        RichText::new("가져오기").strong().color(egui::Color32::WHITE),
+                        theme::icon(theme::icon::DOWNLOAD_SIMPLE).size(15.0).color(egui::Color32::WHITE),
+                        RichText::new("가져오기").color(egui::Color32::WHITE),
                         theme::icon(theme::icon::CARET_DOWN).size(11.0).color(egui::Color32::WHITE),
                     ))
-                    .fill(theme::ACCENT_DIM);
+                    .fill(theme::PRIMARY);
                     if let Some(mode) = import_menu(ui, import) {
                         self.pick_import(mode);
                     }
@@ -471,8 +486,8 @@ impl LibraryView {
             .size_range(240.0..=440.0)
             .frame(theme::side_frame())
             .show(ui, |ui| {
-                ui.label(RichText::new("작품").strong());
-                ui.add_space(4.0);
+                ui.label(RichText::new("작품").small().color(theme::TEXT_WEAK));
+                ui.add_space(2.0);
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     if filtered.is_empty() {
                         theme::hint(
@@ -506,7 +521,7 @@ impl LibraryView {
             });
 
         egui::CentralPanel::default()
-            .frame(egui::Frame::new().fill(theme::CANVAS_BG).inner_margin(egui::Margin::symmetric(24, 18)))
+            .frame(egui::Frame::new().fill(theme::CANVAS_BG).inner_margin(egui::Margin::symmetric(32, 24)))
             .show(ui, |ui| {
                 if let Some(error) = &self.error {
                     ui.colored_label(theme::DANGER, error);
@@ -518,7 +533,7 @@ impl LibraryView {
                     ui.colored_label(theme::DANGER, "시스템 폰트를 불러오지 못했습니다.");
                 }
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                    ui.set_max_width(ui.available_width().min(880.0));
+                    ui.set_max_width(ui.available_width().min(960.0));
                     // `WorkspaceEmptyState`: the LaMa setup card until it is ready.
                     if lama_card(ui, services) {
                         ui.add_space(12.0);
@@ -544,22 +559,29 @@ impl LibraryView {
     fn chapter_list(&mut self, ui: &mut egui::Ui, work: &WorkSummary, search_active: bool) -> Option<LibraryAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            ui.label(RichText::new(&work.work.title).size(22.0).strong());
-            if ui.button(RichText::new("이름 변경 · 삭제").small()).clicked() {
-                self.pending = Some(Pending {
-                    work: true,
-                    id: work.work.id.clone(),
-                    original: work.work.title.clone(),
-                    title: work.work.title.clone(),
-                });
-            }
+            ui.label(theme::semibold(&work.work.title).size(20.0));
+            let more = egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
+                .frame_when_inactive(false);
+            egui::containers::menu::MenuButton::from_button(more).ui(ui, |ui| {
+                if ui.button("이름 변경 · 삭제…").clicked() {
+                    self.pending = Some(Pending {
+                        work: true,
+                        id: work.work.id.clone(),
+                        original: work.work.title.clone(),
+                        title: work.work.title.clone(),
+                    });
+                    ui.close();
+                }
+            });
         });
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
-        theme::hint(ui, &format!("{}화 · {pages}페이지 중 {done}페이지 검수 완료", work.chapters.len()));
-        ui.add_space(10.0);
+        theme::hint(ui, &format!("{}화 · {pages}페이지 · 검수 완료 {done}페이지", work.chapters.len()));
+        ui.add_space(16.0);
         if work.chapters.is_empty() {
             theme::hint(ui, "이 작품에는 아직 화가 없습니다.");
+        } else {
+            chapter_header(ui);
         }
         for chapter in &work.chapters {
             let response = chapter_row(ui, chapter);
@@ -587,7 +609,7 @@ impl LibraryView {
                 }
             });
             if !search_active && response.dnd_hover_payload::<(String, String)>().is_some() {
-                ui.painter().hline(response.rect.x_range(), response.rect.top() - 3.0, (2.0, theme::ACCENT));
+                ui.painter().hline(response.rect.x_range(), response.rect.top(), (2.0, theme::ACCENT));
             }
             if !search_active
                 && let Some(source) = response.dnd_release_payload::<(String, String)>()
@@ -601,10 +623,6 @@ impl LibraryView {
                     )
                 });
             }
-        }
-        if !search_active && work.chapters.len() > 1 {
-            ui.add_space(6.0);
-            theme::hint(ui, "끌어서 화 순서를 바꿀 수 있습니다. 우클릭하면 이름 변경과 삭제.");
         }
         action
     }
@@ -643,8 +661,8 @@ impl LibraryView {
                 .resizable(false)
                 .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]),
             |ui| {
-                ui.label("새 이름");
-                let response = ui.text_edit_singleline(&mut pending.title);
+                theme::caption(ui, "이름");
+                let response = ui.add(egui::TextEdit::singleline(&mut pending.title).desired_width(320.0));
                 let trimmed = pending.title.trim().to_owned();
                 if response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && !trimmed.is_empty() {
                     save = true;
@@ -658,17 +676,21 @@ impl LibraryView {
                     .weak()
                     .small(),
                 );
+                ui.add_space(6.0);
                 ui.horizontal(|ui| {
-                    let delete_label = if pending.work { "작품 삭제" } else { "화 삭제" };
+                    let delete_label = if pending.work { "작품 삭제…" } else { "화 삭제…" };
                     if ui.add(theme::danger(delete_label)).clicked() {
                         delete = true;
                     }
-                    if ui.button("취소").clicked() {
-                        close = true;
-                    }
-                    if ui.add_enabled(!trimmed.is_empty(), egui::Button::new("저장")).clicked() {
-                        save = true;
-                    }
+                    ui.add_space(40.0);
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add_enabled(!trimmed.is_empty(), theme::primary("저장")).clicked() {
+                            save = true;
+                        }
+                        if ui.button("취소").clicked() {
+                            close = true;
+                        }
+                    });
                 });
             },
         );
@@ -752,8 +774,6 @@ pub fn import_menu(ui: &mut egui::Ui, button: egui::Button<'static>) -> Option<I
                 ui.close();
             }
         }
-        ui.separator();
-        theme::hint(ui, "창에 파일이나 폴더를 끌어다 놓아도 됩니다.");
     });
     picked
 }
@@ -807,132 +827,154 @@ pub fn preview_dropped(paths: &[PathBuf]) -> Result<ImportPreview, String> {
 }
 
 fn welcome(ui: &mut egui::Ui, view: &mut LibraryView) {
-    ui.add_space(30.0);
+    ui.add_space(60.0);
     ui.vertical_centered(|ui| {
-        ui.label(RichText::new("만화 원고를 가져와서 시작하세요").size(22.0).strong());
+        ui.label(theme::icon(theme::icon::FOLDER_OPEN).size(40.0).color(theme::TEXT_FAINT));
+        ui.add_space(10.0);
+        ui.label(theme::semibold("보관함이 비어 있습니다").size(18.0));
         ui.add_space(4.0);
-        theme::hint(ui, "작품과 화 단위로 보관해 두고, 이어서 번역하거나 페이지별로 다시 번역할 수 있습니다.");
-        ui.add_space(14.0);
-        let primary = theme::primary_icon(theme::icon::FOLDER_OPEN, "폴더 가져오기").min_size(egui::vec2(200.0, 40.0));
+        theme::hint(ui, "만화 원고를 가져오면 작품과 화 단위로 보관하고 이어서 번역합니다.");
+        ui.add_space(18.0);
+        let primary = theme::primary_icon(theme::icon::FOLDER_OPEN, "폴더 가져오기").min_size(egui::vec2(180.0, 34.0));
         if ui.add(primary).on_hover_text("이미지가 든 폴더 하나를 한 화로 가져옵니다").clicked() {
             view.pick_import(ImportMode::Folder);
         }
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let width: f32 = 2.0 * 140.0 + 8.0;
+            let width: f32 = 3.0 * 120.0 + 2.0 * 8.0;
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            for (mode, glyph, label) in [
-                (ImportMode::Images, theme::icon::IMAGE, "이미지 파일"),
-                (ImportMode::Zip, theme::icon::FILE_ZIP, "압축파일"),
+            for (mode, glyph, label, hint) in [
+                (ImportMode::Images, theme::icon::IMAGE, "이미지 파일", "고른 이미지들을 한 화로 가져옵니다"),
+                (ImportMode::Zip, theme::icon::FILE_ZIP, "압축파일", "ZIP 하나를 한 화로 가져옵니다"),
+                (
+                    ImportMode::ZipFolder,
+                    theme::icon::STACK,
+                    "여러 화",
+                    "폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다",
+                ),
             ] {
-                if ui.add(theme::icon_button(glyph, label).min_size(egui::vec2(140.0, 32.0))).clicked() {
+                if ui
+                    .add(theme::icon_button(glyph, label).min_size(egui::vec2(120.0, 30.0)))
+                    .on_hover_text(hint)
+                    .clicked()
+                {
                     view.pick_import(mode);
                 }
             }
         });
-        ui.add_space(10.0);
-        theme::hint(ui, "이 창에 이미지·폴더·ZIP을 끌어다 놓아도 됩니다.");
-        if ui
-            .add(
-                egui::Button::new(RichText::new("여러 화를 한 번에 가져와 번역하기…").small())
-                    .frame_when_inactive(false),
-            )
-            .on_hover_text("폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다")
-            .clicked()
-        {
-            view.pick_import(ImportMode::ZipFolder);
-        }
+        ui.add_space(14.0);
+        theme::hint(ui, "이미지 · 폴더 · ZIP을 창에 끌어다 놓아도 됩니다.");
     });
 }
 
 fn row_fill(response: &egui::Response, selected: bool) -> Color32 {
     if selected {
-        theme::ACCENT_DIM
+        theme::SELECTED
     } else if response.hovered() {
-        Color32::from_rgb(40, 44, 50)
+        theme::ROW_HOVER
     } else {
         Color32::TRANSPARENT
     }
 }
 
-fn truncated(ui: &egui::Ui, text: &str, size: f32, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
-    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), egui::FontId::proportional(size), color);
+fn truncated(
+    ui: &egui::Ui,
+    text: &str,
+    font: egui::FontId,
+    color: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
     job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(10.0));
     ui.painter().layout_job(job)
 }
 
 fn work_row(ui: &mut egui::Ui, work: &WorkSummary, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 50.0), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, 6.0, row_fill(&response, selected));
-        let inner = rect.shrink2(egui::vec2(10.0, 7.0));
-        let title =
-            truncated(ui, &work.work.title, 14.5, if selected { Color32::WHITE } else { theme::TEXT }, inner.width());
-        painter.galley(inner.min, title, theme::TEXT);
+        let inner = rect.shrink2(egui::vec2(10.0, 6.0));
+        let color = if selected { Color32::WHITE } else { theme::TEXT };
+        let title = truncated(ui, &work.work.title, egui::FontId::proportional(13.5), color, inner.width());
+        painter.galley(inner.min, title, color);
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
-        let meta = format!("{}화 · 검수 {done}/{pages}p", work.chapters.len());
-        let meta = truncated(ui, &meta, 11.5, theme::TEXT_WEAK, inner.width());
+        let meta = format!("{}화 · 검수 {done}/{pages}", work.chapters.len());
+        let meta = truncated(ui, &meta, egui::FontId::proportional(11.5), theme::TEXT_WEAK, inner.width());
         painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
     }
     response.on_hover_text(&work.work.title)
 }
 
+/// Column rects of a chapter row: title, pages, status, review progress, last change.
+fn chapter_columns(rect: Rect) -> [Rect; 5] {
+    let inner = rect.shrink2(egui::vec2(12.0, 0.0));
+    let widths = [96.0, 150.0, 104.0, 64.0];
+    let mut right = inner.right();
+    let mut columns = [Rect::NOTHING; 5];
+    for (slot, width) in [4, 3, 2, 1].into_iter().zip(widths) {
+        columns[slot] = Rect::from_x_y_ranges((right - width)..=right, inner.y_range());
+        right -= width + 12.0;
+    }
+    columns[0] = Rect::from_x_y_ranges(inner.left()..=right.max(inner.left()), inner.y_range());
+    columns
+}
+
+fn chapter_header(ui: &mut egui::Ui) {
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 24.0), Sense::hover());
+    let painter = ui.painter();
+    let columns = chapter_columns(rect);
+    for (column, label) in columns.iter().zip(["화", "페이지", "상태", "검수", "수정"]) {
+        painter.text(
+            column.left_center(),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(11.5),
+            theme::TEXT_FAINT,
+        );
+    }
+    painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, theme::BORDER));
+}
+
 fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 58.0), Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), Sense::click_and_drag());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
-        let fill = if response.hovered() { Color32::from_rgb(40, 44, 50) } else { theme::CARD_BG };
-        painter.rect_filled(rect, 8.0, fill);
-        painter.rect_stroke(rect, 8.0, Stroke::new(1.0, theme::BORDER), egui::StrokeKind::Inside);
-        let inner = rect.shrink2(egui::vec2(14.0, 9.0));
+        if response.hovered() {
+            painter.rect_filled(rect.shrink2(egui::vec2(0.0, 1.0)), 5.0, theme::ROW_HOVER);
+        }
+        painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, theme::BORDER));
+        let [title, pages, status, review, updated] = chapter_columns(rect);
+        let center = rect.center().y;
 
-        // Right: status pill, progress and the page count.
-        let (status_color, status) = status_style(chapter.status);
+        let galley = truncated(ui, &chapter.title, theme::semibold_font(13.5), theme::TEXT, title.width());
+        painter.galley(egui::pos2(title.left(), center - galley.size().y / 2.0), galley, theme::TEXT);
+
+        let text = |column: Rect, text: String, color: Color32| {
+            let galley = truncated(ui, &text, egui::FontId::proportional(12.0), color, column.width());
+            painter.galley(egui::pos2(column.left(), center - galley.size().y / 2.0), galley, color);
+        };
+        text(pages, format!("{}p", chapter.page_count), theme::TEXT_WEAK);
+
+        let (status_color, label) = status_style(chapter.status);
+        painter.circle_filled(egui::pos2(status.left() + 3.5, center), 3.5, status_color);
+        text(status.with_min_x(status.left() + 13.0), label.into(), theme::TEXT);
+
         let ratio =
             if chapter.page_count == 0 { 0.0 } else { chapter.completed_page_count as f32 / chapter.page_count as f32 };
-        let count = painter.layout_no_wrap(
-            format!("검수 {}/{}", chapter.completed_page_count, chapter.page_count),
-            egui::FontId::proportional(12.0),
+        let bar = Rect::from_min_size(egui::pos2(review.left(), center - 2.0), egui::vec2(90.0, 4.0));
+        theme::paint_progress(painter, bar, ratio, if ratio >= 1.0 { theme::SUCCESS } else { theme::ACCENT });
+        text(
+            review.with_min_x(bar.right() + 10.0),
+            format!("{}/{}", chapter.completed_page_count, chapter.page_count),
             theme::TEXT_WEAK,
         );
-        let count_pos = egui::pos2(inner.right() - count.size().x, inner.center().y - count.size().y / 2.0);
-        let bar = Rect::from_min_size(egui::pos2(count_pos.x - 128.0, inner.center().y - 3.0), egui::vec2(116.0, 6.0));
-        painter.rect_filled(bar, 3.0, Color32::from_rgb(52, 56, 64));
-        painter.rect_filled(
-            Rect::from_min_size(bar.min, egui::vec2(bar.width() * ratio, bar.height())),
-            3.0,
-            if ratio >= 1.0 { theme::SUCCESS } else { theme::ACCENT },
-        );
-        painter.galley(count_pos, count, theme::TEXT_WEAK);
-        let pill_text = painter.layout_no_wrap(status.into(), egui::FontId::proportional(11.5), status_color);
-        let pill = Rect::from_min_size(
-            egui::pos2(
-                bar.left() - 14.0 - pill_text.size().x - 14.0,
-                inner.center().y - pill_text.size().y / 2.0 - 2.0,
-            ),
-            pill_text.size() + egui::vec2(14.0, 4.0),
-        );
-        painter.rect_filled(pill, 9.0, status_color.gamma_multiply(0.18));
-        painter.galley(pill.min + egui::vec2(7.0, 2.0), pill_text, status_color);
 
-        // Left: title and dates.
-        let text_width = pill.left() - 16.0 - inner.left();
-        let title = truncated(ui, &chapter.title, 15.0, theme::TEXT, text_width);
-        painter.galley(inner.min, title, theme::TEXT);
-        let updated = chapter.updated_at.get(..10).unwrap_or(&chapter.updated_at);
-        let meta = truncated(
-            ui,
-            &format!("{}페이지 · 수정 {updated}", chapter.page_count),
-            11.5,
-            theme::TEXT_WEAK,
-            text_width,
-        );
-        painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
+        let date = chapter.updated_at.get(..10).unwrap_or(&chapter.updated_at).to_owned();
+        text(updated, date, theme::TEXT_WEAK);
     }
-    ui.add_space(6.0);
-    response.on_hover_text(format!("{} 열기", chapter.title))
+    response.on_hover_text(format!("{} 열기 · 끌어서 순서 변경 · 우클릭으로 이름 변경과 삭제", chapter.title))
 }
 
 fn status_style(status: ChapterStatus) -> (Color32, &'static str) {

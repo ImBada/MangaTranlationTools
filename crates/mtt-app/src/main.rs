@@ -88,33 +88,63 @@ fn startup_error(message: &str) {
         .show();
 }
 
+/// `(regular file, face index, semibold file, face index)` per platform.
+type UiFontFiles = (&'static str, u32, &'static str, u32);
+
 /// Makes a Hangul-capable system font the primary UI font so Korean and Latin text share
-/// one face; other scripts still fall back through eframe's system font provider.
+/// one face; other scripts still fall back through eframe's system font provider. Its
+/// semibold weight, when present, becomes `theme::SEMIBOLD_FAMILY` for titles.
 fn install_ui_fonts(ctx: &egui::Context) {
-    let candidates: &[(&str, u32)] = if cfg!(target_os = "macos") {
-        &[("/System/Library/Fonts/AppleSDGothicNeo.ttc", 0)]
+    let candidates: &[UiFontFiles] = if cfg!(target_os = "macos") {
+        let file = "/System/Library/Fonts/AppleSDGothicNeo.ttc";
+        &[(file, 0, file, 4)]
     } else if cfg!(target_os = "windows") {
-        &[("C:\\Windows\\Fonts\\malgun.ttf", 0)]
+        &[("C:\\Windows\\Fonts\\malgun.ttf", 0, "C:\\Windows\\Fonts\\malgunbd.ttf", 0)]
     } else {
         &[
-            ("/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc", 1),
-            ("/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc", 1),
+            (
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                1,
+                "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc",
+                1,
+            ),
+            (
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc",
+                1,
+                "/usr/share/fonts/noto-cjk/NotoSansCJK-Bold.ttc",
+                1,
+            ),
         ]
     };
-    for (path, index) in candidates {
-        let Ok(bytes) = std::fs::read(path) else {
+    use egui::epaint::text::{FontInsert, FontPriority, InsertFontFamily};
+    // Loaded once for the whole run; the macOS collection holds both weights, so one copy
+    // serves both faces.
+    let read = |path: &str| std::fs::read(path).ok().map(|bytes| &*Box::leak(bytes.into_boxed_slice()));
+    for &(path, index, bold_path, bold_index) in candidates {
+        let Some(bytes) = read(path) else {
             continue;
         };
-        let mut data = egui::FontData::from_owned(bytes);
-        data.index = *index;
+        let mut data = egui::FontData::from_static(bytes);
+        data.index = index;
         let families = [egui::FontFamily::Proportional, egui::FontFamily::Monospace]
             .into_iter()
-            .map(|family| egui::epaint::text::InsertFontFamily {
-                family,
-                priority: egui::epaint::text::FontPriority::Highest,
-            })
+            .map(|family| InsertFontFamily { family, priority: FontPriority::Highest })
             .collect();
-        ctx.add_font(egui::epaint::text::FontInsert { name: "ui-hangul".into(), data, families });
+        ctx.add_font(FontInsert { name: "ui-hangul".into(), data, families });
+        let bold_bytes = if bold_path == path { Some(bytes) } else { read(bold_path) };
+        if let Some(bold_bytes) = bold_bytes {
+            let semibold = egui::FontFamily::Name(theme::SEMIBOLD_FAMILY.into());
+            let mut data = egui::FontData::from_static(bold_bytes);
+            data.index = bold_index;
+            let family = InsertFontFamily { family: semibold.clone(), priority: FontPriority::Highest };
+            ctx.add_font(FontInsert { name: "ui-hangul-semibold".into(), data, families: vec![family] });
+            // Glyphs the semibold face lacks come from the regular one.
+            let mut data = egui::FontData::from_static(bytes);
+            data.index = index;
+            let family = InsertFontFamily { family: semibold, priority: FontPriority::Lowest };
+            ctx.add_font(FontInsert { name: "ui-hangul-semibold-fallback".into(), data, families: vec![family] });
+            theme::set_semibold_ready();
+        }
         return;
     }
     log::warn!("no Hangul UI font found; relying on system font fallback");

@@ -110,7 +110,7 @@ pub fn sheet(ui: &mut egui::Ui, columns: usize) {
         for (ui, groups) in cols.iter_mut().zip(&placement) {
             for &index in groups {
                 let group = &GROUPS[index];
-                ui.label(RichText::new(group.title).strong());
+                ui.label(theme::semibold(group.title));
                 ui.add_space(2.0);
                 let grid = egui::Grid::new(("shortcut-group", index)).num_columns(2).spacing([10.0, 3.0]);
                 grid.min_row_height(20.0).show(ui, |ui| {

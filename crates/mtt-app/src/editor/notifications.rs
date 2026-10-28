@@ -4,7 +4,7 @@
 
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, RichText};
+use eframe::egui;
 use mtt_core::model::InpaintStatus;
 
 use super::{Editor, InpaintScope};
@@ -190,7 +190,7 @@ impl Editor {
 fn card(ui: &mut egui::Ui, title: &str, message: &str, actions: impl FnOnce(&mut egui::Ui)) {
     egui::Frame::popup(ui.style()).stroke((1.0, theme::DANGER)).show(ui, |ui| {
         ui.set_width(320.0);
-        ui.label(RichText::new(title).strong().color(theme::DANGER));
+        ui.label(theme::semibold(title).color(theme::DANGER));
         ui.label(message);
         ui.horizontal(actions);
     });

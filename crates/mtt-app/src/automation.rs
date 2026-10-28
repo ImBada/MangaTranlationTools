@@ -46,6 +46,8 @@ pub enum Step {
     /// `card-drag:<card>><target>` drags an inspector card's grip onto the top of another.
     CardDrag(crate::editor::widgets::Card, crate::editor::widgets::Card),
     Sample([f32; 2]),
+    /// Moves the pointer to a screen point (tooltips, hover states).
+    Hover([f32; 2]),
     WaitTranslation,
     Window([f32; 2]),
     InpaintAll,
@@ -130,6 +132,10 @@ impl Automation {
                         (v.len() == 2).then(|| Step::Sample([v[0], v[1]]))?
                     }
                     "sample-wait" => Step::WaitSample,
+                    "hover" => {
+                        let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                        (v.len() == 2).then(|| Step::Hover([v[0], v[1]]))?
+                    }
                     "translate-wait" => Step::WaitTranslation,
                     "window" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
@@ -294,6 +300,10 @@ impl Automation {
                 self.wait_frames = 10;
             }
             (Step::Wait(frames), _) => self.wait_frames = *frames,
+            (Step::Hover(pos), _) => {
+                self.injected.push_back(vec![egui::Event::PointerMoved(egui::pos2(pos[0], pos[1]))]);
+                self.wait_frames = 3;
+            }
             (Step::Space(pressed), _) => {
                 self.injected.push_back(vec![egui::Event::Key {
                     key: egui::Key::Space,
