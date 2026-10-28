@@ -19,9 +19,9 @@ pub const GROUPS: &[Group] = &[
             ("3 / 4", "인페인트 결과 / 마스크"),
             ("1", "검수 · 출력"),
             ("5", "원본 이미지 보기 켜고 끄기"),
-            ("Space", "누르는 동안 최종 결과 미리보기 + 끌어서 이동"),
+            ("Space", "누르는 동안 최종 결과 보기 · 끌면 이동"),
             ("스크롤", "화면 이동"),
-            ("⌘ 스크롤", "확대 / 축소 (트랙패드는 두 손가락 벌리기)"),
+            ("⌘ 스크롤", "확대 / 축소 (트랙패드: 벌리기)"),
             ("⌘0", "화면에 맞춤"),
             ("⌘+ / ⌘-", "확대 / 축소"),
         ],
@@ -40,7 +40,7 @@ pub const GROUPS: &[Group] = &[
     Group {
         title: "편집",
         items: &[
-            ("E", "선택한 블록 문장 바로 고치기 (더블클릭도 됨)"),
+            ("E", "문장 바로 고치기 (더블클릭도 됨)"),
             ("⌘Enter / Esc", "바로 고치기 확정 / 취소"),
             ("⌘Z / ⇧⌘Z", "실행 취소 / 다시 실행"),
             ("⌘C / ⌘V", "블록 복사 / 붙여넣기"),
@@ -95,23 +95,40 @@ pub fn keycaps(ui: &mut egui::Ui, mac: &str) {
     });
 }
 
-/// Every group as a two-column grid of keycaps and descriptions.
+/// Every group as a grid of keycaps and descriptions, in `columns` columns; each group goes
+/// into the column that is shortest so far.
 pub fn sheet(ui: &mut egui::Ui, columns: usize) {
+    let columns = columns.max(1);
+    let mut placement: Vec<Vec<usize>> = vec![Vec::new(); columns];
+    let mut rows = vec![0; columns];
+    for (index, group) in GROUPS.iter().enumerate() {
+        let column = (0..columns).min_by_key(|&column| rows[column]).unwrap_or(0);
+        rows[column] += group.items.len() + 2;
+        placement[column].push(index);
+    }
     ui.columns(columns, |cols| {
-        for (index, group) in GROUPS.iter().enumerate() {
-            let ui = &mut cols[index % columns];
-            ui.label(RichText::new(group.title).strong());
-            ui.add_space(2.0);
-            egui::Grid::new(("shortcut-group", index)).num_columns(2).spacing([10.0, 4.0]).show(ui, |ui| {
-                for (mac, action) in group.items {
-                    keycaps(ui, mac);
-                    ui.label(RichText::new(*action).small());
-                    ui.end_row();
-                }
-            });
-            ui.add_space(10.0);
+        for (ui, groups) in cols.iter_mut().zip(&placement) {
+            for &index in groups {
+                let group = &GROUPS[index];
+                ui.label(RichText::new(group.title).strong());
+                ui.add_space(2.0);
+                let grid = egui::Grid::new(("shortcut-group", index)).num_columns(2).spacing([10.0, 3.0]);
+                grid.min_row_height(20.0).show(ui, |ui| {
+                    for (mac, action) in group.items {
+                        keycaps(ui, mac);
+                        ui.label(RichText::new(*action).small());
+                        ui.end_row();
+                    }
+                });
+                ui.add_space(10.0);
+            }
         }
     });
+}
+
+/// Columns for the shortcut sheet in a window `width` points wide, and the sheet's width.
+pub fn sheet_layout(width: f32) -> (usize, f32) {
+    if width >= 1040.0 { (3, (width - 60.0).min(1120.0)) } else { (2, (width - 60.0).min(760.0)) }
 }
 
 #[cfg(test)]

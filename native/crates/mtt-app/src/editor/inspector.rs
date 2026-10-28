@@ -59,7 +59,7 @@ fn translate(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
         editor.inspector_tab,
         &[
             (InspectorTab::Blocks, "블록", "이 페이지의 텍스트 블록"),
-            (InspectorTab::Presets, "프리셋", "화 전체에서 쓰는 글꼴 프리셋 편집"),
+            (InspectorTab::Presets, "프리셋 편집", "화 전체에서 쓰는 글꼴 프리셋 편집"),
         ],
     ) {
         if tab == InspectorTab::Presets {
@@ -145,11 +145,36 @@ fn selection(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
 }
 
 /// Drop target for a dragged card: a line where it would land, moved there on release.
+/// Holding the card near the top or bottom of the panel scrolls it.
 fn reorder_cards(editor: &mut Editor, ui: &egui::Ui, cards: &[(Card, egui::Rect)]) {
     let Some(dragged) = egui::DragAndDrop::payload::<CardDrag>(ui.ctx()) else { return };
     let Some(pointer) = ui.input(|i| i.pointer.interact_pos()) else { return };
-    let Some(&(target, rect)) = cards.iter().find(|(_, rect)| rect.contains(pointer)) else { return };
-    let after = pointer.y > rect.center().y;
+    let visible = ui.clip_rect();
+    if !visible.x_range().contains(pointer.x) {
+        return;
+    }
+    let edge = 36.0;
+    let scroll = if pointer.y < visible.top() + edge {
+        12.0
+    } else if pointer.y > visible.bottom() - edge {
+        -12.0
+    } else {
+        0.0
+    };
+    if scroll != 0.0 {
+        ui.scroll_with_delta(egui::vec2(0.0, scroll));
+        ui.ctx().request_repaint();
+    }
+    // Over a card: before or after it by which half; past the ends: first or last.
+    let (Some(first), Some(last)) = (cards.first(), cards.last()) else { return };
+    let (target, rect, after) = if pointer.y < first.1.top() {
+        (first.0, first.1, false)
+    } else if pointer.y > last.1.bottom() {
+        (last.0, last.1, true)
+    } else {
+        let Some(&(target, rect)) = cards.iter().find(|(_, rect)| rect.y_range().contains(pointer.y)) else { return };
+        (target, rect, pointer.y > rect.center().y)
+    };
     // Each card is followed by 8pt of space; the line sits in that gap.
     let y = if after { rect.bottom() - 4.0 } else { rect.top() - 4.0 };
     ui.painter().hline(rect.x_range(), y, egui::Stroke::new(2.0, theme::ACCENT));
@@ -206,7 +231,7 @@ pub(super) fn page_widget(
                     _ => ("인페인트 전", theme::IDLE),
                 };
                 theme::pill(ui, inpainted, color);
-                theme::pill(ui, &format!("블록 {}", page.blocks.len()), theme::IDLE);
+                theme::pill(ui, &format!("블록 {}개", page.blocks.len()), theme::IDLE);
             });
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
@@ -256,7 +281,10 @@ pub(super) fn page_widget(
     }
     if export {
         editor.status = match editor.export_current(services) {
-            Ok(path) => format!("페이지 렌더 저장: {}", path.display()),
+            Ok(path) => format!(
+                "이 페이지를 출력했습니다: {} (출력 폴더 열기는 검수 · 출력 모드)",
+                path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
+            ),
             Err(error) => format!("출력 실패: {error}"),
         };
     }
@@ -294,7 +322,11 @@ pub(super) fn block_widget(editor: &mut Editor, ui: &mut egui::Ui, worker: &Work
             .1
         }
         _ => {
-            let note = if grouped { "그룹은 오른쪽 그룹 카드에서 고칩니다." } else { PICK_A_BLOCK };
+            let note = if grouped {
+                "그룹은 오른쪽 그룹 카드에서 고칩니다."
+            } else {
+                "블록을 고르면 여기서 문장을 고칩니다."
+            };
             widgets::frame(ui, host, Widget::Block, "블록", |_| {}, |ui| theme::hint(ui, note)).1
         }
     };
@@ -909,9 +941,16 @@ fn chapter_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
                 Some((current, total)) => format!("출력 중 {current}/{total}"),
                 None => "전체 페이지 출력".into(),
             };
+            let unreviewed = total - completed;
             if ui
                 .add_enabled(total > 0 && !job_active && !render_busy, theme::primary_icon(theme::icon::EXPORT, label))
                 .clicked()
+                && (unreviewed == 0
+                    || theme::confirm(
+                        "전체 페이지 출력",
+                        &format!("검수 완료하지 않은 페이지가 {unreviewed}개 있습니다."),
+                        "그래도 모든 페이지를 출력할까요?",
+                    ))
             {
                 editor.status = match editor.export_all(services, worker) {
                     Ok(()) => "전체 페이지 출력 시작".into(),

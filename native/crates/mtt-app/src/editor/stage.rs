@@ -56,15 +56,20 @@ impl ViewState {
     }
 
     /// `resolveStageFitSize`: fits the stage but never upscales or exceeds 1040px wide.
-    fn fit(&mut self, width: f32, height: f32) {
-        let available = self.stage_rect.size() - Vec2::splat(32.0);
+    /// `insets` keep the left and right room taken by widget windows free, unless that
+    /// would leave the page too little.
+    fn fit(&mut self, width: f32, height: f32, insets: (f32, f32)) {
+        let stage = self.stage_rect.size();
+        let (left, right) = if stage.x - insets.0 - insets.1 < stage.x * 0.45 { (0.0, 0.0) } else { insets };
+        let room = egui::vec2(stage.x - left - right, stage.y);
+        let available = room - Vec2::splat(32.0);
         let width = width.max(1.0);
         self.zoom = (available.x / width)
             .min(available.y / height.max(1.0))
             .min(MAX_FIT_WIDTH / width)
             .min(1.0)
             .clamp(MIN_ZOOM, MAX_ZOOM);
-        self.offset = (self.stage_rect.size() - Vec2::new(width, height) * self.zoom) / 2.0;
+        self.offset = egui::vec2(left, 0.0) + (room - Vec2::new(width, height) * self.zoom) / 2.0;
         self.fit_requested = false;
         self.auto_fit = true;
     }
@@ -349,7 +354,7 @@ pub fn stage(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services) {
             return;
         };
         if editor.view.fit_requested {
-            editor.view.fit(page.width as f32, page.height as f32);
+            editor.view.fit(page.width as f32, page.height as f32, editor.widgets.side_insets());
         }
         let page_rect = editor
             .view
@@ -430,6 +435,12 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
     // One row above the block (below it when there is no room), kept inside the canvas.
     let above = rect.top() - 36.0 - ROTATE_HANDLE_OFFSET;
     let y = if above >= stage.top() + 4.0 { above } else { rect.bottom() + 8.0 };
+    // The row draws above windows, so it waits while a widget window sits where it goes.
+    let row = Rect::from_min_size(egui::pos2(rect.left(), y), egui::vec2(320.0, 36.0));
+    if editor.widgets.covers(row, editor.mode()) {
+        editor.size_repeat = None;
+        return;
+    }
     egui::Area::new(egui::Id::unique("block-quick-controls"))
         .fixed_pos(egui::pos2(rect.left(), y))
         .constrain_to(stage)
@@ -624,8 +635,11 @@ fn paint_overlay(
     }
 
     let tint = alpha_tint(opacity.overlay);
-    // Block backgrounds are an editing aid, not part of the output.
-    if editor.layer == Layer::Overlay && !editor.final_output_preview() {
+    // Block backgrounds are an editing aid, not part of the output: they cover the original
+    // text until the page is inpainted, then the page shows as it will be exported (the
+    // "배경 투명도 편집" mode keeps them to edit their opacity).
+    let backgrounds = editor.overlay_opacity_edit || !editor.current_result_exists();
+    if editor.layer == Layer::Overlay && backgrounds && !editor.final_output_preview() {
         for block in
             page.blocks.iter().filter(|block| block.render_direction != mtt_core::model::RenderTextDirection::Hidden)
         {
@@ -712,7 +726,10 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
         painter.rect_filled(rect, 0.0, RANGE_COLOR.gamma_multiply(0.12));
         painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RANGE_COLOR), StrokeKind::Middle);
     }
-    if let Some(range) = editor.range {
+    // The inpaint range belongs to the inpaint modes.
+    if let Some(range) = editor.range
+        && editor.mode() == super::Mode::Inpaint
+    {
         let rect = editor.view.rect_to_screen(range);
         painter.rect_stroke(rect, 0.0, Stroke::new(1.5, RANGE_COLOR), StrokeKind::Middle);
     }

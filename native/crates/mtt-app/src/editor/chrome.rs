@@ -168,12 +168,13 @@ fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
 /// "AI 번역" (pending pages) with a menu for the other runs, or the running job.
 fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
     if let Some(job) = &editor.translation {
-        let hover = format!("{}\n{}", job.endpoint, job.last_message);
-        let text = format!("{} {}/{}", job.phase_label(), job.done, job.total);
+        // One counter on the bar; what is happening right now goes in the tooltip.
+        let hover = format!("{}\n{}\n{}", job.phase_label(), job.endpoint, job.last_message);
+        let text = format!("번역 중 · {}/{} 완료", job.done, job.total);
         let progress = job.progress();
         if ui
             .add(egui::Button::new((
-                theme::icon(icon::MINUS).color(theme::DANGER),
+                theme::icon(icon::X).color(theme::DANGER),
                 RichText::new("취소").color(theme::DANGER),
             )))
             .on_hover_text("AI 번역 취소")
@@ -706,7 +707,7 @@ pub fn canvas_toolbar(editor: &mut Editor, ui: &mut egui::Ui) {
                 ui.spacing_mut().button_padding.x = 7.0;
                 let locked = editor.page_edit_locked();
                 match editor.mode() {
-                    Mode::Translate => translate_tools(editor, ui, locked),
+                    Mode::Translate => translate_tools(editor, ui, locked, full.width() < 720.0),
                     Mode::Inpaint => inpaint_tools(editor, ui, locked),
                     Mode::Review => review_tools(editor, ui),
                 }
@@ -732,7 +733,9 @@ fn pointer_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool, pointer_h
     }
 }
 
-fn translate_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
+/// `compact` (narrow canvas): the buttons keep their icon and key, the name moves to the
+/// tooltip, so the row doesn't wrap.
+fn translate_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool, compact: bool) {
     let hint = format!(
         "선택\n블록을 눌러 고르고 끌어서 옮깁니다\n{} 드래그: 선택한 블록 영역 다시 그리기\n{} 클릭: 블록 복제",
         shortcuts::keys("⌥"),
@@ -741,24 +744,32 @@ fn translate_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
     pointer_tools(editor, ui, locked, &hint, "범위 선택\n끈 사각형에 걸친 블록을 모두 고릅니다");
     ui.separator();
     let page_ready = editor.page().is_some() && !locked && !editor.inpaint_busy();
-    if ui
-        .add_enabled(page_ready, egui::Button::new(theme::icon_text(icon::PLUS_SQUARE, "블록 추가")))
-        .on_hover_text("빈 텍스트 블록 만들기")
-        .clicked()
-    {
+    let add = if compact {
+        egui::Button::new(theme::icon(icon::PLUS_SQUARE))
+    } else {
+        egui::Button::new(theme::icon_text(icon::PLUS_SQUARE, "블록 추가"))
+    };
+    if ui.add_enabled(page_ready, add).on_hover_text("블록 추가: 빈 텍스트 블록 만들기").clicked() {
         editor.create_empty_block();
     }
     let single = editor.selection.len() == 1;
+    let label = |glyph, name, key| {
+        if compact {
+            egui::Button::new((theme::icon(glyph), theme::key_hint(key, false)))
+        } else {
+            theme::icon_button_key(glyph, name, key)
+        }
+    };
     if ui
-        .add_enabled(single && !locked, theme::icon_button_key(icon::CURSOR_TEXT, "직접 입력", "E"))
-        .on_hover_text("캔버스에서 문장 바로 고치기 (더블클릭도 됨)")
+        .add_enabled(single && !locked, label(icon::CURSOR_TEXT, "직접 입력", "E"))
+        .on_hover_text("직접 입력: 캔버스에서 문장 바로 고치기 (더블클릭도 됨)")
         .on_disabled_hover_text("블록 하나를 고르면 캔버스에서 바로 고칠 수 있습니다")
         .clicked()
     {
         let id = editor.selection[0].clone();
         editor.start_inline_edit(&id);
     }
-    if ui.add(theme::icon_button_key(icon::BINOCULARS, "찾기", "⌘F")).on_hover_text("화 전체에서 찾아 바꾸기").clicked()
+    if ui.add(label(icon::BINOCULARS, "찾기", "⌘F")).on_hover_text("찾기: 화 전체에서 찾아 바꾸기").clicked()
     {
         editor.find.open = true;
     }

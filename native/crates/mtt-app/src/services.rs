@@ -30,6 +30,10 @@ pub struct UiState {
     /// Order of the selection cards in the inspector (`editor::widgets::Card` keys).
     #[serde(default)]
     pub inspector_order: Vec<String>,
+    /// The canvas rect the widget windows were last placed against, so they keep their
+    /// distance to its edges when the app window has another size.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub widget_canvas: Option<[f32; 4]>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize, serde::Deserialize)]

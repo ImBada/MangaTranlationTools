@@ -275,7 +275,9 @@ impl Editor {
                 self.status = match (error, cancelled) {
                     (Some(error), _) => error,
                     (None, true) => "작업이 취소됨".into(),
-                    (None, false) => summarize_warnings(&job.warnings).unwrap_or("번역 완료").into(),
+                    (None, false) => summarize_warnings(&job.warnings)
+                        .unwrap_or("번역 완료 · 문장을 확인한 뒤 인페인트(3)로 원문 글자를 지우세요")
+                        .into(),
                 };
                 return Some(success);
             }

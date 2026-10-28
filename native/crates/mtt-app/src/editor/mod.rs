@@ -1748,6 +1748,13 @@ impl Editor {
 
     pub fn toggle_page_completed(&mut self) {
         self.edit_page(|page| page.progress_completed = Some(!page.is_completed()));
+        // 검수: checking a page off moves on to the next page still to review.
+        if self.mode() == Mode::Review
+            && self.page().is_some_and(PageRecord::is_completed)
+            && let Some(next) = (self.current + 1..self.page_count()).find(|&i| !self.chapter.pages[i].is_completed())
+        {
+            self.go_to_page(next);
+        }
     }
 
     // ---- persistence -----------------------------------------------------------------
@@ -2090,7 +2097,8 @@ impl Editor {
     ) -> Option<EditorAction> {
         let pointer_down = ui.input(|i| i.pointer.any_down());
         self.tick(services, worker, pointer_down);
-        self.widgets.load(&services.ui_state.widgets, &services.ui_state.inspector_order);
+        let ui_state = &services.ui_state;
+        self.widgets.load(&ui_state.widgets, &ui_state.inspector_order, ui_state.widget_canvas);
         self.text_editing = false;
         self.font_previews.begin_frame();
         self.eyedropper_frame(&ui.ctx().clone());
@@ -2123,7 +2131,11 @@ impl Editor {
         if self.shortcut_sheet {
             let mut open = true;
             let ctx = ui.ctx().clone();
-            let max_height = (ctx.content_rect().height() - 180.0).max(200.0);
+            let screen = ctx.content_rect();
+            // As many columns as fit, so the whole sheet shows without scrolling on a
+            // normal window; the footer stays outside the scroll area.
+            let (columns, width) = crate::shortcuts::sheet_layout(screen.width());
+            let max_height = (screen.height() - 200.0).max(200.0);
             crate::theme::modal(
                 &ctx,
                 egui::Window::new("단축키")
@@ -2131,9 +2143,13 @@ impl Editor {
                     .collapsible(false)
                     .resizable(false)
                     .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
-                    .default_width(760.0),
+                    .min_width(width)
+                    .max_width(width),
                 |ui| {
-                    egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| crate::shortcuts::sheet(ui, 2));
+                    egui::ScrollArea::vertical()
+                        .max_height(max_height)
+                        .show(ui, |ui| crate::shortcuts::sheet(ui, columns));
+                    ui.separator();
                     crate::theme::hint(ui, "? 또는 Esc로 닫습니다. 버튼 옆의 작은 글자도 단축키입니다.");
                 },
             );
@@ -2151,7 +2167,7 @@ impl Editor {
             stage::shortcuts(self, &ui.ctx().clone(), services);
         }
         let ui_state = &mut services.ui_state;
-        if self.widgets.store(&mut ui_state.widgets, &mut ui_state.inspector_order) {
+        if self.widgets.store(&mut ui_state.widgets, &mut ui_state.inspector_order, &mut ui_state.widget_canvas) {
             services.save_ui_state();
         }
         action
@@ -2635,6 +2651,28 @@ mod tests {
         editor.selection.clear();
         editor.select_adjacent_block(-1);
         assert_eq!(editor.selection, ["y"], "Shift+Tab with nothing selected starts at the end");
+    }
+
+    #[test]
+    fn review_check_off_moves_to_the_next_page_to_review() {
+        let mut editor = Editor::new(chapter_with_pages(4));
+        editor.chapter.pages[1].progress_completed = Some(true);
+        editor.select_layer_shortcut(1);
+        editor.toggle_page_completed();
+        assert!(editor.chapter.pages[0].is_completed());
+        assert_eq!(editor.current, 2, "page 2 is already reviewed, so it goes on to 3");
+        editor.toggle_page_completed();
+        editor.toggle_page_completed();
+        assert_eq!(editor.current, 3, "the last page stays put");
+        assert!(editor.chapter.pages[3].is_completed());
+        editor.toggle_page_completed();
+        assert!(!editor.chapter.pages[3].is_completed(), "unchecking stays on the page");
+        assert_eq!(editor.current, 3);
+
+        editor.select_layer_shortcut(2);
+        editor.go_to_page(0);
+        editor.toggle_page_completed();
+        assert_eq!(editor.current, 0, "other modes stay on the page");
     }
 
     #[test]

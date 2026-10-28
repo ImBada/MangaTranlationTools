@@ -170,7 +170,7 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
     let mut group_drop: Option<(String, String, String, DropPosition)> = None;
     let mut group_action = None;
     let mut toggle_collapsed = false;
-    let title = format!("텍스트 블록 {}", page.blocks.len());
+    let title = format!("텍스트 블록 · {}개", page.blocks.len());
     let (_, toggle) = widgets::frame(
         ui,
         host,
@@ -216,7 +216,9 @@ pub fn blocks_widget(editor: &mut Editor, ui: &mut egui::Ui, host: Host) {
                 .auto_shrink([false, host == Host::Panel])
                 .show(ui, |ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    if page.blocks.is_empty() {
+                    if page.blocks.is_empty() && locked {
+                        theme::hint(ui, "AI 번역이 끝나면 여기에 블록이 나옵니다.");
+                    } else if page.blocks.is_empty() {
                         theme::hint(ui, "텍스트 블록이 없습니다. AI 번역을 돌리거나 '블록 추가'로 만드세요.");
                     }
                     for item in list_items(&page) {

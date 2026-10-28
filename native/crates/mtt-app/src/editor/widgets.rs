@@ -2,7 +2,9 @@
 //! the canvas — the page list, the text block list, the selected block, the preset palette
 //! and "이 페이지".
 //! The button in a widget's header moves it between the two; where each one is and where
-//! its window was are kept in `native-ui-state.json`.
+//! its window was are kept in `native-ui-state.json`. Everything starts in its panel.
+//! Windows keep their distance to the nearest canvas edges when the canvas changes size,
+//! and fitting the page leaves room for windows along the canvas's sides.
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 
@@ -49,11 +51,6 @@ impl Widget {
             Widget::Presets => "presets",
             Widget::Page => "page",
         }
-    }
-
-    /// The block widgets (list, selected block, presets) start out as their own windows.
-    fn floats_by_default(self) -> bool {
-        matches!(self, Widget::Blocks | Widget::Block | Widget::Presets)
     }
 
     /// Modes a floating widget shows in; the block widgets only work on blocks.
@@ -153,6 +150,10 @@ pub struct Layout {
     rects: HashMap<Widget, Rect>,
     /// Windows to place at their rect on the next frame (just popped out).
     place: HashSet<Widget>,
+    /// Canvas the rects were placed against.
+    canvas: Option<Rect>,
+    /// Room taken on the canvas's left and right by windows along its sides.
+    insets: (f32, f32),
     dirty: bool,
 }
 
@@ -164,13 +165,41 @@ impl Default for Layout {
             floating: HashSet::new(),
             rects: HashMap::new(),
             place: HashSet::new(),
+            canvas: None,
+            insets: (0.0, 0.0),
             dirty: false,
         }
     }
 }
 
+fn to_rect([x, y, w, h]: [f32; 4]) -> Rect {
+    Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
+}
+
+fn from_rect(rect: Rect) -> [f32; 4] {
+    [rect.min.x, rect.min.y, rect.width(), rect.height()]
+}
+
+/// `rect` moved (not resized) to lie inside `bounds` as far as it fits.
+fn clamp_into(rect: Rect, bounds: Rect) -> Rect {
+    let mut shift = Vec2::ZERO;
+    if rect.right() > bounds.right() {
+        shift.x = bounds.right() - rect.right();
+    }
+    if rect.left() + shift.x < bounds.left() {
+        shift.x = bounds.left() - rect.left();
+    }
+    if rect.bottom() > bounds.bottom() {
+        shift.y = bounds.bottom() - rect.bottom();
+    }
+    if rect.top() + shift.y < bounds.top() {
+        shift.y = bounds.top() - rect.top();
+    }
+    rect.translate(shift)
+}
+
 impl Layout {
-    pub fn load(&mut self, saved: &BTreeMap<String, SavedWidget>, order: &[String]) {
+    pub fn load(&mut self, saved: &BTreeMap<String, SavedWidget>, order: &[String], canvas: Option<[f32; 4]>) {
         if self.loaded {
             return;
         }
@@ -185,15 +214,58 @@ impl Layout {
             }
         }
         self.cards = cards;
+        self.canvas = canvas.map(to_rect);
         for widget in Widget::ALL {
             let entry = saved.get(widget.key());
-            if entry.map_or(widget.floats_by_default(), |entry| entry.floating) {
+            if entry.is_some_and(|entry| entry.floating) {
                 self.floating.insert(widget);
             }
-            if let Some([x, y, w, h]) = entry.and_then(|entry| entry.rect) {
-                self.rects.insert(widget, Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h)));
+            if let Some(rect) = entry.and_then(|entry| entry.rect) {
+                self.rects.insert(widget, to_rect(rect));
+                self.place.insert(widget);
             }
         }
+    }
+
+    /// "위젯 배치 초기화": every widget back in its panel, cards in the default order.
+    pub fn reset(&mut self) {
+        self.floating.clear();
+        self.rects.clear();
+        self.cards = Card::ALL.to_vec();
+        self.dirty = true;
+    }
+
+    /// Whether a widget window shown in `mode` overlaps `rect`.
+    pub fn covers(&self, rect: Rect, mode: Mode) -> bool {
+        self.floating
+            .iter()
+            .filter(|widget| widget.shown_in(mode))
+            .filter_map(|widget| self.rects.get(widget))
+            .any(|window| window.intersects(rect))
+    }
+
+    /// Room on the canvas's left and right taken by windows along its sides.
+    pub fn side_insets(&self) -> (f32, f32) {
+        self.insets
+    }
+
+    /// Moves every window by how much its nearest canvas edges moved.
+    fn follow_canvas(&mut self, old: Rect, canvas: Rect) {
+        for (widget, rect) in &mut self.rects {
+            let dx = if rect.center().x > old.center().x {
+                canvas.right() - old.right()
+            } else {
+                canvas.left() - old.left()
+            };
+            let dy = if rect.center().y > old.center().y {
+                canvas.bottom() - old.bottom()
+            } else {
+                canvas.top() - old.top()
+            };
+            *rect = clamp_into(rect.translate(egui::vec2(dx, dy)), canvas);
+            self.place.insert(*widget);
+        }
+        self.dirty = true;
     }
 
     pub fn floating(&self, widget: Widget) -> bool {
@@ -219,8 +291,10 @@ impl Layout {
     pub fn set_floating(&mut self, widget: Widget, floating: bool, from: Option<Pos2>) {
         if floating {
             if let Some(from) = from {
+                // Where the card was, pulled onto the canvas.
                 let size = self.rects.get(&widget).map_or(widget.default_size(), |rect| rect.size());
-                self.rects.insert(widget, Rect::from_min_size(from, size));
+                let rect = Rect::from_min_size(from, size);
+                self.rects.insert(widget, self.canvas.map_or(rect, |canvas| clamp_into(rect, canvas)));
             }
             self.floating.insert(widget);
             self.place.insert(widget);
@@ -231,13 +305,19 @@ impl Layout {
     }
 
     /// Writes the layout into the UI state when it changed; returns whether it did.
-    pub fn store(&mut self, saved: &mut BTreeMap<String, SavedWidget>, order: &mut Vec<String>) -> bool {
+    pub fn store(
+        &mut self,
+        saved: &mut BTreeMap<String, SavedWidget>,
+        order: &mut Vec<String>,
+        canvas: &mut Option<[f32; 4]>,
+    ) -> bool {
         if !std::mem::take(&mut self.dirty) {
             return false;
         }
         *order = self.cards.iter().map(|card| card.key().to_owned()).collect();
+        *canvas = self.canvas.map(from_rect);
         for widget in Widget::ALL {
-            let rect = self.rects.get(&widget).map(|rect| [rect.min.x, rect.min.y, rect.width(), rect.height()]);
+            let rect = self.rects.get(&widget).copied().map(from_rect);
             saved.insert(widget.key().to_owned(), SavedWidget { floating: self.floating(widget), rect });
         }
         true
@@ -342,8 +422,13 @@ pub fn floating_windows(editor: &mut Editor, ctx: &egui::Context, services: &mut
     if !stage.is_positive() {
         return;
     }
+    if let Some(old) = editor.widgets.canvas.filter(|old| *old != stage) {
+        editor.widgets.follow_canvas(old, stage);
+    }
+    editor.widgets.canvas = Some(stage);
     let mode = editor.mode();
     let pointer_down = ctx.input(|input| input.pointer.any_down());
+    let mut insets = (0.0_f32, 0.0_f32);
     for widget in Widget::ALL {
         if !editor.widgets.floating(widget) || !widget.shown_in(mode) {
             continue;
@@ -369,7 +454,22 @@ pub fn floating_windows(editor: &mut Editor, ctx: &egui::Context, services: &mut
             Widget::Page => super::inspector::page_widget(editor, ui, services, worker, Host::Window),
         });
         if let Some(shown) = shown {
-            editor.widgets.track(widget, shown.response.rect, pointer_down);
+            let rect = shown.response.rect;
+            editor.widgets.track(widget, rect, pointer_down);
+            // A window against a canvas side takes that side's room from the page fit.
+            if rect.left() <= stage.left() + 40.0 && rect.center().x < stage.center().x {
+                insets.0 = insets.0.max(rect.right() - stage.left() + 8.0);
+            }
+            if rect.right() >= stage.right() - 40.0 && rect.center().x > stage.center().x {
+                insets.1 = insets.1.max(stage.right() - rect.left() + 8.0);
+            }
+        }
+    }
+    let changed = (insets.0 - editor.widgets.insets.0).abs() > 4.0 || (insets.1 - editor.widgets.insets.1).abs() > 4.0;
+    if changed && !pointer_down {
+        editor.widgets.insets = insets;
+        if editor.view.auto_fit {
+            editor.view.fit_requested = true;
         }
     }
 }
@@ -382,7 +482,7 @@ fn window_frame(ctx: &egui::Context) -> egui::Frame {
         .inner_margin(egui::Margin::same(10))
 }
 
-/// "보기" menu rows: each widget's window on or off.
+/// "보기" menu rows: each widget's window on or off, and a reset.
 pub fn menu(editor: &mut Editor, ui: &mut egui::Ui) {
     ui.label(RichText::new("위젯").small().color(theme::TEXT_WEAK));
     for widget in Widget::ALL {
@@ -390,6 +490,11 @@ pub fn menu(editor: &mut Editor, ui: &mut egui::Ui) {
         if ui.checkbox(&mut floating, format!("{} 따로 띄우기", widget.label())).changed() {
             editor.widgets.set_floating(widget, floating, None);
         }
+    }
+    if ui.button("위젯 배치 초기화").on_hover_text("모든 위젯을 패널에 다시 붙이고 카드 순서도 처음대로").clicked()
+    {
+        editor.widgets.reset();
+        editor.view.fit_requested = true;
     }
 }
 
@@ -400,9 +505,9 @@ mod tests {
     #[test]
     fn layout_defaults_and_round_trips() {
         let mut layout = Layout::default();
-        layout.load(&BTreeMap::new(), &[]);
-        assert!(layout.floating(Widget::Blocks) && layout.floating(Widget::Block) && layout.floating(Widget::Presets));
-        assert!(!layout.floating(Widget::Pages) && !layout.floating(Widget::Page));
+        layout.load(&BTreeMap::new(), &[], None);
+        assert!(Widget::ALL.iter().all(|widget| !layout.floating(*widget)), "everything starts docked");
+        layout.set_floating(Widget::Blocks, true, None);
 
         layout.set_floating(Widget::Blocks, false, None);
         layout.set_floating(Widget::Pages, true, Some(egui::pos2(10.0, 20.0)));
@@ -411,14 +516,39 @@ mod tests {
         assert_eq!(layout.cards(), [Card::Presets, Card::Style, Card::Block, Card::Placement]);
         let mut saved = BTreeMap::new();
         let mut order = Vec::new();
-        assert!(layout.store(&mut saved, &mut order));
-        assert!(!layout.store(&mut saved, &mut order), "nothing new to write");
+        let mut canvas = None;
+        assert!(layout.store(&mut saved, &mut order, &mut canvas));
+        assert!(!layout.store(&mut saved, &mut order, &mut canvas), "nothing new to write");
 
         let mut again = Layout::default();
-        again.load(&saved, &order[..2]);
+        again.load(&saved, &order[..2], canvas);
         assert_eq!(again.cards(), [Card::Presets, Card::Style, Card::Block, Card::Placement], "unknown cards follow");
-        assert!(!again.floating(Widget::Blocks), "docking is remembered over the default");
+        assert!(!again.floating(Widget::Blocks), "docking again is remembered");
         assert!(again.floating(Widget::Pages));
         assert_eq!(again.rects[&Widget::Pages].min, egui::pos2(10.0, 20.0));
+    }
+
+    #[test]
+    fn windows_keep_their_distance_to_the_nearest_canvas_edges() {
+        let mut layout = Layout::default();
+        let old = Rect::from_min_size(egui::pos2(200.0, 60.0), egui::vec2(900.0, 800.0));
+        let right = Rect::from_min_size(egui::pos2(780.0, 100.0), egui::vec2(300.0, 200.0));
+        let left = Rect::from_min_size(egui::pos2(212.0, 600.0), egui::vec2(250.0, 200.0));
+        layout.rects.insert(Widget::Blocks, right);
+        layout.rects.insert(Widget::Page, left);
+
+        let canvas = Rect::from_min_size(egui::pos2(200.0, 60.0), egui::vec2(600.0, 600.0));
+        layout.follow_canvas(old, canvas);
+        let moved = layout.rects[&Widget::Blocks];
+        assert_eq!(moved.right(), right.right() - 300.0, "right-hand window follows the right edge");
+        assert_eq!(moved.top(), right.top(), "and keeps its distance to the top");
+        let moved = layout.rects[&Widget::Page];
+        assert_eq!(moved.left(), left.left());
+        assert_eq!(
+            moved.bottom(),
+            canvas.bottom() - (old.bottom() - left.bottom()),
+            "bottom window follows the bottom"
+        );
+        assert!(layout.rects.values().all(|rect| canvas.contains_rect(*rect)));
     }
 }

@@ -305,10 +305,10 @@ pub fn segmented_icons<T: Copy + PartialEq>(ui: &mut egui::Ui, current: T, optio
 /// Small shortcut label next to a control (`mac` spelling, see [`crate::shortcuts::keys`]).
 pub fn key_hint(mac: &str, on_accent: bool) -> RichText {
     let color = if on_accent { Color32::from_rgb(190, 208, 245) } else { KEY_HINT };
-    RichText::new(crate::shortcuts::keys(mac)).size(10.5).color(color)
+    RichText::new(crate::shortcuts::keys(mac)).size(11.0).color(color)
 }
 
-const KEY_HINT: Color32 = Color32::from_rgb(120, 128, 140);
+const KEY_HINT: Color32 = Color32::from_rgb(138, 146, 158);
 
 /// Toolbar toggle: an icon with its shortcut in small type beside it (the tooltip
 /// carries the name).
