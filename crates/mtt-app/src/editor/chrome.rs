@@ -140,16 +140,13 @@ fn work_notes_dialog(editor: &mut Editor, ui: &egui::Ui, services: &mut Services
         },
     );
     if save {
-        let work = services.library.read_work(&editor.chapter.work_id).ok().flatten();
-        editor.status = match work {
-            Some(mut work) => {
-                work.translation_notes = draft.trim().to_owned();
-                match services.library.write_work(&work) {
-                    Ok(()) => "번역 메모를 저장했습니다. 다음 번역부터 반영됩니다.".into(),
-                    Err(error) => format!("번역 메모를 저장하지 못했습니다: {error}"),
-                }
-            }
-            None => "작품 정보를 찾지 못해 번역 메모를 저장하지 못했습니다.".into(),
+        let saved = services
+            .library
+            .update_work(&editor.chapter.work_id, |work| work.translation_notes = draft.trim().to_owned());
+        editor.status = match saved {
+            Ok(Some(())) => "번역 메모를 저장했습니다. 다음 번역부터 반영됩니다.".into(),
+            Ok(None) => "작품 정보를 찾지 못해 번역 메모를 저장하지 못했습니다.".into(),
+            Err(error) => format!("번역 메모를 저장하지 못했습니다: {error}"),
         };
     } else if !close {
         editor.work_notes_draft = Some(draft);

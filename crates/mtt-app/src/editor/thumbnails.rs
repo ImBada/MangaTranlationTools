@@ -75,7 +75,7 @@ impl Thumbnails {
 }
 
 fn decode(path: &std::path::Path) -> Result<egui::ColorImage, String> {
-    let mut image = image::open(path).map_err(|error| error.to_string())?;
+    let mut image = mtt_core::image_io::open_image(path).map_err(|error| error.to_string())?;
     // Long strips (webtoons) show their top instead of a sliver of the whole page.
     let tallest = image.width().saturating_mul(8) / 5;
     if image.height() > tallest && tallest > 0 {

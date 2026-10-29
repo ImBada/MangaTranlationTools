@@ -10,7 +10,7 @@ use mtt_core::import::{
     ImportPreview, ImportResult, ImportTarget, create_import, preview_archive, preview_folder, preview_images,
     preview_zip_folder,
 };
-use mtt_core::library::{ChapterSummary, WorkSummary};
+use mtt_core::library::{ChapterSummary, UnreadableEntry, WorkSummary};
 use mtt_core::model::ChapterStatus;
 
 use crate::app::AppEvent;
@@ -68,6 +68,8 @@ struct Pending {
 #[derive(Default)]
 pub struct LibraryView {
     works: Vec<WorkSummary>,
+    /// Library files the last listing skipped, plus this session's rebuild notices.
+    unreadable: Vec<UnreadableEntry>,
     /// Bumped whenever `works` is replaced.
     works_generation: u64,
     /// The search result for `(query, works_generation)`; searching normalizes every title.
@@ -115,11 +117,14 @@ impl LibraryView {
     }
 
     pub fn refresh(&mut self, services: &mut Services) {
-        match services.library.list() {
-            Ok(works) => {
-                self.works = works;
+        match services.library.list_all() {
+            Ok(listing) => {
+                self.works = listing.works;
                 self.works_generation += 1;
                 self.error = None;
+                // A rebuild is reported once; keep its notice while the app runs.
+                self.unreadable.retain(|entry| entry.rebuilt);
+                self.unreadable.extend(listing.unreadable);
             }
             Err(error) => self.error = Some(format!("보관함을 읽지 못했습니다: {error}")),
         }
@@ -272,16 +277,24 @@ impl LibraryView {
                     egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
                         for chapter in &mut dialog.preview.chapters {
                             ui.horizontal(|ui| {
+                                let pages = format!("{}페이지", chapter.pages.len());
                                 if batch {
-                                    ui.checkbox(&mut chapter.enabled, format!("{}페이지", chapter.pages.len()));
+                                    // A source that couldn't be read can't be picked.
+                                    ui.add_enabled(
+                                        chapter.error.is_none(),
+                                        egui::Checkbox::new(&mut chapter.enabled, pages),
+                                    );
                                 } else {
-                                    ui.label(RichText::new(format!("{}페이지", chapter.pages.len())).weak());
+                                    ui.label(RichText::new(pages).weak());
                                 }
                                 ui.add_enabled(
                                     chapter.enabled,
                                     egui::TextEdit::singleline(&mut chapter.title).desired_width(320.0),
                                 );
                             });
+                            if let Some(error) = &chapter.error {
+                                ui.label(RichText::new(format!("읽지 못함: {error}")).small().color(theme::DANGER));
+                            }
                         }
                     });
                 });
@@ -543,6 +556,17 @@ impl LibraryView {
                 }
                 if services.fonts_failed() {
                     ui.colored_label(theme::DANGER, "시스템 폰트를 불러오지 못했습니다.");
+                }
+                if !self.unreadable.is_empty() {
+                    let title = format!("읽지 못한 파일 {}개", self.unreadable.len());
+                    egui::CollapsingHeader::new(RichText::new(title).color(theme::DANGER))
+                        .id_salt("library-unreadable")
+                        .show(ui, |ui| {
+                            for entry in &self.unreadable {
+                                ui.label(RichText::new(&entry.message).small())
+                                    .on_hover_text(entry.path.display().to_string());
+                            }
+                        });
                 }
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
                     ui.set_max_width(ui.available_width().min(960.0));
@@ -825,10 +849,14 @@ pub fn preview_dropped(paths: &[PathBuf]) -> Result<ImportPreview, String> {
         (true, many) if !many.is_empty() => {
             let mut chapters = Vec::new();
             for path in many {
-                let preview = if path.is_dir() { preview_folder(path) } else { preview_archive(path) };
-                chapters.extend(preview.map_err(|e| e.to_string())?.chapters);
+                if path.is_dir() {
+                    chapters.extend(preview_folder(path).map_err(|e| e.to_string())?.chapters);
+                } else {
+                    // One archive that can't be read stays in the list, disabled, with its error.
+                    chapters.push(mtt_core::import::archive_chapter_draft(path));
+                }
             }
-            chapters.retain(|chapter| !chapter.pages.is_empty());
+            chapters.retain(|chapter| !chapter.pages.is_empty() || chapter.error.is_some());
             chapters.sort_by(|a, b| mtt_core::import::natural_cmp(&a.title, &b.title));
             let suggested_work_title = many[0]
                 .parent()
@@ -1033,6 +1061,50 @@ mod tests {
 
     fn png(path: &std::path::Path) {
         image::RgbaImage::new(2, 2).save(path).unwrap();
+    }
+
+    #[test]
+    fn unreadable_library_files_are_listed_next_to_the_rest() {
+        let ctx = egui::Context::default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut services = Services::new(&ctx, mtt_core::paths::AppPaths::from_data_root(dir.path()));
+        let library = services.library.clone();
+        let good = library.create_work("멀쩡한 작품").unwrap();
+        let chapter = mtt_core::model::Chapter { id: "c1".into(), work_id: good.id.clone(), ..Default::default() };
+        library.write_chapter_file(&chapter).unwrap();
+        library.update_work(&good.id, |work| work.chapter_order.extend(["c1".into(), "c2".into()])).unwrap();
+        std::fs::create_dir_all(library.chapter_dir(&good.id, "c2")).unwrap();
+        std::fs::write(library.chapter_file(&good.id, "c2"), "").unwrap();
+        let damaged = library.create_work("깨진 작품").unwrap();
+        std::fs::write(library.work_file(&damaged.id), "").unwrap();
+
+        let mut view = LibraryView::default();
+        view.refresh(&mut services);
+        assert_eq!(view.error, None);
+        assert_eq!(view.works.len(), 2);
+        assert_eq!(view.works[0].chapters.len(), 1);
+        assert_eq!(view.unreadable.len(), 2, "{:?}", view.unreadable);
+        // The rebuild is reported once by the library; the view keeps showing it.
+        view.refresh(&mut services);
+        assert_eq!(view.unreadable.len(), 2);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            view.ui(ui, &mut services, &mut |_, _| false);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn a_dropped_archive_that_cannot_be_read_is_listed_disabled() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("1화");
+        std::fs::create_dir(&good).unwrap();
+        png(&good.join("01.png"));
+        let bad = dir.path().join("2화.cbz");
+        std::fs::write(&bad, b"not an archive").unwrap();
+        let preview = preview_dropped(&[bad, good]).unwrap();
+        let drafts: Vec<(&str, bool, bool)> =
+            preview.chapters.iter().map(|c| (c.title.as_str(), c.enabled, c.error.is_some())).collect();
+        assert_eq!(drafts, [("1화", true, false), ("2화", false, true)]);
     }
 
     #[test]

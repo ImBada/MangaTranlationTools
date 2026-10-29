@@ -366,7 +366,9 @@ pub fn translate_regions(
 ) -> Result<Vec<parser::RegionText>, SendError> {
     let unreadable = |error: String| SendError::new(error, Retry::No);
     let mut variants = vec![images::original_variant(image_path).map_err(unreadable)?];
-    let page = image::open(image_path).map_err(|e| unreadable(format!("{}: {e}", image_path.display())))?.to_rgba8();
+    let page = mtt_core::image_io::open_image(image_path)
+        .map_err(|e| unreadable(format!("{}: {e}", image_path.display())))?
+        .to_rgba8();
     for region in regions {
         variants.push(images::region_variant(&page, region.id, region.bbox).map_err(unreadable)?);
     }

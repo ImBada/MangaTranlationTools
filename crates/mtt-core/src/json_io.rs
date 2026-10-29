@@ -83,19 +83,34 @@ pub fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> CoreResult<()>
 /// last write may be lost on a power cut. For state that is cheap to lose.
 pub fn write_json_replace<T: Serialize>(path: &Path, value: &T) -> CoreResult<()> {
     let text = to_pretty_json(value).map_err(|source| CoreError::json(path, source))?;
-    write_bytes(path, text.as_bytes(), false)
+    write_bytes(path, text.as_bytes(), false, false)
+}
+
+/// Like `write_json_atomic` for files holding secrets (API keys): on Unix the file is
+/// readable by its owner only (0600), whatever the old file's mode was.
+pub fn write_json_private<T: Serialize>(path: &Path, value: &T) -> CoreResult<()> {
+    let text = to_pretty_json(value).map_err(|source| CoreError::json(path, source))?;
+    write_bytes(path, text.as_bytes(), true, true)
 }
 
 pub fn write_bytes_atomic(path: &Path, bytes: &[u8]) -> CoreResult<()> {
-    write_bytes(path, bytes, true)
+    write_bytes(path, bytes, true, false)
 }
 
-fn write_bytes(path: &Path, bytes: &[u8], sync: bool) -> CoreResult<()> {
+fn write_bytes(path: &Path, bytes: &[u8], sync: bool, private: bool) -> CoreResult<()> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
     fs::create_dir_all(parent).map_err(|source| CoreError::io(parent, source))?;
     let temp_path = temp_sibling(path);
     let write = || -> std::io::Result<()> {
-        let mut file = fs::File::create(&temp_path)?;
+        let mut options = fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        if private {
+            std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+        }
+        #[cfg(not(unix))]
+        let _ = private;
+        let mut file = options.open(&temp_path)?;
         file.write_all(bytes)?;
         if sync {
             file.sync_all()?;
@@ -109,16 +124,46 @@ fn write_bytes(path: &Path, bytes: &[u8], sync: bool) -> CoreResult<()> {
     fs::rename(&temp_path, path).map_err(|source| {
         let _ = fs::remove_file(&temp_path);
         CoreError::io(path, source)
-    })
+    })?;
+    if sync {
+        sync_dir(parent);
+    }
+    Ok(())
+}
+
+/// Flushes a directory entry change (the rename above) to disk, so a power cut can't bring
+/// back the old file or an empty one. Best effort: some file systems refuse it, and on
+/// Windows a directory can't be opened as a file (NTFS journals the rename itself).
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(dir) = fs::File::open(dir) {
+        let _ = dir.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Moves a file that couldn't be read out of the way (`<name>.bad`, `<name>.bad-2`, …) so it
+/// is kept for the user while a repaired one takes its place. Returns where it went.
+pub fn set_aside_broken(path: &Path) -> CoreResult<PathBuf> {
+    let target = (1..)
+        .map(|n| append_extension(path, &if n == 1 { "bad".to_owned() } else { format!("bad-{n}") }))
+        .find(|candidate| !candidate.exists())
+        .expect("an unused name");
+    fs::rename(path, &target).map_err(|source| CoreError::io(path, source))?;
+    Ok(target)
 }
 
 /// Copies `path` to `<path>.native-backup` the first time the native app overwrites it.
+/// Written like any other file (temp file + rename), so a crash mid-copy can't leave a
+/// truncated backup that would then never be made again.
 pub fn backup_once(path: &Path) -> CoreResult<()> {
     let backup = append_extension(path, "native-backup");
     if backup.exists() || !path.exists() {
         return Ok(());
     }
-    fs::copy(path, &backup).map(|_| ()).map_err(|source| CoreError::io(&backup, source))
+    let bytes = fs::read(path).map_err(|source| CoreError::io(path, source))?;
+    write_bytes_atomic(&backup, &bytes)
 }
 
 fn temp_sibling(path: &Path) -> PathBuf {
@@ -198,6 +243,33 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn broken_files_are_set_aside_without_replacing_earlier_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("work.json");
+        fs::write(&path, "{").unwrap();
+        assert_eq!(set_aside_broken(&path).unwrap(), dir.path().join("work.json.bad"));
+        fs::write(&path, "").unwrap();
+        assert_eq!(set_aside_broken(&path).unwrap(), dir.path().join("work.json.bad-2"));
+        assert!(!path.exists());
+        assert_eq!(fs::read_to_string(dir.path().join("work.json.bad")).unwrap(), "{");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn private_files_are_readable_by_their_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        fs::write(&path, "{}").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        write_json_private(&path, &json!({ "apiKey": "secret" })).unwrap();
+        assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        write_json_atomic(&dir.path().join("chapter.json"), &json!({})).unwrap();
+        let mode = fs::metadata(dir.path().join("chapter.json")).unwrap().permissions().mode();
+        assert_ne!(mode & 0o077, 0, "other files keep the usual mode");
     }
 
     #[test]

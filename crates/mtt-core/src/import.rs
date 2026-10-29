@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, CoreResult};
+use crate::image_io::probe_image;
 use crate::library::{
     DEFAULT_CHAPTER_TITLE, DEFAULT_WORK_TITLE, Library, resolve_chapter_status, sanitize_title, unique_title,
 };
@@ -42,6 +43,19 @@ pub enum PageSource {
 /// PDF pages become PNGs at this resolution, enough for fine lettering and line art.
 pub const PDF_DPI: f32 = 300.0;
 
+/// Longest side of a rendered PDF page. A B5 page at [`PDF_DPI`] is about 3000px, but scans
+/// whose page box is in pixels come out 10000px and more: gigabytes to render, and larger
+/// than the editor opens.
+pub const PDF_MAX_SIDE: f32 = 8000.0;
+
+/// Largest page file taken from an archive. Far above any real page; it stops a damaged
+/// or hostile archive from filling the disk.
+const MAX_PAGE_BYTES: u64 = 256 << 20;
+
+fn too_large(name: &str) -> CoreError {
+    CoreError::Invalid(format!("{name}: 페이지 파일이 너무 큽니다 ({}MB 초과).", MAX_PAGE_BYTES >> 20))
+}
+
 /// What a file imports as when it isn't an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveKind {
@@ -51,13 +65,36 @@ pub enum ArchiveKind {
 }
 
 impl ArchiveKind {
-    /// By extension: `.zip`/`.cbz`, `.rar`/`.cbr`, `.pdf`.
+    /// By extension: `.zip`/`.cbz`, `.rar`/`.cbr`, `.pdf`. Picks the files to offer; how a
+    /// file is read is [`ArchiveKind::detect`].
     pub fn of(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
             "zip" | "cbz" => Some(Self::Zip),
             "rar" | "cbr" => Some(Self::Rar),
             "pdf" => Some(Self::Pdf),
             _ => None,
+        }
+    }
+
+    /// By the file's first bytes, which often disagree with the extension (a `.cbz` that is
+    /// really a RAR, or the other way round); by extension when they match no known header.
+    pub fn detect(path: &Path) -> Option<Self> {
+        Self::sniff(path).or_else(|| Self::of(path))
+    }
+
+    fn sniff(path: &Path) -> Option<Self> {
+        use std::io::Read;
+        let mut head = Vec::with_capacity(1024);
+        fs::File::open(path).ok()?.take(1024).read_to_end(&mut head).ok()?;
+        if [&b"PK\x03\x04"[..], b"PK\x05\x06", b"PK\x07\x08"].iter().any(|magic| head.starts_with(magic)) {
+            Some(Self::Zip)
+        } else if head.starts_with(b"Rar!\x1a\x07") || head.starts_with(b"RE\x7e\x5e") {
+            Some(Self::Rar)
+        } else if head.windows(5).any(|window| window == b"%PDF-") {
+            // Readers accept the header anywhere in the first 1024 bytes.
+            Some(Self::Pdf)
+        } else {
+            None
         }
     }
 }
@@ -77,6 +114,22 @@ pub struct ChapterDraft {
     pub source_kind: ImportSourceKind,
     pub pages: Vec<PageDraft>,
     pub enabled: bool,
+    /// Why the source couldn't be listed; such a draft has no pages and stays disabled.
+    pub error: Option<String>,
+}
+
+impl ChapterDraft {
+    /// A draft of `pages`, or a disabled one carrying the error when listing failed, so one
+    /// bad source in a batch doesn't fail the whole preview.
+    fn listed(title: String, source_kind: ImportSourceKind, pages: CoreResult<Vec<PageDraft>>) -> Self {
+        match pages {
+            Ok(pages) => Self { title, source_kind, pages, enabled: true, error: None },
+            Err(error) => {
+                log::warn!("import preview: {title}: {error}");
+                Self { title, source_kind, pages: Vec::new(), enabled: false, error: Some(error.to_string()) }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -100,7 +153,7 @@ pub struct ImportResult {
 }
 
 /// `localeCompare(..., { numeric: true, sensitivity: "base" })` approximation: digit runs
-/// compare by value, everything else case-insensitively.
+/// (ASCII or full-width) compare by value, everything else case-insensitively.
 pub fn natural_cmp(left: &str, right: &str) -> Ordering {
     let (mut a, mut b) = (left.chars().peekable(), right.chars().peekable());
     loop {
@@ -108,10 +161,10 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
             (None, None) => return Ordering::Equal,
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+            (Some(x), Some(y)) if ascii_digit(x).is_some() && ascii_digit(y).is_some() => {
                 let take_number = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| {
                     let mut digits = String::new();
-                    while let Some(c) = chars.peek().copied().filter(char::is_ascii_digit) {
+                    while let Some(c) = chars.peek().copied().and_then(ascii_digit) {
                         digits.push(c);
                         chars.next();
                     }
@@ -125,6 +178,7 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
                 }
             }
             (Some(x), Some(y)) => {
+                let (x, y) = (ascii_digit(x).unwrap_or(x), ascii_digit(y).unwrap_or(y));
                 let ordering = x.to_lowercase().cmp(y.to_lowercase());
                 if ordering != Ordering::Equal {
                     return ordering;
@@ -136,16 +190,32 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
     }
 }
 
+/// `ch` as an ASCII digit when it is one, or a full-width one (`１２` in Japanese names).
+fn ascii_digit(ch: char) -> Option<char> {
+    match ch {
+        '0'..='9' => Some(ch),
+        '\u{ff10}'..='\u{ff19}' => char::from_u32(u32::from(ch) - 0xff10 + u32::from('0')),
+        _ => None,
+    }
+}
+
 fn sort_naturally(paths: &mut [PathBuf]) {
     paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
 }
 
+/// Names become page names and chapter titles in NFC: macOS file names often hold
+/// decomposed Hangul (ㅈ+ㅔ for 제), which would not match the same title typed in.
+fn nfc(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfc().collect()
+}
+
 fn file_name(path: &Path) -> String {
-    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_name().map(|name| nfc(&name.to_string_lossy())).unwrap_or_default()
 }
 
 fn file_stem(path: &Path) -> String {
-    path.file_stem().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_stem().map(|name| nfc(&name.to_string_lossy())).unwrap_or_default()
 }
 
 fn list_image_files(folder: &Path) -> CoreResult<Vec<PathBuf>> {
@@ -160,13 +230,42 @@ fn list_image_files(folder: &Path) -> CoreResult<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Decodes a ZIP entry name: UTF-8 when valid, otherwise Shift_JIS (common for Japanese
-/// archives created on Windows).
+/// Decodes a ZIP (or old RAR) entry name: UTF-8 when valid, otherwise the code page of the
+/// Windows that made the archive: CP949 when the bytes read as Korean (see
+/// [`looks_like_euc_kr`]), else Shift_JIS (common for Japanese archives).
 pub fn decode_zip_name(raw: &[u8]) -> String {
-    match std::str::from_utf8(raw) {
-        Ok(text) => text.replace('\\', "/"),
-        Err(_) => encoding_rs::SHIFT_JIS.decode(raw).0.replace('\\', "/"),
+    let text = match std::str::from_utf8(raw) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        // `EUC_KR` is the WHATWG encoding, which is CP949.
+        Err(_) if looks_like_euc_kr(raw) => encoding_rs::EUC_KR.decode_without_bom_handling(raw).0,
+        Err(_) => encoding_rs::SHIFT_JIS.decode(raw).0,
+    };
+    nfc(&text.replace('\\', "/"))
+}
+
+/// Whether legacy bytes read as Korean: every non-ASCII pair is a KS X 1001 symbol or Hangul
+/// syllable (no Hanja, nothing from CP949's extension rows) and at least one is Hangul.
+/// Shift_JIS kana and kanji start with bytes outside those rows (or would read as Hanja),
+/// so Japanese names stay Shift_JIS; Korean names in Shift_JIS turn into half-width
+/// katakana (`제1화` → `ﾁｦ1ﾈｭ`). A name of nothing but half-width katakana can read both
+/// ways and is taken as Korean.
+fn looks_like_euc_kr(raw: &[u8]) -> bool {
+    let mut hangul = false;
+    let mut bytes = raw.iter().copied();
+    while let Some(lead) = bytes.next() {
+        if lead < 0x80 {
+            continue;
+        }
+        if !bytes.next().is_some_and(|trail| (0xa1..=0xfe).contains(&trail)) {
+            return false;
+        }
+        match lead {
+            0xa1..=0xac => {}
+            0xb0..=0xc8 => hangul = true,
+            _ => return false,
+        }
     }
+    hangul
 }
 
 fn is_ignored_zip_entry(name: &str) -> bool {
@@ -185,7 +284,7 @@ pub fn list_rar_images(archive: &Path) -> CoreResult<Vec<PageDraft>> {
         .map(|(index, member)| {
             // Old archives store names in the creator's code page (Shift_JIS for Japanese ones).
             let name = if member.name_is_unicode() {
-                member.to_owned().meta.name_lossy().replace('\\', "/")
+                nfc(&member.to_owned().meta.name_lossy().replace('\\', "/"))
             } else {
                 decode_zip_name(member.name_bytes())
             };
@@ -220,9 +319,9 @@ pub fn list_pdf_pages(document: &Path) -> CoreResult<Vec<PageDraft>> {
         .collect())
 }
 
-/// Pages of an archive or PDF by [`ArchiveKind::of`].
+/// Pages of an archive or PDF by [`ArchiveKind::detect`].
 pub fn list_archive_pages(path: &Path) -> CoreResult<Vec<PageDraft>> {
-    match ArchiveKind::of(path) {
+    match ArchiveKind::detect(path) {
         Some(ArchiveKind::Rar) => list_rar_images(path),
         Some(ArchiveKind::Pdf) => list_pdf_pages(path),
         _ => list_zip_images(path),
@@ -255,7 +354,7 @@ fn single(source_kind: ImportSourceKind, title: String, pages: Vec<PageDraft>) -
         batch: false,
         source_kind,
         suggested_work_title: DEFAULT_WORK_TITLE.into(),
-        chapters: vec![ChapterDraft { title, source_kind, pages, enabled: true }],
+        chapters: vec![ChapterDraft { title, source_kind, pages, enabled: true, error: None }],
     }
 }
 
@@ -281,7 +380,13 @@ pub fn preview_archive(archive: &Path) -> CoreResult<ImportPreview> {
 }
 
 fn archive_source_kind(path: &Path) -> ImportSourceKind {
-    if ArchiveKind::of(path) == Some(ArchiveKind::Pdf) { ImportSourceKind::Pdf } else { ImportSourceKind::Zip }
+    if ArchiveKind::detect(path) == Some(ArchiveKind::Pdf) { ImportSourceKind::Pdf } else { ImportSourceKind::Zip }
+}
+
+/// One archive or PDF of a multi-file import as a chapter draft; one that can't be read
+/// becomes a disabled draft carrying the error.
+pub fn archive_chapter_draft(path: &Path) -> ChapterDraft {
+    ChapterDraft::listed(file_stem(path), archive_source_kind(path), list_archive_pages(path))
 }
 
 /// Every archive or PDF directly inside `folder` plus every nested folder containing
@@ -291,44 +396,39 @@ pub fn preview_zip_folder(folder: &Path) -> CoreResult<ImportPreview> {
     for entry in fs::read_dir(folder).map_err(|source| CoreError::io(folder, source))?.filter_map(Result::ok) {
         let path = entry.path();
         if entry.file_type().is_ok_and(|kind| kind.is_file()) && ArchiveKind::of(&path).is_some() {
-            let pages = list_archive_pages(&path)?;
-            sources.push((
-                file_name(&path),
-                ChapterDraft {
-                    title: file_stem(&path),
-                    source_kind: ImportSourceKind::ZipFolder,
-                    pages,
-                    enabled: true,
-                },
-            ));
+            let draft = ChapterDraft { source_kind: ImportSourceKind::ZipFolder, ..archive_chapter_draft(&path) };
+            sources.push((file_name(&path), draft));
         }
     }
     let mut stack = vec![folder.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let mut children: Vec<PathBuf> = fs::read_dir(&current)
-            .map_err(|source| CoreError::io(&current, source))?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| entry.path())
-            .collect();
+        let mut children: Vec<PathBuf> = match fs::read_dir(&current) {
+            Ok(entries) => entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .map(|entry| entry.path())
+                .collect(),
+            Err(source) if current == folder => return Err(CoreError::io(&current, source)),
+            // An unreadable subfolder is listed below as a disabled draft with the error.
+            Err(_) => Vec::new(),
+        };
         sort_naturally(&mut children);
         stack.extend(children.into_iter().rev());
         if current == folder {
             continue;
         }
-        let images = list_image_files(&current)?;
-        if images.is_empty() {
+        let images = list_image_files(&current);
+        if images.as_ref().is_ok_and(Vec::is_empty) {
             continue;
         }
-        let relative = current.strip_prefix(folder).unwrap_or(&current).to_string_lossy().replace('\\', "/");
-        let pages = images
-            .into_iter()
-            .map(|path| PageDraft { name: file_name(&path), source: PageSource::File(path) })
-            .collect();
-        sources.push((
-            relative.clone(),
-            ChapterDraft { title: relative, source_kind: ImportSourceKind::Folder, pages, enabled: true },
-        ));
+        let relative = nfc(&current.strip_prefix(folder).unwrap_or(&current).to_string_lossy().replace('\\', "/"));
+        let pages = images.map(|images| {
+            images
+                .into_iter()
+                .map(|path| PageDraft { name: file_name(&path), source: PageSource::File(path) })
+                .collect()
+        });
+        sources.push((relative.clone(), ChapterDraft::listed(relative, ImportSourceKind::Folder, pages)));
     }
     sources.sort_by(|a, b| natural_cmp(&a.0, &b.0));
     Ok(ImportPreview {
@@ -378,7 +478,7 @@ pub fn create_import(
                 if cancelled() {
                     return Err(CoreError::Invalid("가져오기를 취소했습니다.".into()));
                 }
-                pages.push(materialize_page(page, &pages_dir, index, &mut archive)?);
+                pages.push(materialize_page(page, &pages_dir, index, &mut archive, &draft.pages, &cancelled)?);
                 done += 1;
                 progress(done, total);
             }
@@ -397,10 +497,13 @@ pub fn create_import(
                 updated_at: now.clone(),
                 ..Chapter::default()
             };
-            let mut current_work = library.read_work(&work.id)?.unwrap_or_else(|| work.clone());
-            current_work.chapter_order.push(chapter_id.clone());
-            current_work.updated_at = now;
-            library.write_work(&current_work)?;
+            let added = library.update_work(&work.id, |current| {
+                current.chapter_order.push(chapter_id.clone());
+                current.updated_at = now;
+            })?;
+            if added.is_none() {
+                return Err(CoreError::NotFound("선택한 작품을 찾지 못했습니다.".into()));
+            }
             library.write_chapter_file(&chapter)?;
         }
         Ok(created.iter().map(|(id, _)| id.clone()).collect())
@@ -420,8 +523,63 @@ pub fn create_import(
 /// The archive or PDF the last page came from, kept open for the next.
 enum OpenSource {
     Zip(PathBuf, zip::ZipArchive<fs::File>),
-    Rar(PathBuf, rars::Archive),
+    Rar(PathBuf, RarPages),
     Pdf(PathBuf, hayro::hayro_syntax::Pdf),
+}
+
+/// The members of a RAR archive a chapter takes, decoded in one pass into a temporary
+/// folder next to its pages: reading members one at a time decodes every earlier member
+/// of a solid archive again for each page (O(n²)).
+struct RarPages {
+    files: std::collections::HashMap<usize, PathBuf>,
+    _scratch: tempfile::TempDir,
+}
+
+fn extract_rar_pages(
+    path: &Path,
+    wanted: &std::collections::HashSet<usize>,
+    scratch: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> CoreResult<RarPages> {
+    use rars::ExtractionDecision;
+    let rar = rars::ArchiveReader::read_path(path)
+        .map_err(|error| CoreError::Invalid(format!("RAR을 열지 못했습니다: {error}")))?;
+    let dir = tempfile::Builder::new()
+        .prefix(".rar-")
+        .tempdir_in(scratch)
+        .map_err(|source| CoreError::io(scratch, source))?;
+    let last = wanted.iter().max().copied().unwrap_or(0);
+    let solid = rar.is_solid();
+    let mut files = std::collections::HashMap::new();
+    let mut current = 0usize;
+    let options = rars::ArchiveReadOptions::new().with_max_member_output_bytes(MAX_PAGE_BYTES);
+    // Like `Archive::read_members_at`, but into files instead of memory.
+    let extracted = rar.extract_with_control(options, |member| {
+        let index = current;
+        current += 1;
+        if index > last || cancelled() {
+            return Ok(ExtractionDecision::Stop);
+        }
+        if member.meta.is_directory || member.meta.is_redirection {
+            return Ok(ExtractionDecision::Skip);
+        }
+        if wanted.contains(&index) {
+            let file_path = dir.path().join(index.to_string());
+            let file = fs::File::create(&file_path)?;
+            files.insert(index, file_path);
+            return Ok(ExtractionDecision::Extract(Box::new(file)));
+        }
+        // In a solid archive every earlier member has to be decoded.
+        Ok(if solid { ExtractionDecision::Extract(Box::new(std::io::sink())) } else { ExtractionDecision::Skip })
+    });
+    if cancelled() {
+        return Err(CoreError::Invalid("가져오기를 취소했습니다.".into()));
+    }
+    extracted.map_err(|error| match error {
+        rars::Error::MemberOutputLimitExceeded { .. } => too_large(&file_name(path)),
+        error => CoreError::Invalid(format!("RAR 항목을 풀지 못했습니다: {error}")),
+    })?;
+    Ok(RarPages { files, _scratch: dir })
 }
 
 impl OpenSource {
@@ -432,8 +590,16 @@ impl OpenSource {
     }
 }
 
-/// `source` opened (or the one already open when it is the same file).
-fn open_source<'a>(open: &'a mut Option<OpenSource>, path: &Path, kind: ArchiveKind) -> CoreResult<&'a mut OpenSource> {
+/// `source` opened (or the one already open when it is the same file). A RAR archive is
+/// decoded right away for every page of `pages` it holds, into a folder next to `pages_dir`.
+fn open_source<'a>(
+    open: &'a mut Option<OpenSource>,
+    path: &Path,
+    kind: ArchiveKind,
+    pages: &[PageDraft],
+    pages_dir: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> CoreResult<&'a mut OpenSource> {
     if open.as_ref().is_none_or(|current| current.path() != path) {
         *open = Some(match kind {
             ArchiveKind::Zip => {
@@ -443,9 +609,15 @@ fn open_source<'a>(open: &'a mut Option<OpenSource>, path: &Path, kind: ArchiveK
                 OpenSource::Zip(path.to_path_buf(), zip)
             }
             ArchiveKind::Rar => {
-                let rar = rars::ArchiveReader::read_path(path)
-                    .map_err(|error| CoreError::Invalid(format!("RAR을 열지 못했습니다: {error}")))?;
-                OpenSource::Rar(path.to_path_buf(), rar)
+                let wanted = pages
+                    .iter()
+                    .filter_map(|page| match &page.source {
+                        PageSource::RarEntry { archive, index, .. } if archive == path => Some(*index),
+                        _ => None,
+                    })
+                    .collect();
+                let scratch = pages_dir.parent().unwrap_or(pages_dir);
+                OpenSource::Rar(path.to_path_buf(), extract_rar_pages(path, &wanted, scratch, cancelled)?)
             }
             ArchiveKind::Pdf => OpenSource::Pdf(path.to_path_buf(), open_pdf(path)?),
         });
@@ -457,7 +629,8 @@ fn render_pdf_page(pdf: &hayro::hayro_syntax::Pdf, index: usize) -> CoreResult<V
     let cache = hayro::RenderCache::new();
     let pages = pdf.pages();
     let page = pages.get(index).ok_or_else(|| CoreError::Invalid(format!("PDF {}쪽을 찾지 못했습니다.", index + 1)))?;
-    let scale = PDF_DPI / 72.0;
+    let (width, height) = page.render_dimensions();
+    let scale = pdf_scale(width, height);
     let settings = hayro::PixmapSettings {
         x_scale: scale,
         y_scale: scale,
@@ -474,11 +647,32 @@ fn render_pdf_page(pdf: &hayro::hayro_syntax::Pdf, index: usize) -> CoreResult<V
     .map_err(|error| CoreError::Invalid(format!("PDF {}쪽을 PNG로 만들지 못했습니다: {error:?}", index + 1)))
 }
 
+/// Copies at most `limit` bytes; `None` when the source has more.
+fn copy_capped(
+    source: impl std::io::Read,
+    target: &mut impl std::io::Write,
+    limit: u64,
+) -> std::io::Result<Option<u64>> {
+    let copied = std::io::copy(&mut source.take(limit + 1), target)?;
+    Ok((copied <= limit).then_some(copied))
+}
+
+/// Points to pixels: [`PDF_DPI`], or less when the long side would pass [`PDF_MAX_SIDE`].
+fn pdf_scale(width_pt: f32, height_pt: f32) -> f32 {
+    let long_side = width_pt.max(height_pt);
+    let scale = PDF_DPI / 72.0;
+    if long_side * scale > PDF_MAX_SIDE { PDF_MAX_SIDE / long_side } else { scale }
+}
+
+/// Copies `draft` into `pages_dir` as page `index`. `pages` are all of the chapter's pages
+/// (a RAR archive is decoded for all of them at once).
 fn materialize_page(
     draft: &PageDraft,
     pages_dir: &Path,
     index: usize,
     archive: &mut Option<OpenSource>,
+    pages: &[PageDraft],
+    cancelled: &dyn Fn() -> bool,
 ) -> CoreResult<PageRecord> {
     let page_id = uuid::Uuid::new_v4().to_string();
     let source_name = match &draft.source {
@@ -496,33 +690,60 @@ fn materialize_page(
             fs::copy(path, &output).map_err(|source| CoreError::io(path, source))?;
         }
         PageSource::ZipEntry { archive: archive_path, index: entry_index, name } => {
-            let OpenSource::Zip(_, zip) = open_source(archive, archive_path, ArchiveKind::Zip)? else {
+            let OpenSource::Zip(_, zip) =
+                open_source(archive, archive_path, ArchiveKind::Zip, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as ZIP")
             };
-            let mut entry = zip
+            let entry = zip
                 .by_index(*entry_index)
                 .map_err(|error| CoreError::Invalid(format!("ZIP 항목을 찾지 못했습니다: {name}: {error}")))?;
+            if entry.size() > MAX_PAGE_BYTES {
+                return Err(too_large(name));
+            }
             let mut target = fs::File::create(&output).map_err(|source| CoreError::io(&output, source))?;
-            std::io::copy(&mut entry, &mut target).map_err(|source| CoreError::io(&output, source))?;
+            // The declared size can lie.
+            copy_capped(entry, &mut target, MAX_PAGE_BYTES)
+                .map_err(|source| CoreError::io(&output, source))?
+                .ok_or_else(|| too_large(name))?;
         }
         PageSource::RarEntry { archive: archive_path, index: member, name } => {
-            let OpenSource::Rar(_, rar) = open_source(archive, archive_path, ArchiveKind::Rar)? else {
+            let OpenSource::Rar(_, extracted) =
+                open_source(archive, archive_path, ArchiveKind::Rar, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as RAR")
             };
-            let bytes = rar
-                .read_member_at(*member, None)
-                .map_err(|error| CoreError::Invalid(format!("RAR 항목을 풀지 못했습니다: {name}: {error}")))?
+            let file = extracted
+                .files
+                .remove(member)
                 .ok_or_else(|| CoreError::Invalid(format!("RAR 항목을 찾지 못했습니다: {name}")))?;
-            fs::write(&output, bytes).map_err(|source| CoreError::io(&output, source))?;
+            fs::rename(&file, &output).map_err(|source| CoreError::io(&file, source))?;
         }
         PageSource::PdfPage { document, index: page } => {
-            let OpenSource::Pdf(_, pdf) = open_source(archive, document, ArchiveKind::Pdf)? else {
+            let OpenSource::Pdf(_, pdf) =
+                open_source(archive, document, ArchiveKind::Pdf, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as PDF")
             };
             fs::write(&output, render_pdf_page(pdf, *page)?).map_err(|source| CoreError::io(&output, source))?;
         }
     }
-    let (width, height) = image::image_dimensions(&output).unwrap_or((1000, 1400));
+    // By content: a `.jpg` may hold WebP or PNG, and a file that isn't an image (or is cut
+    // off before its size) must not become a page the editor can't open.
+    let (format, (width, height)) = probe_image(&output)
+        .map_err(|error| CoreError::Invalid(format!("{}: 이미지를 읽지 못했습니다: {error}", draft.name)))?;
+    // Stored under the extension of the format it holds.
+    let output = match format.and_then(|format| {
+        let extensions = format.extensions_str();
+        extensions.first().filter(|_| !extensions.contains(&extension.as_str()))
+    }) {
+        Some(detected) => {
+            let renamed = output.with_extension(detected);
+            fs::rename(&output, &renamed).map_err(|source| CoreError::io(&output, source))?;
+            renamed
+        }
+        None => output,
+    };
     let now = now_iso();
     Ok(PageRecord {
         id: page_id,
@@ -545,13 +766,15 @@ fn rollback(library: &Library, work_id: &str, created_work: bool, created: &[(St
         }
         return;
     }
-    if let Ok(Some(mut work)) = library.read_work(work_id) {
+    let removed = library.update_work(work_id, |work| {
         let before = work.chapter_order.len();
         work.chapter_order.retain(|id| !created.iter().any(|(created_id, _)| created_id == id));
         if work.chapter_order.len() != before {
             work.updated_at = now_iso();
-            let _ = library.write_work(&work);
         }
+    });
+    if let Err(error) = removed {
+        log::warn!("import rollback failed: {error}");
     }
     for (_, dir) in created {
         let _ = fs::remove_dir_all(dir);
@@ -579,6 +802,34 @@ mod tests {
         let (encoded, _, _) = encoding_rs::SHIFT_JIS.encode("第1話/001.jpg");
         assert_eq!(decode_zip_name(&encoded), "第1話/001.jpg");
         assert_eq!(decode_zip_name("a\\b.png".as_bytes()), "a/b.png");
+    }
+
+    #[test]
+    fn legacy_zip_names_pick_korean_or_japanese() {
+        for name in ["제1화/001.jpg", "원피스 1권/표지.png", "[번역] 「외전」 02.jpg"] {
+            let (encoded, _, _) = encoding_rs::EUC_KR.encode(name);
+            assert!(std::str::from_utf8(&encoded).is_err());
+            assert_eq!(decode_zip_name(&encoded), name, "CP949");
+        }
+        for name in ["第1話/001.jpg", "ひらがな/カタカナ 02.png", "東方 漢字.jpg", "ｶﾀｶﾅ 第2話.jpg"]
+        {
+            let (encoded, _, _) = encoding_rs::SHIFT_JIS.encode(name);
+            assert_eq!(decode_zip_name(&encoded), name, "Shift_JIS");
+        }
+    }
+
+    #[test]
+    fn names_are_stored_composed() {
+        let decomposed = "\u{110c}\u{1166}1\u{1112}\u{116a}"; // 제1화 as macOS writes it
+        assert_eq!(decode_zip_name(format!("{decomposed}/001.jpg").as_bytes()), "제1화/001.jpg");
+        assert_eq!(file_stem(Path::new(&format!("/x/{decomposed}.cbz"))), "제1화");
+    }
+
+    #[test]
+    fn full_width_digits_sort_by_value() {
+        let mut names = vec!["１０.png", "p10.png", "２.png", "1.png", "p２.png"];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(names, ["1.png", "２.png", "１０.png", "p２.png", "p10.png"]);
     }
 
     #[test]
@@ -632,6 +883,52 @@ mod tests {
         // Separator-agnostic: Windows stores `\pages\001-…`.
         assert_eq!(image_path.parent().and_then(Path::file_name), Some(std::ffi::OsStr::new("pages")));
         assert!(image_path.file_name().unwrap().to_string_lossy().starts_with("001-"));
+    }
+
+    #[test]
+    fn images_are_stored_as_the_format_they_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let webp = dir.path().join("01.jpg");
+        image::RgbaImage::new(5, 7).save_with_format(&webp, image::ImageFormat::WebP).unwrap();
+        let png = dir.path().join("02.JPEG");
+        image::RgbaImage::new(3, 4).save_with_format(&png, image::ImageFormat::Png).unwrap();
+        let jpeg = dir.path().join("03.jpeg");
+        image::RgbImage::new(2, 2).save_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_images(&[webp, png, jpeg]);
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let stored: Vec<(String, (u32, u32))> = chapter
+            .pages
+            .iter()
+            .map(|page| {
+                let path = Path::new(&page.image_path);
+                assert!(path.is_file());
+                (path.extension().unwrap().to_string_lossy().into_owned(), (page.width, page.height))
+            })
+            .collect();
+        assert_eq!(
+            stored,
+            [("webp".to_owned(), (5, 7)), ("png".to_owned(), (3, 4)), ("jpeg".to_owned(), (2, 2))],
+            "names keep the right extension"
+        );
+        assert_eq!(chapter.pages[0].name, "01.jpg", "the page name stays as imported");
+    }
+
+    #[test]
+    fn a_page_that_is_not_an_image_fails_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("01.png");
+        write_png(&good, 2, 2);
+        let bad = dir.path().join("02.jpg");
+        fs::write(&bad, b"<html>404</html>").unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_images(&[good, bad]);
+        let error =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap_err();
+        assert!(error.to_string().contains("02.jpg"), "{error}");
+        assert!(library.list().unwrap().is_empty(), "rolled back, no 1000×1400 placeholder page");
     }
 
     #[test]
@@ -728,6 +1025,131 @@ mod tests {
         let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
         let sizes: Vec<(u32, u32)> = chapter.pages.iter().map(|page| (page.width, page.height)).collect();
         assert_eq!(sizes, [(5, 6), (3, 4)]);
+    }
+
+    fn zip_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn rar_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        rar_bytes_with(entries, false)
+    }
+
+    fn rar_bytes_with(entries: &[(&str, Vec<u8>)], solid: bool) -> Vec<u8> {
+        use rars::rar50::{ArchiveEntry, ArchiveExtras, WriterOptions, write_streaming_archive_to};
+        use rars::{EntrySource, WriterResources};
+        let entries: Vec<ArchiveEntry> = entries
+            .iter()
+            .map(|(name, bytes)| ArchiveEntry::new(*name, EntrySource::from_bytes(bytes.clone())))
+            .collect();
+        let mut options = WriterOptions::default();
+        options.features.solid = solid;
+        let mut bytes = Vec::new();
+        write_streaming_archive_to(
+            &entries,
+            options,
+            ArchiveExtras::default(),
+            &WriterResources::default(),
+            &mut bytes,
+        )
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn archive_type_comes_from_the_file_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let rar_named_cbz = dir.path().join("1화.cbz");
+        fs::write(&rar_named_cbz, rar_bytes(&[("01.png", png(3, 4))])).unwrap();
+        let zip_named_cbr = dir.path().join("2화.cbr");
+        fs::write(&zip_named_cbr, zip_bytes(&[("01.png", png(5, 6))])).unwrap();
+        let pdf_named_zip = dir.path().join("3화.zip");
+        fs::write(&pdf_named_zip, single_page_pdf()).unwrap();
+        assert_eq!(ArchiveKind::detect(&rar_named_cbz), Some(ArchiveKind::Rar));
+        assert_eq!(ArchiveKind::detect(&zip_named_cbr), Some(ArchiveKind::Zip));
+        assert_eq!(ArchiveKind::detect(&pdf_named_zip), Some(ArchiveKind::Pdf));
+        let unknown = dir.path().join("x.cbr");
+        fs::write(&unknown, b"????").unwrap();
+        assert_eq!(ArchiveKind::detect(&unknown), Some(ArchiveKind::Rar), "falls back to the extension");
+
+        let library = Library::new(dir.path().join("library"));
+        let mut sizes = Vec::new();
+        for archive in [&rar_named_cbz, &zip_named_cbr, &pdf_named_zip] {
+            let preview = preview_archive(archive).unwrap();
+            let result =
+                create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+            let page = &library.open_chapter(&result.chapter_ids[0]).unwrap().pages[0];
+            sizes.push((page.width, page.height));
+        }
+        assert_eq!(sizes, [(3, 4), (5, 6), (300, 300)]);
+        assert_eq!(preview_archive(&pdf_named_zip).unwrap().source_kind, ImportSourceKind::Pdf);
+    }
+
+    #[test]
+    fn one_unreadable_archive_does_not_fail_the_folder_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("1화.cbz"), zip_bytes(&[("01.png", png(2, 2))])).unwrap();
+        fs::write(dir.path().join("2화.cbz"), b"PK\x03\x04 cut off").unwrap();
+        let preview = preview_zip_folder(dir.path()).unwrap();
+        let drafts: Vec<(&str, usize, bool, bool)> = preview
+            .chapters
+            .iter()
+            .map(|draft| (draft.title.as_str(), draft.pages.len(), draft.enabled, draft.error.is_some()))
+            .collect();
+        assert_eq!(drafts, [("1화", 1, true, false), ("2화", 0, false, true)]);
+        let library = Library::new(dir.path().join("library"));
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        assert_eq!(result.chapter_ids.len(), 1);
+    }
+
+    #[test]
+    fn solid_rar_pages_are_decoded_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entries: Vec<(String, Vec<u8>)> = (1..=12).map(|n| (format!("{n:02}.png"), png(n, 2))).collect();
+        entries.insert(3, ("ComicInfo.xml".into(), b"<ComicInfo />".to_vec()));
+        let entries: Vec<(&str, Vec<u8>)> =
+            entries.iter().map(|(name, bytes)| (name.as_str(), bytes.clone())).collect();
+        let bytes = rar_bytes_with(&entries, true);
+        assert!(rars::ArchiveReader::read(&bytes).unwrap().is_solid());
+        let archive = dir.path().join("1화.cbr");
+        fs::write(&archive, bytes).unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_archive(&archive).unwrap();
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let widths: Vec<u32> = chapter.pages.iter().map(|page| page.width).collect();
+        assert_eq!(widths, (1..=12).collect::<Vec<_>>());
+        let leftovers: Vec<_> = fs::read_dir(library.chapter_dir(&chapter.work_id, &chapter.id))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".rar-"))
+            .collect();
+        assert!(leftovers.is_empty(), "scratch folder removed: {leftovers:?}");
+    }
+
+    #[test]
+    fn pdf_pages_are_capped_on_the_long_side() {
+        assert_eq!(pdf_scale(595.0, 842.0), PDF_DPI / 72.0, "A4 stays at 300 DPI");
+        // A scan whose page box is in pixels.
+        let scale = pdf_scale(2480.0, 3508.0);
+        assert!((3508.0 * scale - PDF_MAX_SIDE).abs() < 0.5, "{}", 3508.0 * scale);
+        assert!(pdf_scale(0.0, 0.0).is_finite());
+    }
+
+    #[test]
+    fn archive_entries_are_copied_up_to_the_cap() {
+        let mut target = Vec::new();
+        assert_eq!(copy_capped(&b"12345"[..], &mut target, 5).unwrap(), Some(5));
+        let mut target = Vec::new();
+        assert_eq!(copy_capped(&b"123456"[..], &mut target, 5).unwrap(), None);
+        assert!(target.len() <= 6, "stops reading after the cap");
     }
 
     #[test]

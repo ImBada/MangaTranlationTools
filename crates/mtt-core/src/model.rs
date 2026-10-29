@@ -47,6 +47,8 @@ macro_rules! string_enum {
             }
         }
 
+        impl Finite for $name {}
+
         impl Serialize for $name {
             fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
                 serializer.serialize_str(self.as_str())
@@ -195,9 +197,13 @@ string_enum! {
 #[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct BBox {
+    #[serde(deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub x: f64,
+    #[serde(deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub y: f64,
+    #[serde(deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub w: f64,
+    #[serde(deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub h: f64,
 }
 
@@ -210,9 +216,9 @@ impl BBox {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontCharacterOverride {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub character: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub font_family: String,
 }
 
@@ -229,7 +235,7 @@ macro_rules! define_text_style {
             #[serde(default, skip_serializing_if = "Option::is_none")]
             pub character_font_overrides: Option<Vec<FontCharacterOverride>>,
             $(
-                #[serde(default, skip_serializing_if = "Option::is_none")]
+                #[serde(default, skip_serializing_if = "unset_or_non_finite")]
                 pub $field: Option<$ty>,
             )+
         }
@@ -371,11 +377,11 @@ pub const LAYOUT_VERSION: u32 = 3;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationBlock {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
     #[serde(rename = "type", default)]
     pub block_type: BlockType,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub bbox: BBox,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_bbox: Option<BBox>,
@@ -383,29 +389,33 @@ pub struct TranslationBlock {
     pub bbox_space: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub render_bbox_space: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub source_text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub translated_text: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub confidence: f64,
     #[serde(default)]
     pub source_direction: SourceTextDirection,
     #[serde(default)]
     pub render_direction: RenderTextDirection,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "unset_or_non_finite")]
     pub rotation_deg: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_preset_id: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "unset_or_non_finite")]
     pub text_padding_px: Option<f64>,
     #[serde(default)]
     pub text_align: TextAlign,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text_position: Option<TextPosition>,
-    #[serde(default = "default_background_color")]
+    #[serde(default = "default_background_color", deserialize_with = "de_background_color_lenient")]
     pub background_color: String,
-    #[serde(default = "default_opacity")]
+    #[serde(
+        default = "default_opacity",
+        deserialize_with = "de_opacity_lenient",
+        serialize_with = "ser_finite_opacity"
+    )]
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inpainted: Option<bool>,
@@ -421,7 +431,12 @@ pub struct TranslationBlock {
     /// evenly spaced rows from its top to its bottom, as fractions of its width (an empty
     /// span where nothing fits). Set from the balloon around the block, so lines can follow
     /// its outline; it scales with the box.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "de_text_shape_lenient",
+        serialize_with = "ser_text_shape"
+    )]
     pub text_shape: Option<Vec<[f64; 2]>>,
     #[serde(flatten)]
     pub links: PresetLinks,
@@ -540,11 +555,11 @@ impl TranslationBlock {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationBlockGroupEffect {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(rename = "type", default)]
+    #[serde(rename = "type", default, deserialize_with = "de_string_lenient")]
     pub effect_type: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_bool_lenient")]
     pub enabled: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub settings: Option<JsonMap>,
@@ -555,15 +570,15 @@ pub struct TranslationBlockGroupEffect {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationBlockGroup {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_ids_lenient")]
     pub block_ids: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub effects: Vec<TranslationBlockGroupEffect>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub updated_at: String,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -572,9 +587,9 @@ pub struct TranslationBlockGroup {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontPreset {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub font_size_preset_id: Option<String>,
@@ -587,11 +602,11 @@ pub struct FontPreset {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FontSizePreset {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub font_size_px: f64,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -602,17 +617,21 @@ pub struct FontSizePreset {
 pub struct InpaintSettings {
     #[serde(default)]
     pub engine: InpaintEngine,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub padding_px: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_f64_lenient", serialize_with = "ser_finite")]
     pub feather_px: f64,
-    #[serde(default = "default_tile_size")]
+    #[serde(
+        default = "default_tile_size",
+        deserialize_with = "de_tile_size_lenient",
+        serialize_with = "ser_finite_tile_size"
+    )]
     pub tile_size: f64,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(default, skip_serializing_if = "unset_or_non_finite")]
     pub artifact_cleanup_px: Option<f64>,
     /// Snap the fill to the page's own colors with hard edges, for pages drawn without
     /// anti-aliasing (1-bit black and white).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "de_bool_lenient")]
     pub aliased: bool,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -640,11 +659,11 @@ impl Default for InpaintSettings {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PageRecord {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub image_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inpaint_mask_path: Option<String>,
@@ -667,7 +686,7 @@ pub struct PageRecord {
     pub width: u32,
     #[serde(default, deserialize_with = "de_u32_lenient")]
     pub height: u32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub blocks: Vec<TranslationBlock>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub block_groups: Option<Vec<TranslationBlockGroup>>,
@@ -677,9 +696,9 @@ pub struct PageRecord {
     pub last_error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub progress_completed: Option<bool>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub updated_at: String,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -695,11 +714,11 @@ impl PageRecord {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Chapter {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub work_id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub title: String,
     #[serde(default)]
     pub source_kind: ImportSourceKind,
@@ -714,15 +733,15 @@ pub struct Chapter {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub favorite_font_preset_ids: Option<Vec<String>>,
     /// Inpaint this chapter without anti-aliasing (`InpaintSettings::aliased`).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    #[serde(default, skip_serializing_if = "std::ops::Not::not", deserialize_with = "de_bool_lenient")]
     pub inpaint_aliased: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_ids_lenient")]
     pub page_order: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pub pages: Vec<PageRecord>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub updated_at: String,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -773,18 +792,18 @@ impl Chapter {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Work {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub id: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub title: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_ids_lenient")]
     pub chapter_order: Vec<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     pub updated_at: String,
     /// Names, terms and tone for this work, added to every translation prompt.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "de_string_lenient")]
     pub translation_notes: String,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -794,7 +813,7 @@ pub struct Work {
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryIndexFile {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_ids_lenient")]
     pub work_order: Vec<String>,
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -807,6 +826,124 @@ fn de_u32_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::
         .filter(|number| number.is_finite() && *number >= 0.0)
         .map(|number| number.round().min(f64::from(u32::MAX)) as u32)
         .unwrap_or(0))
+}
+
+// Lenient readers: `JSON.stringify` (and older versions of this app) write NaN and
+// ±Infinity as `null`, and one such value must not make a whole chapter unreadable. A
+// `null` or a value of the wrong type reads as the field's default, like a missing key.
+
+pub(crate) fn de_f64_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_f64().unwrap_or(0.0))
+}
+
+fn de_opacity_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_f64().unwrap_or_else(default_opacity))
+}
+
+fn de_tile_size_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_f64().unwrap_or_else(default_tile_size))
+}
+
+pub(crate) fn de_bool_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Value::deserialize(deserializer)?.as_bool().unwrap_or(false))
+}
+
+pub(crate) fn de_string_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => text,
+        _ => String::new(),
+    })
+}
+
+fn de_background_color_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(text) => text,
+        _ => default_background_color(),
+    })
+}
+
+/// `null` reads as the default; any other value must still have the field's shape.
+pub(crate) fn de_null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Default + Deserialize<'de>,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
+
+/// An id list; entries that are not strings (`undefined` in a TS array is written as
+/// `null`) are dropped.
+pub(crate) fn de_ids_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::Array(items) => items
+            .into_iter()
+            .filter_map(|item| match item {
+                Value::String(id) => Some(id),
+                _ => None,
+            })
+            .collect(),
+        _ => Vec::new(),
+    })
+}
+
+fn de_text_shape_lenient<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Option<Vec<[f64; 2]>>, D::Error> {
+    let Value::Array(rows) = Value::deserialize(deserializer)? else { return Ok(None) };
+    let number = |value: Option<&Value>| value.and_then(Value::as_f64).unwrap_or(0.0);
+    Ok(Some(
+        rows.iter()
+            .map(|row| {
+                let row = row.as_array();
+                [number(row.and_then(|row| row.first())), number(row.and_then(|row| row.get(1)))]
+            })
+            .collect(),
+    ))
+}
+
+// Writers: a non-finite number would be written as `null`, which the TS app reads as a
+// broken value. Optional numbers are left out instead and required ones get the default
+// the lenient readers above would use.
+
+/// Values a JSON number can't hold.
+trait Finite {
+    fn is_finite_value(&self) -> bool {
+        true
+    }
+}
+
+impl Finite for f64 {
+    fn is_finite_value(&self) -> bool {
+        self.is_finite()
+    }
+}
+
+impl Finite for bool {}
+impl Finite for String {}
+
+fn unset_or_non_finite<T: Finite>(value: &Option<T>) -> bool {
+    value.as_ref().is_none_or(|value| !value.is_finite_value())
+}
+
+fn finite_or(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() { value } else { fallback }
+}
+
+fn ser_finite<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(finite_or(*value, 0.0))
+}
+
+fn ser_finite_opacity<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(finite_or(*value, default_opacity()))
+}
+
+fn ser_finite_tile_size<S: serde::Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_f64(finite_or(*value, default_tile_size()))
+}
+
+fn ser_text_shape<S: serde::Serializer>(value: &Option<Vec<[f64; 2]>>, serializer: S) -> Result<S::Ok, S::Error> {
+    let rows: Option<Vec<[f64; 2]>> = value
+        .as_ref()
+        .map(|rows| rows.iter().map(|[left, right]| [finite_or(*left, 0.0), finite_or(*right, 0.0)]).collect());
+    rows.serialize(serializer)
 }
 
 #[cfg(test)]
@@ -870,6 +1007,76 @@ mod tests {
         let page: PageRecord = serde_json::from_value(json!({ "width": 1071.6, "height": "x" })).unwrap();
         assert_eq!(page.width, 1072);
         assert_eq!(page.height, 0);
+    }
+
+    #[test]
+    fn nulls_read_as_defaults() {
+        // What `JSON.stringify` writes for NaN, and for `undefined` inside arrays.
+        let chapter: Chapter = serde_json::from_value(json!({
+            "id": null, "title": null, "pageOrder": ["p", null], "createdAt": null, "inpaintAliased": null,
+            "pages": [{
+                "id": "p", "name": null, "imagePath": null, "width": null, "updatedAt": null,
+                "inpaintSettings": { "paddingPx": null, "featherPx": null, "tileSize": null, "aliased": null },
+                "blocks": [{
+                    "id": "b", "bbox": { "x": null, "y": 2, "w": null, "h": 4 }, "confidence": null,
+                    "opacity": null, "backgroundColor": null, "sourceText": null, "translatedText": null,
+                    "fontSizePx": null, "rotationDeg": null, "textShape": [[null, 0.5], [0.1, null]]
+                }, { "id": "c", "bbox": null }],
+                "blockGroups": [{ "id": "g", "blockIds": ["b", null],
+                    "effects": [{ "id": "e", "type": null, "enabled": null }] }]
+            }],
+            "fontSizePresets": [{ "id": "s", "name": null, "fontSizePx": null }]
+        }))
+        .unwrap();
+        assert_eq!(chapter.title, "");
+        assert_eq!(chapter.page_order, ["p"]);
+        let page = &chapter.pages[0];
+        assert_eq!(page.inpaint_settings.as_ref().unwrap().tile_size, 1024.0);
+        let block = &page.blocks[0];
+        assert_eq!(block.bbox, BBox::new(0.0, 2.0, 0.0, 4.0));
+        assert_eq!((block.confidence, block.opacity), (0.0, 1.0));
+        assert_eq!(block.background_color, DEFAULT_BLOCK_BACKGROUND_COLOR);
+        assert_eq!((block.style.font_size_px, block.rotation_deg), (None, None));
+        assert_eq!(block.text_shape, Some(vec![[0.0, 0.5], [0.1, 0.0]]));
+        assert_eq!(page.blocks[1].bbox, BBox::default());
+        let group = &page.block_groups.as_ref().unwrap()[0];
+        assert_eq!(group.block_ids, ["b"]);
+        assert!(!group.effects[0].enabled);
+        assert_eq!(chapter.font_size_presets.as_ref().unwrap()[0].font_size_px, 0.0);
+    }
+
+    #[test]
+    fn non_finite_numbers_are_written_as_defaults() {
+        let block = TranslationBlock {
+            bbox: BBox::new(f64::NAN, 1.0, f64::INFINITY, 2.0),
+            confidence: f64::NAN,
+            opacity: f64::NAN,
+            rotation_deg: Some(f64::NAN),
+            text_padding_px: Some(f64::NEG_INFINITY),
+            text_shape: Some(vec![[f64::NAN, 0.5]]),
+            style: TextStyle { font_size_px: Some(f64::NAN), line_height: Some(1.2), ..TextStyle::default() },
+            ..TranslationBlock::default()
+        };
+        let page = PageRecord {
+            blocks: vec![block],
+            inpaint_settings: Some(InpaintSettings {
+                tile_size: f64::NAN,
+                artifact_cleanup_px: Some(f64::NAN),
+                ..InpaintSettings::default()
+            }),
+            ..PageRecord::default()
+        };
+        let text = crate::json_io::to_pretty_json(&page).unwrap();
+        assert!(!text.contains("null"), "{text}");
+        let back: PageRecord = serde_json::from_str(&text).unwrap();
+        let block = &back.blocks[0];
+        assert_eq!(block.bbox, BBox::new(0.0, 1.0, 0.0, 2.0));
+        assert_eq!((block.confidence, block.opacity), (0.0, 1.0));
+        assert_eq!((block.rotation_deg, block.text_padding_px, block.style.font_size_px), (None, None, None));
+        assert_eq!(block.style.line_height, Some(1.2));
+        assert_eq!(block.text_shape, Some(vec![[0.0, 0.5]]));
+        let settings = back.inpaint_settings.unwrap();
+        assert_eq!((settings.tile_size, settings.artifact_cleanup_px), (1024.0, None));
     }
 
     #[test]
