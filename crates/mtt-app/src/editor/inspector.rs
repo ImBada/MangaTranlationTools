@@ -901,9 +901,14 @@ fn range_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>)
     let ctx = ui.ctx().clone();
     theme::card(ui, "선택 범위", |ui| {
         if !has_range {
+            let keys = crate::shortcuts::keys;
             theme::hint(
                 ui,
-                &format!("캔버스에서 드래그해 범위를 고르세요. {}드래그로 더합니다.", crate::shortcuts::keys("⇧")),
+                &format!(
+                    "캔버스에서 드래그해 범위를 고르세요. {} 정사각형, {} 가운데부터, Space로 위치를 옮깁니다. 범위를 고르면 브러시는 그 안에만 칠합니다.",
+                    keys("⇧"),
+                    keys("⌥")
+                ),
             );
             return;
         }
@@ -913,7 +918,7 @@ fn range_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>)
             } else {
                 "브러시 색으로 채우기"
             };
-            if ui.add_enabled(editor.tool == Tool::Range && !locked, egui::Button::new(fill_label)).clicked() {
+            if ui.add_enabled(!locked, egui::Button::new(fill_label)).clicked() {
                 if editor.inpaint_layer == Layer::InpaintMask {
                     editor.fill_range_on_mask(&ctx, true);
                 } else {
@@ -929,12 +934,12 @@ fn range_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>)
             }
             let mask_layer = editor.inpaint_layer == Layer::InpaintMask;
             if ui
-                .add_enabled(editor.tool == Tool::Range && !locked, egui::Button::new("범위 안 비우기"))
-                .on_hover_text(if mask_layer {
-                    "범위 안 마스크 지우기 (Delete)"
+                .add_enabled(!locked, egui::Button::new("범위 안 비우기"))
+                .on_hover_text(crate::shortcuts::keys(if mask_layer {
+                    "범위 안 마스크 지우기 (⌫)"
                 } else {
-                    "범위 안 결과 지우기"
-                })
+                    "범위 안 결과 지우기 (⌫)"
+                }))
                 .clicked()
             {
                 let changed = if mask_layer {
@@ -946,7 +951,7 @@ fn range_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>)
                     editor.status = "선택 범위에서 지울 레이어 내용이 없습니다.".into();
                 }
             }
-            if ui.button("선택 해제").clicked() {
+            if ui.button("선택 해제").on_hover_text(crate::shortcuts::keys("⌘D")).clicked() {
                 editor.range = None;
             }
         });

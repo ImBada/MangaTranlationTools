@@ -162,6 +162,15 @@ pub enum Drag {
         start: Pos2,
         current: Pos2,
         additive: bool,
+        /// On the inpaint layers, like Photoshop's marquee: ⇧ draws a square, ⌥ draws from
+        /// the centre, Space moves the rectangle being drawn.
+        square: bool,
+        centered: bool,
+    },
+    /// Dragging inside the inpaint range moves its outline (Photoshop's marquee).
+    RangeMove {
+        grab: Pos2,
+        original: Rect,
     },
     /// Alt+drag with a selected block: the rectangle becomes that block's box
     /// (`onSelectedBlockRangeChange`).
@@ -210,6 +219,63 @@ pub enum Drag {
         before_mask: StrokeBackup,
         dirty: Option<(u32, u32, u32, u32)>,
     },
+}
+
+fn page_size(page: &PageRecord) -> Vec2 {
+    egui::vec2(page.width as f32, page.height as f32)
+}
+
+/// The inpaint range a marquee drag selects: corners on the pixel grid, clamped to the
+/// page; `None` when nothing is left.
+fn marquee_rect(start: Pos2, current: Pos2, square: bool, centered: bool, page: Vec2) -> Option<Rect> {
+    let start = start.round();
+    let mut delta = current.round() - start;
+    if square {
+        let side = delta.x.abs().max(delta.y.abs());
+        delta = egui::vec2(side * delta.x.signum(), side * delta.y.signum());
+    }
+    let rect = if centered {
+        Rect::from_center_size(start, delta.abs() * 2.0)
+    } else {
+        Rect::from_two_pos(start, start + delta)
+    };
+    let rect = rect.intersect(Rect::from_min_size(Pos2::ZERO, page));
+    (rect.width() >= 1.0 && rect.height() >= 1.0).then_some(rect)
+}
+
+/// `range` moved by whole pixels, kept on the page.
+pub(super) fn moved_range(range: Rect, offset: Vec2, page: Vec2) -> Rect {
+    let max = (page - range.size()).max(Vec2::ZERO);
+    let min = (range.min + offset).clamp(Pos2::ZERO, max.to_pos2());
+    Rect::from_min_size(min, range.size())
+}
+
+/// Photoshop's selection outline: black and white dashes crawling along the edge.
+fn marching_ants(ui: &egui::Ui, painter: &egui::Painter, rect: Rect) {
+    const DASH: f32 = 4.0;
+    let snap = |pos: Pos2| Pos2::new(painter.round_to_pixel_center(pos.x), painter.round_to_pixel_center(pos.y));
+    let rect = Rect::from_min_max(snap(rect.min), snap(rect.max));
+    let path = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+    let width = 1.0 / ui.ctx().pixels_per_point();
+    painter.add(egui::Shape::line(path.to_vec(), Stroke::new(width, Color32::BLACK)));
+    let time = ui.input(|i| i.time);
+    let offset = (time * 12.0) as f32 % (DASH * 2.0);
+    painter.extend(egui::Shape::dashed_line_with_offset(
+        &path,
+        Stroke::new(width, Color32::WHITE),
+        &[DASH],
+        &[DASH],
+        DASH * 2.0 - offset,
+    ));
+    ui.ctx().request_repaint_after(std::time::Duration::from_millis(80));
+}
+
+/// Photoshop's W/H (or ΔX/ΔY) box beside the pointer.
+fn range_readout(painter: &egui::Painter, pointer: Pos2, text: &str) {
+    let galley = painter.layout_no_wrap(text.to_owned(), egui::FontId::monospace(11.0), Color32::WHITE);
+    let rect = Rect::from_min_size(pointer + egui::vec2(16.0, 16.0), galley.size() + egui::vec2(12.0, 8.0));
+    painter.rect_filled(rect, 3.0, Color32::from_black_alpha(200));
+    painter.galley(rect.min + egui::vec2(6.0, 4.0), galley, Color32::WHITE);
 }
 
 /// Page-pixel rect of a block's editable box.
@@ -776,17 +842,39 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
             painter.circle_stroke(knob, HANDLE_SIZE / 2.0 + 1.0, Stroke::new(1.0, SELECTION_COLOR));
         }
     }
-    if let Some(Drag::Range { start, current, .. }) = &editor.drag {
-        let rect = editor.view.rect_to_screen(Rect::from_two_pos(*start, *current));
-        painter.rect_filled(rect, 0.0, RANGE_COLOR.gamma_multiply(0.12));
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RANGE_COLOR), StrokeKind::Middle);
-    }
-    // The inpaint range belongs to the inpaint modes.
-    if let Some(range) = editor.range
-        && editor.mode() == super::Mode::Inpaint
-    {
-        let rect = editor.view.rect_to_screen(range);
-        painter.rect_stroke(rect, 0.0, Stroke::new(1.5, RANGE_COLOR), StrokeKind::Middle);
+    // The inpaint range belongs to the inpaint modes: marching ants on pixel edges, and
+    // while drawing or moving it the size or the offset next to the pointer.
+    let inpaint = editor.mode() == super::Mode::Inpaint;
+    match &editor.drag {
+        Some(Drag::Range { start, current, square, centered, .. }) if inpaint => {
+            if let Some(rect) = marquee_rect(*start, *current, *square, *centered, page_size(page)) {
+                marching_ants(ui, painter, editor.view.rect_to_screen(rect));
+                if let Some(pos) = hover {
+                    range_readout(painter, pos, &format!("W: {} px\nH: {} px", rect.width(), rect.height()));
+                }
+            }
+        }
+        Some(Drag::Range { start, current, .. }) => {
+            let rect = editor.view.rect_to_screen(Rect::from_two_pos(*start, *current));
+            painter.rect_filled(rect, 0.0, RANGE_COLOR.gamma_multiply(0.12));
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RANGE_COLOR), StrokeKind::Middle);
+        }
+        Some(Drag::RangeMove { original, .. }) if inpaint => {
+            if let Some(range) = editor.range {
+                marching_ants(ui, painter, editor.view.rect_to_screen(range));
+                if let Some(pos) = hover {
+                    let offset = range.min - original.min;
+                    range_readout(painter, pos, &format!("ΔX: {} px\nΔY: {} px", offset.x, offset.y));
+                }
+            }
+        }
+        _ => {
+            if let Some(range) = editor.range
+                && inpaint
+            {
+                marching_ants(ui, painter, editor.view.rect_to_screen(range));
+            }
+        }
     }
     // Colour picker loupe: brush colour (left) and the last sample (right).
     if editor.tool == Tool::Result
@@ -941,6 +1029,7 @@ fn stage_cursor(
         Some(Drag::Resize { handle, .. }) => return Some(handle.cursor()),
         Some(Drag::Rotate { .. }) => return Some(CursorIcon::Grabbing),
         Some(Drag::Range { .. } | Drag::BlockRange { .. }) => return Some(CursorIcon::Crosshair),
+        Some(Drag::RangeMove { .. }) => return Some(CursorIcon::Move),
         Some(Drag::Paint { .. } | Drag::AutoErase { .. } | Drag::ResultPaint { .. } | Drag::Heal { .. }) => {
             return Some(CursorIcon::Crosshair);
         }
@@ -952,7 +1041,14 @@ fn stage_cursor(
     let painting_blocked = editor.inpaint_busy() || editor.page_edit_locked();
     match editor.tool {
         Tool::Zoom => return Some(zoom),
-        Tool::Range => return Some(CursorIcon::Crosshair),
+        Tool::Range => {
+            // Inside the inpaint range a drag moves it.
+            let inside = !editor.layer.edits_blocks()
+                && !modifiers.shift
+                && !modifiers.alt
+                && editor.range.zip(hover).is_some_and(|(range, pos)| range.contains(editor.view.to_page(pos)));
+            return Some(if inside { CursorIcon::Move } else { CursorIcon::Crosshair });
+        }
         Tool::MaskBrush | Tool::MaskEraser | Tool::MaskAutoEraser | Tool::Result => {
             // A blocked press pans instead of painting.
             return Some(if painting_blocked { CursorIcon::Grab } else { CursorIcon::Crosshair });
@@ -1014,7 +1110,23 @@ fn start_drag(
             }
             return Drag::Pan { last: screen };
         }
-        Tool::Range => return Drag::Range { start: point, current: point, additive: modifiers.shift },
+        Tool::Range => {
+            if !editor.layer.edits_blocks()
+                && !modifiers.shift
+                && !modifiers.alt
+                && let Some(range) = editor.range
+                && range.contains(point)
+            {
+                return Drag::RangeMove { grab: point, original: range };
+            }
+            return Drag::Range {
+                start: point,
+                current: point,
+                additive: modifiers.shift,
+                square: false,
+                centered: false,
+            };
+        }
         Tool::MaskAutoEraser if editor.layer == Layer::InpaintMask => {
             if let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(&page.id) {
                 if loaded.mask.is_some() {
@@ -1182,7 +1294,20 @@ fn update_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord, scre
             let target = (*start_zoom * factor).clamp(MIN_ZOOM, MAX_ZOOM);
             editor.view.zoom_at(*anchor, target / editor.view.zoom);
         }
-        Drag::Range { current, .. } | Drag::BlockRange { current, .. } => *current = point,
+        Drag::Range { start, current, square, centered, .. } => {
+            if !editor.layer.edits_blocks() {
+                if ctx.input(|i| i.key_down(Key::Space)) {
+                    *start += point - *current;
+                }
+                *square = modifiers.shift;
+                *centered = modifiers.alt;
+            }
+            *current = point;
+        }
+        Drag::BlockRange { current, .. } => *current = point,
+        Drag::RangeMove { grab, original } => {
+            editor.range = Some(moved_range(*original, (point - *grab).round(), page_size(page)));
+        }
         Drag::Idle => {}
         Drag::Rotate { id, center, start_angle, start_rotation } => {
             // `clampRotationDeg(start + angle - startAngle)`.
@@ -1303,9 +1428,33 @@ fn heal_to(editor: &Editor, drag: &mut Drag, point: Pos2) {
     }
     let diameter =
         editor.result_brush.size.clamp(super::result_tools::RESULT_BRUSH_MIN, super::result_tools::RESULT_BRUSH_MAX);
-    let touched = stroke_mask(mask, (last.x, last.y), (point.x, point.y), diameter, 255);
+    let mut touched = stroke_mask(mask, (last.x, last.y), (point.x, point.y), diameter, 255);
+    if let Some(clip) = editor.paint_clip(mask.width(), mask.height())
+        && let Some(rect) = touched
+    {
+        clear_outside(mask, rect, clip);
+        touched = intersect_pixels(rect, clip);
+    }
     *bounds = super::result_tools::union(*bounds, touched);
     *last = point;
+}
+
+/// Zeroes the pixels of `rect` outside `keep`.
+fn clear_outside(mask: &mut image::GrayImage, rect: (u32, u32, u32, u32), keep: (u32, u32, u32, u32)) {
+    for y in rect.1..rect.1 + rect.3 {
+        for x in rect.0..rect.0 + rect.2 {
+            let inside = (keep.0..keep.0 + keep.2).contains(&x) && (keep.1..keep.1 + keep.3).contains(&y);
+            if !inside {
+                mask.put_pixel(x, y, image::Luma([0]));
+            }
+        }
+    }
+}
+
+fn intersect_pixels(a: (u32, u32, u32, u32), b: (u32, u32, u32, u32)) -> Option<(u32, u32, u32, u32)> {
+    let (left, top) = (a.0.max(b.0), a.1.max(b.1));
+    let (right, bottom) = ((a.0 + a.2).min(b.0 + b.2), (a.1 + a.3).min(b.1 + b.3));
+    (right > left && bottom > top).then(|| (left, top, right - left, bottom - top))
 }
 
 /// Where a Shift+click stroke starts: the end of the last stroke on this page.
@@ -1316,6 +1465,8 @@ fn line_start(editor: &Editor, page_id: &str, modifiers: Modifiers) -> Option<Po
 
 fn paint_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
     let Drag::Paint { last, erase, before, dirty } = drag else { return };
+    let Some((width, height)) = editor.loaded_page().map(|page| (page.width(), page.height())) else { return };
+    let clip = editor.paint_clip(width, height);
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
     let diameter = editor.brush_size.clamp(MASK_BRUSH_MIN, MASK_BRUSH_MAX);
     let value = if *erase { 0 } else { 255 };
@@ -1325,6 +1476,9 @@ fn paint_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut 
         before.save(mask.as_raw(), rect);
     }
     let touched = stroke_mask(mask, segment.0, segment.1, diameter, value);
+    if let (Some(rect), Some(clip)) = (touched, clip) {
+        before.restore_outside(mask, rect, clip);
+    }
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = Some(match *dirty {
@@ -1380,8 +1534,9 @@ fn advance_result_stroke(
     if !finish && last.distance(point) < 0.25 && dirty.is_some() {
         return;
     }
+    let Some((width, height)) = editor.loaded_page().map(|page| (page.width(), page.height())) else { return };
+    let clip = editor.paint_clip(width, height);
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
-    let (width, height) = (loaded.width(), loaded.height());
     let (result, mask) = loaded.ensure_layers();
     let (tool, settings) = (editor.result_tool, &editor.result_brush);
     let sample = (point.x, point.y);
@@ -1394,6 +1549,10 @@ fn advance_result_stroke(
     } else {
         stroke.add_point(tool, result, mask, sample, settings)
     };
+    if let (Some(rect), Some(clip)) = (touched, clip) {
+        before_result.restore_outside(result, rect, clip);
+        before_mask.restore_outside(mask, rect, clip);
+    }
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = super::result_tools::union(*dirty, touched);
@@ -1423,15 +1582,15 @@ fn finish_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord) {
         return;
     }
     match drag {
-        Drag::Range { start, current, additive } => {
+        Drag::Range { start, current, additive, square, centered } => {
+            if !editor.layer.edits_blocks() {
+                // Inpaint range selection on layers 3/4 (`inpaintSelectionRect`).
+                editor.range = marquee_rect(start, current, square, centered, page_size(page));
+                return;
+            }
             let rect = Rect::from_two_pos(start, current)
                 .intersect(Rect::from_min_size(Pos2::ZERO, egui::vec2(page.width as f32, page.height as f32)));
             let tiny = rect.width() < 2.0 || rect.height() < 2.0;
-            if !editor.layer.edits_blocks() {
-                // Inpaint range selection on layers 3/4 (`inpaintSelectionRect`).
-                editor.range = (!tiny).then_some(rect);
-                return;
-            }
             if tiny {
                 if !additive {
                     editor.selection.clear();
@@ -1584,6 +1743,7 @@ type ShortcutAction = Box<dyn FnOnce(&mut Editor, &mut Services)>;
 /// Editor keyboard shortcuts (only while no text field has focus).
 pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Services) {
     let one_hand = services.settings.one_hand_mode;
+    let nudge = editor.tool == Tool::Range && editor.range.is_some() && editor.mode() == super::Mode::Inpaint;
     let mut actions: Vec<ShortcutAction> = Vec::new();
     ctx.input_mut(|input| {
         let command = Modifiers::COMMAND;
@@ -1633,15 +1793,25 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
                 }
             }));
         }
+        // On the inpaint layers ⌘D drops the range and ⌘A (with T) selects the page, like
+        // Photoshop.
         if input.consume_key(command, Key::D) {
             actions.push(Box::new(|editor, _| {
-                if !editor.page_edit_locked() {
+                if editor.mode() == super::Mode::Inpaint && editor.range.is_some() {
+                    editor.range = None;
+                } else if !editor.page_edit_locked() {
                     editor.duplicate_selected()
                 }
             }));
         }
         if input.consume_key(command, Key::A) {
-            actions.push(Box::new(|editor, _| editor.select_all()));
+            actions.push(Box::new(|editor, _| {
+                if editor.mode() == super::Mode::Inpaint && editor.tool == Tool::Range {
+                    editor.range = editor.page().map(|page| Rect::from_min_size(Pos2::ZERO, page_size(page)));
+                } else {
+                    editor.select_all()
+                }
+            }));
         }
         if input.consume_key(command, Key::F) {
             actions.push(Box::new(|editor, _| editor.find.open = true));
@@ -1743,6 +1913,29 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
                     editor.delete_selection_or_range(&ctx)
                 }
             }));
+        }
+        // With T and a range, the arrows nudge it 1px (⇧ 10px) like Photoshop instead of
+        // turning the page.
+        if nudge {
+            for (key, direction) in [
+                (Key::ArrowLeft, egui::vec2(-1.0, 0.0)),
+                (Key::ArrowRight, egui::vec2(1.0, 0.0)),
+                (Key::ArrowUp, egui::vec2(0.0, -1.0)),
+                (Key::ArrowDown, egui::vec2(0.0, 1.0)),
+            ] {
+                let step = if input.consume_key(Modifiers::SHIFT, key) {
+                    10.0
+                } else if input.consume_key(Modifiers::NONE, key) {
+                    1.0
+                } else {
+                    continue;
+                };
+                actions.push(Box::new(move |editor, _| {
+                    if let (Some(range), Some(page)) = (editor.range, editor.page()) {
+                        editor.range = Some(moved_range(range, direction * step, page_size(page)));
+                    }
+                }));
+            }
         }
         // `resolveKeyboardPageNavigation`: ←/→ and D/F; ↑/↓ while the stage has focus.
         if input.consume_key(Modifiers::NONE, Key::D)
@@ -1858,6 +2051,43 @@ mod tests {
             ..PageRecord::default()
         };
         Editor::new(Chapter { id: "c".into(), page_order: vec!["p".into()], pages: vec![page], ..Chapter::default() })
+    }
+
+    #[test]
+    fn marquee_snaps_to_pixels_and_follows_photoshop_modifiers() {
+        let page = egui::vec2(100.0, 80.0);
+        let rect = |start: (f32, f32), end: (f32, f32), square, centered| {
+            marquee_rect(Pos2::new(start.0, start.1), Pos2::new(end.0, end.1), square, centered, page)
+        };
+        assert_eq!(
+            rect((10.4, 10.6), (30.2, 20.7), false, false),
+            Some(Rect::from_min_max(Pos2::new(10.0, 11.0), Pos2::new(30.0, 21.0)))
+        );
+        assert_eq!(
+            rect((50.0, 40.0), (40.0, 45.0), true, false),
+            Some(Rect::from_min_max(Pos2::new(40.0, 40.0), Pos2::new(50.0, 50.0))),
+            "⇧ keeps the drag direction"
+        );
+        assert_eq!(
+            rect((50.0, 40.0), (60.0, 45.0), false, true),
+            Some(Rect::from_min_max(Pos2::new(40.0, 35.0), Pos2::new(60.0, 45.0))),
+            "⌥ grows from the press"
+        );
+        assert_eq!(
+            rect((90.0, 70.0), (130.0, 99.0), false, false),
+            Some(Rect::from_min_max(Pos2::new(90.0, 70.0), Pos2::new(100.0, 80.0))),
+            "clamped to the page"
+        );
+        assert_eq!(rect((10.0, 10.0), (30.2, 10.4), false, false), None, "no height left");
+    }
+
+    #[test]
+    fn moving_the_range_keeps_it_on_the_page() {
+        let range = Rect::from_min_size(Pos2::new(10.0, 10.0), egui::vec2(20.0, 20.0));
+        let page = egui::vec2(100.0, 80.0);
+        assert_eq!(moved_range(range, egui::vec2(5.0, -3.0), page).min, Pos2::new(15.0, 7.0));
+        assert_eq!(moved_range(range, egui::vec2(500.0, -50.0), page).min, Pos2::new(80.0, 0.0));
+        assert_eq!(moved_range(range, egui::vec2(500.0, -50.0), page).size(), range.size());
     }
 
     #[test]

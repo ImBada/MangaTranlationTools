@@ -225,6 +225,28 @@ impl StrokeBackup {
         }
         out
     }
+
+    /// Puts back the pixels of `rect` outside `keep`: the stroke only changes the
+    /// selection, like Photoshop's.
+    pub fn restore_outside(&self, data: &mut [u8], rect: PixelRect, keep: PixelRect) {
+        let (x, y, width, height) = rect;
+        let (right, bottom) = (x + width, y + height);
+        let (keep_left, keep_top) = (keep.0, keep.1);
+        let (keep_right, keep_bottom) = (keep.0 + keep.2, keep.1 + keep.3);
+        let channels = self.channels as usize;
+        for row in y..bottom {
+            let spans = if (keep_top..keep_bottom).contains(&row) {
+                [(x, keep_left.clamp(x, right)), (keep_right.clamp(x, right), right)]
+            } else {
+                [(x, right), (right, right)]
+            };
+            for (from, to) in spans.into_iter().filter(|(from, to)| from < to) {
+                let before = self.before(data, (from, row, to - from, 1));
+                let start = (row * self.width + from) as usize * channels;
+                data[start..start + before.len()].copy_from_slice(&before);
+            }
+        }
+    }
 }
 
 pub enum Entry {
@@ -462,5 +484,22 @@ mod tests {
         let rect = (0, 0, width, height);
         assert_eq!(backup.before(&layer, rect), original);
         assert_eq!(backup.before(&layer, (62, 20, 70, 30)), read_rect(&original, width, 1, (62, 20, 70, 30)));
+    }
+
+    #[test]
+    fn stroke_backup_keeps_a_stroke_inside_the_selection() {
+        let (width, height) = (100u32, 80u32);
+        let mut layer = vec![7u8; (width * height) as usize];
+        let mut backup = StrokeBackup::new(width, height, 1);
+        let stroke = (0, 0, width, height);
+        backup.save(&layer, stroke);
+        layer.fill(255);
+        backup.restore_outside(&mut layer, stroke, (20, 30, 40, 10));
+        for row in 0..height {
+            for column in 0..width {
+                let inside = (20..60).contains(&column) && (30..40).contains(&row);
+                assert_eq!(layer[(row * width + column) as usize], if inside { 255 } else { 7 }, "({column}, {row})");
+            }
+        }
     }
 }

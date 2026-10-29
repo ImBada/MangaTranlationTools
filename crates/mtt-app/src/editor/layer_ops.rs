@@ -38,6 +38,15 @@ pub struct PsdFiles {
     pub last_import: Option<(PathBuf, String)>,
 }
 
+/// `range` in page pixels clamped to the image: `(x, y, width, height)`.
+pub(super) fn range_pixels(range: egui::Rect, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+    let x = (range.min.x.floor().max(0.0) as u32).min(width);
+    let y = (range.min.y.floor().max(0.0) as u32).min(height);
+    let right = (range.max.x.ceil().max(0.0) as u32).min(width);
+    let bottom = (range.max.y.ceil().max(0.0) as u32).min(height);
+    (right > x && bottom > y).then(|| (x, y, right - x, bottom - y))
+}
+
 impl Editor {
     pub fn current_mask_has_pixels(&self) -> bool {
         self.loaded_page().is_some_and(LoadedPage::mask_has_pixels)
@@ -49,12 +58,15 @@ impl Editor {
 
     /// The range in page pixels clamped to the image: `(x, y, width, height)`.
     fn range_pixels(&self, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
-        let range = self.range?;
-        let x = (range.min.x.floor().max(0.0) as u32).min(width);
-        let y = (range.min.y.floor().max(0.0) as u32).min(height);
-        let right = (range.max.x.ceil().max(0.0) as u32).min(width);
-        let bottom = (range.max.y.ceil().max(0.0) as u32).min(height);
-        (right > x && bottom > y).then(|| (x, y, right - x, bottom - y))
+        range_pixels(self.range?, width, height)
+    }
+
+    /// Where brushes may paint: inside the range while one is shown, like Photoshop.
+    pub(super) fn paint_clip(&self, width: u32, height: u32) -> Option<(u32, u32, u32, u32)> {
+        if self.mode() != super::Mode::Inpaint {
+            return None;
+        }
+        self.range_pixels(width, height)
     }
 
     /// Applies `edit` to one layer of the current page as a single undo step. Returns

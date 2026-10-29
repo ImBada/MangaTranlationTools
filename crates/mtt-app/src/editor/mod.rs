@@ -1306,14 +1306,19 @@ impl Editor {
         self.insert_blocks(vec![block]);
     }
 
-    /// Delete/Backspace (and Q in one-hand mode): with the range tool on an inpaint layer,
-    /// clears that layer inside the range; otherwise deletes the selected blocks.
+    /// Delete/Backspace (and Q in one-hand mode): with a range on an inpaint layer, clears
+    /// that layer inside it (Photoshop's Delete); otherwise deletes the selected blocks.
     pub fn delete_selection_or_range(&mut self, ctx: &egui::Context) {
         if self.inpaint_busy() && self.layer != Layer::Overlay {
             return;
         }
-        if self.range.is_some() && self.tool == Tool::Range && self.layer == Layer::InpaintMask {
-            if !self.fill_range_on_mask(ctx, false) {
+        if self.range.is_some() && matches!(self.layer, Layer::InpaintMask | Layer::InpaintResult) {
+            let changed = if self.layer == Layer::InpaintMask {
+                self.fill_range_on_mask(ctx, false)
+            } else {
+                self.fill_range_on_result(ctx, false)
+            };
+            if !changed {
                 self.status = "선택 범위에서 지울 레이어 내용이 없습니다.".into();
             }
         } else if !self.selection.is_empty() && self.layer.edits_blocks() {
@@ -2423,7 +2428,9 @@ impl Editor {
         // gets the space instead.
         self.final_preview = !dialog_open
             && !ui.ctx().text_edit_focused()
-            && ui.input(|input| input.key_down(egui::Key::Space) && !input.modifiers.any());
+            && ui.input(|input| input.key_down(egui::Key::Space) && !input.modifiers.any())
+            // Space while drawing a range moves it instead.
+            && !matches!(self.drag, Some(stage::Drag::Range { .. }));
         let action = chrome::top_bar(self, ui, services, worker);
         chrome::status_bar(self, ui);
         chrome::page_strip(self, ui, services, worker);
