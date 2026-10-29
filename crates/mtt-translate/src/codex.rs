@@ -3,13 +3,16 @@
 //! like the Codex CLI's `auth.json` (owner-only on Unix) and refreshed before they expire,
 //! and the headers the Codex Responses endpoint wants. koharu signs in the same way.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, LazyLock, Mutex, PoisonError};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::client::{Retry, SendError};
 
 /// OpenAI's sign-in server and the Codex CLI's public OAuth client.
 pub const AUTH_BASE: &str = "https://auth.openai.com";
@@ -58,13 +61,22 @@ pub struct DeviceCode {
     interval: Duration,
 }
 
-/// The sign-in state stored at one path. Refreshes are serialized so parallel requests
-/// don't each spend the (single-use) refresh token.
+/// The sign-in state stored at one path. Refreshes of a path are serialized across the
+/// process (see [`refresh_lock`]) so parallel requests don't each spend the (single-use)
+/// refresh token.
 #[derive(Debug)]
 pub struct CodexAuth {
     path: PathBuf,
     auth_base: String,
-    refresh: Mutex<()>,
+    refresh: Arc<Mutex<()>>,
+}
+
+/// The lock every [`CodexAuth`] for `path` refreshes under: the translation job and the
+/// settings' model list each make their own, and must not both spend the refresh token.
+fn refresh_lock(path: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: LazyLock<Mutex<HashMap<PathBuf, Arc<Mutex<()>>>>> = LazyLock::new(Default::default);
+    let mut locks = LOCKS.lock().unwrap_or_else(PoisonError::into_inner);
+    Arc::clone(locks.entry(path.to_path_buf()).or_default())
 }
 
 impl std::fmt::Debug for Tokens {
@@ -86,7 +98,8 @@ impl CodexAuth {
 
     /// Talks to another sign-in server (tests).
     pub fn with_auth_base(path: impl Into<PathBuf>, auth_base: &str) -> Self {
-        Self { path: path.into(), auth_base: auth_base.trim_end_matches('/').to_owned(), refresh: Mutex::new(()) }
+        let path = path.into();
+        Self { refresh: refresh_lock(&path), path, auth_base: auth_base.trim_end_matches('/').to_owned() }
     }
 
     pub fn path(&self) -> &Path {
@@ -98,33 +111,35 @@ impl CodexAuth {
         self.load().and_then(|tokens| account(&tokens).ok())
     }
 
-    /// A session with at least a minute left, refreshing the tokens if needed.
-    pub fn session(&self) -> Result<Session, String> {
-        let tokens = self.load().ok_or(NOT_SIGNED_IN)?;
+    /// A session with at least a minute left, refreshing the tokens if needed. Errors are
+    /// [`Retry::Stop`] when only signing in again helps, [`Retry::Later`] when the sign-in
+    /// server could not be reached.
+    pub fn session(&self) -> Result<Session, SendError> {
+        let tokens = self.load().ok_or_else(|| stop(NOT_SIGNED_IN))?;
         if tokens.expires_at_ms > now_ms() + REFRESH_MARGIN_MS {
-            return session(&tokens);
+            return session(&tokens).map_err(stop);
         }
-        let _refresh = self.refresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _refresh = self.refresh.lock().unwrap_or_else(PoisonError::into_inner);
         // Another request may have refreshed meanwhile.
-        let current = self.load().ok_or(NOT_SIGNED_IN)?;
+        let current = self.load().ok_or_else(|| stop(NOT_SIGNED_IN))?;
         if current.expires_at_ms > now_ms() + REFRESH_MARGIN_MS {
-            return session(&current);
+            return session(&current).map_err(stop);
         }
         self.refresh_tokens(&current)
     }
 
     /// Refreshes even if the tokens look valid (the server answered 401). Skipped when
     /// another request already refreshed past `stale`.
-    pub fn force_refresh(&self, stale: &Session) -> Result<Session, String> {
-        let _refresh = self.refresh.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-        let current = self.load().ok_or(NOT_SIGNED_IN)?;
+    pub fn force_refresh(&self, stale: &Session) -> Result<Session, SendError> {
+        let _refresh = self.refresh.lock().unwrap_or_else(PoisonError::into_inner);
+        let current = self.load().ok_or_else(|| stop(NOT_SIGNED_IN))?;
         if current.access_token != stale.access_token {
-            return session(&current);
+            return session(&current).map_err(stop);
         }
         self.refresh_tokens(&current)
     }
 
-    fn refresh_tokens(&self, current: &Tokens) -> Result<Session, String> {
+    fn refresh_tokens(&self, current: &Tokens) -> Result<Session, SendError> {
         let mut response = agent()
             .post(&format!("{}/oauth/token", self.auth_base))
             .send_form([
@@ -132,14 +147,29 @@ impl CodexAuth {
                 ("refresh_token", current.refresh_token.as_str()),
                 ("client_id", CLIENT_ID),
             ])
-            .map_err(|error| format!("ChatGPT 로그인 갱신 요청 실패: {error}"))?;
-        if response.status().as_u16() == 401 {
-            let _ = std::fs::remove_file(&self.path);
-            return Err("ChatGPT 로그인이 만료되었습니다. 설정 › 번역에서 다시 로그인하세요.".into());
+            .map_err(|error| SendError::new(format!("ChatGPT 로그인 갱신 요청 실패: {error}"), Retry::Later(None)))?;
+        let status = response.status().as_u16();
+        if status == 401 {
+            // The refresh token was spent or revoked. If the file has other tokens by now,
+            // someone else refreshed them; only the rejected ones are signed out.
+            match self.load() {
+                Some(stored) if stored.refresh_token != current.refresh_token => {
+                    return session(&stored).map_err(stop);
+                }
+                Some(_) => {
+                    let _ = std::fs::remove_file(&self.path);
+                }
+                None => {}
+            }
+            return Err(stop("ChatGPT 로그인이 만료되었습니다. 설정 › 번역에서 다시 로그인하세요."));
         }
-        let tokens = tokens_from(read_success(&mut response, "로그인 갱신")?)?;
-        self.store(&tokens)?;
-        session(&tokens)
+        let value = read_success(&mut response, "로그인 갱신").map_err(|error| match status {
+            408 | 429 | 500..=599 => SendError::new(error, Retry::Later(None)),
+            _ => stop(error),
+        })?;
+        let tokens = tokens_from(value, Some(current)).map_err(stop)?;
+        self.store(&tokens).map_err(stop)?;
+        session(&tokens).map_err(stop)
     }
 
     /// Asks for a device code; show it and open [`DeviceCode::verification_url`].
@@ -203,7 +233,7 @@ impl CodexAuth {
                 ("redirect_uri", DEVICE_REDIRECT_URI),
             ])
             .map_err(|error| format!("ChatGPT 로그인 완료 요청 실패: {error}"))?;
-        let tokens = tokens_from(read_success(&mut response, "로그인 완료")?)?;
+        let tokens = tokens_from(read_success(&mut response, "로그인 완료")?, None)?;
         let account = account(&tokens)?;
         self.store(&tokens)?;
         Ok(account)
@@ -241,6 +271,11 @@ impl CodexAuth {
 
 const NOT_SIGNED_IN: &str = "ChatGPT 계정에 로그인하지 않았습니다. 설정 › 번역에서 ChatGPT 로그인을 하세요.";
 
+/// A sign-in error only signing in again fixes.
+fn stop(message: impl Into<String>) -> SendError {
+    SendError::new(message, Retry::Stop)
+}
+
 /// Headers naming `session`'s account on any ChatGPT backend request.
 pub fn account_headers(session: &Session) -> [(&'static str, String); 3] {
     [
@@ -277,7 +312,9 @@ fn read_success(response: &mut ureq::http::Response<ureq::Body>, what: &str) -> 
     serde_json::from_str(&text).map_err(|error| format!("ChatGPT {what} 응답을 읽지 못했습니다: {error}"))
 }
 
-fn tokens_from(value: Value) -> Result<Tokens, String> {
+/// Tokens from a token response. A refresh may leave out the refresh and ID tokens; the
+/// `previous` ones then stay (like the Codex CLI).
+fn tokens_from(value: Value, previous: Option<&Tokens>) -> Result<Tokens, String> {
     let access_token = string(&value, "access_token")?;
     let expires_at_ms = value
         .get("expires_in")
@@ -285,12 +322,18 @@ fn tokens_from(value: Value) -> Result<Tokens, String> {
         .map(|seconds| now_ms() + seconds * 1000)
         .or_else(|| jwt(&access_token)?.get("exp")?.as_u64().map(|exp| exp * 1000))
         .ok_or("로그인 응답에 만료 시각이 없습니다.")?;
-    Ok(Tokens {
-        access_token,
-        refresh_token: string(&value, "refresh_token")?,
-        id_token: value.get("id_token").and_then(Value::as_str).map(str::to_owned),
-        expires_at_ms,
-    })
+    let refresh_token = match (string(&value, "refresh_token"), previous) {
+        (Ok(token), _) => token,
+        (Err(_), Some(previous)) => previous.refresh_token.clone(),
+        (Err(error), None) => return Err(error),
+    };
+    let id_token = value
+        .get("id_token")
+        .and_then(Value::as_str)
+        .filter(|token| !token.is_empty())
+        .map(str::to_owned)
+        .or_else(|| previous.and_then(|previous| previous.id_token.clone()));
+    Ok(Tokens { access_token, refresh_token, id_token, expires_at_ms })
 }
 
 fn session(tokens: &Tokens) -> Result<Session, String> {
@@ -360,7 +403,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mtt-codex-{}", std::process::id()));
         let auth = CodexAuth::new(dir.join("codex-auth.json"));
         assert!(auth.account().is_none());
-        assert!(auth.session().unwrap_err().contains("로그인하지 않았습니다"));
+        let error = auth.session().unwrap_err();
+        assert!(error.message.contains("로그인하지 않았습니다"));
+        assert_eq!(error.retry, Retry::Stop);
         auth.store(&tokens).unwrap();
         assert_eq!(auth.session().unwrap().account_id, "acct-1", "fresh tokens are used as they are");
         #[cfg(unix)]
@@ -372,5 +417,19 @@ mod tests {
         auth.logout().unwrap();
         assert!(auth.account().is_none());
         std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn a_refresh_without_new_refresh_or_id_tokens_keeps_the_old_ones() {
+        let previous = Tokens {
+            access_token: "old".into(),
+            refresh_token: "r-1".into(),
+            id_token: Some("id-1".into()),
+            expires_at_ms: 0,
+        };
+        let value = serde_json::json!({ "access_token": test_jwt("acct-1", "a@example.com"), "expires_in": 60 });
+        let tokens = tokens_from(value.clone(), Some(&previous)).unwrap();
+        assert_eq!((tokens.refresh_token.as_str(), tokens.id_token.as_deref()), ("r-1", Some("id-1")));
+        assert!(tokens_from(value, None).is_err(), "a first sign-in needs a refresh token");
     }
 }

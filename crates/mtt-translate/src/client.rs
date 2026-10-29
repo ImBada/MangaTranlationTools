@@ -387,7 +387,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
     };
     let url = format!("{}/{path}", endpoint.base_url.trim_end_matches('/'));
     let session = match &endpoint.auth {
-        Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::Stop))?),
+        Some(auth) => Some(auth.session()?),
         None => None,
     };
     let post = |session: Option<&crate::codex::Session>, body: &[u8]| {
@@ -408,7 +408,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
         if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
             && response.status().as_u16() == 401
         {
-            let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::Stop))?;
+            let fresh = auth.force_refresh(stale)?;
             response = post(Some(&fresh), &body)?;
             session = Some(fresh);
         }
@@ -454,7 +454,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
 /// ChatGPT sign-in, that there is a usable session.
 pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
     if let Some(auth) = &endpoint.auth {
-        return auth.session().map(|_| ());
+        return auth.session().map(|_| ()).map_err(|error| error.message);
     }
     get_models(endpoint).map(|_| ())
 }
@@ -499,7 +499,7 @@ fn get_models(endpoint: &Endpoint) -> Result<String, String> {
         Some(_) => format!("{base}/models?client_version={}", codex_client_version(base)),
         None => format!("{base}/models"),
     };
-    let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose()?;
+    let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose().map_err(|error| error.message)?;
     let get = |session: Option<&crate::codex::Session>| {
         let mut request = agent(Duration::from_secs(30)).get(&url).header("Accept", "application/json");
         if let Some(session) = session {
@@ -515,7 +515,7 @@ fn get_models(endpoint: &Endpoint) -> Result<String, String> {
     if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
         && response.status().as_u16() == 401
     {
-        response = get(Some(&auth.force_refresh(stale)?))?;
+        response = get(Some(&auth.force_refresh(stale).map_err(|error| error.message)?))?;
     }
     let status = response.status();
     let text = response.body_mut().read_to_string().unwrap_or_default();

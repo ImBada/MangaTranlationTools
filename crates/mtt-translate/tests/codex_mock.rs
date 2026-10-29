@@ -219,3 +219,131 @@ fn cancelling_stops_waiting_for_approval() {
     assert!(error.contains("취소"), "{error}");
     assert!(auth.account().is_none());
 }
+
+/// Answers each `/oauth/token` refresh with `reply(refresh_token)` after a short pause (so
+/// refreshes that aren't serialized would overlap). Returns the base URL and the refresh
+/// tokens it was sent.
+fn spawn_token_server(
+    reply: impl Fn(&str) -> (u16, serde_json::Value) + Send + 'static,
+) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base = format!("http://{}", listener.local_addr().unwrap());
+    let sent = Arc::new(Mutex::new(Vec::new()));
+    let seen = Arc::clone(&sent);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let request = read_request(&stream);
+            let token = request
+                .body
+                .split('&')
+                .find_map(|pair| pair.strip_prefix("refresh_token="))
+                .unwrap_or_default()
+                .to_owned();
+            seen.lock().unwrap().push(token.clone());
+            std::thread::sleep(Duration::from_millis(200));
+            let (status, body) = reply(&token);
+            let body = body.to_string();
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+        }
+    });
+    (base, sent)
+}
+
+/// A sign-in file in a fresh folder holding `refresh` and an access token marked `marker`.
+fn sign_in_file(name: &str, marker: &str, refresh: &str, expires_at_ms: u64) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("mtt-codex-{name}-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("codex-auth.json");
+    write_tokens(&path, marker, refresh, expires_at_ms);
+    path
+}
+
+fn write_tokens(path: &std::path::Path, marker: &str, refresh: &str, expires_at_ms: u64) {
+    let tokens = serde_json::json!({
+        "access_token": jwt("acct-1", marker), "refresh_token": refresh, "id_token": "id-1",
+        "expires_at_ms": expires_at_ms,
+    });
+    std::fs::write(path, tokens.to_string()).unwrap();
+}
+
+fn stored(path: &std::path::Path) -> serde_json::Value {
+    serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap()
+}
+
+fn later_ms() -> u64 {
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis() as u64 + 3_600_000
+}
+
+#[test]
+fn two_sign_ins_for_one_file_spend_the_refresh_token_once() {
+    let (base, sent) = spawn_token_server(|token| match token {
+        "r-1" => (
+            200,
+            serde_json::json!({ "access_token": jwt("acct-1", "new"), "refresh_token": "r-2", "expires_in": 3600 }),
+        ),
+        _ => (401, serde_json::json!({ "error": { "code": "refresh_token_reused" } })),
+    });
+    let path = sign_in_file("shared", "old", "r-1", 0);
+    // The translation job and the settings' model list each make their own.
+    let sessions: Vec<_> = (0..2)
+        .map(|_| {
+            let auth = CodexAuth::with_auth_base(&path, &base);
+            std::thread::spawn(move || auth.session())
+        })
+        .collect();
+    for session in sessions {
+        assert_eq!(session.join().unwrap().unwrap().access_token, jwt("acct-1", "new"));
+    }
+    assert_eq!(*sent.lock().unwrap(), ["r-1"], "refreshed once");
+    assert_eq!(stored(&path)["refresh_token"], "r-2", "still signed in");
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_rejected_refresh_signs_out_only_the_tokens_it_rejected() {
+    // Someone else refreshed while this request was out: their tokens stay.
+    let path = sign_in_file("rejected-other", "old", "r-1", 0);
+    let file = path.clone();
+    let (base, _) = spawn_token_server(move |_| {
+        write_tokens(&file, "theirs", "r-9", later_ms());
+        (401, serde_json::json!({ "error": { "code": "refresh_token_reused" } }))
+    });
+    let session = CodexAuth::with_auth_base(&path, &base).session().unwrap();
+    assert_eq!(session.access_token, jwt("acct-1", "theirs"));
+    assert_eq!(stored(&path)["refresh_token"], "r-9");
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+
+    let path = sign_in_file("rejected-same", "old", "r-1", 0);
+    let (base, _) = spawn_token_server(|_| (401, serde_json::json!({ "error": { "code": "refresh_token_expired" } })));
+    let error = CodexAuth::with_auth_base(&path, &base).session().unwrap_err();
+    assert_eq!(error.retry, mtt_translate::Retry::Stop, "{}", error.message);
+    assert!(!path.exists(), "signed out");
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
+
+#[test]
+fn a_refresh_server_error_is_retried_and_omitted_tokens_are_kept() {
+    let calls = Arc::new(Mutex::new(0));
+    let counted = Arc::clone(&calls);
+    let (base, _) = spawn_token_server(move |_| {
+        *counted.lock().unwrap() += 1;
+        match *counted.lock().unwrap() {
+            1 => (503, serde_json::json!({ "error": "unavailable" })),
+            _ => (200, serde_json::json!({ "access_token": jwt("acct-1", "new"), "expires_in": 3600 })),
+        }
+    });
+    let path = sign_in_file("server-error", "old", "r-1", 0);
+    let auth = CodexAuth::with_auth_base(&path, &base);
+    let error = auth.session().unwrap_err();
+    assert_eq!(error.retry, mtt_translate::Retry::Later(None), "{}", error.message);
+    assert!(path.exists(), "still signed in");
+    assert_eq!(auth.session().unwrap().access_token, jwt("acct-1", "new"));
+    let tokens = stored(&path);
+    assert_eq!((tokens["refresh_token"].as_str(), tokens["id_token"].as_str()), (Some("r-1"), Some("id-1")));
+    std::fs::remove_dir_all(path.parent().unwrap()).ok();
+}
