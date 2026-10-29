@@ -9,6 +9,7 @@ use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block
 use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
 use mtt_core::model::{BBox, PageAnalysisStatus, PageRecord, TranslationBlock};
+use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
 use mtt_translate::{TranslationConfig, overlay_item_to_block, translate_page};
 
 use super::Editor;
@@ -28,11 +29,27 @@ pub enum RunMode {
 }
 
 pub enum TranslationEvent {
-    Started { total: usize, endpoint: String },
-    PageStarted { page_id: String },
-    Attempt { page_id: String, attempt: u32, error: String },
-    PageDone { page_id: String, result: Result<Vec<TranslationBlock>, String> },
-    Finished { cancelled: bool, error: Option<String> },
+    Started {
+        total: usize,
+        endpoint: String,
+    },
+    PageStarted {
+        page_id: String,
+    },
+    Attempt {
+        page_id: String,
+        attempt: u32,
+        error: String,
+    },
+    /// The page's blocks with the source lettering found under each.
+    PageDone {
+        page_id: String,
+        result: Result<Vec<(TranslationBlock, Option<SourceLettering>)>, String>,
+    },
+    Finished {
+        cancelled: bool,
+        error: Option<String>,
+    },
 }
 
 pub struct TranslationJob {
@@ -180,10 +197,17 @@ impl Editor {
                                     || cancel.load(Ordering::SeqCst),
                                 )
                                 .map(|items| {
+                                    // The lettering colors come from the page itself.
+                                    let source = image::open(path).ok().map(|image| image.to_rgba8());
                                     items
                                         .iter()
                                         .enumerate()
-                                        .map(|(i, item)| overlay_item_to_block(item, page_id, *width, *height, i))
+                                        .map(|(i, item)| {
+                                            let block = overlay_item_to_block(item, page_id, *width, *height, i);
+                                            let lettering =
+                                                source.as_ref().and_then(|source| detect_lettering(source, &block));
+                                            (block, lettering)
+                                        })
                                         .collect()
                                 });
                                 if cancel.load(Ordering::SeqCst) && result.is_err() {
@@ -300,7 +324,11 @@ impl Editor {
 
     /// Replaces a page's generated blocks with the translation (block-type presets applied)
     /// as one undo step (`updatePageAfterAnalysis`); the user's own blocks stay.
-    fn apply_translated_page(&mut self, page_id: &str, result: Result<Vec<TranslationBlock>, String>) {
+    fn apply_translated_page(
+        &mut self,
+        page_id: &str,
+        result: Result<Vec<(TranslationBlock, Option<SourceLettering>)>, String>,
+    ) {
         let name = self.page_name(page_id);
         if let Some(job) = &mut self.translation {
             job.done += 1;
@@ -318,7 +346,7 @@ impl Editor {
                     // `buildPageWarnings`: "[?]" marks uncertain OCR.
                     let uncertain = blocks
                         .iter()
-                        .filter(|block| block.source_text.contains("[?]") || block.translated_text.contains("[?]"))
+                        .filter(|(block, _)| block.source_text.contains("[?]") || block.translated_text.contains("[?]"))
                         .count();
                     if uncertain > 0 {
                         job.warnings.push(format!("{name}: 불확실한 OCR 조각이 {uncertain}개 있습니다."));
@@ -342,10 +370,17 @@ impl Editor {
         let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == page_id) else { return };
         let before = BlocksSnapshot::of(page);
         match result {
-            Ok(mut blocks) => {
-                for block in &mut blocks {
-                    apply_block_type_font_preset_to_block(block, &presets);
-                }
+            Ok(translated) => {
+                let blocks = translated
+                    .into_iter()
+                    .map(|(mut block, lettering)| {
+                        apply_block_type_font_preset_to_block(&mut block, &presets);
+                        if let Some(lettering) = lettering {
+                            lettering.apply_to(&mut block);
+                        }
+                        block
+                    })
+                    .collect();
                 let (blocks, kept) = merge_translated_blocks(page_id, &page.blocks, blocks);
                 page.blocks = blocks;
                 page.block_groups = Some(valid_groups(page)).filter(|groups| !groups.is_empty());
@@ -428,7 +463,7 @@ pub fn apply_for_test(
     blocks: Vec<TranslationBlock>,
 ) -> mtt_core::model::Chapter {
     let mut editor = Editor::new(chapter);
-    editor.apply_translated_page(page_id, Ok(blocks));
+    editor.apply_translated_page(page_id, Ok(blocks.into_iter().map(|block| (block, None)).collect()));
     editor.chapter
 }
 

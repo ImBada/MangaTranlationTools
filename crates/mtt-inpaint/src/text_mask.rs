@@ -1,12 +1,14 @@
 //! Automatic text masks for selected blocks (`drawBlocksOnInpaintMask`): dark source pixels
-//! inside each block's detection box, minus connected components that look like balloon
-//! outlines or panel borders, grown so anti-aliased edges and thin light outlines go too.
+//! inside each block's detection box (light ones for text on a dark box), minus connected
+//! components that look like balloon outlines or panel borders, grown so anti-aliased
+//! edges and thin light outlines go too. The same strokes give the source lettering's
+//! colors ([`detect_lettering`]).
 
 use image::{GrayImage, RgbaImage};
-use mtt_core::geometry::bbox_to_pixels;
-use mtt_core::model::TranslationBlock;
+use mtt_core::geometry::{bbox_to_pixels, parse_hex_color};
+use mtt_core::model::{StyleKey, TranslationBlock};
 
-use crate::{Rect, close, dilate};
+use crate::{Rect, close, dilate, erode};
 
 const TEXT_MASK_MIN_ALPHA: u8 = 48;
 const TEXT_MASK_MAX_LUMA: f32 = 205.0;
@@ -20,6 +22,29 @@ const TEXT_MASK_CENTER_KEEP_INSET_RATIO: f32 = 0.14;
 const GROWTH_PER_1024_PX: f32 = 3.0;
 const MIN_GROWTH_PX: usize = 2;
 const MAX_GROWTH_PX: usize = 8;
+/// A box whose edge is darker than this may hold light text; it does when the light
+/// pixels (at least `LIGHT_TEXT_CONTRAST` above the edge) keep `LIGHT_TEXT_MAJORITY` times
+/// more glyph pixels than the dark ones.
+const DARK_BACKGROUND_LUMA: f32 = 100.0;
+const LIGHT_TEXT_CONTRAST: f32 = 50.0;
+const LIGHT_TEXT_MAJORITY: usize = 5;
+/// Lettering detection looks at glyph-sized strokes (at least `1 / GLYPH_SHARE_OF_LARGEST`
+/// of the largest, so screentone dots don't count), at least `MIN_LETTERING_PIXELS` of
+/// them. An outline is rings around the glyphs with `OUTLINE_SHARE` of their pixels within
+/// `COLOR_TOLERANCE` of one color that differs from the fill by `OUTLINE_CONTRAST` luma,
+/// and that stop within `MAX_OUTLINE_PX` (a color that goes on is the background).
+const GLYPH_SHARE_OF_LARGEST: usize = 20;
+const MIN_LETTERING_PIXELS: usize = 24;
+const MAX_OUTLINE_PX: usize = 8;
+const OUTLINE_SHARE: f32 = 0.85;
+const COLOR_TOLERANCE: u8 = 40;
+const OUTLINE_CONTRAST: f32 = 90.0;
+/// A box edge (its outer `EDGE_BAND_PX`) is plain when this share of it is within
+/// `COLOR_TOLERANCE` of its median.
+const EDGE_BAND_PX: u32 = 3;
+const PLAIN_EDGE_SHARE: f32 = 0.9;
+/// The fill replaces the block's text color when a channel differs by more than this.
+const FILL_DIFFERENCE: u8 = 80;
 
 struct Component {
     pixels: Vec<usize>,
@@ -47,7 +72,7 @@ pub fn growth_radius(width: u32, height: u32) -> usize {
 
 /// Mask covering the text strokes of `blocks`, added to `base` when given. The strokes are
 /// grown by [`growth_radius`] and closed (gaps between them filled), staying within that
-/// distance of the boxes and off the dark pixels set aside as balloon outlines.
+/// distance of the boxes and off the text-colored pixels set aside as balloon outlines.
 pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: Option<&GrayImage>) -> GrayImage {
     let (width, height) = source.dimensions();
     let mut mask = base.cloned().unwrap_or_else(|| GrayImage::new(width, height));
@@ -79,19 +104,9 @@ pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: O
     let mut outlines = vec![false; area_len];
     let mut allowed = vec![false; area_len];
     for rect in rects {
-        let (rw, rh) = (rect.width as usize, rect.height as usize);
-        let mut candidates = vec![0u8; rw * rh];
-        for y in 0..rh {
-            for x in 0..rw {
-                let p = source.get_pixel(rect.x + x as u32, rect.y + y as u32).0;
-                let luma = f32::from(p[0]) * 0.299 + f32::from(p[1]) * 0.587 + f32::from(p[2]) * 0.114;
-                if p[3] >= TEXT_MASK_MIN_ALPHA && luma <= TEXT_MASK_MAX_LUMA {
-                    candidates[y * rw + x] = 255;
-                }
-            }
-        }
-        let filtered = retain_centered_components(&filter_candidates(&candidates, rw, rh), rw, rh);
-        for (index, (value, candidate)) in filtered.iter().zip(&candidates).enumerate() {
+        let rw = rect.width as usize;
+        let found = rect_strokes(source, rect);
+        for (index, (value, candidate)) in found.strokes.iter().zip(&found.candidates).enumerate() {
             let (x, y) = ((rect.x - area.x) as usize + index % rw, (rect.y - area.y) as usize + index / rw);
             if *value > 0 {
                 strokes[y * area_width + x] = 255;
@@ -118,6 +133,201 @@ pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: O
         }
     }
     mask
+}
+
+/// The source lettering of a block: its fill color and, for text drawn with a contrasting
+/// rim (white outlines over art, say), the outline color and how far it reaches past the
+/// glyphs. Light text on a dark box also gives the box color.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceLettering {
+    pub fill: [u8; 3],
+    pub outline: Option<([u8; 3], u32)>,
+    pub dark_background: Option<[u8; 3]>,
+}
+
+impl SourceLettering {
+    /// Puts the lettering on `block` over its preset values, unlinking only the fields it
+    /// changes: the text color when it clearly differs, and the outline when there is one.
+    pub fn apply_to(&self, block: &mut TranslationBlock) {
+        let hex = |[r, g, b]: [u8; 3]| format!("#{r:02x}{g:02x}{b:02x}");
+        let current = block.style.text_color.as_deref().and_then(parse_hex_color);
+        let differs = current
+            .is_none_or(|(r, g, b)| [r, g, b].iter().zip(self.fill).any(|(a, b)| a.abs_diff(b) > FILL_DIFFERENCE));
+        if differs {
+            block.style.text_color = Some(hex(self.fill));
+            block.links.set(StyleKey::TextColor, Some(false));
+        }
+        if let Some((color, reach)) = self.outline {
+            // The stroke is centred on the glyph edge, so it reaches half its width out.
+            block.style.outline_color = Some(hex(color));
+            block.style.outline_width_px = Some(f64::from(reach * 2));
+            block.links.set(StyleKey::OutlineColor, Some(false));
+            block.links.set(StyleKey::OutlineWidthPx, Some(false));
+        }
+        if let Some(color) = self.dark_background {
+            block.background_color = hex(color);
+        }
+    }
+}
+
+/// The lettering inside `block`'s box, `None` when too little text is found.
+pub fn detect_lettering(source: &RgbaImage, block: &TranslationBlock) -> Option<SourceLettering> {
+    let rect = scan_rect(block, source.width(), source.height())?;
+    let found = rect_strokes(source, rect);
+    let (rw, rh) = (rect.width as usize, rect.height as usize);
+    let strokes = glyph_sized(&found.strokes, rw, rh);
+    let count = strokes.iter().filter(|value| **value > 0).count();
+    if count < MIN_LETTERING_PIXELS {
+        return None;
+    }
+    let colors_in = |selection: &[u8]| -> Vec<[u8; 3]> {
+        selection
+            .iter()
+            .enumerate()
+            .filter(|(_, value)| **value > 0)
+            .map(|(index, _)| {
+                let p = source.get_pixel(rect.x + (index % rw) as u32, rect.y + (index / rw) as u32).0;
+                [p[0], p[1], p[2]]
+            })
+            .collect()
+    };
+    // The fill from the stroke cores, without their anti-aliased edges.
+    let core = erode(&strokes, rw, rh, 1);
+    let core_count = core.iter().filter(|value| **value > 0).count();
+    let fill = median_color(&colors_in(if core_count * 5 >= count { &core } else { &strokes }))?;
+    // Rings around the strokes, from 2px out (1px is anti-aliasing).
+    let mut inner = dilate(&strokes, rw, rh, 1);
+    let mut rim: Option<([u8; 3], u32)> = None;
+    let mut rim_ends = false;
+    for distance in 2..=MAX_OUTLINE_PX {
+        let outer = dilate(&strokes, rw, rh, distance);
+        let ring: Vec<u8> = outer.iter().zip(&inner).map(|(o, i)| if *o > 0 && *i == 0 { 255 } else { 0 }).collect();
+        let colors = colors_in(&ring);
+        let color = match rim {
+            Some((color, _)) => Some(color),
+            None => median_color(&colors).filter(|color| (luma(*color) - luma(fill)).abs() >= OUTLINE_CONTRAST),
+        };
+        let Some(color) = color.filter(|color| colors.len() >= 8 && share_near(&colors, *color) >= OUTLINE_SHARE)
+        else {
+            rim_ends = true;
+            break;
+        };
+        rim = Some((color, distance as u32));
+        inner = outer;
+    }
+    // A rim that goes on, or has the color of a plain box edge, is the background.
+    let outline =
+        rim.filter(|(color, _)| rim_ends && !found.edge.is_some_and(|(edge, plain)| plain && near(*color, edge)));
+    Some(SourceLettering {
+        fill,
+        outline,
+        dark_background: found.light.then(|| found.edge.map(|(edge, _)| edge)).flatten(),
+    })
+}
+
+/// `strokes` without components much smaller than the largest (dots, specks).
+fn glyph_sized(strokes: &[u8], width: usize, height: usize) -> Vec<u8> {
+    let mut visited = vec![false; strokes.len()];
+    let mut components = Vec::new();
+    for index in 0..strokes.len() {
+        if strokes[index] > 0 && !visited[index] {
+            components.push(collect(strokes, &mut visited, width, height, index).pixels);
+        }
+    }
+    let largest = components.iter().map(Vec::len).max().unwrap_or(0);
+    let mut kept = vec![0u8; strokes.len()];
+    for pixels in components.iter().filter(|pixels| pixels.len() * GLYPH_SHARE_OF_LARGEST >= largest) {
+        for pixel in pixels {
+            kept[*pixel] = 255;
+        }
+    }
+    kept
+}
+
+/// Text pixels in `rect`: the candidates of the text's polarity and the ones kept as
+/// glyph strokes (`width * height` each), whether the text is light on a dark box, and
+/// the box edge's median color with whether the edge is plain.
+struct RectStrokes {
+    candidates: Vec<u8>,
+    strokes: Vec<u8>,
+    light: bool,
+    edge: Option<([u8; 3], bool)>,
+}
+
+fn rect_strokes(source: &RgbaImage, rect: Rect) -> RectStrokes {
+    let (rw, rh) = (rect.width as usize, rect.height as usize);
+    let candidates = |keep: &dyn Fn(f32) -> bool| -> Vec<u8> {
+        let mut out = vec![0u8; rw * rh];
+        for y in 0..rh {
+            for x in 0..rw {
+                let p = source.get_pixel(rect.x + x as u32, rect.y + y as u32).0;
+                if p[3] >= TEXT_MASK_MIN_ALPHA && keep(luma([p[0], p[1], p[2]])) {
+                    out[y * rw + x] = 255;
+                }
+            }
+        }
+        out
+    };
+    let keep_text = |candidates: &[u8]| retain_centered_components(&filter_candidates(candidates, rw, rh), rw, rh);
+    let count = |mask: &[u8]| mask.iter().filter(|value| **value > 0).count();
+    let edge = edge_color(source, rect);
+    let dark_candidates = candidates(&|luma| luma <= TEXT_MASK_MAX_LUMA);
+    let dark = keep_text(&dark_candidates);
+    if let Some((edge_color, _)) = edge
+        && luma(edge_color) < DARK_BACKGROUND_LUMA
+    {
+        let threshold = luma(edge_color) + LIGHT_TEXT_CONTRAST;
+        let light_candidates = candidates(&|luma| luma >= threshold);
+        let light = keep_text(&light_candidates);
+        if count(&dark) * LIGHT_TEXT_MAJORITY < count(&light) {
+            return RectStrokes { candidates: light_candidates, strokes: light, light: true, edge };
+        }
+    }
+    RectStrokes { candidates: dark_candidates, strokes: dark, light: false, edge }
+}
+
+/// Median color of the `EDGE_BAND_PX` along `rect`'s sides (thick enough to catch
+/// screentone dots) and whether the edge is plain.
+fn edge_color(source: &RgbaImage, rect: Rect) -> Option<([u8; 3], bool)> {
+    let (right, bottom) = (rect.x + rect.width, rect.y + rect.height);
+    let colors: Vec<[u8; 3]> = (rect.y..bottom)
+        .flat_map(|y| (rect.x..right).map(move |x| (x, y)))
+        .filter(|(x, y)| {
+            x - rect.x < EDGE_BAND_PX
+                || right - x <= EDGE_BAND_PX
+                || y - rect.y < EDGE_BAND_PX
+                || bottom - y <= EDGE_BAND_PX
+        })
+        .map(|(x, y)| {
+            let p = source.get_pixel(x, y).0;
+            [p[0], p[1], p[2]]
+        })
+        .collect();
+    let median = median_color(&colors)?;
+    Some((median, share_near(&colors, median) >= PLAIN_EDGE_SHARE))
+}
+
+fn luma([r, g, b]: [u8; 3]) -> f32 {
+    f32::from(r) * 0.299 + f32::from(g) * 0.587 + f32::from(b) * 0.114
+}
+
+fn median_color(colors: &[[u8; 3]]) -> Option<[u8; 3]> {
+    if colors.is_empty() {
+        return None;
+    }
+    Some([0, 1, 2].map(|channel| {
+        let mut values: Vec<u8> = colors.iter().map(|color| color[channel]).collect();
+        let middle = values.len() / 2;
+        *values.select_nth_unstable(middle).1
+    }))
+}
+
+fn near(a: [u8; 3], b: [u8; 3]) -> bool {
+    a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= COLOR_TOLERANCE)
+}
+
+fn share_near(colors: &[[u8; 3]], target: [u8; 3]) -> f32 {
+    colors.iter().filter(|color| near(**color, target)).count() as f32 / colors.len().max(1) as f32
 }
 
 /// Detection box plus a small padding (`textMaskScanRect`).
@@ -329,5 +539,79 @@ mod tests {
         assert_eq!(mask.get_pixel(1012, 178)[0], 255);
         assert_eq!(mask.get_pixel(996, 200)[0], 0, "art left alone");
         assert_eq!(mask.get_pixel(1100, 200)[0], 0);
+    }
+
+    fn glyphs(source: &mut RgbaImage, color: [u8; 3]) {
+        for x0 in [1000, 1022, 1044] {
+            for y in 180..220 {
+                for x in x0..x0 + 10 {
+                    source.put_pixel(x, y, image::Rgba([color[0], color[1], color[2], 255]));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn light_text_on_a_dark_box_is_masked_and_detected() {
+        let mut source = RgbaImage::from_pixel(2048, 400, image::Rgba([12, 12, 12, 255]));
+        glyphs(&mut source, [250, 250, 250]);
+        let block = wide_block();
+        let mask = mask_for_blocks(&source, &[&block], None);
+        assert_eq!(mask.get_pixel(1005, 200)[0], 255, "white glyph masked");
+        assert_eq!(mask.get_pixel(1100, 200)[0], 0);
+        let lettering = detect_lettering(&source, &block).unwrap();
+        assert_eq!(
+            lettering,
+            SourceLettering { fill: [250, 250, 250], outline: None, dark_background: Some([12, 12, 12]) }
+        );
+
+        let mut styled = TranslationBlock { background_color: "#fffdf5".into(), ..block };
+        styled.style.text_color = Some("#111111".into());
+        lettering.apply_to(&mut styled);
+        assert_eq!(styled.style.text_color.as_deref(), Some("#fafafa"));
+        assert_eq!(styled.links.get(StyleKey::TextColor), Some(false));
+        assert_eq!(styled.background_color, "#0c0c0c");
+    }
+
+    #[test]
+    fn dark_text_in_a_balloon_has_no_outline() {
+        let mut source = RgbaImage::from_pixel(2048, 400, image::Rgba([255, 255, 255, 255]));
+        glyphs(&mut source, [20, 20, 20]);
+        let lettering = detect_lettering(&source, &wide_block()).unwrap();
+        assert_eq!(lettering, SourceLettering { fill: [20, 20, 20], outline: None, dark_background: None });
+        let mut block = wide_block();
+        block.style.text_color = Some("#111111".into());
+        lettering.apply_to(&mut block);
+        assert_eq!(block.style.text_color.as_deref(), Some("#111111"), "close to the preset: kept");
+        assert_eq!(block.links.get(StyleKey::TextColor), None);
+    }
+
+    #[test]
+    fn a_white_rim_over_art_is_an_outline() {
+        let mut source = RgbaImage::from_fn(2048, 400, |x, y| {
+            let v = if (x / 2 + y / 2) % 2 == 0 { 60 } else { 140 };
+            image::Rgba([v, v, v, 255])
+        });
+        for x0 in [1000, 1022, 1044] {
+            paint(&mut source, x0 - 3, 177, 16, 46, 250);
+        }
+        glyphs(&mut source, [10, 10, 10]);
+        let lettering = detect_lettering(&source, &wide_block()).unwrap();
+        assert_eq!(lettering.fill, [10, 10, 10]);
+        assert_eq!(lettering.outline, Some(([250, 250, 250], 3)));
+        let mut block = wide_block();
+        lettering.apply_to(&mut block);
+        assert_eq!(block.style.outline_width_px, Some(6.0));
+        assert_eq!(block.style.outline_color.as_deref(), Some("#fafafa"));
+    }
+
+    #[test]
+    fn colored_text_sets_the_fill() {
+        let mut source = RgbaImage::from_pixel(2048, 400, image::Rgba([255, 255, 255, 255]));
+        glyphs(&mut source, [200, 30, 30]);
+        let mut block = wide_block();
+        block.style.text_color = Some("#111111".into());
+        detect_lettering(&source, &block).unwrap().apply_to(&mut block);
+        assert_eq!(block.style.text_color.as_deref(), Some("#c81e1e"));
     }
 }
