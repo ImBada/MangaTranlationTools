@@ -22,9 +22,29 @@ use mtt_core::settings::{AppSettings, ModelProvider, ReasoningEffort};
 pub use client::{Api, Endpoint, ModelOption, Retry, SendError};
 pub use parser::OverlayItem;
 
-pub const PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
-Image 1 is the original full page. Another image is a grayscale/high-contrast assist view of the exact same page.
-Task: detect each speech bubble, narration box, name call, or sound-effect block that contains visible Japanese text and return a Korean replacement text with one bounding box per item.
+/// How the page prompts start: what the images are, the original alone (fast mode) or with
+/// the assist view (accuracy mode).
+fn page_intro(assist_view: bool) -> &'static str {
+    if assist_view {
+        "You are given the same Japanese manga page in multiple full-page renderings.
+Image 1 is the original full page. Another image is a grayscale/high-contrast assist view of the exact same page."
+    } else {
+        "You are given a Japanese manga page.
+Image 1 is the original full page."
+    }
+}
+
+/// The page prompt for the images sent (see [`page_intro`]).
+pub fn page_prompt(assist_view: bool) -> String {
+    format!("{}\n{PAGE_TASK}", page_intro(assist_view))
+}
+
+/// Shorter prompt used after an answer that could not be read (`buildRetryPrompt`).
+pub fn retry_prompt(assist_view: bool) -> String {
+    format!("{}\n{RETRY_TASK}", page_intro(assist_view))
+}
+
+const PAGE_TASK: &str = "Task: detect each speech bubble, narration box, name call, or sound-effect block that contains visible Japanese text and return a Korean replacement text with one bounding box per item.
 Use coordinates for the ORIGINAL page only.
 Return only plain text records in this exact field format:
 id: 1
@@ -59,9 +79,7 @@ Rules:
 - Keep jp and ko on a single line each. Replace internal newlines with spaces.
 - If OCR is uncertain, keep only the uncertain fragment as [?] and still give the best short Korean translation.";
 
-/// Shorter prompt used for retries (`buildRetryPrompt`).
-pub const RETRY_PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
-Return only plain text records for a downstream parser.
+const RETRY_TASK: &str = "Return only plain text records for a downstream parser.
 Use this exact field format and nothing else:
 id: 1
 type: dialogue
@@ -219,6 +237,8 @@ pub fn list_models(config: &TranslationConfig) -> Result<Vec<ModelOption>, Strin
 struct Tries {
     /// Answers cut off at the output limit.
     cut_off: u32,
+    /// Whether the model answered something that could not be read.
+    unreadable: bool,
 }
 
 /// The output limit for a request after `cut_off` answers were cut off at it: doubled for
@@ -274,10 +294,14 @@ pub fn translate_page(
     // The images (and their base64) are the same for every attempt.
     let variants = images::prepare_variants(image_path, config.include_enhanced_variant)
         .map_err(|error| SendError::new(error, Retry::No))?;
+    let assist_view = variants.iter().any(|variant| variant.role == images::VariantRole::Enhanced);
+    let (prompt, retry) = (page_prompt(assist_view), retry_prompt(assist_view));
     with_retries(
         config,
-        |attempt, tries, cancelled| {
-            let prompt = if attempt > 1 { RETRY_PROMPT } else { PROMPT };
+        |tries, cancelled| {
+            // The shorter, format-only prompt helps an answer that could not be read; after a
+            // network or server error the page is asked the same way again.
+            let prompt = if tries.unreadable { &retry } else { &prompt };
             request_attempt(config, tries, &variants, prompt, parser::parse_items, cancelled)
         },
         on_attempt,
@@ -350,7 +374,7 @@ pub fn translate_regions(
     let ids: Vec<u32> = regions.iter().map(|region| region.id).collect();
     with_retries(
         config,
-        |_, tries, cancelled| {
+        |tries, cancelled| {
             request_attempt(
                 config,
                 tries,
@@ -365,12 +389,12 @@ pub fn translate_regions(
     )
 }
 
-/// Runs `attempt(number, tries, cancelled)` up to `config.attempts` times, pausing after
+/// Runs `attempt(tries, cancelled)` up to `config.attempts` times, pausing after
 /// server errors and stopping early on errors that would repeat or on cancel. The error
 /// keeps the last attempt's [`Retry`], so callers can tell a job-stopping one.
 fn with_retries<T>(
     config: &TranslationConfig,
-    mut attempt: impl FnMut(u32, Tries, &dyn Fn() -> bool) -> Result<T, SendError>,
+    mut attempt: impl FnMut(Tries, &dyn Fn() -> bool) -> Result<T, SendError>,
     mut on_attempt: impl FnMut(u32, &str),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<T, SendError> {
@@ -382,7 +406,7 @@ fn with_retries<T>(
         if cancelled() {
             return Err(cancel());
         }
-        let error = match attempt(number, tries, cancelled) {
+        let error = match attempt(tries, cancelled) {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
@@ -400,6 +424,7 @@ fn with_retries<T>(
             }
             Retry::Stop => return Err(error),
             Retry::Longer => tries.cut_off += 1,
+            Retry::Now => tries.unreadable = true,
             Retry::Later(asked)
                 if number < attempts && !wait_unless_cancelled(retry_delay(number, asked), cancelled) =>
             {

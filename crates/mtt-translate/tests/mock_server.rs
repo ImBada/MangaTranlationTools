@@ -418,3 +418,19 @@ fn the_model_test_gives_a_reasoning_model_room_to_think() {
     assert!(body["max_completion_tokens"].as_u64().unwrap() > 1000, "{body}");
     assert!(body.get("max_tokens").is_none() && body.get("temperature").is_none(), "{body}");
 }
+
+#[test]
+fn a_server_error_is_retried_with_the_full_prompt_for_the_images_sent() {
+    let (base_url, bodies) =
+        spawn_scripted(vec![(503, "application/json", r#"{"error":"busy"}"#.into()), chat_reply(RECORD, "stop")]);
+    // Fast mode: the original page only.
+    let (page, config) = page_and_config(base_url, 2);
+    assert!(!config.include_enhanced_variant);
+    translate_page(&config, &page, |_, _| {}, || false).unwrap();
+    let bodies = bodies.lock().unwrap();
+    for body in bodies.iter() {
+        assert!(body.contains("Task: detect each speech bubble"), "the full prompt, not the retry one");
+        assert!(!body.contains("Return only plain text records for a downstream parser"));
+        assert!(!body.contains("assist view") && !body.contains("Image 2"), "no image that wasn't sent");
+    }
+}
