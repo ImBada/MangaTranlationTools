@@ -462,7 +462,15 @@ impl<'a> BlockPainter<'a> {
                 let scale = self.font_size / self.layout.font_size_px.max(f64::EPSILON);
                 shaped.lines.iter().map(|line| WrappedLine { width: line.width * scale, ..line.clone() }).collect()
             }
-            None => wrap_text_to_width(self.ctx, self.fonts, self.block, self.text, self.font_size, fit_width),
+            None => wrap_text_to_width(
+                self.ctx,
+                self.fonts,
+                self.block,
+                self.text,
+                self.font_size,
+                fit_width,
+                self.layout.min_font_size_px,
+            ),
         };
         let line_height = self.font_size * style_line_height(self.block);
         let total_height = lines.len() as f64 * line_height;

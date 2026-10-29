@@ -82,6 +82,9 @@ pub struct BlockTextLayout {
     pub fit_inner_width: f64,
     pub fit_inner_height: f64,
     pub font_size_px: f64,
+    /// The smallest size the fit could pick (the font size itself without auto-fit). Under
+    /// v2 a word too long for a line even at this size may break between its characters.
+    pub min_font_size_px: f64,
     pub overflow: bool,
     /// The lines follow the block's text shape ([`shaped_lines`]).
     pub shaped: bool,
@@ -438,18 +441,16 @@ fn layout_in(
         preferred
     };
     let min_font_size = if v2 { (READABLE_FONT_SIZE_PX * scale).max(MIN_FONT_SIZE_PX) } else { MIN_FONT_SIZE_PX };
-    let font_size_px = resolve_text_font_size(
-        ctx,
-        fonts,
-        block,
-        text,
-        (min_font_size, max_font_size),
-        fit_inner_width,
-        fit_inner_height,
-    );
+    let smallest_font_size = if auto_fit { min_font_size } else { max_font_size };
+    let paragraphs = if block.render_direction == RenderTextDirection::Vertical {
+        Vec::new()
+    } else {
+        wrap_paragraphs(ctx, fonts, block, text, fit_inner_width, smallest_font_size)
+    };
+    let fit = FitArea { width: fit_inner_width, height: fit_inner_height };
+    let font_size_px = resolve_text_font_size(block, text, &paragraphs, (min_font_size, max_font_size), fit);
     // Following the shape is harder than fitting its box, so count down from the box's fit.
     let shaped_size = follow.and_then(|shape| {
-        let paragraphs = Paragraph::measure_all(ctx, fonts, block, text);
         let floor = min_font_size.ceil().min(font_size_px);
         let mut size = font_size_px;
         loop {
@@ -462,9 +463,8 @@ fn layout_in(
             size -= 1.0;
         }
     });
-    let overflow = shaped_size.is_none()
-        && !text.trim().is_empty()
-        && !does_text_fit(ctx, fonts, block, text, font_size_px, fit_inner_width, fit_inner_height);
+    let overflow =
+        shaped_size.is_none() && !text.trim().is_empty() && !does_text_fit(block, text, &paragraphs, font_size_px, fit);
     BlockTextLayout {
         rect,
         padding_px,
@@ -472,6 +472,7 @@ fn layout_in(
         fit_inner_width,
         fit_inner_height,
         font_size_px: shaped_size.unwrap_or(font_size_px),
+        min_font_size_px: smallest_font_size,
         overflow,
         shaped: shaped_size.is_some(),
     }
@@ -494,7 +495,7 @@ pub fn shaped_lines(
 ) -> Option<ShapedLines> {
     let shape = line_shape(block).filter(|_| layout.shaped)?;
     fit_shape(
-        &Paragraph::measure_all(ctx, fonts, block, text),
+        &wrap_paragraphs(ctx, fonts, block, text, layout.fit_inner_width, layout.min_font_size_px),
         block,
         layout.font_size_px,
         shape,
@@ -648,13 +649,11 @@ fn source_glyph_size_px(block: &TranslationBlock, rect: PixelRect) -> Option<f64
 
 /// The largest whole size in `min..=max` that fits (`min` when none does).
 fn resolve_text_font_size(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
     block: &TranslationBlock,
     text: &str,
+    paragraphs: &[Paragraph],
     (min_font_size, max_font_size): (f64, f64),
-    inner_width: f64,
-    inner_height: f64,
+    fit: FitArea,
 ) -> f64 {
     let capped = max_font_size.floor().clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
     if !block.style.auto_fit_text.unwrap_or(true) || text.trim().is_empty() {
@@ -664,7 +663,7 @@ fn resolve_text_font_size(
     let (mut low, mut high, mut best) = (floor, capped as i64, floor);
     while low <= high {
         let mid = low + (high - low) / 2;
-        if does_text_fit(ctx, fonts, block, text, mid as f64, inner_width, inner_height) {
+        if does_text_fit(block, text, paragraphs, mid as f64, fit) {
             best = mid;
             low = mid + 1;
         } else {
@@ -674,21 +673,23 @@ fn resolve_text_font_size(
     (best as f64).min(capped)
 }
 
-fn does_text_fit(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
-    block: &TranslationBlock,
-    text: &str,
-    font_size: f64,
-    inner_width: f64,
-    inner_height: f64,
-) -> bool {
+/// The area text is fitted to: the inner box less the measuring margin.
+#[derive(Debug, Clone, Copy)]
+struct FitArea {
+    width: f64,
+    height: f64,
+}
+
+/// Whether `text` (horizontal: its `paragraphs` from [`wrap_paragraphs`]) fits `fit` at
+/// `font_size`.
+fn does_text_fit(block: &TranslationBlock, text: &str, paragraphs: &[Paragraph], font_size: f64, fit: FitArea) -> bool {
+    let (inner_width, inner_height) = (fit.width, fit.height);
     if block.render_direction == RenderTextDirection::Vertical {
         return measure_vertical_text(block, text, font_size, inner_width, inner_height);
     }
     let line_height = font_size * style_line_height(block);
     // Balancing keeps the line count and widths within the limit, so the plain wrap decides.
-    let lines = wrap_lines(ctx, fonts, block, text, font_size, inner_width, false);
+    let lines = wrap_lines(paragraphs, block, font_size, inner_width, false);
     let total_height = lines.len() as f64 * line_height;
     let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
     total_height <= inner_height && widest <= inner_width
@@ -751,22 +752,43 @@ pub fn wrap_text_to_width(
     text: &str,
     font_size: f64,
     max_width: f64,
+    min_font_size: f64,
 ) -> Vec<WrappedLine> {
-    wrap_lines(ctx, fonts, block, text, font_size, max_width, block.layout_version() >= 2)
+    let paragraphs = wrap_paragraphs(ctx, fonts, block, text, max_width, min_font_size);
+    wrap_lines(&paragraphs, block, font_size, max_width, block.layout_version() >= 2)
 }
 
-fn wrap_lines(
+/// The paragraphs of `text` measured for lines of `max_width`. Under v2 a word too long for
+/// a line even at `min_font_size` may break between its characters, at a mid-phrase cost
+/// (CSS `word-break: keep-all` with `overflow-wrap: anywhere`).
+fn wrap_paragraphs(
     ctx: &mut FontContext,
     fonts: &BlockFonts,
     block: &TranslationBlock,
     text: &str,
+    max_width: f64,
+    min_font_size: f64,
+) -> Vec<Paragraph> {
+    let mut paragraphs = Paragraph::measure_all(ctx, fonts, block, text);
+    if block.layout_version() >= 2 {
+        let spacing = letter_spacing_px(block, min_font_size);
+        for paragraph in &mut paragraphs {
+            paragraph.break_long_words(max_width, min_font_size, spacing);
+        }
+    }
+    paragraphs
+}
+
+fn wrap_lines(
+    paragraphs: &[Paragraph],
+    block: &TranslationBlock,
     font_size: f64,
     max_width: f64,
     balance: bool,
 ) -> Vec<WrappedLine> {
     let spacing = letter_spacing_px(block, font_size);
     let mut lines = Vec::new();
-    for paragraph in Paragraph::measure_all(ctx, fonts, block, text) {
+    for paragraph in paragraphs {
         let segments = &paragraph.segments;
         if segments.is_empty() {
             lines.push(WrappedLine { text: String::new(), width: 0.0 });
@@ -797,7 +819,7 @@ fn wrap_lines(
         }
     }
     if lines.is_empty() {
-        lines.push(WrappedLine { text: text.to_owned(), width: 0.0 });
+        lines.push(WrappedLine { text: String::new(), width: 0.0 });
     }
     lines
 }
@@ -854,6 +876,34 @@ impl Paragraph {
         let count = (self.units_before[end] - self.units_before[start]) as f64;
         (self.prefix_em[end] - self.prefix_em[start]) * font_size
             + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
+    }
+
+    /// Splits segments wider than `max_width` at `font_size` between their characters,
+    /// keeping punctuation with its word ([`join_kinsoku`]) and spaces inside.
+    fn break_long_words(&mut self, max_width: f64, font_size: f64, spacing: f64) {
+        let too_wide = |&(start, end): &(usize, usize)| self.width(start, end, font_size, spacing) > max_width;
+        if !self.segments.iter().any(too_wide) {
+            return;
+        }
+        let mut segments = Vec::with_capacity(self.segments.len());
+        for &(start, end) in &self.segments {
+            if !too_wide(&(start, end)) {
+                segments.push((start, end));
+                continue;
+            }
+            let mut pieces = Vec::new();
+            let mut piece_start = start;
+            for index in start + 1..end {
+                let starts_unit = self.units_before[index + 1] > self.units_before[index];
+                if starts_unit && self.chars[index - 1] != ' ' && self.chars[index] != ' ' {
+                    pieces.push((piece_start, index));
+                    piece_start = index;
+                }
+            }
+            pieces.push((piece_start, end));
+            segments.extend(join_kinsoku(&self.chars, pieces));
+        }
+        self.segments = segments;
     }
 
     /// The line of segments `first..end`.
@@ -1253,6 +1303,48 @@ mod tests {
         // The original rules keep their segments.
         let chars: Vec<char> = "말이야…」".chars().collect();
         assert_eq!(split_text_wrap_segments(&chars, false).len(), 3);
+    }
+
+    /// `text` measured at 1em per char, its segments broken for lines of `max_width` em.
+    fn break_words(text: &str, max_width: f64) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut paragraph = Paragraph {
+            prefix_em: (0..=chars.len()).map(|count| count as f64).collect(),
+            units_before: (0..=chars.len()).collect(),
+            segments: split_text_wrap_segments(&chars, true),
+            chars,
+        };
+        paragraph.break_long_words(max_width, 1.0, 0.0);
+        paragraph.segments.iter().map(|&(start, end)| paragraph.chars[start..end].iter().collect()).collect()
+    }
+
+    #[test]
+    fn v2_breaks_only_words_too_long_for_a_line() {
+        assert_eq!(break_words("가나 다라마바사", 4.0), ["가나", "다", "라", "마", "바", "사"]);
+        assert_eq!(break_words("가나 다라마바", 4.0), ["가나", "다라마바"]);
+        assert_eq!(break_words("으아아아악!」", 4.0), ["으", "아", "아", "아", "악!」"]);
+        assert_eq!(break_words("무슨 소리야 ?!", 3.0), ["무슨", "소", "리", "야 ?!"]);
+
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let text = "으아아아아아아아아아아아아아아아악";
+        let mut block = TranslationBlock {
+            bbox: mtt_core::model::BBox::new(100.0, 100.0, 120.0, 300.0),
+            translated_text: text.into(),
+            ..TranslationBlock::default()
+        };
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        // Only meaningful where some font measures the text.
+        if measure_text_width(&mut ctx, &fonts, &block, text, 9.0) <= 120.0 {
+            return;
+        }
+        let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
+        assert_eq!(drawn.lines, [text], "the original rules never break a word");
+        block.layout_version = Some(2);
+        let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
+        assert!(!drawn.layout.overflow && drawn.lines.len() > 1, "{:?}", drawn.lines);
+        assert_eq!(drawn.lines.concat(), text);
+        assert!(drawn.font_size_px >= READABLE_FONT_SIZE_PX, "{}", drawn.font_size_px);
     }
 
     #[test]
