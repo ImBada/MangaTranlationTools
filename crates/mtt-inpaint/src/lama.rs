@@ -5,13 +5,12 @@
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
 use image::{GrayImage, RgbaImage};
 use mtt_core::paths::AppPaths;
 
 use crate::lama_torch::TorchLama;
+use crate::model_cache::{self, ModelCache};
 use crate::torch_runtime;
 
 pub const MODEL_URL: &str = "https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors";
@@ -67,14 +66,7 @@ pub fn status(paths: &AppPaths) -> LamaStatus {
 
 /// Where the model runs (or will, before it has loaded).
 pub fn device_label() -> &'static str {
-    let loaded =
-        MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner()).as_ref().map(|loaded| loaded.model.device());
-    match loaded {
-        Some(mtt_torch::Device::Mps) => "GPU (MPS)",
-        Some(mtt_torch::Device::Cpu) => "CPU",
-        None if cfg!(target_os = "macos") => "GPU (MPS)",
-        None => "CPU",
-    }
+    MODEL.device_label()
 }
 
 impl Lama {
@@ -94,11 +86,8 @@ impl Lama {
     pub fn inpaint(&self, source: &RgbaImage, mask: &GrayImage) -> Result<RgbaImage, String> {
         match self {
             Self::Torch { model, runtime } => {
-                let model = torch_model(model, runtime)?;
-                // One inference at a time: the GPU (or every CPU core) is busy anyway, and
-                // LibTorch's MPS stream is shared.
-                static RUNNING: Mutex<()> = Mutex::new(());
-                let _running = RUNNING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+                let model = MODEL.get(model, runtime, || TorchLama::load(model, TorchLama::default_device()))?;
+                let _running = model_cache::exclusive();
                 crate::windows::inpaint_by_windows(source, mask, |image, mask| model.inpaint(image, mask))
             }
             Self::Command(command) => command.run(source, mask),
@@ -106,55 +95,8 @@ impl Lama {
     }
 }
 
-/// A model that has not been used for this long is unloaded (it holds a few hundred MB;
-/// LibTorch itself stays loaded).
-const MODEL_IDLE_LIMIT: Duration = Duration::from_secs(10 * 60);
-
-struct LoadedModel {
-    path: PathBuf,
-    model: Arc<TorchLama>,
-    last_used: Instant,
-}
-
 /// The model, loaded on first use and kept for later inpaints.
-static MODEL: LazyLock<Mutex<Option<LoadedModel>>> = LazyLock::new(Mutex::default);
-
-fn torch_model(path: &Path, runtime: &Path) -> Result<Arc<TorchLama>, String> {
-    let mut guard = MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    if let Some(loaded) = guard.as_mut().filter(|loaded| loaded.path == path) {
-        loaded.last_used = Instant::now();
-        return Ok(Arc::clone(&loaded.model));
-    }
-    let started = Instant::now();
-    mtt_torch::load(runtime).map_err(|e| format!("LibTorch를 불러오지 못했습니다: {e}"))?;
-    let model = Arc::new(TorchLama::load(path, TorchLama::default_device())?);
-    log::info!("LaMa loaded on {:?} in {:.2}s", model.device(), started.elapsed().as_secs_f32());
-    let was_loaded = guard.is_some();
-    *guard = Some(LoadedModel { path: path.to_owned(), model: Arc::clone(&model), last_used: Instant::now() });
-    if !was_loaded {
-        start_idle_watch();
-    }
-    Ok(model)
-}
-
-/// Unloads the model once it has been idle for `MODEL_IDLE_LIMIT`.
-fn start_idle_watch() {
-    std::thread::spawn(|| {
-        loop {
-            std::thread::sleep(Duration::from_secs(30));
-            let mut guard = MODEL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-            match guard.as_ref() {
-                Some(loaded) if loaded.last_used.elapsed() >= MODEL_IDLE_LIMIT => {
-                    log::info!("LaMa idle, unloading the model");
-                    *guard = None;
-                    return;
-                }
-                Some(_) => {}
-                None => return,
-            }
-        }
-    });
-}
+static MODEL: ModelCache<TorchLama> = ModelCache::new("LaMa", TorchLama::device);
 
 impl LamaCommand {
     /// `MANGA_TRANSLATOR_LAMA_COMMAND` + `MANGA_TRANSLATOR_LAMA_ARGS` (JSON string array).
@@ -226,16 +168,17 @@ pub fn download_lama(paths: &AppPaths, mut progress: impl FnMut(Download, u64, O
     if !model.is_file() {
         let dir = model.parent().expect("model path has a parent");
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
-        write_model_readme(dir, &model);
+        write_model_readme(dir, MODEL_URL, &model);
         download(MODEL_URL, &model, |written, total| progress(Download::Model, written, total))?;
     }
     torch_runtime::download(paths, |written, total| progress(Download::Runtime, written, total))
 }
 
-fn write_model_readme(model_dir: &Path, model: &Path) {
+/// A note in the model's folder on where the file comes from, for a manual download.
+pub(crate) fn write_model_readme(model_dir: &Path, url: &str, model: &Path) {
     let eol = if cfg!(windows) { "\r\n" } else { "\n" };
-    let text =
-        ["Download lama-manga.safetensors from:", MODEL_URL, "", "Save it as:", &model.to_string_lossy(), ""].join(eol);
+    let name = model.file_name().unwrap_or_default().to_string_lossy();
+    let text = [&format!("Download {name} from:"), url, "", "Save it as:", &model.to_string_lossy(), ""].join(eol);
     let _ = std::fs::write(model_dir.join("README.txt"), text);
 }
 

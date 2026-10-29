@@ -34,6 +34,7 @@ use mtt_core::model::{
     BBox, Chapter, InpaintEngine, InpaintSettings, InpaintStatus, PageRecord, StyleKey, TranslationBlock,
 };
 use mtt_inpaint::lama::Lama;
+use mtt_inpaint::text_segmentation::TextSegmentation;
 use mtt_render::page::{LayerOpacity, LayerVisibility, PageImages, PageRenderOptions};
 
 use crate::app::AppEvent;
@@ -346,6 +347,8 @@ pub struct Editor {
     pub result_brush: result_tools::BrushSettings,
     pub inpaint_engine: InpaintEngine,
     pub lama: Option<Lama>,
+    /// The text segmentation model for block text masks, when downloaded.
+    pub text_segmentation: Option<TextSegmentation>,
     inpaint_running: Option<String>,
     pub translation: Option<translation::TranslationJob>,
     pub find: panels::FindState,
@@ -481,6 +484,7 @@ impl Editor {
             result_brush: result_tools::BrushSettings::default(),
             inpaint_engine: InpaintEngine::LocalFillFallback,
             lama: None,
+            text_segmentation: None,
             inpaint_running: None,
             translation: None,
             find: panels::FindState::default(),
@@ -1341,9 +1345,11 @@ impl Editor {
         self.layer_dirty.insert((page_id, LayerKind::Mask), Instant::now());
     }
 
-    /// Detects LaMa (the downloaded model or a configured command) and prefers it when available.
+    /// Detects LaMa (the downloaded model or a configured command) and prefers it when
+    /// available, and the text segmentation model for block masks.
     pub fn configure_inpaint(&mut self, services: &Services) {
         self.lama = Lama::detect(&services.paths);
+        self.text_segmentation = TextSegmentation::detect(&services.paths);
         self.inpaint_engine = if self.lama.is_some() { InpaintEngine::Lama } else { InpaintEngine::LocalFillFallback };
     }
 
@@ -1390,6 +1396,7 @@ impl Editor {
             self.inpaint_engine
         };
         let lama = self.lama.clone();
+        let segmentation = self.text_segmentation.clone();
         let jpeg = matches!(
             std::path::Path::new(if page.image_path.is_empty() { &page.name } else { &page.image_path })
                 .extension()
@@ -1416,9 +1423,19 @@ impl Editor {
         self.status = format!("인페인트 실행 중… ({})", engine_label(engine));
         let ctx = worker.ctx().clone();
         worker.spawn(move || {
-            let outcome =
-                compute_inpaint(scope, &source, mask, result, range, &blocks, engine, &settings, lama.as_ref())
-                    .map(|computed| computed.finish(&ctx, &page_id));
+            let outcome = compute_inpaint(
+                scope,
+                &source,
+                mask,
+                result,
+                range,
+                &blocks,
+                engine,
+                &settings,
+                lama.as_ref(),
+                segmentation.as_ref(),
+            )
+            .map(|computed| computed.finish(&ctx, &page_id));
             AppEvent::InpaintFinished { chapter_id, page_id, outcome }
         });
     }
@@ -2401,7 +2418,8 @@ pub fn engine_label(engine: InpaintEngine) -> &'static str {
     }
 }
 
-/// Worker-side inpaint for one scope; returns the new full mask and result layers.
+/// Worker-side inpaint for one scope; returns the new full mask and result layers. Block
+/// masks take their glyph pixels from `segmentation` when given.
 #[allow(clippy::too_many_arguments)]
 fn compute_inpaint(
     scope: InpaintScope,
@@ -2413,6 +2431,7 @@ fn compute_inpaint(
     engine: InpaintEngine,
     settings: &InpaintSettings,
     lama: Option<&Lama>,
+    segmentation: Option<&TextSegmentation>,
 ) -> Result<ComputedInpaint, String> {
     let started = Instant::now();
     let (width, height) = source.dimensions();
@@ -2433,7 +2452,7 @@ fn compute_inpaint(
         }
         InpaintScope::SelectedBlocks | InpaintScope::AllBlocks => {
             let refs: Vec<&TranslationBlock> = blocks.iter().collect();
-            let patch = mtt_inpaint::text_mask::mask_for_blocks(source, &refs, None);
+            let patch = mtt_inpaint::text_segmentation::mask_for_blocks(source, &refs, None, segmentation);
             if !patch.pixels().any(|p| p[0] > 0) {
                 return Err("블록에서 지울 글자를 찾지 못했습니다.".into());
             }
@@ -2690,6 +2709,7 @@ mod tests {
             InpaintEngine::LocalFillFallback,
             &settings,
             None,
+            None,
         )
         .unwrap();
         assert_eq!(outcome.result.get_pixel(10, 10)[3], 255, "range pixel inpainted");
@@ -2705,6 +2725,7 @@ mod tests {
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,
+            None,
             None,
         );
         assert!(empty_range.is_err());
@@ -2737,6 +2758,7 @@ mod tests {
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,
+            None,
             None,
         )
         .unwrap();

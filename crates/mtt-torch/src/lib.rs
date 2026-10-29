@@ -1,6 +1,6 @@
 //! LibTorch, loaded at run time from a downloaded runtime: LibTorch's own libraries plus
 //! `koharu-torch`, the C shim koharu builds against them (tch-rs's C API). Only the
-//! operations LaMa needs are bound.
+//! operations LaMa and the text segmentation model need are bound.
 //!
 //! `load` opens the libraries once per process and they stay loaded. All the unsafe code
 //! is in `ffi`.

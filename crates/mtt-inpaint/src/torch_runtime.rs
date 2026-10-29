@@ -1,5 +1,5 @@
-//! The LibTorch runtime LaMa runs on: koharu's LibTorch builds with their C shim
-//! (<https://github.com/koharu-rs/torch>), downloaded once into
+//! The LibTorch runtime LaMa and the text segmentation model run on: koharu's LibTorch
+//! builds with their C shim (<https://github.com/koharu-rs/torch>), downloaded once into
 //! `<data>/tools/libtorch/<release>-<asset>/`. macOS gets the MPS build, Windows and Linux
 //! the CPU one.
 
@@ -46,11 +46,20 @@ pub fn installed(dir: &Path) -> bool {
     mtt_torch::LIBRARIES.iter().all(|name| dir.join(name).is_file())
 }
 
-/// Downloads, checks and unpacks the runtime unless it is already there.
+/// MPS when the runtime has it and the Mac can run it, otherwise the CPU. LibTorch must be
+/// loaded.
+pub fn default_device() -> mtt_torch::Device {
+    if mtt_torch::mps_available() { mtt_torch::Device::Mps } else { mtt_torch::Device::Cpu }
+}
+
+/// Downloads, checks and unpacks the runtime unless it is already there. Concurrent calls
+/// (LaMa's and the segmentation model's downloads) wait for each other.
 pub fn download(paths: &AppPaths, progress: impl FnMut(u64, Option<u64>)) -> Result<(), String> {
     let (Some(asset), Some(dir)) = (ASSET.as_ref(), runtime_dir(paths)) else {
         return Err("이 플랫폼용 LibTorch가 없습니다.".into());
     };
+    static DOWNLOADING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _downloading = DOWNLOADING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if installed(&dir) {
         return Ok(());
     }
@@ -65,7 +74,17 @@ pub fn download(paths: &AppPaths, progress: impl FnMut(u64, Option<u64>)) -> Res
 }
 
 fn verify(archive: &Path, expected: &str) -> Result<(), String> {
-    let mut file = std::fs::File::open(archive).map_err(|e| e.to_string())?;
+    let actual = sha256(archive)?;
+    if actual == expected {
+        Ok(())
+    } else {
+        Err(format!("LibTorch 파일이 손상되었습니다 (SHA-256 {actual}). 다시 받아 주세요."))
+    }
+}
+
+/// The file's SHA-256 in lowercase hex.
+pub(crate) fn sha256(path: &Path) -> Result<String, String> {
+    let mut file = std::fs::File::open(path).map_err(|e| e.to_string())?;
     let mut hasher = Sha256::new();
     let mut buffer = vec![0u8; 1 << 16];
     loop {
@@ -75,12 +94,7 @@ fn verify(archive: &Path, expected: &str) -> Result<(), String> {
         }
         hasher.update(&buffer[..read]);
     }
-    let actual: String = hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect();
-    if actual == expected {
-        Ok(())
-    } else {
-        Err(format!("LibTorch 파일이 손상되었습니다 (SHA-256 {actual}). 다시 받아 주세요."))
-    }
+    Ok(hasher.finalize().iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// The runtime's libraries from `archive`, flat into `dir` (via a `.partial` folder, so a

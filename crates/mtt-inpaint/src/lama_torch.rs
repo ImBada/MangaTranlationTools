@@ -2,14 +2,14 @@
 //! torch operations, on MPS when the Mac has it and otherwise the CPU. BatchNorm is folded
 //! into the convolutions when the weights load.
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use image::{GrayImage, RgbaImage};
 use mtt_torch::{Device, Tensor};
 
+use crate::torch_weights::{Array, Conv, Folded, Weights};
+
 const BLOCKS: usize = 18;
-const BN_EPS: f32 = 1e-5;
 /// Channels of the resnet blocks: `LOCAL` through plain convolutions, `GLOBAL` through
 /// the spectral transform, whose Fourier unit works on `SPECTRAL` of them.
 const LOCAL: i64 = 128;
@@ -31,17 +31,6 @@ pub struct TorchLama {
     up: [Conv; 3],
     /// The 7×7 output convolution.
     out: Conv,
-}
-
-struct Conv {
-    weight: Tensor,
-    bias: Option<Tensor>,
-}
-
-impl Conv {
-    fn forward(&self, x: &Tensor, stride: i64) -> Result<Tensor, String> {
-        x.conv2d(&self.weight, self.bias.as_ref(), stride, 0)
-    }
 }
 
 /// One `FFC_BN_ACT` of a resnet block.
@@ -67,7 +56,7 @@ impl TorchLama {
 
     /// MPS when available, otherwise the CPU.
     pub fn default_device() -> Device {
-        if mtt_torch::mps_available() { Device::Mps } else { Device::Cpu }
+        crate::torch_runtime::default_device()
     }
 
     pub fn device(&self) -> Device {
@@ -214,132 +203,7 @@ impl FfcLayer {
     }
 }
 
-/// A checkpoint tensor on the CPU.
-#[derive(Debug, Clone, PartialEq)]
-struct Array {
-    shape: Vec<usize>,
-    data: Vec<f32>,
-}
-
-impl Array {
-    fn vector(data: Vec<f32>) -> Self {
-        Self { shape: vec![data.len()], data }
-    }
-
-    /// Each entry along `axis` multiplied by `scale[index]`.
-    fn scale_axis(mut self, axis: usize, scale: &[f32]) -> Result<Self, String> {
-        if self.shape.get(axis) != Some(&scale.len()) {
-            return Err(format!("{:?} 축 {axis}에 {}개 배율", self.shape, scale.len()));
-        }
-        let inner: usize = self.shape[axis + 1..].iter().product();
-        for (index, value) in self.data.iter_mut().enumerate() {
-            *value *= scale[(index / inner) % scale.len()];
-        }
-        Ok(self)
-    }
-
-    /// `self` and `other` joined along `axis`.
-    fn concat(self, other: Self, axis: usize) -> Result<Self, String> {
-        let same_rest =
-            |a: &[usize], b: &[usize]| a.len() == b.len() && (0..a.len()).all(|i| i == axis || a[i] == b[i]);
-        if !same_rest(&self.shape, &other.shape) {
-            return Err(format!("{:?}와 {:?}를 축 {axis}로 붙일 수 없습니다", self.shape, other.shape));
-        }
-        let outer: usize = self.shape[..axis].iter().product();
-        let (a, b) = (self.data.len() / outer, other.data.len() / outer);
-        let data =
-            (0..outer).flat_map(|o| self.data[o * a..][..a].iter().chain(&other.data[o * b..][..b])).copied().collect();
-        let mut shape = self.shape;
-        shape[axis] += other.shape[axis];
-        Ok(Self { shape, data })
-    }
-
-    fn tensor(&self, device: Device) -> Result<Tensor, String> {
-        let shape: Vec<i64> = self.shape.iter().map(|&side| side as i64).collect();
-        Tensor::from_f32(&self.data, &shape)?.to(device)
-    }
-}
-
-/// A convolution's folded weight and bias before they go to the device.
-struct Folded {
-    weight: Array,
-    bias: Option<Array>,
-}
-
-impl Folded {
-    fn concat(self, other: Self, axis: usize) -> Result<Self, String> {
-        let bias = match (self.bias, other.bias) {
-            (Some(a), Some(b)) => Some(a.concat(b, 0)?),
-            (None, None) => None,
-            _ => return Err("편향이 한쪽에만 있습니다".into()),
-        };
-        Ok(Self { weight: self.weight.concat(other.weight, axis)?, bias })
-    }
-
-    fn upload(self, device: Device) -> Result<Conv, String> {
-        Ok(Conv { weight: self.weight.tensor(device)?, bias: self.bias.map(|bias| bias.tensor(device)).transpose()? })
-    }
-}
-
-struct Weights(HashMap<String, Array>);
-
 impl Weights {
-    /// The float32 tensors of a safetensors file (BatchNorm's `num_batches_tracked`
-    /// counters are integers, and unused).
-    fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let file = safetensors::SafeTensors::deserialize(bytes).map_err(|e| e.to_string())?;
-        let mut tensors = HashMap::new();
-        for (name, view) in file.tensors() {
-            if view.dtype() != safetensors::Dtype::F32 {
-                if name.ends_with(".num_batches_tracked") {
-                    continue;
-                }
-                return Err(format!("{name}: {:?}", view.dtype()));
-            }
-            let data = view.data().as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
-            tensors.insert(name, Array { shape: view.shape().to_vec(), data });
-        }
-        Ok(Self(tensors))
-    }
-
-    fn get(&self, name: &str) -> Result<Array, String> {
-        self.0.get(name).cloned().ok_or_else(|| format!("{name} 없음"))
-    }
-
-    /// BatchNorm `prefix` as a per-channel scale and shift.
-    fn batch_norm(&self, prefix: &str) -> Result<(Vec<f32>, Vec<f32>), String> {
-        let part = |name: &str| self.get(&format!("{prefix}.{name}")).map(|array| array.data);
-        let (gamma, beta, mean, variance) =
-            (part("weight")?, part("bias")?, part("running_mean")?, part("running_var")?);
-        let scale: Vec<f32> = gamma.iter().zip(&variance).map(|(g, v)| g / (v + BN_EPS).sqrt()).collect();
-        let shift = beta.iter().zip(&mean).zip(&scale).map(|((b, m), s)| b - m * s).collect();
-        Ok((scale, shift))
-    }
-
-    /// Convolution `weight` (output channels along `out_axis`) with its own `bias` and
-    /// then BatchNorm `batch_norm` folded in.
-    fn folded(
-        &self,
-        weight: &str,
-        bias: Option<&str>,
-        batch_norm: Option<&str>,
-        out_axis: usize,
-    ) -> Result<Folded, String> {
-        let weight = self.get(weight)?;
-        let bias = bias.map(|name| self.get(name)).transpose()?;
-        let Some(batch_norm) = batch_norm else { return Ok(Folded { weight, bias }) };
-        let (scale, shift) = self.batch_norm(batch_norm)?;
-        let bias = match bias {
-            Some(bias) => bias.data.iter().zip(&scale).zip(&shift).map(|((b, s), t)| b * s + t).collect(),
-            None => shift,
-        };
-        Ok(Folded { weight: weight.scale_axis(out_axis, &scale)?, bias: Some(Array::vector(bias)) })
-    }
-
-    fn conv(&self, weight: &str, bias: Option<&str>, batch_norm: Option<&str>, device: Device) -> Result<Conv, String> {
-        self.folded(weight, bias, batch_norm, 0)?.upload(device)
-    }
-
     fn ffc_layer(&self, prefix: &str, device: Device) -> Result<FfcLayer, String> {
         let ffc = format!("{prefix}.ffc");
         let spectral = format!("{ffc}.convg2g");
@@ -363,6 +227,8 @@ impl Weights {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use super::*;
 
     #[test]
@@ -384,22 +250,6 @@ mod tests {
         assert_eq!(&input[4..8], &[0.0, 50.0 / 255.0, 100.0 / 255.0, 50.0 / 255.0]);
         // Mask: only the real masked pixel, not its mirror at (3, 0).
         assert_eq!(&input[3 * plane..3 * plane + 4], &[0.0, 1.0, 0.0, 0.0]);
-    }
-
-    #[test]
-    fn batch_norm_folds_into_the_output_channels() {
-        let mut map = HashMap::new();
-        let array = |shape: Vec<usize>, data: Vec<f32>| Array { shape, data };
-        map.insert("conv.weight".into(), array(vec![2, 1, 1, 2], vec![1.0, 2.0, 3.0, 4.0]));
-        map.insert("conv.bias".into(), array(vec![2], vec![1.0, -1.0]));
-        map.insert("bn.weight".into(), array(vec![2], vec![2.0, 1.0]));
-        map.insert("bn.bias".into(), array(vec![2], vec![0.5, 0.0]));
-        map.insert("bn.running_mean".into(), array(vec![2], vec![1.0, 2.0]));
-        map.insert("bn.running_var".into(), array(vec![2], vec![1.0 - BN_EPS, 4.0 - BN_EPS]));
-        let folded = Weights(map).folded("conv.weight", Some("conv.bias"), Some("bn"), 0).unwrap();
-        // scale (2, 0.5), shift (0.5 − 2, 0 − 1).
-        assert_eq!(folded.weight.data, vec![2.0, 4.0, 1.5, 2.0]);
-        assert_eq!(folded.bias.unwrap().data, vec![1.0 * 2.0 - 1.5, -0.5 - 1.0]);
     }
 
     /// The checkpoint's tensors with fixed pseudo-random values (BatchNorm near identity).
@@ -497,12 +347,5 @@ mod tests {
             let worst = cpu.pixels().zip(mps.pixels()).map(|(a, b)| (0..3).map(|c| a[c].abs_diff(b[c])).max().unwrap());
             assert!(worst.max().unwrap() <= 1, "CPU and MPS agree");
         }
-    }
-
-    #[test]
-    fn arrays_concatenate_along_an_axis() {
-        let a = Array { shape: vec![2, 1], data: vec![1.0, 2.0] };
-        let b = Array { shape: vec![2, 2], data: vec![3.0, 4.0, 5.0, 6.0] };
-        assert_eq!(a.concat(b, 1).unwrap(), Array { shape: vec![2, 3], data: vec![1.0, 3.0, 4.0, 2.0, 5.0, 6.0] });
     }
 }

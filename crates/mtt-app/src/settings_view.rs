@@ -1,6 +1,7 @@
 //! Settings window (`SettingsModal.tsx`): model provider, endpoints, translation mode,
 //! parallelism, one-hand mode, a model connectivity test, the LaMa download
-//! (`LamaRuntimeSettingsSection.tsx`) and the version/update bar (`SettingsVersionBar.tsx`).
+//! (`LamaRuntimeSettingsSection.tsx`), the text segmentation model's download and the
+//! version/update bar (`SettingsVersionBar.tsx`).
 
 use eframe::egui::{self, RichText};
 use mtt_core::settings::{
@@ -13,24 +14,48 @@ use crate::theme;
 use crate::update_check::{self, UpdateStatus};
 use crate::worker::Worker;
 
-/// `LamaRuntimeStatus` without the job flags (those live in [`SettingsView`]).
+/// `LamaRuntimeStatus` without the job flags (those live in [`SettingsView`]), with the
+/// text segmentation model's.
 #[derive(Debug, Clone)]
 pub struct LamaRuntimeStatus {
     lama: mtt_inpaint::lama::LamaStatus,
     /// Where the model runs.
     device: &'static str,
+    segmentation: mtt_inpaint::text_segmentation::SegmentationStatus,
+    segmentation_device: &'static str,
 }
 
 impl LamaRuntimeStatus {
     fn detect(paths: &mtt_core::paths::AppPaths) -> Self {
-        Self { lama: mtt_inpaint::lama::status(paths), device: mtt_inpaint::lama::device_label() }
+        Self {
+            lama: mtt_inpaint::lama::status(paths),
+            device: mtt_inpaint::lama::device_label(),
+            segmentation: mtt_inpaint::text_segmentation::status(paths),
+            segmentation_device: mtt_inpaint::text_segmentation::device_label(),
+        }
     }
+}
+
+/// Which download a [`LamaEvent`] is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ModelJob {
+    Lama,
+    Segmentation,
 }
 
 pub enum LamaEvent {
     Status(LamaRuntimeStatus),
-    Progress(String),
-    DownloadFinished(Result<(), String>),
+    Progress(ModelJob, String),
+    DownloadFinished(ModelJob, Result<(), String>),
+}
+
+/// A model download's progress and outcome in the settings.
+#[derive(Default)]
+struct DownloadState {
+    running: bool,
+    progress: Option<String>,
+    last_error: Option<String>,
+    action: Option<(ActionState, String)>,
 }
 
 /// ChatGPT sign-in progress from its worker thread.
@@ -74,10 +99,8 @@ pub struct SettingsView {
     save_error: Option<String>,
     show_key: bool,
     lama_status: Option<LamaRuntimeStatus>,
-    lama_downloading: bool,
-    lama_progress: Option<String>,
-    lama_last_error: Option<String>,
-    lama_action: Option<(ActionState, String)>,
+    lama: DownloadState,
+    segmentation: DownloadState,
     update: Option<UpdateStatus>,
     update_busy: bool,
     test_endpoint: Option<String>,
@@ -99,7 +122,8 @@ impl SettingsView {
         self.draft = Some(services.settings.clone());
         self.test_result = None;
         self.save_error = None;
-        self.lama_action = None;
+        self.lama.action = None;
+        self.segmentation.action = None;
         self.reset_message = None;
         self.refresh_lama_status(services, worker);
         if !self.update.as_ref().is_some_and(UpdateStatus::fresh) {
@@ -125,87 +149,86 @@ impl SettingsView {
         self.update = Some(status);
     }
 
-    /// Returns true when a LaMa job finished, so the editor should re-detect LaMa.
+    /// Returns true when a model download finished, so the editor should re-detect the
+    /// models.
     pub fn on_lama_event(&mut self, event: LamaEvent, services: &Services, worker: &Worker<AppEvent>) -> bool {
         match event {
             LamaEvent::Status(status) => {
                 self.lama_status = Some(status);
                 false
             }
-            LamaEvent::Progress(line) => {
-                self.lama_progress = Some(line);
+            LamaEvent::Progress(job, line) => {
+                self.download_state(job).progress = Some(line);
                 false
             }
-            LamaEvent::DownloadFinished(result) => {
-                self.lama_downloading = false;
-                self.finish_lama_job(result, "LaMa 준비가 끝났습니다.", services, worker);
+            LamaEvent::DownloadFinished(job, result) => {
+                let done = match job {
+                    ModelJob::Lama => "LaMa 준비가 끝났습니다.",
+                    ModelJob::Segmentation => "글자 분할 모델 준비가 끝났습니다.",
+                };
+                let state = self.download_state(job);
+                state.running = false;
+                state.progress = None;
+                match result {
+                    Ok(()) => {
+                        state.last_error = None;
+                        state.action = Some((ActionState::Success, done.into()));
+                    }
+                    Err(error) => {
+                        log::error!("{job:?} download failed: {error}");
+                        state.action = Some((ActionState::Error, error.clone()));
+                        state.last_error = Some(error);
+                    }
+                }
+                self.refresh_lama_status(services, worker);
                 true
             }
         }
     }
 
-    fn finish_lama_job(
-        &mut self,
-        result: Result<(), String>,
-        done: &str,
-        services: &Services,
-        worker: &Worker<AppEvent>,
-    ) {
-        if !self.lama_downloading {
-            self.lama_progress = None;
+    fn download_state(&mut self, job: ModelJob) -> &mut DownloadState {
+        match job {
+            ModelJob::Lama => &mut self.lama,
+            ModelJob::Segmentation => &mut self.segmentation,
         }
-        match result {
-            Ok(()) => {
-                self.lama_last_error = None;
-                self.lama_action = Some((ActionState::Success, done.into()));
-            }
-            Err(error) => {
-                log::error!("LaMa job failed: {error}");
-                self.lama_action = Some((ActionState::Error, error.clone()));
-                self.lama_last_error = Some(error);
-            }
-        }
-        self.refresh_lama_status(services, worker);
     }
 
     /// `downloadLamaModel`: the model and the LibTorch runtime, whichever are missing.
     fn download_lama(&mut self, services: &Services, worker: &Worker<AppEvent>) {
         if let Some(status) = self.lama_status.as_ref().map(|status| &status.lama) {
             if status.model_exists && status.runtime_exists {
-                self.lama_action = Some((ActionState::Success, "LaMa가 이미 준비되어 있습니다.".into()));
+                self.lama.action = Some((ActionState::Success, "LaMa가 이미 준비되어 있습니다.".into()));
                 return;
             }
             if status.runtime_path.is_none() {
-                self.lama_action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
+                self.lama.action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
                 return;
             }
         }
-        self.lama_downloading = true;
-        self.lama_action = Some((ActionState::Success, "LaMa 다운로드를 시작했습니다.".into()));
+        self.lama.running = true;
+        self.lama.action = Some((ActionState::Success, "LaMa 다운로드를 시작했습니다.".into()));
         let paths = services.paths.clone();
-        let emitter = worker.emitter();
-        std::thread::spawn(move || {
-            let mut last = None;
-            let result = mtt_inpaint::lama::download_lama(&paths, |part, written, total| {
-                let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
-                let label = match part {
-                    mtt_inpaint::lama::Download::Model => "모델",
-                    mtt_inpaint::lama::Download::Runtime => "LibTorch",
-                };
-                let line = match total {
-                    Some(total) if total > 0 => {
-                        let percent = written * 100 / total;
-                        if last == Some((part, percent)) {
-                            return;
-                        }
-                        last = Some((part, percent));
-                        format!("{label} 다운로드 {percent}% ({:.0}/{:.0}MB)", mb(written), mb(total))
-                    }
-                    _ => format!("{label} 다운로드 {:.0}MB", mb(written)),
-                };
-                emitter.emit(AppEvent::Lama(LamaEvent::Progress(line)));
-            });
-            emitter.emit(AppEvent::Lama(LamaEvent::DownloadFinished(result)));
+        spawn_download(worker, ModelJob::Lama, move |progress| mtt_inpaint::lama::download_lama(&paths, progress));
+    }
+
+    /// The text segmentation model and the LibTorch runtime, whichever are missing.
+    fn download_segmentation(&mut self, services: &Services, worker: &Worker<AppEvent>) {
+        if let Some(status) = self.lama_status.as_ref().map(|status| &status.segmentation) {
+            if status.ready() {
+                self.segmentation.action =
+                    Some((ActionState::Success, "글자 분할 모델이 이미 준비되어 있습니다.".into()));
+                return;
+            }
+            if status.runtime_path.is_none() {
+                self.segmentation.action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
+                return;
+            }
+        }
+        self.segmentation.running = true;
+        self.segmentation.action = Some((ActionState::Success, "글자 분할 모델 다운로드를 시작했습니다.".into()));
+        let paths = services.paths.clone();
+        spawn_download(worker, ModelJob::Segmentation, move |progress| {
+            mtt_inpaint::text_segmentation::download_segmentation(&paths, progress)
         });
     }
 
@@ -221,7 +244,7 @@ impl SettingsView {
         if self.lama_banner_dismissed || status.lama.ready() {
             return false;
         }
-        let busy = self.lama_downloading;
+        let busy = self.lama.running;
         let mut open_settings = false;
         egui::Frame::new()
             .fill(theme::CARD_BG)
@@ -234,7 +257,7 @@ impl SettingsView {
                     ui.label(theme::icon(theme::icon::INFO).color(theme::ACCENT));
                     if busy {
                         ui.spinner();
-                        let progress = self.lama_progress.clone().unwrap_or_else(|| "LaMa 준비 중".into());
+                        let progress = self.lama.progress.clone().unwrap_or_else(|| "LaMa 준비 중".into());
                         ui.add(egui::Label::new(RichText::new(progress).small()).truncate());
                     } else {
                         ui.add(
@@ -273,69 +296,77 @@ impl SettingsView {
         self.tab = SettingsTab::Inpaint;
     }
 
-    fn lama_section(&mut self, ui: &mut egui::Ui, services: &Services, worker: &Worker<AppEvent>) {
-        ui.label(theme::semibold("LaMa 인페인트"));
-        theme::hint(
-            ui,
-            "원문 글자를 더 자연스럽게 지우는 인페인트 모델입니다. 모델과 실행용 LibTorch를 받기 전에는 로컬 채우기를 씁니다.",
-        );
-        ui.add_space(8.0);
+    /// The 인페인트 tab: LaMa, then the text segmentation model.
+    fn inpaint_tab(&mut self, ui: &mut egui::Ui, services: &Services, worker: &Worker<AppEvent>) {
         let status = self.lama_status.clone();
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 18.0;
-            runtime_state(ui, "모델", status.as_ref().is_some_and(|s| s.lama.model_exists), self.lama_downloading);
-            runtime_state(
-                ui,
-                "LibTorch",
-                status.as_ref().is_some_and(|s| s.lama.runtime_exists),
-                self.lama_downloading,
-            );
-            if let Some(status) = &status {
-                ui.label(RichText::new(format!("실행: {}", status.device)).small().color(theme::TEXT_WEAK));
-            }
-        });
-        ui.add_space(8.0);
-        ui.horizontal(|ui| {
-            let download_label = if self.lama_downloading { "다운로드 중…" } else { "LaMa 받기" };
-            let button = ui
-                .add_enabled(!self.lama_downloading, egui::Button::new(download_label))
-                .on_hover_text("모델 약 200MB, LibTorch 약 70~120MB (압축)");
-            if button.clicked() {
-                self.download_lama(services, worker);
-            }
-            if ui.add(egui::Button::new("상태 새로고침").frame_when_inactive(false)).clicked() {
-                self.refresh_lama_status(services, worker);
-            }
-        });
-        if let Some(progress) = self.lama_progress.as_ref().filter(|_| self.lama_downloading) {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().size(12.0));
-                ui.label(RichText::new(progress).small());
-            });
+        let runtime_note = |path: Option<&std::path::Path>, missing: &str| match path {
+            Some(path) => format!("LibTorch 경로: {}", path.display()),
+            None => missing.to_owned(),
+        };
+        let lama = status.as_ref().map(|status| &status.lama);
+        let mut notes = Vec::new();
+        if let Some(command) = lama.and_then(|lama| lama.command.as_ref()) {
+            notes.push(format!("MANGA_TRANSLATOR_LAMA_COMMAND로 지정한 명령을 씁니다: {}", command.display()));
         }
-        if let Some((state, message)) = &self.lama_action {
-            let color = match state {
-                ActionState::Success => theme::SUCCESS,
-                ActionState::Error => theme::DANGER,
-            };
-            ui.label(RichText::new(message).small().color(color));
+        if let Some(lama) = lama {
+            notes.push(format!("모델 경로: {}", lama.model_path.display()));
+            notes.push(runtime_note(
+                lama.runtime_path.as_deref(),
+                "이 플랫폼용 LibTorch가 없어 LaMa 모델을 앱 안에서 돌릴 수 없습니다.",
+            ));
         }
-        if let Some(status) = &status {
-            ui.add_space(6.0);
-            if let Some(command) = &status.lama.command {
-                theme::hint(
-                    ui,
-                    &format!("MANGA_TRANSLATOR_LAMA_COMMAND로 지정한 명령을 씁니다: {}", command.display()),
-                );
-            }
-            theme::hint(ui, &format!("모델 경로: {}", status.lama.model_path.display()));
-            match &status.lama.runtime_path {
-                Some(path) => theme::hint(ui, &format!("LibTorch 경로: {}", path.display())),
-                None => theme::hint(ui, "이 플랫폼용 LibTorch가 없어 LaMa 모델을 앱 안에서 돌릴 수 없습니다."),
-            }
+        let (download, refresh) = model_section(
+            ui,
+            &self.lama,
+            &ModelSection {
+                title: "LaMa 인페인트",
+                description: "원문 글자를 더 자연스럽게 지우는 인페인트 모델입니다. 모델과 실행용 LibTorch를 받기 전에는 로컬 채우기를 씁니다.",
+                button: "LaMa 받기",
+                sizes: "모델 약 200MB, LibTorch 약 70~120MB (압축)",
+                model_exists: lama.is_some_and(|lama| lama.model_exists),
+                runtime_exists: lama.is_some_and(|lama| lama.runtime_exists),
+                device: status.as_ref().map(|status| status.device),
+                notes,
+            },
+        );
+        if download {
+            self.download_lama(services, worker);
         }
-        if let Some(error) = &self.lama_last_error {
-            theme::hint(ui, &format!("최근 오류: {error}"));
+        if refresh {
+            self.refresh_lama_status(services, worker);
+        }
+        ui.add_space(18.0);
+        let segmentation = status.as_ref().map(|status| &status.segmentation);
+        let notes = segmentation
+            .map(|segmentation| {
+                vec![
+                    format!("모델 경로: {}", segmentation.model_path.display()),
+                    runtime_note(
+                        segmentation.runtime_path.as_deref(),
+                        "이 플랫폼용 LibTorch가 없어 글자 분할 모델을 앱 안에서 돌릴 수 없습니다.",
+                    ),
+                ]
+            })
+            .unwrap_or_default();
+        let (download, refresh) = model_section(
+            ui,
+            &self.segmentation,
+            &ModelSection {
+                title: "글자 분할 모델",
+                description: "블록을 지울 때 글자 픽셀을 찾아 마스크를 만드는 모델입니다(Manga109로 학습, 라이선스 표기 없음). 받기 전이거나 실행에 실패하면 밝기로 글자를 찾습니다.",
+                button: "글자 분할 모델 받기",
+                sizes: "모델 약 210MB, LibTorch 약 70~120MB (압축, LaMa와 함께 씀)",
+                model_exists: segmentation.is_some_and(|segmentation| segmentation.model_exists),
+                runtime_exists: segmentation.is_some_and(|segmentation| segmentation.runtime_exists),
+                device: status.as_ref().map(|status| status.segmentation_device),
+                notes,
+            },
+        );
+        if download {
+            self.download_segmentation(services, worker);
+        }
+        if refresh {
+            self.refresh_lama_status(services, worker);
         }
     }
 
@@ -718,7 +749,7 @@ impl SettingsView {
                     self.tab,
                     &[
                         (SettingsTab::Translation, "번역", "번역 엔진과 모델"),
-                        (SettingsTab::Inpaint, "인페인트", "LaMa 모델"),
+                        (SettingsTab::Inpaint, "인페인트", "LaMa와 글자 분할 모델"),
                         (SettingsTab::Editing, "편집", "단축키 옵션"),
                         (SettingsTab::About, "정보", "버전과 데이터 폴더"),
                     ],
@@ -739,7 +770,7 @@ impl SettingsView {
                             &base_url,
                             &services.paths.codex_auth_path,
                         ),
-                        SettingsTab::Inpaint => self.lama_section(ui, services, worker),
+                        SettingsTab::Inpaint => self.inpaint_tab(ui, services, worker),
                         SettingsTab::Editing => {
                             toggle_row(ui, "한손모드", &mut draft.one_hand_mode);
                             theme::hint(
@@ -893,6 +924,105 @@ fn effort_description(effort: ReasoningEffort) -> &'static str {
         ReasoningEffort::High => "더 오래 생각해서 까다로운 페이지를 처리합니다.",
         ReasoningEffort::Xhigh => "가장 넉넉한 생각 예산을 사용합니다.",
     }
+}
+
+/// What a model's part of the 인페인트 tab shows.
+struct ModelSection<'a> {
+    title: &'a str,
+    description: &'a str,
+    button: &'a str,
+    /// The download sizes, on the button's hover.
+    sizes: &'a str,
+    model_exists: bool,
+    runtime_exists: bool,
+    /// Where the model runs, once the status is known.
+    device: Option<&'static str>,
+    /// Paths and the like, under the status.
+    notes: Vec<String>,
+}
+
+/// A model's status, download button, progress and last error. Returns whether the
+/// download and the refresh were clicked.
+fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSection) -> (bool, bool) {
+    ui.label(theme::semibold(section.title));
+    theme::hint(ui, section.description);
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 18.0;
+        runtime_state(ui, "모델", section.model_exists, state.running);
+        runtime_state(ui, "LibTorch", section.runtime_exists, state.running);
+        if let Some(device) = section.device {
+            ui.label(RichText::new(format!("실행: {device}")).small().color(theme::TEXT_WEAK));
+        }
+    });
+    ui.add_space(8.0);
+    let (download, refresh) = ui
+        .horizontal(|ui| {
+            let label = if state.running { "다운로드 중…" } else { section.button };
+            let download =
+                ui.add_enabled(!state.running, egui::Button::new(label)).on_hover_text(section.sizes).clicked();
+            let refresh = ui.add(egui::Button::new("상태 새로고침").frame_when_inactive(false)).clicked();
+            (download, refresh)
+        })
+        .inner;
+    if let Some(progress) = state.progress.as_ref().filter(|_| state.running) {
+        ui.horizontal(|ui| {
+            ui.add(egui::Spinner::new().size(12.0));
+            ui.label(RichText::new(progress).small());
+        });
+    }
+    if let Some((action, message)) = &state.action {
+        let color = match action {
+            ActionState::Success => theme::SUCCESS,
+            ActionState::Error => theme::DANGER,
+        };
+        ui.label(RichText::new(message).small().color(color));
+    }
+    if !section.notes.is_empty() {
+        ui.add_space(6.0);
+        for note in &section.notes {
+            theme::hint(ui, note);
+        }
+    }
+    if let Some(error) = &state.last_error {
+        theme::hint(ui, &format!("최근 오류: {error}"));
+    }
+    (download, refresh)
+}
+
+/// Runs `download` on its own thread, reporting progress lines and the outcome as `job`'s
+/// events.
+fn spawn_download(
+    worker: &Worker<AppEvent>,
+    job: ModelJob,
+    download: impl FnOnce(&mut dyn FnMut(mtt_inpaint::lama::Download, u64, Option<u64>)) -> Result<(), String>
+    + Send
+    + 'static,
+) {
+    let emitter = worker.emitter();
+    std::thread::spawn(move || {
+        let mut last = None;
+        let result = download(&mut |part, written, total| {
+            let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
+            let label = match part {
+                mtt_inpaint::lama::Download::Model => "모델",
+                mtt_inpaint::lama::Download::Runtime => "LibTorch",
+            };
+            let line = match total {
+                Some(total) if total > 0 => {
+                    let percent = written * 100 / total;
+                    if last == Some((part, percent)) {
+                        return;
+                    }
+                    last = Some((part, percent));
+                    format!("{label} 다운로드 {percent}% ({:.0}/{:.0}MB)", mb(written), mb(total))
+                }
+                _ => format!("{label} 다운로드 {:.0}MB", mb(written)),
+            };
+            emitter.emit(AppEvent::Lama(LamaEvent::Progress(job, line)));
+        });
+        emitter.emit(AppEvent::Lama(LamaEvent::DownloadFinished(job, result)));
+    });
 }
 
 fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool) {

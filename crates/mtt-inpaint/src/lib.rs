@@ -8,10 +8,14 @@ pub mod bubble;
 pub mod engine;
 pub mod lama;
 pub mod lama_torch;
+mod model_cache;
 pub mod psd;
 pub mod psd_text;
 pub mod text_mask;
+pub mod text_segmentation;
+pub mod text_segmentation_torch;
 pub mod torch_runtime;
+mod torch_weights;
 pub mod windows;
 
 use image::{GrayImage, RgbaImage};

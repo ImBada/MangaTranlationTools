@@ -85,6 +85,13 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 - 모델: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`를 `~/Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`에 (직접 받아 둬도 됩니다)
 - LibTorch: [koharu](https://github.com/mayocream/koharu)가 C 연결 코드와 함께 빌드해 올린 [koharu-rs/torch](https://github.com/koharu-rs/torch/releases) `v2.13.0.7`. 받은 파일은 SHA-256을 확인한 뒤 데이터 폴더의 `tools/libtorch/`에 풉니다(풀면 Mac 약 340MB).
 
+### 글자 분할 모델 (선택)
+
+설정의 **인페인트** 탭에서 `글자 분할 모델 받기`를 하면 블록 글자 마스크를 밝기 규칙 대신 모델(UNet++ / EfficientNetV2, 약 217MB)로 찾습니다.
+색 글자, 외곽선 글자, 스크린톤·그림 위 글자에서 더 정확하고, LaMa와 같은 LibTorch로 앱 안에서 돕니다(없으면 함께 받음). 모델이 아무것도 못 찾은 블록은 예전 규칙으로 돌아갑니다.
+
+- 모델: `https://huggingface.co/mayocream/manga-text-segmentation-2025` (리비전 고정, SHA-256 확인). Manga109로 학습되었고 가중치에 라이선스 표기가 없습니다.
+
 다른 LaMa 실행 방식(예: NVIDIA GPU에서 도는 다른 프로그램)을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다. 지정하면 모델 대신 이 명령이 인페인트할 영역 전체를 받습니다.
 
 ## 환경 변수
@@ -145,7 +152,7 @@ MANGA_TRANSLATOR_DATA_DIR=/tmp/x MTT_AUTOMATION="import:DIR;wait-editor;ready;sh
 ## 라이선스
 
 이 프로젝트는 **GNU General Public License v3.0 (or later)** 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
-PSD 텍스트 레이어 코드(`crates/mtt-inpaint/src/psd_text.rs`)는 [koharu](https://github.com/koharu-rs/koharu)의 koharu-psd(MIT OR Apache-2.0, Copyright 2025-2026 Mayo Takanashi and Koharu contributors)에서 옮겨 왔습니다.
+PSD 텍스트 레이어 코드(`crates/mtt-inpaint/src/psd_text.rs`)와 글자 분할 모델 구조(`crates/mtt-inpaint/src/text_segmentation_torch.rs`)는 [koharu](https://github.com/koharu-rs/koharu)(MIT OR Apache-2.0, Copyright 2025-2026 Mayo Takanashi and Koharu contributors)에서 옮겨 왔습니다.
 
 ## 참고 프로젝트
 

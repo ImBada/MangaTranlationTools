@@ -2,7 +2,8 @@
 //! inside each block's detection box (light ones for text on a dark box), minus connected
 //! components that look like balloon outlines or panel borders, grown so anti-aliased
 //! edges and thin light outlines go too. The same strokes give the source lettering's
-//! colors ([`detect_lettering`]).
+//! colors ([`detect_lettering`]). With the text segmentation model, its glyph pixels take
+//! the strokes' place (`text_segmentation.rs`).
 
 use image::{GrayImage, RgbaImage};
 use mtt_core::geometry::{bbox_to_pixels, parse_hex_color};
@@ -76,55 +77,126 @@ pub fn growth_radius(width: u32, height: u32) -> usize {
 pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: Option<&GrayImage>) -> GrayImage {
     let (width, height) = source.dimensions();
     let mut mask = base.cloned().unwrap_or_else(|| GrayImage::new(width, height));
+    if let Some(area) = block_area(blocks, width, height) {
+        paint_block_mask(&mut mask, source, &area, None);
+    }
+    mask
+}
+
+/// The scan boxes of some blocks, how far their strokes grow, and the area the mask can
+/// cover: the boxes plus the growth.
+pub(crate) struct BlockArea {
+    pub(crate) rects: Vec<Rect>,
+    pub(crate) radius: usize,
+    pub(crate) area: Rect,
+}
+
+pub(crate) fn block_area(blocks: &[&TranslationBlock], width: u32, height: u32) -> Option<BlockArea> {
     let rects: Vec<Rect> = blocks.iter().filter_map(|block| scan_rect(block, width, height)).collect();
     let radius = growth_radius(width, height);
-    let grow = |rect: Rect| {
-        let by = radius as f32;
-        Rect::clamped(
-            rect.x as f32 - by,
-            rect.y as f32 - by,
-            rect.width as f32 + by * 2.0,
-            rect.height as f32 + by * 2.0,
-            width,
-            height,
-        )
-        .unwrap_or(rect)
-    };
-    // Everything happens inside the blocks' boxes plus the growth.
-    let Some(area) = rects.iter().copied().map(grow).reduce(|a, b| {
+    let area = rects.iter().map(|rect| grow(*rect, radius, width, height)).reduce(|a, b| {
         let (x, y) = (a.x.min(b.x), a.y.min(b.y));
         let (right, bottom) = ((a.x + a.width).max(b.x + b.width), (a.y + a.height).max(b.y + b.height));
         Rect { x, y, width: right - x, height: bottom - y }
-    }) else {
-        return mask;
-    };
-    let area_width = area.width as usize;
-    let area_len = area_width * area.height as usize;
+    })?;
+    Some(BlockArea { rects, radius, area })
+}
+
+fn grow(rect: Rect, by: usize, width: u32, height: u32) -> Rect {
+    let by = by as f32;
+    Rect::clamped(
+        rect.x as f32 - by,
+        rect.y as f32 - by,
+        rect.width as f32 + by * 2.0,
+        rect.height as f32 + by * 2.0,
+        width,
+        height,
+    )
+    .unwrap_or(rect)
+}
+
+/// Glyph pixels found by other means (the segmentation model) over a [`BlockArea`]'s area,
+/// nonzero = glyph, already grown by `grown_by`.
+pub(crate) struct Glyphs<'a> {
+    pub(crate) mask: &'a [u8],
+    pub(crate) grown_by: usize,
+}
+
+/// A box falls back to the luma strokes when `glyphs` has fewer pixels in it than this
+/// share of its area (and `MIN_GLYPH_PIXELS`): the model found no text there.
+const GLYPH_FALLBACK_SHARE: usize = 1000;
+const MIN_GLYPH_PIXELS: usize = 8;
+
+/// Paints the text mask of `area` onto `mask`: the strokes grown to `area.radius` in all
+/// and closed, the growth kept within the grown boxes and off the candidates the heuristic
+/// set aside as balloon outlines.
+///
+/// With `glyphs`, the strokes are the glyphs within the grown boxes plus the candidates
+/// that touch them (the thin parts the model is unsure of) when the heuristic kept them or
+/// they lie inside the box (outlines and borders cross its edge); the other candidates
+/// count as outlines. A box the glyphs find nothing in keeps the heuristic's strokes.
+pub(crate) fn paint_block_mask(mask: &mut GrayImage, source: &RgbaImage, area: &BlockArea, glyphs: Option<Glyphs>) {
+    let BlockArea { rects, radius, area } = area;
+    let (area_width, area_height) = (area.width as usize, area.height as usize);
+    let area_len = area_width * area_height;
     let mut strokes = vec![0u8; area_len];
     let mut outlines = vec![false; area_len];
     let mut allowed = vec![false; area_len];
     for rect in rects {
         let rw = rect.width as usize;
-        let found = rect_strokes(source, rect);
-        for (index, (value, candidate)) in found.strokes.iter().zip(&found.candidates).enumerate() {
+        let at = |index: usize| {
             let (x, y) = ((rect.x - area.x) as usize + index % rw, (rect.y - area.y) as usize + index / rw);
+            y * area_width + x
+        };
+        let (rh, rect_len) = (rect.height as usize, rw * rect.height as usize);
+        let found = rect_strokes(source, *rect);
+        let kept = match &glyphs {
+            Some(glyphs) => {
+                let glyph = |index: usize| glyphs.mask[at(index)] > 0;
+                let count = (0..rect_len).filter(|index| glyph(*index)).count();
+                if count < (rect_len / GLYPH_FALLBACK_SHARE).max(MIN_GLYPH_PIXELS) {
+                    found.strokes.clone()
+                } else {
+                    attached(&found, rw, rh, glyph)
+                }
+            }
+            None => found.strokes.clone(),
+        };
+        for (index, (value, candidate)) in kept.iter().zip(&found.candidates).enumerate() {
             if *value > 0 {
-                strokes[y * area_width + x] = 255;
+                strokes[at(index)] = 255;
             } else if *candidate > 0 {
-                outlines[y * area_width + x] = true;
+                outlines[at(index)] = true;
             }
         }
-        let grown = grow(rect);
+        let grown = grow(*rect, *radius, source.width(), source.height());
         for y in grown.y - area.y..grown.y - area.y + grown.height {
             let start = y as usize * area_width + (grown.x - area.x) as usize;
             allowed[start..start + grown.width as usize].fill(true);
         }
     }
-    let grown =
-        close(&dilate(&strokes, area_width, area.height as usize, radius), area_width, area.height as usize, radius);
+    // The glyphs replace the strokes within the grown boxes.
+    let glyph_strokes = glyphs.as_ref().map(|glyphs| {
+        let kept: Vec<u8> = glyphs
+            .mask
+            .iter()
+            .zip(&allowed)
+            .map(|(value, allowed)| if *value > 0 && *allowed { 255 } else { 0 })
+            .collect();
+        (kept, glyphs.grown_by)
+    });
+    let mut grown = dilate(&strokes, area_width, area_height, *radius);
+    if let Some((kept, grown_by)) = &glyph_strokes {
+        let glyphs_grown = dilate(kept, area_width, area_height, radius.saturating_sub(*grown_by));
+        for (target, value) in grown.iter_mut().zip(glyphs_grown) {
+            *target |= value;
+        }
+    }
+    let grown = close(&grown, area_width, area_height, *radius);
     for index in 0..area_len {
-        // A stroke in one box wins over the same pixel set aside as outline in another.
-        if strokes[index] > 0 || (grown[index] > 0 && allowed[index] && !outlines[index]) {
+        // A stroke (or glyph) wins over the same pixel set aside as outline in another box.
+        let stroke = strokes[index] > 0 || glyph_strokes.as_ref().is_some_and(|(kept, _)| kept[index] > 0);
+        if stroke || (grown[index] > 0 && allowed[index] && !outlines[index]) {
             mask.put_pixel(
                 area.x + (index % area_width) as u32,
                 area.y + (index / area_width) as u32,
@@ -132,7 +204,27 @@ pub fn mask_for_blocks(source: &RgbaImage, blocks: &[&TranslationBlock], base: O
             );
         }
     }
-    mask
+}
+
+/// The candidate components of `found` (`width`×`height`) with a pixel where `glyph` holds
+/// that are strokes or stay off the box's edge.
+fn attached(found: &RectStrokes, width: usize, height: usize, glyph: impl Fn(usize) -> bool) -> Vec<u8> {
+    let candidates = &found.candidates;
+    let mut visited = vec![false; candidates.len()];
+    let mut kept = vec![0u8; candidates.len()];
+    for index in 0..candidates.len() {
+        if candidates[index] > 0 && !visited[index] {
+            let component = collect(candidates, &mut visited, width, height, index);
+            // Strokes are whole candidate components.
+            let stroke = found.strokes[index] > 0;
+            if (stroke || !component.touches_edge) && component.pixels.iter().any(|pixel| glyph(*pixel)) {
+                for pixel in component.pixels {
+                    kept[pixel] = 255;
+                }
+            }
+        }
+    }
+    kept
 }
 
 /// The source lettering of a block: its fill color and, for text drawn with a contrasting
