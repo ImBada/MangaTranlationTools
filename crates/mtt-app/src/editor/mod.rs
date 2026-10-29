@@ -429,6 +429,9 @@ pub struct Editor {
     pub thumbnails: thumbnails::Thumbnails,
     /// Tab / Shift+Tab presses taken before egui's focus handling (see `MttApp::raw_input_hook`).
     pub pending_block_step: i32,
+    /// Tab / Shift+Tab pressed in the 번역 field: applied after the frame's typing, then the
+    /// next block's 번역 field takes focus.
+    pub pending_text_step: i32,
     /// "다시 번역" on the selected blocks, started next frame (where the services are).
     pub block_translation_requested: bool,
     /// The work's translation notes being edited (`작품 › 화 › 번역 메모`).
@@ -548,6 +551,7 @@ impl Editor {
             work_title: String::new(),
             thumbnails: Default::default(),
             pending_block_step: 0,
+            pending_text_step: 0,
             block_translation_requested: false,
             work_notes_draft: None,
             shortcut_sheet: false,
@@ -2481,6 +2485,14 @@ impl Editor {
         panels::find_replace_window(self, ui);
         panels::preset_backup_window(self, ui, services);
         panels::character_override_window(self, ui, services);
+        // Tab in the 번역 field, after this frame's typing (an IME commit that came with the
+        // key) has gone into the block it was typed for.
+        let text_step = std::mem::take(&mut self.pending_text_step);
+        if text_step != 0 && !dialog_open && self.mode() == Mode::Translate {
+            self.select_adjacent_block(text_step);
+            self.focus_text_requested = true;
+            ui.ctx().request_repaint();
+        }
         // `modalOpen`: no editor shortcuts while a dialog is up (or was when the frame
         // began: the Esc that closed it is not the editor's); the shortcut sheet only takes
         // the keys that close it. A focused text field keeps its keys, number and colour

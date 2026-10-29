@@ -337,29 +337,16 @@ impl eframe::App for MttApp {
         self.services.tick_ui_state(&ctx);
     }
 
-    /// Tab / Shift+Tab step through text blocks. egui would otherwise move keyboard focus
-    /// to the first button (which Space, the pan key, then presses), so the key is taken
-    /// out before egui sees it unless a text field or dialog has focus.
+    /// Tab / Shift+Tab step through text blocks (`Editor::take_tab_keys`) unless the
+    /// settings or import dialog is open.
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         if let Some(automation) = &mut self.automation {
             raw_input.events.extend(automation.take_injected_events());
         }
         let Screen::Editor(editor) = &mut self.screen else { return };
-        if self.settings.is_open() || self.library.import_open() || ctx.memory(|memory| memory.focused().is_some()) {
-            return;
+        if !self.settings.is_open() && !self.library.import_open() {
+            editor.take_tab_keys(ctx, &mut raw_input.events);
         }
-        raw_input.events.retain(|event| match event {
-            egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. }
-                if !modifiers.command && !modifiers.alt && !modifiers.ctrl =>
-            {
-                if *pressed {
-                    editor.pending_block_step += if modifiers.shift { -1 } else { 1 };
-                    ctx.request_repaint();
-                }
-                false
-            }
-            _ => true,
-        });
     }
 
     fn on_exit(&mut self) {

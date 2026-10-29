@@ -1739,6 +1739,40 @@ fn click(editor: &mut Editor, page: &PageRecord, point: Pos2, modifiers: Modifie
 
 type ShortcutAction = Box<dyn FnOnce(&mut Editor, &mut Services)>;
 
+impl Editor {
+    /// Tab / Shift+Tab step through text blocks; `MttApp::raw_input_hook` hands the keys
+    /// over before egui sees them, since egui would otherwise move keyboard focus to the
+    /// first button (which Space, the pan key, then presses). In the 번역 field they move
+    /// on to the next block's 번역 field; other focused widgets keep the key.
+    pub fn take_tab_keys(&mut self, ctx: &egui::Context, events: &mut Vec<egui::Event>) {
+        let focused = ctx.memory(|memory| memory.focused());
+        let in_translation = match (focused, self.selection.as_slice()) {
+            (Some(focused), [id]) => focused == super::inspector::translated_field_id(id),
+            _ => false,
+        };
+        if focused.is_some() && !in_translation {
+            return;
+        }
+        events.retain(|event| match event {
+            egui::Event::Key { key: Key::Tab, pressed, modifiers, .. }
+                if !modifiers.command && !modifiers.alt && !modifiers.ctrl =>
+            {
+                if *pressed {
+                    let step = if modifiers.shift { -1 } else { 1 };
+                    if in_translation {
+                        self.pending_text_step += step;
+                    } else {
+                        self.pending_block_step += step;
+                    }
+                    ctx.request_repaint();
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+}
+
 /// Keys while the shortcut sheet is open: Esc and `?` close it, nothing reaches the page
 /// behind it.
 pub fn shortcut_sheet_keys(editor: &mut Editor, ctx: &egui::Context) {

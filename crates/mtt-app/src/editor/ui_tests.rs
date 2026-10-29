@@ -66,9 +66,10 @@ impl Harness {
         harness
     }
 
-    /// Runs one frame with `events`.
-    fn frame(&mut self, events: Vec<egui::Event>) {
+    /// Runs one frame with `events`, the way `MttApp` does (Tab handed to the editor first).
+    fn frame(&mut self, mut events: Vec<egui::Event>) {
         self.time += 0.25;
+        self.editor.take_tab_keys(&self.ctx, &mut events);
         let input = egui::RawInput {
             time: Some(self.time),
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
@@ -261,4 +262,44 @@ fn undo_in_the_translation_field_stays_with_its_block() {
     let blocks = &harness.editor.page().unwrap().blocks;
     assert_eq!(blocks[0].translated_text, "블록 0!?");
     assert_eq!(blocks[1].translated_text, "블록 1", "⌘Z in the inline editor stays with its block");
+}
+
+#[test]
+fn tab_in_the_translation_field_moves_to_the_next_blocks_field() {
+    let mut harness = Harness::new(3);
+    harness.editor.selection = vec!["b0".into()];
+    harness.idle(2);
+    let field = super::inspector::translated_field_id;
+    let focused = |harness: &Harness| harness.ctx.memory(|memory| memory.focused());
+    harness.click(harness.ctx.read_response(field("b0")).expect("번역 field").rect.center());
+    assert_eq!(focused(&harness), Some(field("b0")));
+
+    // A syllable being composed: the IME commits it in the same batch as the Tab.
+    let preedit = egui::ImeEvent::Preedit { text: "ㄷ".into(), active_range_chars: None };
+    harness.frame(vec![egui::Event::Ime(preedit)]);
+    harness.frame(vec![
+        egui::Event::Ime(egui::ImeEvent::Commit("다".into())),
+        key_event(egui::Key::Tab, true, egui::Modifiers::NONE),
+    ]);
+    harness.frame(vec![key_event(egui::Key::Tab, false, egui::Modifiers::NONE)]);
+    harness.idle(1);
+    let blocks = &harness.editor.page().unwrap().blocks;
+    assert_eq!(blocks[0].translated_text, "블록 0다", "the syllable stays with the block it was typed for");
+    assert_eq!(blocks[1].translated_text, "블록 1");
+    assert_eq!(harness.editor.selection, ["b1"]);
+    assert_eq!(focused(&harness), Some(field("b1")), "the next block's 번역 field takes the focus");
+
+    harness.press(egui::Key::Tab, egui::Modifiers::SHIFT);
+    harness.idle(1);
+    assert_eq!(harness.editor.selection, ["b0"], "Shift+Tab goes back");
+    assert_eq!(focused(&harness), Some(field("b0")));
+
+    // With nothing focused (the canvas) Tab still steps through the blocks.
+    let stage = harness.editor.view.stage_rect();
+    harness.click(stage.left_bottom() + egui::vec2(12.0, -12.0));
+    assert_eq!(focused(&harness), None);
+    harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    harness.press(egui::Key::Tab, egui::Modifiers::NONE);
+    assert_eq!(harness.editor.selection, ["b1"]);
+    assert_eq!(focused(&harness), None, "the canvas keeps the keyboard");
 }
