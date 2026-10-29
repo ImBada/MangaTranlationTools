@@ -14,7 +14,10 @@ use serde::Deserialize;
 
 use crate::error::{CoreError, CoreResult};
 use crate::json_io::{backup_once, read_json_optional, write_json_atomic, write_json_replace};
-use crate::model::{Chapter, ChapterStatus, LibraryIndexFile, PageAnalysisStatus, PageRecord, Work};
+use crate::model::{
+    Chapter, ChapterStatus, LibraryIndexFile, PageAnalysisStatus, PageRecord, Work, de_null_as_default,
+    de_string_lenient,
+};
 use crate::paths::sanitize_file_basename;
 use crate::time::now_iso;
 
@@ -645,15 +648,15 @@ fn read_dir_entries(path: &Path) -> CoreResult<Vec<fs::DirEntry>> {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ChapterHeader {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     title: String,
     #[serde(default)]
     status: ChapterStatus,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_null_as_default")]
     pages: Vec<PageHeader>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     created_at: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "de_string_lenient")]
     updated_at: String,
 }
 
@@ -741,6 +744,23 @@ mod tests {
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
         assert_eq!(library.list().unwrap()[0].chapters[0].title, "바깥에서 바뀜");
         assert_eq!(library.find_chapter_work_id(&chapter.id).unwrap(), Some(work.id.clone()));
+    }
+
+    #[test]
+    fn a_chapter_saved_with_nan_opens_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        let mut chapter = sample_chapter(&library, &work);
+        chapter.pages[0].blocks.push(crate::model::TranslationBlock { opacity: f64::NAN, ..Default::default() });
+        library.write_chapter(&chapter).unwrap();
+        assert_eq!(library.open_chapter("c1").unwrap().pages[1].blocks[0].opacity, 1.0);
+        // A file written by the TS app (or an older build) with `null` in it.
+        let path = library.chapter_file(&work.id, "c1");
+        let text = fs::read_to_string(&path).unwrap().replace("\"opacity\": 1", "\"opacity\": null");
+        fs::write(&path, text.replace("\"title\": \"1화\"", "\"title\": null")).unwrap();
+        assert_eq!(library.open_chapter("c1").unwrap().pages[1].blocks[0].opacity, 1.0);
+        assert_eq!(library.list().unwrap()[0].chapters[0].title, "");
     }
 
     #[test]
