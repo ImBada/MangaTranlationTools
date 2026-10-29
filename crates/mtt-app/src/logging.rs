@@ -43,4 +43,15 @@ pub fn init(path: &Path) {
     if log::set_logger(logger).is_ok() {
         log::set_max_level(log::LevelFilter::Debug);
     }
+    install_panic_hook();
+}
+
+/// Writes panics to the log with a backtrace; a background job's panic would otherwise
+/// only reach a console nobody sees.
+fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let thread = std::thread::current();
+        let backtrace = std::backtrace::Backtrace::force_capture();
+        log::error!("panic in thread '{}': {info}\n{backtrace}", thread.name().unwrap_or("<unnamed>"));
+    }));
 }

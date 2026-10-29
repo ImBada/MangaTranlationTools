@@ -23,7 +23,7 @@ pub mod widgets;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 use std::time::{Duration, Instant};
 
 use eframe::egui;
@@ -39,7 +39,7 @@ use mtt_render::page::{LayerOpacity, LayerVisibility, PageImages, PageRenderOpti
 
 use crate::app::AppEvent;
 use crate::services::Services;
-use crate::worker::Worker;
+use crate::worker::{Worker, catch_panic};
 use assets::{LoadedPage, PageAssets, PageLoad};
 use history::{BlocksSnapshot, Entry, History, LayerKind, LayerPatch};
 use overlay::OverlayCache;
@@ -174,18 +174,19 @@ fn default_backup_name() -> String {
 }
 
 /// Orders the background writer against synchronous flushes: queued writes remember the
-/// generation they were queued in and are skipped once a flush has advanced it.
+/// generation they were queued in and are skipped once a flush has advanced it. A write
+/// that panicked poisons the lock; the counter is still valid, so it is recovered.
 #[derive(Clone, Default)]
 pub struct WriteGeneration(std::sync::Arc<std::sync::Mutex<u64>>);
 
 impl WriteGeneration {
     fn current(&self) -> u64 {
-        self.0.lock().map(|generation| *generation).unwrap_or_default()
+        *self.0.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// Runs `write` unless a flush happened after `queued_at` (the lock covers the write).
     fn write_if_current(&self, queued_at: u64, write: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
-        let guard = self.0.lock().map_err(|_| "저장 잠금 실패".to_owned())?;
+        let guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if *guard != queued_at {
             return Ok(());
         }
@@ -196,10 +197,7 @@ impl WriteGeneration {
 
     /// Bumps the generation and runs `flush` while holding the lock.
     fn advance_while<T>(&self, flush: impl FnOnce() -> T) -> T {
-        let mut guard = match self.0.lock() {
-            Ok(guard) => guard,
-            Err(poisoned) => poisoned.into_inner(),
-        };
+        let mut guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         *guard += 1;
         flush()
     }
@@ -665,7 +663,12 @@ impl Editor {
             let library = services.library.clone();
             let page = page.clone();
             let ctx = worker.ctx().clone();
-            worker.spawn(move || AppEvent::PageLoaded(Box::new(assets::load_page(&ctx, &library, &chapter, &page))));
+            worker.spawn(move || {
+                let load = catch_panic(|| assets::load_page(&ctx, &library, &chapter, &page)).unwrap_or_else(|error| {
+                    PageLoad { chapter_id: chapter.id.clone(), page_id: page.id.clone(), page: Err(error) }
+                });
+                AppEvent::PageLoaded(Box::new(load))
+            });
         }
     }
 
@@ -1484,20 +1487,23 @@ impl Editor {
         self.status = format!("인페인트 실행 중… ({})", engine_label(engine));
         let ctx = worker.ctx().clone();
         worker.spawn(move || {
-            let outcome = compute_inpaint(
-                scope,
-                &source,
-                mask,
-                result,
-                range,
-                heal.as_ref(),
-                &blocks,
-                engine,
-                &settings,
-                lama.as_ref(),
-                segmentation.as_ref(),
-            )
-            .map(|computed| computed.finish(&ctx, &page_id));
+            let outcome = catch_panic(|| {
+                compute_inpaint(
+                    scope,
+                    &source,
+                    mask,
+                    result,
+                    range,
+                    heal.as_ref(),
+                    &blocks,
+                    engine,
+                    &settings,
+                    lama.as_ref(),
+                    segmentation.as_ref(),
+                )
+                .map(|computed| computed.finish(&ctx, &page_id))
+            })
+            .and_then(|outcome| outcome);
             AppEvent::InpaintFinished { chapter_id, page_id, outcome }
         });
     }
@@ -1680,7 +1686,7 @@ impl Editor {
             let mut composite = source.clone();
             image::imageops::overlay(&mut composite, &result, 0, 0);
             let (translation, texts) = {
-                let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
+                let mut fonts = fonts.lock().unwrap_or_else(PoisonError::into_inner);
                 let options = PageRenderOptions {
                     visibility: mtt_render::page::LayerVisibility {
                         image: false,
@@ -1802,7 +1808,7 @@ impl Editor {
         let source = path.to_owned();
         let ctx = worker.ctx().clone();
         worker.spawn(move || {
-            let result = job(&ctx).and_then(|outcome| {
+            let result = catch_panic(|| job(&ctx)).and_then(|outcome| outcome).and_then(|outcome| {
                 if let Some(parent) = keep_as.parent() {
                     std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
                 }
@@ -2058,8 +2064,10 @@ impl Editor {
         let queued_at = generation.current();
         worker.spawn_serial(move || {
             // A synchronous `flush` since queuing wrote newer data; don't overwrite it.
-            let error =
-                generation.write_if_current(queued_at, || library.write_chapter(&chapter).map_err(|e| e.to_string()));
+            let error = catch_panic(|| {
+                generation.write_if_current(queued_at, || library.write_chapter(&chapter).map_err(|e| e.to_string()))
+            })
+            .and_then(|written| written);
             AppEvent::ChapterSaved { chapter_id: chapter.id.clone(), seq, error: error.err() }
         });
     }
@@ -2163,11 +2171,14 @@ impl Editor {
         let generation = self.write_generation.clone();
         let queued_at = generation.current();
         worker.spawn_serial(move || {
-            let result = payload.encode().and_then(|bytes| {
-                generation.write_if_current(queued_at, || {
-                    mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())
+            let result = catch_panic(|| {
+                payload.encode().and_then(|bytes| {
+                    generation.write_if_current(queued_at, || {
+                        mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())
+                    })
                 })
-            });
+            })
+            .and_then(|written| written);
             AppEvent::LayerSaved { page_id, error: result.err() }
         });
     }
@@ -2250,7 +2261,10 @@ impl Editor {
                 self.page_export_running = true;
                 self.status = "이 페이지를 출력하는 중…".into();
                 let chapter_id = self.chapter.id.clone();
-                worker.spawn(move || AppEvent::EditorJob { chapter_id, job: EditorJob::PageExported(job()) });
+                worker.spawn(move || {
+                    let result = catch_panic(job).and_then(|result| result);
+                    AppEvent::EditorJob { chapter_id, job: EditorJob::PageExported(result) }
+                });
             }
             Err(error) => self.status = format!("출력 실패: {error}"),
         }
@@ -2271,7 +2285,7 @@ impl Editor {
             let images =
                 PageImages { source: Some(&source), inpaint_mask: mask.as_deref(), inpaint_result: result.as_deref() };
             let rendered = {
-                let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
+                let mut fonts = fonts.lock().unwrap_or_else(PoisonError::into_inner);
                 mtt_render::page::render_page(&mut fonts, &page, &images, &PageRenderOptions::OUTPUT)
                     .ok_or("렌더링 실패")?
             };
@@ -2329,7 +2343,7 @@ impl Editor {
     pub fn export_all(&mut self, services: &mut Services, worker: &Worker<AppEvent>, cbz: bool) -> Result<(), String> {
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
         // Its own font context: rendering every page must not hold the editor's.
-        let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?.fork();
+        let mut fonts = fonts.lock().unwrap_or_else(PoisonError::into_inner).fork();
         self.flush(services)?;
         let library = services.library.clone();
         let chapter = self.chapter.clone();
@@ -2346,32 +2360,29 @@ impl Editor {
             let mut archived = Vec::new();
             for (index, page) in chapter.pages.iter().enumerate() {
                 emitter.emit(AppEvent::ExportProgress { current: index, total });
-                let load = assets::decode_page(&library, &chapter, page);
-                let source = match load.source {
-                    Ok(source) => source,
+                // A panic fails its page, not the rest of the run.
+                let rendered = catch_panic(|| {
+                    let load = assets::decode_page(&library, &chapter, page);
+                    let source = load.source?;
+                    let images = PageImages {
+                        source: Some(&source),
+                        inpaint_mask: load.mask.as_ref(),
+                        inpaint_result: load.result.as_ref(),
+                    };
+                    let rendered = mtt_render::page::render_page(&mut fonts, page, &images, &PageRenderOptions::OUTPUT)
+                        .ok_or_else(|| format!("{}: 렌더링 실패", page.name))?;
+                    encode_png(&rendered).map_err(|error| format!("{}: {error}", page.name))
+                })
+                .map_err(|error| format!("{}: {error}", page.name))
+                .and_then(|bytes| bytes);
+                let bytes = match rendered {
+                    Ok(bytes) => bytes,
                     Err(error) => {
                         errors.push(error);
                         continue;
                     }
                 };
-                let images = PageImages {
-                    source: Some(&source),
-                    inpaint_mask: load.mask.as_ref(),
-                    inpaint_result: load.result.as_ref(),
-                };
-                let rendered = mtt_render::page::render_page(&mut fonts, page, &images, &PageRenderOptions::OUTPUT);
-                let Some(rendered) = rendered else {
-                    errors.push(format!("{}: 렌더링 실패", page.name));
-                    continue;
-                };
                 let path = library.render_output_path(&chapter, page);
-                let bytes = match encode_png(&rendered) {
-                    Ok(bytes) => bytes,
-                    Err(error) => {
-                        errors.push(format!("{}: {error}", page.name));
-                        continue;
-                    }
-                };
                 match mtt_core::json_io::write_bytes_atomic(&path, &bytes) {
                     Ok(()) => written += 1,
                     Err(error) => errors.push(format!("{}: {error}", page.name)),
@@ -3111,6 +3122,23 @@ mod tests {
         assert!(wait <= AUTOSAVE_DELAY + Duration::from_millis(10));
         editor.layer_dirty.insert(("p0".into(), LayerKind::Mask), Instant::now() - LAYER_SAVE_DELAY);
         assert!(editor.next_tick_due().unwrap() <= Duration::from_millis(10), "an overdue layer save comes first");
+    }
+
+    #[test]
+    fn a_panicking_write_does_not_stop_later_saves() {
+        let generation = WriteGeneration::default();
+        let queued_at = generation.current();
+        let panicked = catch_panic(|| generation.write_if_current(queued_at, || panic!("encoder bug")));
+        assert!(panicked.is_err());
+        let mut wrote = false;
+        let result = generation.write_if_current(queued_at, || {
+            wrote = true;
+            Ok(())
+        });
+        assert_eq!(result, Ok(()));
+        assert!(wrote, "the poisoned generation lock is recovered");
+        generation.advance_while(|| ());
+        assert_eq!(generation.current(), queued_at + 1);
     }
 
     #[test]

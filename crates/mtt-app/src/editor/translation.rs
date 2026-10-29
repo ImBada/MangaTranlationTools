@@ -115,6 +115,12 @@ pub fn summarize_warnings(warnings: &[String]) -> Option<&'static str> {
     })
 }
 
+/// What a translation thread sends when it dies of a panic, so the run still ends.
+fn panic_finished() -> TranslationEvent {
+    let error = "번역 작업이 내부 오류로 중단되었습니다.".to_owned();
+    TranslationEvent::Finished { cancelled: false, error: Some(error) }
+}
+
 /// `isAnalysisTargetForRun`.
 pub fn is_target(page: &PageRecord, mode: RunMode, current_id: &str) -> bool {
     match mode {
@@ -183,6 +189,7 @@ impl Editor {
             .name("mtt-translation".into())
             .spawn(move || {
                 let send = |event| emitter.emit(AppEvent::Translation { chapter_id: chapter_id.clone(), event });
+                let _finished = crate::worker::OnPanic::new(|| send(panic_finished()));
                 if let Err(error) = mtt_translate::verify_endpoint(&config) {
                     send(TranslationEvent::Finished { cancelled: false, error: Some(error) });
                     return;
@@ -303,6 +310,7 @@ impl Editor {
             .name("mtt-block-translation".into())
             .spawn(move || {
                 let send = |event| emitter.emit(AppEvent::Translation { chapter_id: chapter_id.clone(), event });
+                let _finished = crate::worker::OnPanic::new(|| send(panic_finished()));
                 if let Err(error) = mtt_translate::verify_endpoint(&config) {
                     send(TranslationEvent::Finished { cancelled: false, error: Some(error) });
                     return;

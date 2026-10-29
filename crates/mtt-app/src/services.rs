@@ -116,7 +116,15 @@ impl Services {
             };
         }
         match &self.fonts {
-            FontState::Ready(fonts) => Some(Arc::clone(fonts)),
+            FontState::Ready(fonts) => {
+                // A job that panicked mid-render poisons the lock; the font context is still
+                // usable, and the canvas would otherwise never re-render a block again.
+                if fonts.is_poisoned() {
+                    log::warn!("recovering the font lock after a panic");
+                    fonts.clear_poison();
+                }
+                Some(Arc::clone(fonts))
+            }
             _ => None,
         }
     }
@@ -176,5 +184,32 @@ impl Services {
             }
             Err(error) => Err(error.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_panic_while_holding_the_fonts_does_not_lock_them_for_good() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut services = Services::new(&eframe::egui::Context::default(), AppPaths::from_data_root(dir.path()));
+        let started = Instant::now();
+        let fonts = loop {
+            if let Some(fonts) = services.fonts() {
+                break fonts;
+            }
+            assert!(started.elapsed() < Duration::from_secs(20), "font system loads");
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        let held = Arc::clone(&fonts);
+        let job = std::thread::spawn(move || {
+            let _fonts = held.lock().unwrap();
+            panic!("render failed");
+        });
+        assert!(job.join().is_err());
+        assert!(fonts.is_poisoned());
+        assert!(services.fonts().unwrap().lock().is_ok(), "the next frame gets the fonts again");
     }
 }

@@ -51,7 +51,9 @@ impl Thumbnails {
         let chapter_id = chapter.id.clone();
         let page_id = page.id.clone();
         worker.spawn(move || {
-            let image = path.ok_or_else(|| "원본 이미지 없음".to_owned()).and_then(|path| decode(&path));
+            let image = path
+                .ok_or_else(|| "원본 이미지 없음".to_owned())
+                .and_then(|path| crate::worker::catch_panic(|| decode(&path)).and_then(|image| image));
             AppEvent::Thumbnail(Box::new(ThumbLoad { chapter_id, page_id, image }))
         });
     }

@@ -195,7 +195,7 @@ impl Editor {
         self.status = "PSD를 만드는 중…".into();
         let chapter_id = self.chapter.id.clone();
         worker.spawn(move || {
-            let result = job().and_then(|bytes| {
+            let result = crate::worker::catch_panic(job).and_then(|bytes| bytes).and_then(|bytes| {
                 let path = write_unique_download(&filename, &bytes)?;
                 let meta = ExportedPsdMeta {
                     exported_at: mtt_core::time::now_iso(),
