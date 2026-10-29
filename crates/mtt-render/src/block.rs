@@ -290,6 +290,40 @@ struct TextItem {
     x: f64,
     y: f64,
     align: TextAlign,
+    form: CellForm,
+}
+
+/// How a vertical text cell is set (typesetting v2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CellForm {
+    /// As in horizontal text.
+    Upright,
+    /// Turned a quarter clockwise about its em box: brackets, dashes, waves, ellipses.
+    Rotated,
+    /// A horizontal run in one cell (tate-chu-yoko), narrowed to the em when wider.
+    Across,
+}
+
+/// Characters set sideways in vertical text (what the `vert` forms of CJK fonts do).
+const ROTATED_IN_VERTICAL: &[char] = &[
+    '…', '‥', '⋯', '—', '―', '–', '-', '~', '～', '〜', 'ー', '(', ')', '（', '）', '[', ']', '［', '］', '{', '}',
+    '｛', '｝', '<', '>', '＜', '＞', '〈', '〉', '《', '》', '「', '」', '『', '』', '【', '】', '〔', '〕', '“', '”',
+    '‘', '’',
+];
+
+/// The form of the vertical cell `cell` ([`vertical_units`]) under v2.
+fn vertical_cell_form(cell: &str) -> CellForm {
+    let mut chars = cell.chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) if ROTATED_IN_VERTICAL.contains(&ch) => CellForm::Rotated,
+        _ if cell == CENTERED_PERIOD_ELLIPSIS => CellForm::Rotated,
+        (Some(_), Some(_))
+            if cell.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '!' | '?' | '！' | '？')) =>
+        {
+            CellForm::Across
+        }
+        _ => CellForm::Upright,
+    }
 }
 
 /// A run of the item placed at `x` (left edge).
@@ -301,8 +335,7 @@ struct PlacedSegment {
 }
 
 struct EllipsisDots {
-    centers: [f64; 3],
-    center_y: f64,
+    centers: [(f64, f64); 3],
     radius: f64,
 }
 
@@ -453,6 +486,7 @@ impl<'a> BlockPainter<'a> {
                 x,
                 y: start_y + index as f64 * line_height,
                 align: self.block.text_align,
+                form: CellForm::Upright,
             })
             .collect();
         (items, PixelRect { left: text_left, top: start_y, width: widest, height: total_height })
@@ -496,6 +530,7 @@ impl<'a> BlockPainter<'a> {
                     x: first_x - column as f64 * pitch,
                     y: start_y + index as f64 * advance,
                     align: TextAlign::Center,
+                    form: if v2 { vertical_cell_form(cell) } else { CellForm::Upright },
                 })
             })
             .collect();
@@ -597,12 +632,36 @@ impl<'a> BlockPainter<'a> {
                 self.append_glyphs(&mut builder, &segment.text, segment.x, item.y);
             }
         }
+        let mut glyphs = builder.finish();
+        let form = match item.form {
+            CellForm::Upright => None,
+            CellForm::Rotated => {
+                Some(Transform::from_rotate_at(90.0, item.x as f32, (item.y + self.font_size / 2.0) as f32))
+            }
+            CellForm::Across => {
+                let left = segments.first().map_or(item.x, |segment| segment.x);
+                let right = segments.last().map_or(item.x, |segment| segment.x + segment.advance);
+                let squeeze = (self.font_size / (right - left).max(f64::EPSILON)).min(1.0) as f32;
+                (squeeze < 1.0)
+                    .then(|| Transform::from_row(squeeze, 0.0, 0.0, 1.0, item.x as f32 * (1.0 - squeeze), 0.0))
+            }
+        };
+        if let Some(form) = form {
+            glyphs = glyphs.and_then(|path| path.transform(form));
+            for dots in &mut dots {
+                for center in &mut dots.centers {
+                    let mut point = [tiny_skia::Point::from_xy(center.0 as f32, center.1 as f32)];
+                    form.map_points(&mut point);
+                    *center = (f64::from(point[0].x), f64::from(point[0].y));
+                }
+            }
+        }
         let underline =
             (self.block.style.text_decoration.unwrap_or_default() == TextDecoration::Underline).then(|| {
                 let width = measure_text_width(self.ctx, self.fonts, self.block, &item.text, self.font_size);
                 (aligned_start(item.x, width, item.align), item.y + self.font_size * 1.05, width)
             });
-        ItemGeometry { glyphs: builder.finish(), dots, pivot_y: item.y + self.font_size / 2.0, underline }
+        ItemGeometry { glyphs, dots, pivot_y: item.y + self.font_size / 2.0, underline }
     }
 
     fn append_glyphs(&mut self, builder: &mut PathBuilder, text: &str, x: f64, top: f64) {
@@ -638,8 +697,11 @@ impl<'a> BlockPainter<'a> {
             .unwrap_or(fs * ELLIPSIS_DOT_RADIUS_RATIO);
         let radius = (fs * 0.045).max((fs * 0.09).min(measured));
         let spacing = (radius * 2.8).max((fs * ELLIPSIS_DOT_SPACING_RATIO).min(advance / 3.0));
-        let center_x = segment.x + advance / 2.0;
-        EllipsisDots { centers: [center_x - spacing, center_x, center_x + spacing], center_y: y + fs / 2.0, radius }
+        let (center_x, center_y) = (segment.x + advance / 2.0, y + fs / 2.0);
+        EllipsisDots {
+            centers: [(center_x - spacing, center_y), (center_x, center_y), (center_x + spacing, center_y)],
+            radius,
+        }
     }
 
     fn with_skew(&self, canvas: &mut Canvas, pivot_y: f64, draw: impl FnOnce(&mut Canvas)) {
@@ -656,8 +718,7 @@ impl<'a> BlockPainter<'a> {
     }
 
     fn draw_dots(canvas: &mut Canvas, dots: &EllipsisDots, radius: f64, shader: Shader<'_>) {
-        let centers: Vec<(f64, f64)> = dots.centers.iter().map(|x| (*x, dots.center_y)).collect();
-        if let Some(path) = circles_path(&centers, radius) {
+        if let Some(path) = circles_path(&dots.centers, radius) {
             canvas.fill_path(&path, shader);
         }
     }
@@ -984,6 +1045,56 @@ mod tests {
         // Down by the same baseline nudge as horizontal text.
         let nudge = text.font_size_px * RENDER_Y_OFFSET_RATIO;
         assert!(dx.abs() < 1e-9 && (dy - nudge).abs() < 1e-9, "{dx}, {dy}");
+    }
+
+    /// Width and height of the drawn pixels.
+    fn ink_size(raster: &BlockRaster) -> Option<(u32, u32)> {
+        let width = raster.pixmap.width();
+        let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+        for (index, pixel) in raster.pixmap.pixels().iter().enumerate() {
+            if pixel.alpha() > 0 {
+                let (x, y) = (index as u32 % width, index as u32 / width);
+                (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+            }
+        }
+        (left <= right).then(|| (right - left + 1, bottom - top + 1))
+    }
+
+    #[test]
+    fn v2_sets_marks_sideways_and_short_runs_across_in_vertical_text() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let render = |ctx: &mut FontContext, text: &str, version: Option<u32>| {
+            let mut block = TranslationBlock {
+                bbox: BBox::new(100.0, 100.0, 100.0, 300.0),
+                translated_text: text.into(),
+                render_direction: RenderTextDirection::Vertical,
+                layout_version: version,
+                ..TranslationBlock::default()
+            };
+            block.style.auto_fit_text = Some(false);
+            block.style.font_size_px = Some(40.0);
+            ink_size(&render_block(ctx, page, &block, BlockRenderOptions::default()).unwrap())
+        };
+        // The ellipsis dots are drawn without a font.
+        let (width, height) = render(&mut ctx, "…", None).unwrap();
+        assert!(width > height, "{width}x{height}");
+        let (width, height) = render(&mut ctx, "…", Some(2)).unwrap();
+        assert!(height > width, "{width}x{height}");
+        // Glyphs only where some font draws them.
+        if let Some((width, height)) = render(&mut ctx, "—", None) {
+            assert!(width > height, "{width}x{height}");
+            let (width, height) = render(&mut ctx, "—", Some(2)).unwrap();
+            assert!(height > width, "{width}x{height}");
+        }
+        if let Some((_, stacked)) = render(&mut ctx, "!?", None) {
+            let (width, across) = render(&mut ctx, "!?", Some(2)).unwrap();
+            assert!(across + 20 < stacked && width <= 41, "one cell: {across} vs {stacked}");
+        }
+        if let Some((width, _)) = render(&mut ctx, "2024", Some(2)) {
+            assert!(width <= 41, "longer runs stay upright, one per cell");
+        }
     }
 
     #[test]

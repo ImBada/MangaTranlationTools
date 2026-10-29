@@ -937,13 +937,57 @@ pub fn measure_text_width(
     f64::from(run.advance_em) * font_size + spacing
 }
 
-/// The characters of vertical text, one per cell: whitespace dropped.
+/// The characters of vertical text, one per cell, whitespace dropped. Under v2 ([`by_grapheme`]
+/// is `graphemes`) a cell also holds a run of up to two digits or Latin letters set across
+/// the column (tate-chu-yoko), `!`/`?` in pairs, or a `...` ellipsis.
 pub(crate) fn vertical_units(text: &str, graphemes: bool) -> Vec<&str> {
-    text_units(text, graphemes)
-        .into_iter()
-        .map(|(_, unit)| unit)
-        .filter(|unit| !unit.chars().all(is_js_whitespace))
-        .collect()
+    let units: Vec<(usize, &str)> =
+        text_units(text, graphemes).into_iter().filter(|(_, unit)| !unit.chars().all(is_js_whitespace)).collect();
+    if !graphemes {
+        return units.into_iter().map(|(_, unit)| unit).collect();
+    }
+    #[derive(PartialEq, Clone, Copy)]
+    enum Run {
+        Alphanumeric,
+        Mark,
+        Period,
+    }
+    let run_of = |unit: &str| match unit {
+        "!" | "?" | "！" | "？" => Some(Run::Mark),
+        "." => Some(Run::Period),
+        _ if unit.len() == 1 && unit.as_bytes()[0].is_ascii_alphanumeric() => Some(Run::Alphanumeric),
+        _ => None,
+    };
+    let mut cells = Vec::with_capacity(units.len());
+    let mut index = 0;
+    while index < units.len() {
+        let Some(run) = run_of(units[index].1) else {
+            cells.push(units[index].1);
+            index += 1;
+            continue;
+        };
+        // The run: same kind, nothing (not even a space) in between.
+        let mut end = index + 1;
+        while end < units.len()
+            && run_of(units[end].1) == Some(run)
+            && units[end].0 == units[end - 1].0 + units[end - 1].1.len()
+        {
+            end += 1;
+        }
+        let group = match run {
+            Run::Alphanumeric if end - index <= 2 => end - index,
+            Run::Alphanumeric => 1,
+            Run::Mark => 2,
+            Run::Period => 3,
+        };
+        while index < end {
+            let size = if run == Run::Period && end - index < 3 { 1 } else { group.min(end - index) };
+            let (start, (last_start, last)) = (units[index].0, units[index + size - 1]);
+            cells.push(&text[start..last_start + last.len()]);
+            index += size;
+        }
+    }
+    cells
 }
 
 /// JavaScript `\s` (Unicode White_Space plus U+FEFF).
@@ -1301,6 +1345,16 @@ mod tests {
         let nfd = TranslationBlock { translated_text: "\u{1112}\u{1161}\u{11AB}".into(), ..block.clone() };
         assert_eq!(display_text(&nfd), "한");
         assert_eq!(display_text(&TranslationBlock { layout_version: None, ..nfd }).chars().count(), 3);
+    }
+
+    #[test]
+    fn v2_vertical_cells_group_short_runs() {
+        let text = "「그래…」—2024년 OK!? 10.... A!!!";
+        assert_eq!(
+            vertical_units(text, true),
+            ["「", "그", "래", "…", "」", "—", "2", "0", "2", "4", "년", "OK", "!?", "10", "...", ".", "A", "!!", "!"]
+        );
+        assert_eq!(vertical_units(text, false).len(), text.chars().filter(|ch| *ch != ' ').count());
     }
 
     #[test]
