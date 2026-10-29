@@ -296,7 +296,7 @@ impl Weights {
                 }
                 return Err(format!("{name}: {:?}", view.dtype()));
             }
-            let data = view.data().chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])).collect();
+            let data = view.data().as_chunks::<4>().0.iter().map(|bytes| f32::from_le_bytes(*bytes)).collect();
             tensors.insert(name, Array { shape: view.shape().to_vec(), data });
         }
         Ok(Self(tensors))
