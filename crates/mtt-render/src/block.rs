@@ -16,8 +16,8 @@ use crate::layout::{
     BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, font_background_enabled, font_background_opacity,
     font_background_radius_px, font_background_scale, is_js_whitespace, letter_spacing_px, measure_text_width,
     resolve_block_text_layout, scaled_rect, screentone_dot_radius_px, screentone_tile_size_px,
-    secondary_outline_enabled, shaped_lines, synthetic_bold_stroke_width_px, synthetic_italic_skew_x,
-    text_position_factors, text_shape_strips, wrap_text_to_width,
+    secondary_outline_enabled, shaped_lines, style_line_height, synthetic_bold_stroke_width_px,
+    synthetic_italic_skew_x, text_position_factors, text_shape_strips, wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -199,7 +199,7 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
         font_name: ctx.post_script_name(&lines.concat(), &fonts.base),
         lines,
         font_size_px,
-        line_height_px: font_size_px * block.line_height(),
+        line_height_px: font_size_px * style_line_height(block),
         letter_spacing_px: letter_spacing_px(block, font_size_px),
         text_rect,
         synthetic_bold: fonts.synthetic_bold,
@@ -415,7 +415,7 @@ impl<'a> BlockPainter<'a> {
             }
             None => wrap_text_to_width(self.ctx, self.fonts, self.block, self.text, self.font_size, fit_width),
         };
-        let line_height = self.font_size * self.block.line_height();
+        let line_height = self.font_size * style_line_height(self.block);
         let total_height = lines.len() as f64 * line_height;
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy + ((line_height - self.font_size) / 2.0).max(0.0);
@@ -450,7 +450,7 @@ impl<'a> BlockPainter<'a> {
         inner_height: f64,
     ) -> (Vec<TextItem>, PixelRect) {
         let chars: Vec<char> = self.text.chars().filter(|ch| !is_js_whitespace(*ch)).collect();
-        let line_height = self.font_size * self.block.line_height();
+        let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
         let count = chars.len() as f64;

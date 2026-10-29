@@ -4,9 +4,9 @@ use std::collections::HashMap;
 
 use mtt_core::font_presets::{
     DEFAULT_FONT_BACKGROUND_OPACITY, DEFAULT_FONT_BACKGROUND_RADIUS_PX, DEFAULT_FONT_BACKGROUND_SCALE,
-    DEFAULT_OVERLAY_FONT_FAMILY, DEFAULT_OVERLAY_FONT_WEIGHT, DEFAULT_SCREENTONE_FILL_DENSITY,
-    DEFAULT_SCREENTONE_FILL_INTENSITY, MAX_FONT_BACKGROUND_RADIUS_PX, MAX_FONT_BACKGROUND_SCALE,
-    MIN_FONT_BACKGROUND_RADIUS_PX, MIN_FONT_BACKGROUND_SCALE,
+    DEFAULT_FONT_SIZE_PX, DEFAULT_LINE_HEIGHT, DEFAULT_OVERLAY_FONT_FAMILY, DEFAULT_OVERLAY_FONT_WEIGHT,
+    DEFAULT_SCREENTONE_FILL_DENSITY, DEFAULT_SCREENTONE_FILL_INTENSITY, MAX_FONT_BACKGROUND_RADIUS_PX,
+    MAX_FONT_BACKGROUND_SCALE, MIN_FONT_BACKGROUND_RADIUS_PX, MIN_FONT_BACKGROUND_SCALE,
 };
 use mtt_core::geometry::{
     bbox_to_pixels, clamp, clamp_text_padding_px, resolve_block_render_bbox, text_shape_inner_rect, text_shape_span,
@@ -16,6 +16,11 @@ use mtt_core::model::{RenderTextDirection, TextAlign, TextFontStyle, TextPositio
 use crate::fonts::{BOLD_WEIGHT_THRESHOLD, FontContext, FontSpec};
 
 const MIN_FONT_SIZE_PX: f64 = 2.0;
+/// Style numbers past these (only reachable by editing the data by hand) are clamped, so
+/// size arithmetic stays finite. The editor allows 8..=999px and 0.8..=2.0.
+const MAX_FONT_SIZE_PX: f64 = 10_000.0;
+const MIN_LINE_HEIGHT: f64 = 0.1;
+const MAX_LINE_HEIGHT: f64 = 10.0;
 const MAX_BLOCK_PADDING_PX: f64 = 14.0;
 const MIN_INNER_SIZE_PX: f64 = 1.0;
 const BLOCK_BORDER_PX: f64 = 1.0;
@@ -182,10 +187,24 @@ pub fn text_position_factors(position: Option<TextPosition>) -> (f64, f64) {
     }
 }
 
+/// The block's font size, kept within what the renderer can lay out.
+pub fn style_font_size_px(block: &TranslationBlock) -> f64 {
+    let size = block.font_size_px();
+    if size.is_finite() { size.clamp(1.0, MAX_FONT_SIZE_PX) } else { DEFAULT_FONT_SIZE_PX }
+}
+
+/// The block's line height (a multiple of the font size), kept within what the renderer
+/// can lay out.
+pub fn style_line_height(block: &TranslationBlock) -> f64 {
+    let height = block.line_height();
+    if height.is_finite() { height.clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT) } else { DEFAULT_LINE_HEIGHT }
+}
+
 /// `resolveTextLetterSpacingPx`: letter spacing scales with the rendered font size.
 pub fn letter_spacing_px(block: &TranslationBlock, font_size: f64) -> f64 {
-    let source = block.style.font_size_px.unwrap_or(font_size).max(1.0);
-    block.style.letter_spacing_px.unwrap_or(0.0) * (font_size / source)
+    let source = block.style.font_size_px.map_or(font_size, |_| style_font_size_px(block)).max(1.0);
+    let spacing = block.style.letter_spacing_px.filter(|value| value.is_finite()).unwrap_or(0.0);
+    spacing.clamp(-MAX_FONT_SIZE_PX, MAX_FONT_SIZE_PX) * (font_size / source)
 }
 
 pub fn secondary_outline_enabled(block: &TranslationBlock) -> bool {
@@ -356,7 +375,7 @@ fn layout_in(
     let fit_inner_width = (inner.width - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let fit_inner_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let scale = render_scale(page, stage);
-    let preferred = (block.font_size_px() * scale).floor().max(MIN_FONT_SIZE_PX);
+    let preferred = (style_font_size_px(block) * scale).floor().max(MIN_FONT_SIZE_PX);
     let auto_fit = block.style.auto_fit_text.unwrap_or(true);
     let v2 = block.layout_version() >= 2;
     let max_font_size = if auto_fit {
@@ -366,7 +385,7 @@ fn layout_in(
             Some(glyph) => box_cap.min(glyph * SOURCE_GLYPH_GROWTH),
             None => box_cap,
         };
-        MIN_FONT_SIZE_PX.max(preferred).max(cap)
+        MIN_FONT_SIZE_PX.max(preferred).max(cap).min(MAX_FONT_SIZE_PX)
     } else {
         preferred
     };
@@ -441,7 +460,7 @@ fn fit_shape(
     rect: PixelRect,
     inner: PixelRect,
 ) -> Option<ShapedLines> {
-    let line_height = font_size * block.line_height();
+    let line_height = font_size * style_line_height(block);
     let spacing = letter_spacing_px(block, font_size);
     let (left, right) = (inner.left + TEXT_MEASURE_GUARD_PX, inner.left + inner.width - TEXT_MEASURE_GUARD_PX);
     let fit_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
@@ -582,14 +601,14 @@ fn resolve_text_font_size(
     inner_width: f64,
     inner_height: f64,
 ) -> f64 {
-    let capped = max_font_size.floor().max(MIN_FONT_SIZE_PX);
+    let capped = max_font_size.floor().clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
     if !block.style.auto_fit_text.unwrap_or(true) || text.trim().is_empty() {
         return capped;
     }
     let floor = min_font_size.ceil().min(capped) as i64;
     let (mut low, mut high, mut best) = (floor, capped as i64, floor);
     while low <= high {
-        let mid = (low + high).div_euclid(2);
+        let mid = low + (high - low) / 2;
         if does_text_fit(ctx, fonts, block, text, mid as f64, inner_width, inner_height) {
             best = mid;
             low = mid + 1;
@@ -609,7 +628,7 @@ fn does_text_fit(
     inner_width: f64,
     inner_height: f64,
 ) -> bool {
-    let line_height = font_size * block.line_height();
+    let line_height = font_size * style_line_height(block);
     if block.render_direction == RenderTextDirection::Vertical {
         return measure_vertical_text(block, text, font_size, inner_width, inner_height, line_height);
     }
@@ -1128,6 +1147,32 @@ mod tests {
         assert_eq!(text(lines), ["ab", "cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[5.0, 5.0, 5.0], 1.0, 0.0).map(text).unwrap(), ["ab cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[4.0, 4.0, 1.0], 1.0, 0.0), None, "\"ef\" is too wide");
+    }
+
+    #[test]
+    fn huge_style_numbers_lay_out_without_overflowing() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        for auto_fit in [true, false] {
+            let mut block = TranslationBlock {
+                bbox: BBox::new(100.0, 100.0, 300.0, 200.0),
+                translated_text: "가나다".into(),
+                ..TranslationBlock::default()
+            };
+            block.style.auto_fit_text = Some(auto_fit);
+            block.style.font_size_px = Some(1e300);
+            block.style.line_height = Some(1e300);
+            block.style.letter_spacing_px = Some(-1e300);
+            let fonts = BlockFonts::resolve(&ctx, &block);
+            let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다", page, page);
+            assert!(layout.font_size_px.is_finite() && layout.font_size_px <= MAX_FONT_SIZE_PX, "{layout:?}");
+            crate::block::render_block(&mut ctx, page, &block, crate::block::BlockRenderOptions::default());
+            // A box far larger than any page.
+            block.bbox = BBox::new(0.0, 0.0, 1e300, 1e300);
+            let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다", page, page);
+            assert!(layout.font_size_px.is_finite() && layout.font_size_px <= MAX_FONT_SIZE_PX, "{layout:?}");
+        }
     }
 
     #[test]
