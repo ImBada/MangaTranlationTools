@@ -186,7 +186,7 @@ fn segment(
 }
 
 /// RGB with any transparency over white.
-fn over_white(image: &RgbaImage) -> RgbImage {
+pub(crate) fn over_white(image: &RgbaImage) -> RgbImage {
     RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let [r, g, b, a] = image.get_pixel(x, y).0;
         let over = |value: u8| ((u32::from(value) * u32::from(a) + 255 * (255 - u32::from(a)) + 127) / 255) as u8;

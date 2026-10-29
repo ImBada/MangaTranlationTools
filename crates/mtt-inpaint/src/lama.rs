@@ -2,10 +2,12 @@
 //! (`lama_torch.rs`, `torch_runtime.rs`), or a command set with
 //! `MANGA_TRANSLATOR_LAMA_COMMAND`.
 
+use std::borrow::Cow;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+use image::buffer::ConvertBuffer;
 use image::{GrayImage, RgbaImage};
 use mtt_core::paths::AppPaths;
 
@@ -75,8 +77,15 @@ impl Lama {
     }
 
     /// Inpaints a crop. `mask` is coverage (white = inpaint); the result matches `source`
-    /// outside it.
+    /// outside it. Transparent pixels go in over white, as the text segmentation model sees
+    /// them, rather than as whatever color they hold (often black).
     pub fn inpaint(&self, source: &RgbaImage, mask: &GrayImage) -> Result<RgbaImage, String> {
+        let source: Cow<'_, RgbaImage> = if source.pixels().all(|pixel| pixel[3] == 255) {
+            Cow::Borrowed(source)
+        } else {
+            Cow::Owned(crate::text_segmentation::over_white(source).convert())
+        };
+        let source = source.as_ref();
         match self {
             Self::Torch { model, runtime } => {
                 let model = MODEL.get(model, runtime, |device| TorchLama::load(model, device))?;
@@ -245,6 +254,21 @@ mod tests {
         let source = RgbaImage::from_pixel(4, 3, image::Rgba([1, 2, 3, 255]));
         let result = Lama::Command(command).inpaint(&source, &GrayImage::new(4, 3)).unwrap();
         assert_eq!(result, source);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn transparent_pixels_go_in_over_white() {
+        // The engine sees what `cp` hands back: a transparent black pixel as white, a half
+        // transparent one half way to white.
+        let command =
+            LamaCommand { program: PathBuf::from("/bin/cp"), args: vec!["{source}".into(), "{output}".into()] };
+        let mut source = RgbaImage::from_pixel(3, 1, image::Rgba([0, 0, 0, 0]));
+        source.put_pixel(1, 0, image::Rgba([0, 0, 0, 128]));
+        source.put_pixel(2, 0, image::Rgba([10, 20, 30, 255]));
+        let result = Lama::Command(command).inpaint(&source, &GrayImage::new(3, 1)).unwrap();
+        let pixels: Vec<[u8; 4]> = result.pixels().map(|pixel| pixel.0).collect();
+        assert_eq!(pixels, [[255, 255, 255, 255], [127, 127, 127, 255], [10, 20, 30, 255]]);
     }
 
     #[test]
