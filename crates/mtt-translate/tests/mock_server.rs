@@ -79,6 +79,7 @@ fn translates_with_retry_against_mock_server() {
         attempts: 3,
         concurrency: 1,
         agent: mtt_translate::client::job_agent(Duration::from_secs(30)),
+        instructions: None,
     };
     mtt_translate::verify_endpoint(&config).unwrap();
     let mut failures = Vec::new();
@@ -129,6 +130,7 @@ fn page_and_config(base_url: String, attempts: u32) -> (std::path::PathBuf, Tran
         attempts,
         concurrency: 1,
         agent: mtt_translate::client::job_agent(Duration::from_secs(30)),
+        instructions: None,
     };
     (page, config)
 }
@@ -215,7 +217,8 @@ fn translates_regions_with_close_ups() {
         )
         .unwrap();
     });
-    let (page, config) = page_and_config(base_url, 1);
+    let (page, mut config) = page_and_config(base_url, 1);
+    config = config.with_instructions("", "하루: 주인공");
     let regions = [
         mtt_translate::Region { id: 1, bbox: mtt_core::model::BBox::new(0.0, 0.0, 500.0, 500.0) },
         mtt_translate::Region { id: 2, bbox: mtt_core::model::BBox::new(500.0, 500.0, 500.0, 500.0) },
@@ -227,4 +230,5 @@ fn translates_regions_with_close_ups() {
     assert!(request.contains("Image 2: close-up of region 1."), "close-ups captioned");
     assert!(request.contains("Image 3: close-up of region 2."));
     assert!(request.contains("id: 2, x: 500, y: 500, w: 500, h: 500"), "regions listed");
+    assert!(request.contains("하루: 주인공"), "work notes in the prompt");
 }

@@ -77,6 +77,8 @@ pub struct AppSettings {
     pub translation_parallel: TranslationParallelSettings,
     pub nsfw_mode: bool,
     pub one_hand_mode: bool,
+    /// Added to every translation prompt (tone, house style).
+    pub translation_instructions: String,
     /// Keys written by newer versions of either app.
     #[serde(flatten)]
     pub extra: JsonMap,
@@ -103,6 +105,7 @@ impl Default for AppSettings {
             },
             nsfw_mode: false,
             one_hand_mode: false,
+            translation_instructions: String::new(),
             extra: JsonMap::new(),
         }
     }
@@ -112,8 +115,16 @@ fn field<'a>(map: Option<&'a serde_json::Map<String, Value>>, key: &str) -> Opti
     map.and_then(|map| map.get(key))
 }
 
-const KNOWN_KEYS: [&str; 7] =
-    ["modelProvider", "codex", "openAICompatible", "translationMode", "translationParallel", "nsfwMode", "oneHandMode"];
+const KNOWN_KEYS: [&str; 8] = [
+    "modelProvider",
+    "codex",
+    "openAICompatible",
+    "translationMode",
+    "translationParallel",
+    "nsfwMode",
+    "oneHandMode",
+    "translationInstructions",
+];
 
 impl AppSettings {
     /// `resolveDefaultAppSettings(env)`: built-in defaults overridden by
@@ -191,6 +202,10 @@ impl AppSettings {
             },
             nsfw_mode: bool_or(get("nsfwMode"), defaults.nsfw_mode),
             one_hand_mode: bool_or(get("oneHandMode"), defaults.one_hand_mode),
+            translation_instructions: get("translationInstructions")
+                .and_then(Value::as_str)
+                .map(|text| text.trim().to_owned())
+                .unwrap_or(defaults.translation_instructions),
             extra: record
                 .map(|map| {
                     map.iter()

@@ -64,6 +64,7 @@ pub fn top_bar(
                 ui.add(chevron());
             }
             chapter_menu(editor, ui, services, &mut action);
+            work_notes_dialog(editor, ui, services);
             let left_end = ui.min_rect().right();
             let row = ui.min_rect().y_range();
 
@@ -107,6 +108,54 @@ pub fn top_bar(
     action
 }
 
+/// `번역 메모`: the work's names, terms and tone, saved to its `work.json`.
+fn work_notes_dialog(editor: &mut Editor, ui: &egui::Ui, services: &mut Services) {
+    let Some(mut draft) = editor.work_notes_draft.take() else { return };
+    let ctx = ui.ctx().clone();
+    let (mut save, mut close) = (false, false);
+    theme::modal(
+        &ctx,
+        egui::Window::new("번역 메모")
+            .collapsible(false)
+            .resizable(false)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .min_width(420.0),
+        |ui| {
+            theme::hint(ui, "인물 이름, 고유명사, 말투처럼 이 작품의 모든 번역에서 지킬 내용을 적으세요.");
+            ui.add_space(4.0);
+            let response = ui.add(
+                egui::TextEdit::multiline(&mut draft)
+                    .hint_text("예:\n春香 → 하루카 (주인공, 반말)\n先輩 → 선배")
+                    .desired_rows(8)
+                    .desired_width(400.0),
+            );
+            if response.has_focus() {
+                editor.text_editing = true;
+            }
+            ui.add_space(6.0);
+            ui.horizontal(|ui| {
+                save = ui.button("저장").clicked();
+                close = ui.button("취소").clicked() || ui.input(|input| input.key_pressed(egui::Key::Escape));
+            });
+        },
+    );
+    if save {
+        let work = services.library.read_work(&editor.chapter.work_id).ok().flatten();
+        editor.status = match work {
+            Some(mut work) => {
+                work.translation_notes = draft.trim().to_owned();
+                match services.library.write_work(&work) {
+                    Ok(()) => "번역 메모를 저장했습니다. 다음 번역부터 반영됩니다.".into(),
+                    Err(error) => format!("번역 메모를 저장하지 못했습니다: {error}"),
+                }
+            }
+            None => "작품 정보를 찾지 못해 번역 메모를 저장하지 못했습니다.".into(),
+        };
+    } else if !close {
+        editor.work_notes_draft = Some(draft);
+    }
+}
+
 /// Chapter title as a menu: every work's chapters, and the import entries.
 fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, action: &mut Option<EditorAction>) {
     let title = theme::semibold(ellipsize(&editor.chapter.title, 18));
@@ -148,6 +197,22 @@ fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
             }
         });
         ui.separator();
+        if ui
+            .button(theme::icon_text(icon::TRANSLATE, "번역 메모…"))
+            .on_hover_text("이 작품의 인물 이름·용어·말투. 번역할 때마다 모델에 전달됩니다")
+            .clicked()
+        {
+            editor.work_notes_draft = Some(
+                services
+                    .library
+                    .read_work(&editor.chapter.work_id)
+                    .ok()
+                    .flatten()
+                    .map(|work| work.translation_notes)
+                    .unwrap_or_default(),
+            );
+            ui.close();
+        }
         ui.add_enabled_ui(!job_active, |ui| {
             ui.menu_button(theme::icon_text(icon::DOWNLOAD_SIMPLE, "새로 가져오기"), |ui| {
                 for (mode, label) in [

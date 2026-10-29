@@ -159,7 +159,7 @@ impl Editor {
         self.chapter.status = resolve_chapter_status(&self.chapter.pages);
         self.mark_chapter_dirty();
 
-        let config = TranslationConfig::from_settings(&services.settings);
+        let config = self.translation_config(services);
         let cancel = Arc::new(AtomicBool::new(false));
         self.translation = Some(TranslationJob {
             cancel: Arc::clone(&cancel),
@@ -258,7 +258,7 @@ impl Editor {
             blocks.iter().enumerate().map(|(index, block)| Region { id: index as u32 + 1, bbox: block.bbox }).collect();
         let block_ids: Vec<String> = blocks.into_iter().map(|block| block.id).collect();
         self.commit_checkpoint();
-        let config = TranslationConfig::from_settings(&services.settings);
+        let config = self.translation_config(services);
         let cancel = Arc::new(AtomicBool::new(false));
         self.translation = Some(TranslationJob {
             cancel: Arc::clone(&cancel),
@@ -307,6 +307,19 @@ impl Editor {
                 send(TranslationEvent::Finished { cancelled, error });
             })
             .expect("spawn block translation thread");
+    }
+
+    /// Request settings plus the general instructions and this work's notes.
+    fn translation_config(&self, services: &Services) -> TranslationConfig {
+        let notes = services
+            .library
+            .read_work(&self.chapter.work_id)
+            .ok()
+            .flatten()
+            .map(|work| work.translation_notes)
+            .unwrap_or_default();
+        TranslationConfig::from_settings(&services.settings)
+            .with_instructions(&services.settings.translation_instructions, &notes)
     }
 
     pub fn cancel_translation(&mut self) {

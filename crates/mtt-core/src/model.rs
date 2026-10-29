@@ -762,6 +762,9 @@ pub struct Work {
     pub created_at: String,
     #[serde(default)]
     pub updated_at: String,
+    /// Names, terms and tone for this work, added to every translation prompt.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub translation_notes: String,
     #[serde(flatten)]
     pub extra: JsonMap,
 }

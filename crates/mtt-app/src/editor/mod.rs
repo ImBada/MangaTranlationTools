@@ -406,6 +406,8 @@ pub struct Editor {
     pub pending_block_step: i32,
     /// "다시 번역" on the selected blocks, started next frame (where the services are).
     pub block_translation_requested: bool,
+    /// The work's translation notes being edited (`작품 › 화 › 번역 메모`).
+    pub work_notes_draft: Option<String>,
     /// The shortcut sheet (`?` or the status bar button).
     pub shortcut_sheet: bool,
 }
@@ -516,6 +518,7 @@ impl Editor {
             thumbnails: Default::default(),
             pending_block_step: 0,
             block_translation_requested: false,
+            work_notes_draft: None,
             shortcut_sheet: false,
         };
         editor.reset_checkpoint();
@@ -2290,6 +2293,7 @@ impl Editor {
         // new selection shows this frame.
         let step = std::mem::take(&mut self.pending_block_step);
         let dialog_open = self.app_modal_open
+            || self.work_notes_draft.is_some()
             || self.find.open
             || self.preset_backup_dialog.is_some()
             || self.character_dialog.is_some();

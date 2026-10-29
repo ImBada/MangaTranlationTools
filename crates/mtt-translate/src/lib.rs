@@ -100,6 +100,8 @@ pub struct TranslationConfig {
     pub concurrency: usize,
     /// Shared by the job's requests (connection reuse).
     pub agent: ureq::Agent,
+    /// The user's instructions and the work's notes, added to every prompt.
+    pub instructions: Option<String>,
 }
 
 /// Pause before retrying after a server or network error: 1 s doubling to 20 s, or what
@@ -172,7 +174,23 @@ impl TranslationConfig {
             attempts: env_number("MANGA_TRANSLATOR_PAGE_RETRIES").map_or(DEFAULT_PAGE_ATTEMPTS, |v| v.max(1.0) as u32),
             concurrency,
             agent: client::job_agent(REQUEST_TIMEOUT),
+            instructions: None,
         }
+        .with_instructions(&settings.translation_instructions, "")
+    }
+
+    /// Sets the prompt additions: general `instructions` and `notes` for the work.
+    pub fn with_instructions(mut self, instructions: &str, notes: &str) -> Self {
+        let mut parts = Vec::new();
+        if !instructions.trim().is_empty() {
+            parts.push(format!("Additional instructions from the user:\n{}", instructions.trim()));
+        }
+        if !notes.trim().is_empty() {
+            parts
+                .push(format!("Notes for this work (use these names, terms and tone consistently):\n{}", notes.trim()));
+        }
+        self.instructions = (!parts.is_empty()).then(|| parts.join("\n\n"));
+        self
     }
 
     pub fn describe(&self) -> String {
@@ -199,7 +217,11 @@ fn request_attempt<T>(
     parse: impl Fn(&str) -> Result<T, String>,
     cancelled: &dyn Fn() -> bool,
 ) -> Result<T, SendError> {
-    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, prompt, variants);
+    let prompt = match &config.instructions {
+        Some(instructions) => format!("{prompt}\n\n{instructions}"),
+        None => prompt.to_owned(),
+    };
+    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, &prompt, variants);
     let output = client::send_cancellable(&config.agent, &config.endpoint, body, cancelled)?;
     parse(&output).map_err(|error| SendError {
         message: format!("{error} 응답 미리보기: {}", client::preview(&output, 240)),
@@ -455,6 +477,14 @@ mod tests {
         assert!(compatible.include_enhanced_variant);
         assert_eq!(compatible.concurrency, 4);
         assert!(matches!(compatible.endpoint.api, Api::ChatCompletions { max_tokens: 1400, .. }));
+        assert_eq!(compatible.instructions, None);
+
+        settings.translation_instructions = "  반말로  ".into();
+        let config = TranslationConfig::from_settings(&settings).with_instructions("반말로", "주인공: 하루");
+        let text = config.instructions.unwrap();
+        assert!(text.starts_with("Additional instructions from the user:\n반말로\n\n"), "{text}");
+        assert!(text.ends_with("consistently):\n주인공: 하루"), "{text}");
+        assert_eq!(TranslationConfig::from_settings(&settings).with_instructions("", " ").instructions, None);
     }
 
     #[test]

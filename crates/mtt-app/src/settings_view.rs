@@ -476,6 +476,18 @@ impl SettingsView {
                 .on_hover_text("API·로컬 모델 한도에 맞춰 조절하세요");
             });
         });
+        row(ui, "추가 지시문", &mut |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut draft.translation_instructions)
+                    .hint_text("예: 반말은 반말로, 의성어는 짧게")
+                    .desired_rows(3)
+                    .desired_width(300.0),
+            );
+            theme::hint(
+                ui,
+                "모든 번역 요청 끝에 붙습니다. 인물 이름·용어는 작품마다 작품 › 화 메뉴의 번역 메모에 적으세요.",
+            );
+        });
         ui.add_space(6.0);
         ui.separator();
         ui.add_space(6.0);
