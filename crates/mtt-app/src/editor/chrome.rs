@@ -243,7 +243,7 @@ fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, 
             if theme::confirm(
                 "페이지 재번역",
                 "정말 재번역 하시겠습니까?",
-                "기존 번역 결과와 수정 내용이 이 페이지에서 덮어써집니다.",
+                "번역이 만든 블록은 새 번역으로 바뀝니다. 직접 고치거나 만든 블록은 그대로 둡니다.",
             ) {
                 editor.start_translation(RunMode::CurrentPage, services, worker);
             }
@@ -252,7 +252,7 @@ fn ai_controls(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, 
             if theme::confirm(
                 "전체 다시 번역",
                 "검수 완료로 표시하지 않은 모든 페이지를 다시 번역할까요?",
-                "그 페이지들의 기존 번역과 직접 고친 내용이 새 번역으로 바뀝니다. 지킬 페이지는 먼저 검수 완료로 표시하세요.",
+                "그 페이지들에서 번역이 만든 블록이 새 번역으로 바뀝니다. 직접 고치거나 만든 블록은 그대로 둡니다. 페이지 전체를 지키려면 먼저 검수 완료로 표시하세요.",
             ) {
                 editor.start_translation(RunMode::All, services, worker);
             }
@@ -575,7 +575,7 @@ fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wo
         && theme::confirm(
             "페이지 재번역",
             "정말 재번역 하시겠습니까?",
-            "기존 번역 결과와 수정 내용이 이 페이지에서 덮어써집니다.",
+            "번역이 만든 블록은 새 번역으로 바뀝니다. 직접 고치거나 만든 블록은 그대로 둡니다.",
         )
     {
         editor.start_translation(RunMode::CurrentPage, services, worker);

@@ -6,8 +6,9 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Instant;
 
 use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block_type_font_presets};
+use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
-use mtt_core::model::{PageAnalysisStatus, PageRecord, TranslationBlock};
+use mtt_core::model::{BBox, PageAnalysisStatus, PageRecord, TranslationBlock};
 use mtt_translate::{TranslationConfig, overlay_item_to_block, translate_page};
 
 use super::Editor;
@@ -48,6 +49,8 @@ pub struct TranslationJob {
     pub warnings: Vec<String>,
     pub attempts: u32,
     pub mode: RunMode,
+    /// The user's own blocks left in place on translated pages.
+    pub kept_blocks: usize,
     page_ids: Vec<String>,
 }
 
@@ -139,6 +142,7 @@ impl Editor {
             warnings: Vec::new(),
             attempts: config.attempts.max(1),
             mode,
+            kept_blocks: 0,
             page_ids: ids,
         });
         let chapter_id = self.chapter.id.clone();
@@ -275,9 +279,14 @@ impl Editor {
                 self.status = match (error, cancelled) {
                     (Some(error), _) => error,
                     (None, true) => "작업이 취소됨".into(),
-                    (None, false) => summarize_warnings(&job.warnings)
-                        .unwrap_or("번역 완료 · 문장을 확인한 뒤 인페인트(3)로 원문 글자를 지우세요")
-                        .into(),
+                    (None, false) => {
+                        let summary = summarize_warnings(&job.warnings)
+                            .unwrap_or("번역 완료 · 문장을 확인한 뒤 인페인트(3)로 원문 글자를 지우세요");
+                        match job.kept_blocks {
+                            0 => summary.into(),
+                            kept => format!("{summary} · 직접 고치거나 만든 블록 {kept}개는 그대로 뒀습니다"),
+                        }
+                    }
                 };
                 return Some(success);
             }
@@ -289,8 +298,8 @@ impl Editor {
         self.chapter.pages.iter().find(|page| page.id == page_id).map(|page| page.name.clone()).unwrap_or_default()
     }
 
-    /// Replaces a page's blocks with the translation (block-type presets applied) as one
-    /// undo step (`updatePageAfterAnalysis`).
+    /// Replaces a page's generated blocks with the translation (block-type presets applied)
+    /// as one undo step (`updatePageAfterAnalysis`); the user's own blocks stay.
     fn apply_translated_page(&mut self, page_id: &str, result: Result<Vec<TranslationBlock>, String>) {
         let name = self.page_name(page_id);
         if let Some(job) = &mut self.translation {
@@ -337,8 +346,12 @@ impl Editor {
                 for block in &mut blocks {
                     apply_block_type_font_preset_to_block(block, &presets);
                 }
+                let (blocks, kept) = merge_translated_blocks(page_id, &page.blocks, blocks);
                 page.blocks = blocks;
-                page.block_groups = None;
+                page.block_groups = Some(valid_groups(page)).filter(|groups| !groups.is_empty());
+                if let Some(job) = &mut self.translation {
+                    job.kept_blocks += kept;
+                }
                 page.analysis_status = PageAnalysisStatus::Completed;
                 page.last_error = None;
                 self.chapter.font_presets = Some(presets);
@@ -362,6 +375,49 @@ impl Editor {
         self.chapter.status = resolve_chapter_status(&self.chapter.pages);
         self.mark_chapter_dirty();
     }
+}
+
+/// Share of the smaller box a fresh block may overlap a kept one by.
+const KEPT_OVERLAP: f64 = 0.4;
+
+fn overlap_share(a: BBox, b: BBox) -> f64 {
+    let w = (a.x + a.w).min(b.x + b.w) - a.x.max(b.x);
+    let h = (a.y + a.h).min(b.y + b.h) - a.y.max(b.y);
+    let smaller = (a.w * a.h).min(b.w * b.h);
+    if w <= 0.0 || h <= 0.0 || smaller <= 0.0 { 0.0 } else { w * h / smaller }
+}
+
+/// The page's blocks after a translation returned `fresh` (presets applied) for a page that
+/// had `old`: the user's own blocks stay on top in their order, fresh blocks over them are
+/// dropped, and the rest replace the generated blocks, marked as generated. Also returns how
+/// many blocks stayed.
+fn merge_translated_blocks(
+    page_id: &str,
+    old: &[TranslationBlock],
+    fresh: Vec<TranslationBlock>,
+) -> (Vec<TranslationBlock>, usize) {
+    let kept: Vec<&TranslationBlock> = old.iter().filter(|block| block.is_user_work(page_id)).collect();
+    let mut used: std::collections::HashSet<String> = kept.iter().map(|block| block.id.clone()).collect();
+    let mut next = 1;
+    let mut blocks = Vec::with_capacity(fresh.len() + kept.len());
+    for mut block in fresh {
+        if kept.iter().any(|own| overlap_share(own.bbox, block.bbox) >= KEPT_OVERLAP) {
+            continue;
+        }
+        // A kept block may still carry a translation id.
+        if used.contains(&block.id) {
+            while used.contains(&format!("{page_id}-block-{next}")) {
+                next += 1;
+            }
+            block.id = format!("{page_id}-block-{next}");
+        }
+        used.insert(block.id.clone());
+        block.mark_generated();
+        blocks.push(block);
+    }
+    let count = kept.len();
+    blocks.extend(kept.into_iter().cloned());
+    (blocks, count)
 }
 
 /// Exposed for tests: chapter after applying a translated page.
@@ -417,6 +473,50 @@ mod tests {
         assert_eq!(page.analysis_status, PageAnalysisStatus::Completed);
         assert_eq!(page.blocks[0].font_preset_id.as_deref(), Some("font-preset-sfx"));
         assert_eq!(chapter.font_presets.as_ref().map(Vec::len), Some(4));
+    }
+
+    #[test]
+    fn retranslation_keeps_the_users_own_blocks() {
+        let at = |id: &str, x: f64, text: &str| TranslationBlock {
+            id: id.into(),
+            bbox: BBox::new(x, 100.0, 100.0, 100.0),
+            translated_text: text.into(),
+            ..TranslationBlock::default()
+        };
+        let mut generated = at("p-block-1", 0.0, "그대로");
+        generated.mark_generated();
+        let mut edited = at("p-block-2", 200.0, "생성");
+        edited.mark_generated();
+        edited.translated_text = "직접 고침".into();
+        let manual = at("p-block-manual-5", 400.0, "직접 만듦");
+        let legacy = at("p-block-3", 600.0, "예전 번역");
+        let copy = TranslationBlock { id: "p-block-1-dup-9".into(), ..generated.clone() };
+        let chapter = Chapter {
+            id: "c".into(),
+            pages: vec![PageRecord {
+                id: "p".into(),
+                width: 1000,
+                height: 1000,
+                blocks: vec![generated, edited, manual, legacy, copy],
+                ..PageRecord::default()
+            }],
+            page_order: vec!["p".into()],
+            ..Chapter::default()
+        };
+        let fresh = vec![
+            at("p-block-1", 0.0, "새 1"),
+            at("p-block-2", 210.0, "새 2"), // over the edited block: dropped
+            at("p-block-3", 600.0, "새 3"),
+            at("p-block-4", 800.0, "새 4"),
+        ];
+        let chapter = apply_for_test(chapter, "p", fresh);
+        let blocks = &chapter.pages[0].blocks;
+        let texts: Vec<&str> = blocks.iter().map(|block| block.translated_text.as_str()).collect();
+        assert_eq!(texts, ["새 3", "새 4", "직접 고침", "직접 만듦", "그대로"]);
+        let ids: std::collections::HashSet<&str> = blocks.iter().map(|block| block.id.as_str()).collect();
+        assert_eq!(ids.len(), blocks.len(), "ids stay unique");
+        assert!(blocks[0].generated_fingerprint.is_some() && !blocks[0].is_user_work("p"));
+        assert!(blocks[2].is_user_work("p"));
     }
 
     #[test]

@@ -398,6 +398,10 @@ pub struct TranslationBlock {
     pub opacity: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub inpainted: Option<bool>,
+    /// [`TranslationBlock::content_fingerprint`] when the translation made the block, so
+    /// later hand edits can be told apart (see [`TranslationBlock::is_user_work`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub generated_fingerprint: Option<String>,
     #[serde(flatten)]
     pub links: PresetLinks,
     #[serde(flatten)]
@@ -428,6 +432,7 @@ impl Default for TranslationBlock {
             background_color: default_background_color(),
             opacity: default_opacity(),
             inpainted: None,
+            generated_fingerprint: None,
             links: PresetLinks::default(),
             style: TextStyle::default(),
             extra: JsonMap::new(),
@@ -457,6 +462,50 @@ impl TranslationBlock {
 
     pub fn text_color(&self) -> &str {
         self.style.text_color.as_deref().unwrap_or(DEFAULT_TEXT_COLOR)
+    }
+
+    /// Hash of what a hand edit changes: the id (so copies differ), texts (as saved), boxes,
+    /// rotation, placement and preset. Style fields are left out because editing a preset
+    /// rewrites them on every linked block.
+    pub fn content_fingerprint(&self) -> String {
+        let content = serde_json::json!([
+            self.id,
+            self.source_text,
+            crate::text::normalize_korean_text(&self.translated_text),
+            self.bbox,
+            self.render_bbox,
+            self.rotation_deg,
+            self.font_preset_id,
+            self.text_align,
+            self.text_position,
+            self.render_direction,
+            self.text_padding_px,
+        ]);
+        // FNV-1a: stable across builds, unlike `std`'s hasher.
+        let hash = content
+            .to_string()
+            .bytes()
+            .fold(0xcbf2_9ce4_8422_2325_u64, |hash, byte| (hash ^ u64::from(byte)).wrapping_mul(0x0100_0000_01b3));
+        format!("{hash:016x}")
+    }
+
+    /// Records the block's current content as what the translation produced.
+    pub fn mark_generated(&mut self) {
+        self.generated_fingerprint = Some(self.content_fingerprint());
+    }
+
+    /// Whether the block holds the user's own work: changed since the translation made it,
+    /// or made by hand. Blocks translated before fingerprints existed count as generated
+    /// when they still have the translation's id (`{page_id}-block-{n}`).
+    pub fn is_user_work(&self, page_id: &str) -> bool {
+        match &self.generated_fingerprint {
+            Some(fingerprint) => *fingerprint != self.content_fingerprint(),
+            None => !self
+                .id
+                .strip_prefix(page_id)
+                .and_then(|rest| rest.strip_prefix("-block-"))
+                .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit())),
+        }
     }
 }
 
