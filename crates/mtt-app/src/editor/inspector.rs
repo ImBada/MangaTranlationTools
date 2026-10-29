@@ -577,7 +577,7 @@ fn placement_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlo
                 ui.label("조판");
                 let mut current = block.layout_version() >= mtt_core::model::LAYOUT_VERSION;
                 let toggle = ui.checkbox(&mut current, "새 규칙");
-                let hint = "새 조판 규칙\n줄 길이를 고르게 나누고 문장부호 뒤에서 줄을 바꿉니다. 자동 맞춤은 원문 글자 크기의 1.2배까지만 키우고, 9px보다 작게 줄이지 않습니다(넘치면 표시).\n새로 만든 블록은 처음부터 새 규칙입니다.";
+                let hint = "새 조판 규칙\n줄 길이를 고르게 나누고 문장부호 뒤에서 줄을 바꿉니다. 닫는 괄호·문장부호로 줄을 시작하지 않고, 한 줄보다 긴 단어는 글자 사이에서 나눕니다. 세로쓰기는 가운데에 놓고 괄호·줄표·말줄임표를 세로로 돌리며, 두 자 이하 숫자·영문은 한 칸에 가로로 놓습니다. 자동 맞춤은 원문 글자 크기의 1.2배까지만 키우고, 9px보다 작게 줄이지 않습니다(넘치면 표시).\n새로 만든 블록은 처음부터 새 규칙입니다. 이전 새 규칙으로 만든 블록은 모양이 그대로이고, 켜면 지금 규칙으로 바뀝니다.";
                 if theme::tip(toggle, hint, "").changed() {
                     let version = current.then_some(mtt_core::model::LAYOUT_VERSION);
                     editor.edit_selected(|b| b.layout_version = version);

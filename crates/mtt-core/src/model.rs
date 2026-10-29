@@ -358,10 +358,15 @@ fn default_opacity() -> f64 {
     1.0
 }
 
-/// Typesetting rules new blocks get: 2 caps auto-fit growth by the source glyph size,
-/// balances line lengths (preferring breaks after punctuation) and stops shrinking at a
-/// readable size.
-pub const LAYOUT_VERSION: u32 = 2;
+/// Typesetting rules new blocks get. Each version keeps what the one before it does, so
+/// pages made on an earlier version keep their look:
+/// - 2 caps auto-fit growth by the source glyph size, balances line lengths (preferring
+///   breaks after punctuation) and stops shrinking at a readable size.
+/// - 3 keeps brackets and closing marks off the wrong end of a line, breaks words too long
+///   for a line between syllables, picks the bold face of the font that draws, counts
+///   characters by grapheme cluster, and sets vertical text centred, with sideways marks,
+///   short runs across and a column per line break.
+pub const LAYOUT_VERSION: u32 = 3;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

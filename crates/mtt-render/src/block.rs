@@ -295,7 +295,7 @@ struct TextItem {
     form: CellForm,
 }
 
-/// How a vertical text cell is set (typesetting v2).
+/// How a vertical text cell is set (typesetting v3).
 #[derive(Debug, Clone, Copy, PartialEq)]
 enum CellForm {
     /// As in horizontal text.
@@ -411,7 +411,7 @@ impl<'a> BlockPainter<'a> {
         if self.block.render_direction == RenderTextDirection::Vertical {
             // The original rules place vertical text in the fit area but from the inner
             // box's corner, off centre by the measuring margin.
-            if self.block.layout_version() >= 2 {
+            if self.block.layout_version() >= 3 {
                 self.vertical_items(left, top, layout.inner.width, layout.inner.height)
             } else {
                 self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
@@ -524,12 +524,12 @@ impl<'a> BlockPainter<'a> {
         let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
-        // v2 places the characters' em boxes; the original rules a line height per character.
-        let v2 = self.block.layout_version() >= 2;
+        // v3 places the characters' em boxes; the original rules a line height per character.
+        let v3 = self.block.layout_version() >= 3;
         let font_size = self.font_size;
         let column_height = |count: usize| match count {
             0 => 0.0,
-            _ if v2 => (count - 1) as f64 * advance + font_size,
+            _ if v3 => (count - 1) as f64 * advance + font_size,
             _ => count as f64 * line_height + (count - 1) as f64 * (advance - line_height),
         };
         let total_height = columns.iter().map(|column| column_height(column.len())).fold(0.0, f64::max);
@@ -548,7 +548,7 @@ impl<'a> BlockPainter<'a> {
                     x: first_x - column as f64 * pitch,
                     y: start_y + index as f64 * advance,
                     align: TextAlign::Center,
-                    form: if v2 { vertical_cell_form(cell) } else { CellForm::Upright },
+                    form: if v3 { vertical_cell_form(cell) } else { CellForm::Upright },
                 })
             })
             .collect();
@@ -1024,14 +1024,14 @@ mod tests {
     }
 
     #[test]
-    fn v2_draws_decomposed_hangul_like_composed() {
+    fn v3_draws_decomposed_hangul_like_composed() {
         use mtt_core::model::BBox;
         let mut ctx = FontContext::new();
         let page = Size::new(400.0, 400.0);
         let mut block = TranslationBlock {
             bbox: BBox::new(100.0, 100.0, 200.0, 100.0),
             translated_text: "한글".into(),
-            layout_version: Some(2),
+            layout_version: Some(3),
             ..TranslationBlock::default()
         };
         block.style.letter_spacing_px = Some(2.0);
@@ -1066,18 +1066,18 @@ mod tests {
         let next_column = &items[text.lines[0].chars().count()];
         assert!(next_column.x < first.x && next_column.y == first.y, "the next column starts left of the first");
 
-        // The original rules run the text on across line breaks; v2 starts a column.
+        // The original rules run the text on across line breaks; v3 starts a column.
         block.translated_text = "가\n나다라".into();
         let original = block_text(&mut ctx, page, &block).unwrap().lines;
         assert_eq!(original.concat(), "가나다라");
-        block.layout_version = Some(2);
-        let v2 = block_text(&mut ctx, page, &block).unwrap().lines;
-        assert_eq!(v2, ["가", "나다라"]);
-        assert_ne!(original, v2);
+        block.layout_version = Some(3);
+        let v3 = block_text(&mut ctx, page, &block).unwrap().lines;
+        assert_eq!(v3, ["가", "나다라"]);
+        assert_ne!(original, v3);
     }
 
     #[test]
-    fn v2_centres_vertical_text_in_its_box() {
+    fn v3_centres_vertical_text_in_its_box() {
         use mtt_core::model::BBox;
         let mut ctx = FontContext::new();
         let page = Size::new(1000.0, 1000.0);
@@ -1097,6 +1097,9 @@ mod tests {
         let (dx, dy) = center(&block_text(&mut ctx, page, &block).unwrap());
         assert!(dx < -9.0 && dy < -8.0, "the original rules stay where they were: {dx}, {dy}");
         block.layout_version = Some(2);
+        let (dx, dy) = center(&block_text(&mut ctx, page, &block).unwrap());
+        assert!(dx < -9.0 && dy < -8.0, "blocks made on v2 stay where they were: {dx}, {dy}");
+        block.layout_version = Some(3);
         let text = block_text(&mut ctx, page, &block).unwrap();
         let (dx, dy) = center(&text);
         // Down by the same baseline nudge as horizontal text.
@@ -1118,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_sets_marks_sideways_and_short_runs_across_in_vertical_text() {
+    fn v3_sets_marks_sideways_and_short_runs_across_in_vertical_text() {
         use mtt_core::model::BBox;
         let mut ctx = FontContext::new();
         let page = Size::new(1000.0, 1000.0);
@@ -1137,19 +1140,19 @@ mod tests {
         // The ellipsis dots are drawn without a font.
         let (width, height) = render(&mut ctx, "…", None).unwrap();
         assert!(width > height, "{width}x{height}");
-        let (width, height) = render(&mut ctx, "…", Some(2)).unwrap();
+        let (width, height) = render(&mut ctx, "…", Some(3)).unwrap();
         assert!(height > width, "{width}x{height}");
         // Glyphs only where some font draws them.
         if let Some((width, height)) = render(&mut ctx, "—", None) {
             assert!(width > height, "{width}x{height}");
-            let (width, height) = render(&mut ctx, "—", Some(2)).unwrap();
+            let (width, height) = render(&mut ctx, "—", Some(3)).unwrap();
             assert!(height > width, "{width}x{height}");
         }
         if let Some((_, stacked)) = render(&mut ctx, "!?", None) {
-            let (width, across) = render(&mut ctx, "!?", Some(2)).unwrap();
+            let (width, across) = render(&mut ctx, "!?", Some(3)).unwrap();
             assert!(across + 20 < stacked && width <= 41, "one cell: {across} vs {stacked}");
         }
-        if let Some((width, _)) = render(&mut ctx, "2024", Some(2)) {
+        if let Some((width, _)) = render(&mut ctx, "2024", Some(3)) {
             assert!(width <= 41, "longer runs stay upright, one per cell");
         }
     }

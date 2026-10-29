@@ -83,18 +83,18 @@ pub struct BlockTextLayout {
     pub fit_inner_height: f64,
     pub font_size_px: f64,
     /// The smallest size the fit could pick (the font size itself without auto-fit). Under
-    /// v2 a word too long for a line even at this size may break between its characters.
+    /// v3 a word too long for a line even at this size may break between its characters.
     pub min_font_size_px: f64,
     pub overflow: bool,
     /// The lines when they follow the block's text shape, laid out at `font_size_px`.
     pub shaped: Option<ShapedLines>,
 }
 
-/// Typesetting v2 treats text as the characters a reader sees: the display text in NFC,
+/// Typesetting v3 treats text as the characters a reader sees: the display text in NFC,
 /// letter spacing, vertical cells and per-character fonts by grapheme cluster. The original
 /// rules work by code point, which pulls decomposed Hangul and emoji sequences apart.
 pub fn by_grapheme(block: &TranslationBlock) -> bool {
-    block.layout_version() >= 2
+    block.layout_version() >= 3
 }
 
 /// The text drawn for `block`: [`TranslationBlock::display_text`], composed (NFC) under v2.
@@ -134,9 +134,9 @@ impl BlockFonts {
         let family = block.style.font_family.as_deref().unwrap_or(DEFAULT_OVERLAY_FONT_FAMILY);
         let weight = requested_weight(block);
         // The original rules judge bold by the first listed family even when another one
-        // draws; v2 by the family that draws.
+        // draws; v3 by the family that draws.
         let weights_of = |family: &str| {
-            if block.layout_version() >= 2 { ctx.resolved_family_weights(family) } else { ctx.family_weights(family) }
+            if block.layout_version() >= 3 { ctx.resolved_family_weights(family) } else { ctx.family_weights(family) }
         };
         let base_weights = weights_of(family);
         let base = ctx.resolve_spec(family, canvas_font_weight(base_weights.as_ref(), weight));
@@ -710,7 +710,7 @@ fn measure_vertical_text(
 }
 
 /// Vertical text in columns, right to left, as the fit counts them: as many characters per
-/// column as fit `max_height` at `font_size`, whitespace dropped. Under v2 each paragraph
+/// column as fit `max_height` at `font_size`, whitespace dropped. Under v3 each paragraph
 /// starts a column (an empty one when the paragraph is empty); the original rules run the
 /// text on across line breaks.
 pub(crate) fn vertical_columns<'a>(
@@ -758,7 +758,7 @@ pub fn wrap_text_to_width(
     wrap_lines(&paragraphs, block, font_size, max_width, block.layout_version() >= 2)
 }
 
-/// The paragraphs of `text` measured for lines of `max_width`. Under v2 a word too long for
+/// The paragraphs of `text` measured for lines of `max_width`. Under v3 a word too long for
 /// a line even at `min_font_size` may break between its characters, at a mid-phrase cost
 /// (CSS `word-break: keep-all` with `overflow-wrap: anywhere`).
 fn wrap_paragraphs(
@@ -770,7 +770,7 @@ fn wrap_paragraphs(
     min_font_size: f64,
 ) -> Vec<Paragraph> {
     let mut paragraphs = Paragraph::measure_all(ctx, fonts, block, text);
-    if block.layout_version() >= 2 {
+    if block.layout_version() >= 3 {
         let spacing = letter_spacing_px(block, min_font_size);
         for paragraph in &mut paragraphs {
             paragraph.break_long_words(max_width, min_font_size, spacing);
@@ -861,7 +861,7 @@ impl Paragraph {
                     }
                     units_before.push(units_before.last().copied().unwrap_or_default() + usize::from(starts_unit));
                 }
-                let segments = split_text_wrap_segments(&chars, block.layout_version() >= 2);
+                let segments = split_text_wrap_segments(&chars, block.layout_version() >= 3);
                 Self { chars, prefix_em, units_before, segments }
             })
             .collect()
@@ -1013,7 +1013,7 @@ pub fn measure_text_width(
     f64::from(run.advance_em) * font_size + spacing
 }
 
-/// The characters of vertical text, one per cell, whitespace dropped. Under v2 ([`by_grapheme`]
+/// The characters of vertical text, one per cell, whitespace dropped. Under v3 ([`by_grapheme`]
 /// is `graphemes`) a cell also holds a run of up to two digits or Latin letters set across
 /// the column (tate-chu-yoko), `!`/`?` in pairs, or a `...` ellipsis.
 pub(crate) fn vertical_units(text: &str, graphemes: bool) -> Vec<&str> {
@@ -1090,7 +1090,7 @@ pub fn collapse_whitespace(text: &str) -> String {
 }
 
 /// Char ranges of wrap segments; a segment that starts a new word is preceded by a space.
-/// With `kinsoku` (typesetting v2) no line starts with closing punctuation or ends with an
+/// With `kinsoku` (typesetting v3) no line starts with closing punctuation or ends with an
 /// opening bracket ([`join_kinsoku`]).
 fn split_text_wrap_segments(chars: &[char], kinsoku: bool) -> Vec<(usize, usize)> {
     let mut segments = Vec::new();
@@ -1281,7 +1281,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_lines_keep_brackets_and_closing_marks_with_their_words() {
+    fn v3_lines_keep_brackets_and_closing_marks_with_their_words() {
         let segments = |text: &str| {
             let chars: Vec<char> = text.chars().collect();
             split_text_wrap_segments(&chars, true)
@@ -1335,7 +1335,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_breaks_only_words_too_long_for_a_line() {
+    fn v3_breaks_only_words_too_long_for_a_line() {
         assert_eq!(break_words("가나 다라마바사", 4.0), ["가나", "다", "라", "마", "바", "사"]);
         assert_eq!(break_words("가나 다라마바", 4.0), ["가나", "다라마바"]);
         assert_eq!(break_words("으아아아악!」", 4.0), ["으", "아", "아", "아", "악!」"]);
@@ -1356,7 +1356,7 @@ mod tests {
         }
         let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
         assert_eq!(drawn.lines, [text], "the original rules never break a word");
-        block.layout_version = Some(2);
+        block.layout_version = Some(3);
         let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
         assert!(!drawn.layout.overflow && drawn.lines.len() > 1, "{:?}", drawn.lines);
         assert_eq!(drawn.lines.concat(), text);
@@ -1508,7 +1508,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_judges_bold_by_the_family_that_draws() {
+    fn v3_judges_bold_by_the_family_that_draws() {
         let ctx = FontContext::new();
         // Any installed family with a bold face (fonts differ between machines).
         let Some(family) = ctx
@@ -1525,14 +1525,16 @@ mod tests {
         assert!(original.synthetic_bold, "the original rules look at the first family only");
         assert!(original.base.weight < BOLD_WEIGHT_THRESHOLD, "{:?}", original.base);
         block.layout_version = Some(2);
-        let v2 = BlockFonts::resolve(&ctx, &block);
-        assert!(!v2.synthetic_bold, "{} has a bold face", family.family);
-        assert!(v2.base.weight >= BOLD_WEIGHT_THRESHOLD, "{:?}", v2.base);
-        assert_eq!(v2.base.family, original.base.family);
+        assert!(BlockFonts::resolve(&ctx, &block).synthetic_bold, "blocks made on v2 keep their look");
+        block.layout_version = Some(3);
+        let v3 = BlockFonts::resolve(&ctx, &block);
+        assert!(!v3.synthetic_bold, "{} has a bold face", family.family);
+        assert!(v3.base.weight >= BOLD_WEIGHT_THRESHOLD, "{:?}", v3.base);
+        assert_eq!(v3.base.family, original.base.family);
     }
 
     #[test]
-    fn v2_counts_characters_by_grapheme_cluster() {
+    fn v3_counts_characters_by_grapheme_cluster() {
         use mtt_core::model::FontCharacterOverride;
         // Thumbs up with a skin tone, a ZWJ family and a red heart: one character each.
         let text = "👍🏽👨\u{200D}👩\u{200D}👧 ❤\u{FE0F}";
@@ -1548,7 +1550,7 @@ mod tests {
         let original = BlockFonts::resolve(&ctx, &block);
         let original_width = measure_text_width(&mut ctx, &original, &block, "👍🏽", 20.0);
         assert_eq!(original.spans_for("a❤\u{FE0F}b").first().map(|span| (span.0, span.1)), Some((1, 4)));
-        block.layout_version = Some(2);
+        block.layout_version = Some(3);
         let v2 = BlockFonts::resolve(&ctx, &block);
         let v2_width = measure_text_width(&mut ctx, &v2, &block, "👍🏽", 20.0);
         assert!((original_width - v2_width - 3.0).abs() < 1e-9, "one gap less: {original_width} vs {v2_width}");
@@ -1561,7 +1563,7 @@ mod tests {
     }
 
     #[test]
-    fn v2_vertical_cells_group_short_runs() {
+    fn v3_vertical_cells_group_short_runs() {
         let text = "「그래…」—2024년 OK!? 10.... A!!!";
         assert_eq!(
             vertical_units(text, true),
@@ -1630,8 +1632,8 @@ mod tests {
         assert!(!measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 68.0, 100.0));
         let columns = vertical_columns(&block, "가나다라 마바\n사아자차", 20.0, 100.0);
         assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바", "사", "아"], vec!["자", "차"]]);
-        // v2: a line break starts a column, a blank line leaves one empty.
-        block.layout_version = Some(2);
+        // v3: a line break starts a column, a blank line leaves one empty.
+        block.layout_version = Some(3);
         let columns = vertical_columns(&block, "가나다라 마바\n\n사아자차", 20.0, 100.0);
         assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바"], vec![], vec!["사", "아", "자", "차"]]);
         assert!(!measure_vertical_text(&block, "가나다라 마바\n\n사아자차", 20.0, 90.0, 100.0));
