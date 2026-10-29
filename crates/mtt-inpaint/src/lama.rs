@@ -15,7 +15,11 @@ use crate::lama_torch::TorchLama;
 use crate::model_cache::{self, ModelCache};
 use crate::torch_runtime::{self, RuntimeStatus};
 
-pub const MODEL_URL: &str = "https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors";
+/// `mayocream/lama-manga` (MIT), pinned to the revision that uploaded the model (later ones
+/// only edit the model card) and checked by size and SHA-256 before it's used.
+pub const MODEL_URL: &str = "https://huggingface.co/mayocream/lama-manga/resolve/bc1fd58e8d92133f437f62f4f18f7ee3aa7503f8/lama-manga.safetensors";
+const MODEL_SIZE: u64 = 204_332_996;
+const MODEL_SHA256: &str = "a790515e9da839b8d89af7d565ceb110d908b7d6fbdb991f2acb2ec7d9b08bdb";
 
 #[derive(Debug, Clone)]
 pub enum Lama {
@@ -164,17 +168,30 @@ pub enum Download {
 }
 
 /// `startLamaModelDownload`: whatever is missing of the model (into
-/// `models/lama-manga/`) and the LibTorch runtime (CUDA's when the GPU allows,
-/// `torch_runtime::download`).
+/// `models/lama-manga/`, checked against the pinned size and SHA-256) and the LibTorch
+/// runtime (CUDA's when the GPU allows, `torch_runtime::download`).
 pub fn download_lama(paths: &AppPaths, mut progress: impl FnMut(Download, u64, Option<u64>)) -> Result<(), String> {
     let model = model_path(paths);
     if !model.is_file() {
         let dir = model.parent().expect("model path has a parent");
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
         write_model_readme(dir, MODEL_URL, &model);
-        download(MODEL_URL, &model, |written, total| progress(Download::Model, written, total))?;
+        let unverified = model.with_extension("safetensors.unverified");
+        download(MODEL_URL, &unverified, |written, total| progress(Download::Model, written, total))?;
+        install_verified(&unverified, &model, MODEL_SIZE, MODEL_SHA256, "LaMa 모델")?;
     }
     torch_runtime::download(paths, |written, total| progress(Download::Runtime, written, total))
+}
+
+/// Moves the downloaded `unverified` file to `path` when it has the pinned `size` and
+/// `sha256`, so `path` only ever holds a checked file; otherwise deletes it.
+fn install_verified(unverified: &Path, path: &Path, size: u64, sha256: &str, label: &str) -> Result<(), String> {
+    let checked = torch_runtime::verify(unverified, size, sha256, label);
+    if checked.is_err() {
+        let _ = std::fs::remove_file(unverified);
+    }
+    checked?;
+    std::fs::rename(unverified, path).map_err(|e| e.to_string())
 }
 
 /// A note in the model's folder on where the file comes from, for a manual download.
@@ -185,13 +202,15 @@ pub(crate) fn write_model_readme(model_dir: &Path, url: &str, model: &Path) {
     let _ = std::fs::write(model_dir.join("README.txt"), text);
 }
 
-/// Downloads `url` to `output` via `<output>.download` (redirects followed).
+/// Downloads `url` to `output` via `<output>.download` (https only, redirects too).
 pub fn download(url: &str, output: &Path, mut progress: impl FnMut(u64, Option<u64>)) -> Result<(), String> {
     let mut temp = output.as_os_str().to_owned();
     temp.push(".download");
     let temp = PathBuf::from(temp);
     let _ = std::fs::remove_file(&temp);
-    let agent = ureq::Agent::new_with_config(ureq::Agent::config_builder().http_status_as_error(false).build());
+    let agent = ureq::Agent::new_with_config(
+        ureq::Agent::config_builder().http_status_as_error(false).https_only(true).build(),
+    );
     let mut response = agent
         .get(url)
         .header("User-Agent", "MangaTranslationTools")
@@ -275,7 +294,28 @@ mod tests {
     fn download_reports_http_errors() {
         // Port 9 (discard) is closed on test machines; the error must be a message, not a panic.
         let dir = tempfile::tempdir().unwrap();
-        assert!(download("http://127.0.0.1:9/x", &dir.path().join("x"), |_, _| {}).is_err());
+        assert!(download("https://127.0.0.1:9/x", &dir.path().join("x"), |_, _| {}).is_err());
+        let error = download("http://127.0.0.1:9/x", &dir.path().join("x"), |_, _| {}).unwrap_err();
+        assert!(error.to_lowercase().contains("https"), "plain http is refused: {error}");
+    }
+
+    #[test]
+    fn the_model_is_pinned_and_checked_before_it_is_used() {
+        let revision = MODEL_URL.split("/resolve/").nth(1).and_then(|rest| rest.split('/').next()).unwrap();
+        assert!(MODEL_URL.starts_with("https://huggingface.co/mayocream/lama-manga/"));
+        assert!(revision.len() == 40 && revision.bytes().all(|byte| byte.is_ascii_hexdigit()), "{revision}");
+        assert!(MODEL_SHA256.len() == 64 && MODEL_SHA256.bytes().all(|byte| byte.is_ascii_hexdigit()));
+
+        let dir = tempfile::tempdir().unwrap();
+        let (unverified, model) = (dir.path().join("model.unverified"), dir.path().join("model"));
+        let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        std::fs::write(&unverified, b"abd").unwrap();
+        let error = install_verified(&unverified, &model, 3, abc, "LaMa 모델").unwrap_err();
+        assert!(error.contains("LaMa 모델 파일이 손상되었습니다"), "{error}");
+        assert!(!unverified.exists() && !model.exists(), "a bad download is dropped, not installed");
+        std::fs::write(&unverified, b"abc").unwrap();
+        install_verified(&unverified, &model, 3, abc, "LaMa 모델").unwrap();
+        assert!(!unverified.exists() && std::fs::read(&model).unwrap() == b"abc");
     }
 
     #[test]

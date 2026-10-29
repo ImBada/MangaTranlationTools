@@ -849,7 +849,8 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(name)
 }
 
-fn verify(archive: &Path, size: u64, expected: &str, label: &str) -> Result<(), String> {
+/// Whether `archive` has the pinned `size` and SHA-256; `label` names it in the error.
+pub(crate) fn verify(archive: &Path, size: u64, expected: &str, label: &str) -> Result<(), String> {
     let actual = std::fs::metadata(archive).map_err(|e| e.to_string())?.len();
     if actual != size {
         return Err(format!(
