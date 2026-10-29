@@ -6,7 +6,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use base64::Engine;
-use mtt_translate::client::{Api, Endpoint, send_bytes};
+use mtt_translate::client::{Api, Endpoint, list_models, send_bytes};
 use mtt_translate::codex::CodexAuth;
 
 fn jwt(account: &str, marker: &str) -> String {
@@ -50,15 +50,15 @@ fn read_request(stream: &std::net::TcpStream) -> Request {
 type SeenHeaders = Arc<Mutex<Vec<Vec<(String, String)>>>>;
 
 /// Serves the device flow (approved on the second poll), token exchange and refresh,
-/// and `/responses`, which rejects the first access token once. Returns the base URL
-/// and the `/responses` requests' headers.
+/// `/responses` and `/models`, which each reject the first access token once. Returns the
+/// base URL and the `/responses` and `/models` requests' headers.
 fn spawn_server() -> (String, SeenHeaders) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(Vec::new()));
     let captured = Arc::clone(&seen);
     std::thread::spawn(move || {
-        let (mut polls, mut rejected) = (0, false);
+        let (mut polls, mut rejected, mut models_rejected) = (0, false, false);
         for stream in listener.incoming() {
             let mut stream = stream.unwrap();
             let request = read_request(&stream);
@@ -112,6 +112,23 @@ fn spawn_server() -> (String, SeenHeaders) {
                         (200, "text/event-stream", format!("data: {event}\n\ndata: [DONE]\n\n"))
                     }
                 }
+                models if models.starts_with("/models?client_version=") => {
+                    captured.lock().unwrap().push(request.headers.clone());
+                    let bearer =
+                        request.headers.iter().find(|(name, _)| name == "authorization").map(|(_, v)| v.clone());
+                    if !models_rejected && bearer == Some(format!("Bearer {}", jwt("acct-1", "first"))) {
+                        models_rejected = true;
+                        (401, "application/json", r#"{"error":"expired"}"#.to_owned())
+                    } else {
+                        let catalog = serde_json::json!({ "models": [
+                            { "slug": "gpt-later", "display_name": "GPT Later", "visibility": "list", "priority": 5 },
+                            { "slug": "gpt-hidden", "visibility": "hide", "priority": 0 },
+                            { "slug": "gpt-first", "display_name": "GPT First", "visibility": "list", "priority": 1,
+                              "supported_reasoning_levels": [{ "effort": "low" }, { "effort": "medium" }] },
+                        ]});
+                        (200, "application/json", catalog.to_string())
+                    }
+                }
                 _ => (404, "text/plain", "missing".to_owned()),
             };
             let _ = write!(
@@ -158,6 +175,36 @@ fn device_sign_in_then_a_request_that_refreshes_once() {
     assert_eq!(header(1, "chatgpt-account-id"), "acct-1");
     assert_eq!(header(1, "openai-beta"), "responses=experimental");
     assert!(!header(1, "originator").is_empty());
+    std::fs::remove_dir_all(dir).ok();
+}
+
+#[test]
+fn lists_the_account_models_refreshing_once() {
+    let (base, seen) = spawn_server();
+    let dir = std::env::temp_dir().join(format!("mtt-codex-models-{}", std::process::id()));
+    let auth = Arc::new(CodexAuth::with_auth_base(dir.join("codex-auth.json"), &base));
+    let device = auth.start_device_login().unwrap();
+    auth.finish_device_login(&device, &|| false).unwrap();
+    let endpoint = Endpoint {
+        base_url: base.clone(),
+        api_key: None,
+        model: String::new(),
+        api: Api::Responses { reasoning_effort: "low".into() },
+        auth: Some(auth),
+    };
+    let models = list_models(&endpoint).unwrap();
+    let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+    assert_eq!(ids, ["gpt-first", "gpt-later"], "picker models, best first");
+    assert_eq!(
+        (models[0].name.as_str(), models[0].efforts.clone()),
+        ("GPT First", vec!["low".into(), "medium".into()])
+    );
+    let seen = seen.lock().unwrap();
+    assert_eq!(seen.len(), 2, "rejected once, then asked again after refreshing");
+    let header = |name: &str| seen[1].iter().find(|(key, _)| key == name).map(|(_, value)| value.clone());
+    assert_eq!(header("authorization"), Some(format!("Bearer {}", jwt("acct-1", "second"))));
+    assert_eq!(header("chatgpt-account-id").as_deref(), Some("acct-1"));
+    assert_eq!(header("accept").as_deref(), Some("application/json"));
     std::fs::remove_dir_all(dir).ok();
 }
 

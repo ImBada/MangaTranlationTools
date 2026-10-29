@@ -87,6 +87,18 @@ enum SettingsTab {
     About,
 }
 
+/// The models one engine and address offer.
+struct ModelList {
+    /// `codex:{account}`, or the base URL and key they were asked of.
+    source: String,
+    /// `None` while loading.
+    result: Option<Result<Vec<mtt_translate::ModelOption>, String>>,
+}
+
+/// How long the engine and address must stay the same before their models load, so an
+/// address isn't asked at every keystroke.
+const MODEL_LIST_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
+
 #[derive(Default)]
 pub struct SettingsView {
     open: bool,
@@ -112,6 +124,10 @@ pub struct SettingsView {
     codex_account: Option<mtt_translate::codex::Account>,
     codex_login: Option<CodexLogin>,
     codex_message: Option<Result<String, String>>,
+    /// The selected engine's models, for the model field's list.
+    models: Option<ModelList>,
+    /// The engine and address the model field is for, and since when.
+    model_source: Option<(String, std::time::Instant)>,
 }
 
 impl SettingsView {
@@ -119,6 +135,8 @@ impl SettingsView {
         self.open = true;
         self.codex_account = mtt_translate::codex::CodexAuth::new(&services.paths.codex_auth_path).account();
         self.codex_message = None;
+        self.models = None;
+        self.model_source = None;
         self.draft = Some(services.settings.clone());
         self.test_result = None;
         self.save_error = None;
@@ -517,12 +535,22 @@ impl SettingsView {
             });
             ui.add_space(4.0);
         }
+        let source = match draft.model_provider {
+            ModelProvider::OpenAiCodex => self.codex_account.as_ref().map(|account| format!("codex:{}", account.id)),
+            ModelProvider::OpenAiCompatible => {
+                base_url_valid.then(|| format!("{base_url}\n{}", draft.openai_compatible.api_key.trim()))
+            }
+        };
+        self.load_models(ui.ctx(), source.clone(), draft, base_url, worker);
+        let mut reload = false;
+        let models = self.models.as_ref().filter(|list| source.as_ref() == Some(&list.source));
         match draft.model_provider {
             ModelProvider::OpenAiCodex => {
                 row(ui, "모델", &mut |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut draft.codex.model).hint_text("gpt-5.5").desired_width(300.0),
-                    );
+                    model_field(ui, "codex-models", &mut draft.codex.model, "gpt-5.5", models, &mut reload);
+                    if models.is_none() && self.codex_account.is_none() {
+                        theme::hint(ui, "로그인하면 쓸 수 있는 모델 목록을 불러옵니다.");
+                    }
                 });
                 row(ui, "생각 수준", &mut |ui| {
                     let efforts = [
@@ -537,6 +565,22 @@ impl SettingsView {
                         draft.codex.reasoning_effort = effort;
                     }
                     theme::hint(ui, effort_description(draft.codex.reasoning_effort));
+                    // The listed model says which efforts it takes.
+                    let supported = models
+                        .and_then(|list| list.result.as_ref()?.as_ref().ok())
+                        .and_then(|options| options.iter().find(|option| option.id == draft.codex.model.trim()))
+                        .map(|option| &option.efforts)
+                        .filter(|efforts| !efforts.is_empty());
+                    let effort = draft.codex.reasoning_effort;
+                    if let Some(supported) = supported
+                        && !supported.iter().any(|name| name == mtt_translate::effort_name(effort))
+                    {
+                        ui.label(
+                            RichText::new(format!("이 모델은 '{}'을 지원하지 않습니다.", effort_label(effort)))
+                                .small()
+                                .color(theme::WARNING),
+                        );
+                    }
                 });
             }
             ModelProvider::OpenAiCompatible => {
@@ -560,13 +604,19 @@ impl SettingsView {
                     });
                 });
                 row(ui, "모델", &mut |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut draft.openai_compatible.model)
-                            .hint_text("gpt-4o-mini")
-                            .desired_width(300.0),
+                    model_field(
+                        ui,
+                        "compatible-models",
+                        &mut draft.openai_compatible.model,
+                        "gpt-4o-mini",
+                        models,
+                        &mut reload,
                     );
                 });
             }
+        }
+        if reload && let Some(source) = source {
+            self.fetch_models(source, draft, base_url, worker);
         }
         let note = match draft.model_provider {
             ModelProvider::OpenAiCodex => None,
@@ -659,6 +709,46 @@ impl SettingsView {
 
     pub fn is_open(&self) -> bool {
         self.open
+    }
+
+    /// Loads the models of `source` (see [`ModelList::source`]) once it has stayed the same
+    /// for [`MODEL_LIST_SETTLE`], unless they are loaded or loading.
+    fn load_models(
+        &mut self,
+        ctx: &egui::Context,
+        source: Option<String>,
+        draft: &AppSettings,
+        base_url: &str,
+        worker: &Worker<AppEvent>,
+    ) {
+        let Some(source) = source else { return };
+        if self.models.as_ref().is_some_and(|list| list.source == source) {
+            return;
+        }
+        match &self.model_source {
+            Some((seen, since)) if *seen == source && since.elapsed() >= MODEL_LIST_SETTLE => {
+                self.fetch_models(source, draft, base_url, worker);
+            }
+            Some((seen, since)) if *seen == source => ctx.request_repaint_after(MODEL_LIST_SETTLE - since.elapsed()),
+            _ => {
+                self.model_source = Some((source, std::time::Instant::now()));
+                ctx.request_repaint_after(MODEL_LIST_SETTLE);
+            }
+        }
+    }
+
+    fn fetch_models(&mut self, source: String, draft: &AppSettings, base_url: &str, worker: &Worker<AppEvent>) {
+        let mut settings = draft.normalized();
+        settings.openai_compatible.base_url = base_url.to_owned();
+        let config = mtt_translate::TranslationConfig::from_settings(&settings);
+        self.models = Some(ModelList { source: source.clone(), result: None });
+        worker.spawn(move || AppEvent::ModelList { result: mtt_translate::list_models(&config), source });
+    }
+
+    pub fn on_model_list(&mut self, source: String, result: Result<Vec<mtt_translate::ModelOption>, String>) {
+        if let Some(list) = self.models.as_mut().filter(|list| list.source == source) {
+            list.result = Some(result);
+        }
     }
 
     pub fn on_codex_event(&mut self, event: CodexLoginEvent) {
@@ -1117,6 +1207,72 @@ fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool, option
         ui.label(label);
         ui.label(RichText::new(text).small().color(theme::TEXT_WEAK));
     });
+}
+
+/// The model name field with the engine's models to pick from beside it, and what
+/// loading them said. Sets `reload` when asked to load them again.
+fn model_field(
+    ui: &mut egui::Ui,
+    id: &str,
+    model: &mut String,
+    hint: &str,
+    list: Option<&ModelList>,
+    reload: &mut bool,
+) {
+    let options = list.and_then(|list| list.result.as_ref()?.as_ref().ok());
+    ui.horizontal(|ui| {
+        ui.add(egui::TextEdit::singleline(model).hint_text(hint).desired_width(220.0));
+        ui.add_enabled_ui(options.is_some(), |ui| {
+            ui.push_id(id, |ui| {
+                let button =
+                    egui::Button::new((RichText::new("목록"), theme::icon(theme::icon::CARET_DOWN).size(12.0)));
+                egui::containers::menu::MenuButton::from_button(button).ui(ui, |ui| {
+                    egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+                        for option in options.into_iter().flatten() {
+                            let label = if option.name == option.id {
+                                option.id.clone()
+                            } else {
+                                format!("{} · {}", option.name, option.id)
+                            };
+                            let mut item = ui.selectable_label(model.trim() == option.id, label);
+                            if !option.description.is_empty() {
+                                item = item.on_hover_text(&option.description);
+                            }
+                            if item.clicked() {
+                                model.clone_from(&option.id);
+                                ui.close();
+                            }
+                        }
+                    });
+                })
+            })
+        });
+        let idle = list.is_some_and(|list| list.result.is_some());
+        if ui.add_enabled(idle, egui::Button::new("새로고침")).on_hover_text("모델 목록 다시 불러오기").clicked()
+        {
+            *reload = true;
+        }
+    });
+    match list.map(|list| list.result.as_ref()) {
+        Some(None) => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new().size(12.0));
+                theme::hint(ui, "모델 목록을 불러오는 중…");
+            });
+        }
+        Some(Some(Ok(options))) if !options.iter().any(|option| option.id == model.trim()) => {
+            ui.label(
+                RichText::new("목록에 없는 모델입니다. 옆의 목록에서 고르거나 이름을 확인하세요.")
+                    .small()
+                    .color(theme::WARNING),
+            );
+        }
+        Some(Some(Ok(options))) => theme::hint(ui, &format!("모델 {}개 중에서 고를 수 있습니다.", options.len())),
+        Some(Some(Err(error))) => {
+            ui.label(RichText::new(format!("모델 목록을 불러오지 못했습니다: {error}")).small().color(theme::DANGER));
+        }
+        None => {}
+    }
 }
 
 fn effort_label(effort: ReasoningEffort) -> &'static str {

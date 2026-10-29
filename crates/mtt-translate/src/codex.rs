@@ -241,12 +241,22 @@ impl CodexAuth {
 
 const NOT_SIGNED_IN: &str = "ChatGPT 계정에 로그인하지 않았습니다. 설정 › 번역에서 ChatGPT 로그인을 하세요.";
 
-/// Headers for a Codex request with `session`.
-pub fn request_headers(session: &Session) -> [(&'static str, String); 5] {
+/// Headers naming `session`'s account on any ChatGPT backend request.
+pub fn account_headers(session: &Session) -> [(&'static str, String); 3] {
     [
         ("Authorization", format!("Bearer {}", session.access_token)),
         ("chatgpt-account-id", session.account_id.clone()),
         ("originator", "manga_translation_tools".into()),
+    ]
+}
+
+/// Headers for a Codex request with `session`.
+pub fn request_headers(session: &Session) -> [(&'static str, String); 5] {
+    let [authorization, account, originator] = account_headers(session);
+    [
+        authorization,
+        account,
+        originator,
         ("OpenAI-Beta", "responses=experimental".into()),
         ("Accept", "text/event-stream".into()),
     ]

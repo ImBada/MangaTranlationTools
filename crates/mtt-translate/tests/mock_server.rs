@@ -234,3 +234,46 @@ fn translates_regions_with_close_ups() {
     assert!(request.contains("id: 2, x: 500, y: 500, w: 500, h: 500"), "regions listed");
     assert!(request.contains("하루: 주인공"), "work notes in the prompt");
 }
+
+#[test]
+fn lists_the_server_models() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let auth = Arc::new(Mutex::new(String::new()));
+    let seen = Arc::clone(&auth);
+    std::thread::spawn(move || {
+        let mut stream = listener.incoming().next().unwrap().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header == "\r\n" || header.is_empty() {
+                break;
+            }
+            if let Some(value) = header.to_ascii_lowercase().strip_prefix("authorization:") {
+                *seen.lock().unwrap() = value.trim().to_owned();
+            }
+        }
+        assert!(line.starts_with("GET /v1/models "), "{line}");
+        let body = r#"{"object":"list","data":[{"id":"qwen3-vl:8b"},{"id":"nomic-embed-text"},{"id":"gemma4:31b"}]}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+    });
+    let endpoint = Endpoint {
+        base_url: format!("http://{address}/v1/"),
+        api_key: Some("key-1".into()),
+        model: String::new(),
+        api: Api::ChatCompletions { temperature: 0.0, top_p: 1.0, max_tokens: 100 },
+        auth: None,
+    };
+    let ids: Vec<String> =
+        mtt_translate::client::list_models(&endpoint).unwrap().into_iter().map(|model| model.id).collect();
+    assert_eq!(ids, ["gemma4:31b", "qwen3-vl:8b"]);
+    assert_eq!(*auth.lock().unwrap(), "bearer key-1");
+}

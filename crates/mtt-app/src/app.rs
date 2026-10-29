@@ -43,6 +43,11 @@ pub enum AppEvent {
         event: crate::editor::translation::TranslationEvent,
     },
     ModelTest(Result<String, String>),
+    /// The models an engine offers, for the settings' model field (`source` names it).
+    ModelList {
+        source: String,
+        result: Result<Vec<mtt_translate::ModelOption>, String>,
+    },
     CodexLogin(crate::settings_view::CodexLoginEvent),
     Lama(crate::settings_view::LamaEvent),
     UpdateChecked(crate::update_check::UpdateStatus),
@@ -122,6 +127,7 @@ impl MttApp {
                     }
                 }
                 (AppEvent::ModelTest(result), _) => self.settings.on_test_result(result),
+                (AppEvent::ModelList { source, result }, _) => self.settings.on_model_list(source, result),
                 (AppEvent::CodexLogin(event), _) => self.settings.on_codex_event(event),
                 (AppEvent::UpdateChecked(status), _) => self.settings.on_update_checked(status),
                 (AppEvent::Report { chapter_id, event }, Screen::Editor(editor)) => {

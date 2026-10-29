@@ -49,6 +49,8 @@ pub enum Step {
     Sample([f32; 2]),
     /// Moves the pointer to a screen point (tooltips, hover states).
     Hover([f32; 2]),
+    /// Clicks the primary button at a screen point.
+    Click([f32; 2]),
     /// Translates the current page.
     Translate,
     WaitTranslation,
@@ -138,6 +140,10 @@ impl Automation {
                     "hover" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Hover([v[0], v[1]]))?
+                    }
+                    "click" => {
+                        let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                        (v.len() == 2).then(|| Step::Click([v[0], v[1]]))?
                     }
                     "translate" => Step::Translate,
                     "translate-wait" => Step::WaitTranslation,
@@ -314,6 +320,18 @@ impl Automation {
             (Step::Hover(pos), _) => {
                 self.injected.push_back(vec![egui::Event::PointerMoved(egui::pos2(pos[0], pos[1]))]);
                 self.wait_frames = 3;
+            }
+            (Step::Click(pos), _) => {
+                let pos = egui::pos2(pos[0], pos[1]);
+                let button = |pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                // Move, press and release on separate frames, like a real click.
+                self.injected.extend([vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
+                self.wait_frames = 5;
             }
             (Step::Space(pressed), _) => {
                 self.injected.push_back(vec![egui::Event::Key {

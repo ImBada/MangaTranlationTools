@@ -317,25 +317,134 @@ pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
     if let Some(auth) = &endpoint.auth {
         return auth.session().map(|_| ());
     }
-    let url = format!("{}/models", endpoint.base_url.trim_end_matches('/'));
-    let mut request = agent(Duration::from_secs(30)).get(&url);
-    if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
-        request = request.header("Authorization", &format!("Bearer {}", key.trim()));
+    get_models(endpoint).map(|_| ())
+}
+
+/// The Codex CLI release whose model catalog this reads (koharu asks as the same).
+const CODEX_CLIENT_VERSION: &str = "0.146.0";
+/// Model ids of an OpenAI-compatible server that can't translate a page.
+const NON_CHAT_MODELS: [&str; 6] = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe"];
+
+/// A model an endpoint offers.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModelOption {
+    pub id: String,
+    /// The display name, or the id.
+    pub name: String,
+    pub description: String,
+    /// Reasoning efforts it takes (`low`, `medium`…); empty when the endpoint doesn't say.
+    pub efforts: Vec<String>,
+}
+
+/// The models `endpoint` offers to translate with: the ChatGPT account's Codex catalog
+/// (models shown in pickers that read images, best first), or an OpenAI-compatible
+/// server's `GET /models` (minus embedding, speech and image models, by id).
+pub fn list_models(endpoint: &Endpoint) -> Result<Vec<ModelOption>, String> {
+    let text = get_models(endpoint)?;
+    let catalog: Value = serde_json::from_str(&text)
+        .map_err(|e| format!("모델 목록을 읽지 못했습니다: {e}: {}", preview(&text, 200)))?;
+    let models = if endpoint.auth.is_some() { codex_models(&catalog) } else { compatible_models(&catalog) };
+    if models.is_empty() {
+        return Err("쓸 수 있는 모델이 없습니다.".into());
     }
-    let mut response =
-        request.call().map_err(|e| format!("엔드포인트에 연결하지 못했습니다. Base URL을 확인하세요. ({url}: {e})"))?;
-    let status = response.status();
-    if status.is_success() {
-        return Ok(());
-    }
-    let text = response.body_mut().read_to_string().unwrap_or_default();
-    let hint = match status.as_u16() {
-        401 | 403 => "API 키를 확인하세요.",
-        404 => "Base URL이 /v1 까지 포함하는지 확인하세요.",
-        429 => "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
-        _ => "",
+    Ok(models)
+}
+
+/// The body of `GET {base_url}/models`, as the signed-in account when there is one.
+fn get_models(endpoint: &Endpoint) -> Result<String, String> {
+    let base = endpoint.base_url.trim_end_matches('/');
+    let url = match endpoint.auth {
+        Some(_) => format!("{base}/models?client_version={CODEX_CLIENT_VERSION}"),
+        None => format!("{base}/models"),
     };
-    Err(format!("엔드포인트 확인 실패 ({}). {hint} {}", status.as_u16(), preview(&text, 300)))
+    let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose()?;
+    let get = |session: Option<&crate::codex::Session>| {
+        let mut request = agent(Duration::from_secs(30)).get(&url).header("Accept", "application/json");
+        if let Some(session) = session {
+            for (name, value) in crate::codex::account_headers(session) {
+                request = request.header(name, &value);
+            }
+        } else if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+            request = request.header("Authorization", &format!("Bearer {}", key.trim()));
+        }
+        request.call().map_err(|e| format!("엔드포인트에 연결하지 못했습니다. Base URL을 확인하세요. ({url}: {e})"))
+    };
+    let mut response = get(session.as_ref())?;
+    if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
+        && response.status().as_u16() == 401
+    {
+        response = get(Some(&auth.force_refresh(stale)?))?;
+    }
+    let status = response.status();
+    let text = response.body_mut().read_to_string().unwrap_or_default();
+    if !status.is_success() {
+        let hint = match status.as_u16() {
+            401 | 403 if endpoint.auth.is_some() => "ChatGPT에 다시 로그인하세요.",
+            401 | 403 => "API 키를 확인하세요.",
+            404 => "Base URL이 /v1 까지 포함하는지 확인하세요.",
+            429 => "요청 한도를 초과했습니다. 잠시 후 다시 시도하세요.",
+            _ => "",
+        };
+        return Err(format!("엔드포인트 확인 실패 ({}). {hint} {}", status.as_u16(), preview(&text, 300)));
+    }
+    Ok(text)
+}
+
+/// Codex catalog rows (`{"models": [{"slug", "display_name", "visibility", "priority",
+/// "supported_reasoning_levels", "input_modalities"…}]}`), like the Codex model picker.
+fn codex_models(catalog: &Value) -> Vec<ModelOption> {
+    let text = |row: &Value, key: &str| row.get(key).and_then(Value::as_str).map(str::trim).unwrap_or("").to_owned();
+    let mut rows: Vec<(i64, ModelOption)> = catalog
+        .get("models")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter(|row| row.get("visibility").and_then(Value::as_str).unwrap_or("list").eq_ignore_ascii_case("list"))
+        .filter(|row| {
+            row.get("input_modalities")
+                .and_then(Value::as_array)
+                .is_none_or(|inputs| inputs.iter().any(|input| input.as_str() == Some("image")))
+        })
+        .filter_map(|row| {
+            let id = text(row, "slug");
+            let id = if id.is_empty() { text(row, "id") } else { id };
+            if id.is_empty() {
+                return None;
+            }
+            let name = Some(text(row, "display_name")).filter(|name| !name.is_empty()).unwrap_or_else(|| id.clone());
+            let mut efforts: Vec<String> = Vec::new();
+            for level in row.get("supported_reasoning_levels").and_then(Value::as_array).into_iter().flatten() {
+                if let Some(effort) = level.as_str().or_else(|| level.get("effort")?.as_str())
+                    && !efforts.iter().any(|known| known == effort)
+                {
+                    efforts.push(effort.to_owned());
+                }
+            }
+            let priority = row.get("priority").and_then(Value::as_i64).unwrap_or(i64::MAX);
+            Some((priority, ModelOption { id, name, description: text(row, "description"), efforts }))
+        })
+        .collect();
+    rows.sort_by_key(|(priority, _)| *priority);
+    rows.into_iter().map(|(_, model)| model).collect()
+}
+
+/// OpenAI `GET /models` rows (`{"data": [{"id"}]}`), sorted by id.
+fn compatible_models(catalog: &Value) -> Vec<ModelOption> {
+    let mut ids: Vec<String> = catalog
+        .get("data")
+        .or_else(|| catalog.get("models"))
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|row| row.get("id").or_else(|| row.get("name")).and_then(Value::as_str))
+        .map(|id| id.trim().to_owned())
+        .filter(|id| !id.is_empty() && !NON_CHAT_MODELS.iter().any(|kind| id.to_ascii_lowercase().contains(kind)))
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids.into_iter()
+        .map(|id| ModelOption { name: id.clone(), id, description: String::new(), efforts: Vec::new() })
+        .collect()
 }
 
 /// `extractModelOutputText`.
@@ -417,6 +526,39 @@ pub fn preview(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn codex_catalog_keeps_picker_models_that_read_images_best_first() {
+        let catalog = json!({ "models": [
+            { "slug": "gpt-b", "display_name": "GPT B", "visibility": "list", "priority": 2,
+              "supported_reasoning_levels": [{ "effort": "low" }, { "effort": "high" }, "low"],
+              "input_modalities": ["text", "image"] },
+            { "slug": "hidden", "visibility": "hide", "priority": 0 },
+            { "slug": "text-only", "visibility": "list", "priority": 0, "input_modalities": ["text"] },
+            { "slug": "gpt-a", "description": "Best", "priority": 1 },
+            { "display_name": "no id" },
+        ]});
+        let models = codex_models(&catalog);
+        let ids: Vec<&str> = models.iter().map(|model| model.id.as_str()).collect();
+        assert_eq!(ids, ["gpt-a", "gpt-b"]);
+        assert_eq!((models[0].name.as_str(), models[0].description.as_str()), ("gpt-a", "Best"));
+        assert_eq!(models[1].name, "GPT B");
+        assert_eq!(models[1].efforts, ["low", "high"]);
+    }
+
+    #[test]
+    fn compatible_models_skip_embedding_and_speech_models() {
+        let catalog = json!({ "object": "list", "data": [
+            { "id": "qwen3-vl:8b" }, { "id": "text-embedding-3-small" }, { "id": "whisper-1" },
+            { "id": "gemma4:31b" }, { "id": "gemma4:31b" }, { "id": " " },
+        ]});
+        let ids: Vec<String> = compatible_models(&catalog).into_iter().map(|model| model.id).collect();
+        assert_eq!(ids, ["gemma4:31b", "qwen3-vl:8b"]);
+        // Some servers list `models` with names instead.
+        let ids: Vec<String> =
+            compatible_models(&json!({ "models": [{ "name": "llava" }] })).into_iter().map(|model| model.id).collect();
+        assert_eq!(ids, ["llava"]);
+    }
 
     #[test]
     fn ollama_detection() {

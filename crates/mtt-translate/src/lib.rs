@@ -19,7 +19,7 @@ use mtt_core::model::{
 };
 use mtt_core::settings::{AppSettings, ModelProvider, ReasoningEffort};
 
-pub use client::{Api, Endpoint, Retry, SendError};
+pub use client::{Api, Endpoint, ModelOption, Retry, SendError};
 pub use parser::OverlayItem;
 
 pub const PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
@@ -131,7 +131,8 @@ fn env_number(name: &str) -> Option<f64> {
     std::env::var(name).ok()?.trim().parse::<f64>().ok().filter(|value| value.is_finite())
 }
 
-fn effort_name(effort: ReasoningEffort) -> &'static str {
+/// The Responses API's name for `effort`.
+pub fn effort_name(effort: ReasoningEffort) -> &'static str {
     match effort {
         ReasoningEffort::None => "none",
         ReasoningEffort::Low => "low",
@@ -206,6 +207,11 @@ impl TranslationConfig {
 /// Checks the endpoint is reachable (`/models`), or that the ChatGPT sign-in is usable.
 pub fn verify_endpoint(config: &TranslationConfig) -> Result<(), String> {
     client::verify(&config.endpoint)
+}
+
+/// The models the configured engine offers (see [`client::list_models`]).
+pub fn list_models(config: &TranslationConfig) -> Result<Vec<ModelOption>, String> {
+    client::list_models(&config.endpoint)
 }
 
 /// One request/parse attempt: `prompt` with `variants`, the output read by `parse`.
