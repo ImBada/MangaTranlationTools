@@ -104,7 +104,7 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 - [x] 블록 그룹 UI (그룹 만들기/해제, 그룹 그림자 설정, 선택 안 된 그룹 블록 드래그 시 그룹 전체 이동)
 - [x] 문자별 글꼴 지정 UI
 - [x] 프리셋 이름 한글 표시, 대체된 글꼴 표시
-- [~] 패키징: macOS `.app` + dmg + zip(`bundle-macos.sh --dist`, 검증 완료). Windows(zip/NSIS)·Linux(tar.gz/AppImage/deb) 스크립트 작성, 해당 OS에서 빌드 확인 필요
+- [~] 패키징: macOS `.app` + dmg + zip(`bundle-macos.sh --dist`, 검증 완료). Windows(zip/NSIS)·Linux(tar.gz/deb)는 GitHub Actions(`windows-latest`, `ubuntu-latest`)에서 빌드되는 것까지 확인, 실제 Windows·Linux에서 실행 확인 필요. Linux AppImage는 아직 릴리스에 없음(`appimagetool`이 있으면 만듦)
 
 ## 8단계: TS 앱과 1:1 대응 (기능 인벤토리 기준)
 
