@@ -374,8 +374,8 @@ impl Library {
     /// and every `runs/<run>/pages/<page_id>` entry. Ids that are not a single path component are
     /// skipped so a corrupt id can never widen the recursive delete.
     pub fn remove_page_artifacts(&self, work_id: &str, chapter_id: &str, page_id: &str) -> CoreResult<()> {
-        if page_id.is_empty() || page_id == "." || page_id == ".." || page_id.contains(['/', '\\']) {
-            log::warn!("skipping artifact cleanup for unsafe page id {page_id:?}");
+        if ![work_id, chapter_id, page_id].into_iter().all(is_safe_id) {
+            log::warn!("skipping artifact cleanup for unsafe id {work_id:?}/{chapter_id:?}/{page_id:?}");
             return Ok(());
         }
         let chapter_dir = self.chapter_dir(work_id, chapter_id);
@@ -486,7 +486,7 @@ impl Library {
         };
         self.chapter_dir(&chapter.work_id, &chapter.id)
             .join("inpaint")
-            .join(format!("{}-{suffix}.png", sanitize_file_basename(page_id, page_id)))
+            .join(format!("{}-{suffix}.png", sanitize_file_basename(page_id, "page")))
     }
 
     /// `renders/<page name>.png` (`saveRenderedPage`).
@@ -664,9 +664,11 @@ struct PageHeader {
     progress_completed: Option<bool>,
 }
 
-/// Ids are folder names: non-empty, no path separators, not `.`/`..`.
+/// Ids are folder names and must stay one plain path component on every OS: non-empty,
+/// not `.`/`..`, no path separators, no `:` (on Windows `base.join("C:")` replaces `base`
+/// with the drive's current folder) and no control characters.
 fn is_safe_id(id: &str) -> bool {
-    !id.is_empty() && id != "." && id != ".." && !id.contains(['/', '\\'])
+    !id.is_empty() && id != "." && id != ".." && !id.chars().any(|ch| matches!(ch, '/' | '\\' | ':') || ch.is_control())
 }
 
 #[cfg(test)]
@@ -990,8 +992,12 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let library = Library::new(dir.path());
         let chapter_dir = library.chapter_dir("w", "c");
-        let files = [touch(&chapter_dir, "inpaint/p1-mask.png"), touch(&chapter_dir, "runs/r1/pages/p1/blocks.json")];
-        for page_id in ["", ".", "..", "../pages", "a\\b"] {
+        let files = [
+            touch(&chapter_dir, "inpaint/p1-mask.png"),
+            touch(&chapter_dir, "runs/r1/pages/p1/blocks.json"),
+            touch(&chapter_dir, "runs/r1/pages/C:/blocks.json"),
+        ];
+        for page_id in ["", ".", "..", "../pages", "a\\b", "C:", "c:p1", "p1\0"] {
             library.remove_page_artifacts("w", "c", page_id).unwrap();
         }
         assert!(files.iter().all(|path| path.exists()));
@@ -1010,5 +1016,14 @@ mod tests {
         assert!(library.work_dir("keep").exists(), "nothing else was removed");
         assert_eq!(library.read_work("keep").unwrap().unwrap().id, "keep", "folder name wins");
         assert!(library.delete_chapter("../keep").is_err());
+        // On Windows `join("C:")` would replace the whole base path.
+        for id in ["C:", "C:keep", "a:b", "x\ty"] {
+            assert!(!is_safe_id(id), "{id:?}");
+            assert!(library.delete_work(id).is_err());
+            assert!(library.delete_chapter(id).is_err());
+        }
+        assert!(is_safe_id("0f9c2a5e-1b7d-4c3e-9a8f-2d6e4b1c7a90"));
+        assert!(is_safe_id("p1-block-3"));
+        assert!(library.work_dir("keep").exists());
     }
 }
