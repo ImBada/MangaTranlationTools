@@ -31,7 +31,8 @@ use image::{GrayImage, RgbaImage};
 use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block_type_font_presets};
 use mtt_core::library::resolve_chapter_status;
 use mtt_core::model::{
-    BBox, Chapter, InpaintEngine, InpaintSettings, InpaintStatus, PageRecord, StyleKey, TranslationBlock,
+    BBox, Chapter, ChapterStatus, InpaintEngine, InpaintSettings, InpaintStatus, PageAnalysisStatus, PageRecord,
+    StyleKey, TranslationBlock,
 };
 use mtt_inpaint::lama::Lama;
 use mtt_inpaint::text_segmentation::TextSegmentation;
@@ -573,8 +574,32 @@ impl Editor {
             work_notes_draft: None,
             shortcut_sheet: false,
         };
+        editor.reset_interrupted_jobs();
         editor.reset_checkpoint();
         editor
+    }
+
+    /// Quitting during a translation or inpaint leaves its pages saved as running. Nothing
+    /// runs yet when a chapter opens, so those pages wait for translation again, and the
+    /// inpaint counts as failed (its card offers 다시 실행; the layers are as before the run).
+    fn reset_interrupted_jobs(&mut self) {
+        let mut changed = false;
+        for page in &mut self.chapter.pages {
+            if page.analysis_status == PageAnalysisStatus::Running {
+                page.analysis_status = PageAnalysisStatus::Idle;
+                changed = true;
+            }
+            if page.inpaint_status == Some(InpaintStatus::Running) {
+                page.inpaint_status = Some(InpaintStatus::Failed);
+                changed = true;
+            }
+        }
+        let status = resolve_chapter_status(&self.chapter.pages);
+        if changed || (self.chapter.status == ChapterStatus::Running && status != ChapterStatus::Running) {
+            log::info!("chapter {}: reset pages left running by an interrupted job", self.chapter.id);
+            self.chapter.status = status;
+            self.mark_chapter_dirty();
+        }
     }
 
     pub fn page(&self) -> Option<&PageRecord> {
@@ -3360,6 +3385,21 @@ mod tests {
         let saved = services.library.read_chapter("w", "c").unwrap().unwrap();
         let path = saved.pages[0].inpaint_mask_path.as_deref().expect("the chapter points at the mask");
         assert!(std::path::Path::new(path).is_file());
+    }
+
+    #[test]
+    fn opening_a_chapter_resets_jobs_cut_short_by_quitting() {
+        let mut chapter = chapter_with_pages(2);
+        chapter.pages[0].analysis_status = PageAnalysisStatus::Running;
+        chapter.pages[1].analysis_status = PageAnalysisStatus::Completed;
+        chapter.pages[1].inpaint_status = Some(InpaintStatus::Running);
+        chapter.status = ChapterStatus::Running;
+        let editor = Editor::new(chapter);
+        assert_eq!(editor.chapter.pages[0].analysis_status, PageAnalysisStatus::Idle, "waits for translation");
+        assert_eq!(editor.chapter.pages[1].inpaint_status, Some(InpaintStatus::Failed));
+        assert_eq!(editor.chapter.status, ChapterStatus::Partial);
+        assert!(editor.chapter_dirty, "saved, so the library stops showing it as running");
+        assert!(!Editor::new(chapter_with_pages(1)).chapter_dirty, "nothing to reset, nothing to save");
     }
 
     #[test]
