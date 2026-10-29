@@ -230,6 +230,10 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    fn remaining(&self) -> usize {
+        self.data.len() - self.pos
+    }
+
     fn u8(&mut self) -> Result<u8, String> {
         Ok(self.take(1)?[0])
     }
@@ -253,12 +257,44 @@ impl<'a> Reader<'a> {
     }
 }
 
+/// A rectangle in document pixels, right and bottom exclusive. In `i64`, so the size of any
+/// rectangle a file can state neither overflows nor wraps.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+struct Bounds {
+    top: i64,
+    left: i64,
+    bottom: i64,
+    right: i64,
+}
+
+impl Bounds {
+    fn read(reader: &mut Reader<'_>) -> Result<Self, String> {
+        let [top, left, bottom, right] = [reader.i32()?, reader.i32()?, reader.i32()?, reader.i32()?].map(i64::from);
+        Ok(Self { top, left, bottom, right })
+    }
+
+    /// 0 when right is left of left; at most 2³² - 1.
+    fn width(self) -> u64 {
+        (self.right - self.left).max(0) as u64
+    }
+
+    fn height(self) -> u64 {
+        (self.bottom - self.top).max(0) as u64
+    }
+
+    fn intersect(self, other: Self) -> Self {
+        Self {
+            top: self.top.max(other.top),
+            left: self.left.max(other.left),
+            bottom: self.bottom.min(other.bottom),
+            right: self.right.min(other.right),
+        }
+    }
+}
+
 #[derive(Debug, Default, Clone)]
 struct LayerRecord {
-    top: i32,
-    left: i32,
-    bottom: i32,
-    right: i32,
+    bounds: Bounds,
     channels: Vec<(i16, u32)>,
     opacity: u8,
     hidden: bool,
@@ -272,6 +308,7 @@ struct LayerRecord {
 #[derive(Debug, Clone)]
 pub struct PsdLayer {
     pub name: String,
+    /// Page position of `image`, which is the part of the layer on the canvas.
     pub left: i32,
     pub top: i32,
     pub image: RgbaImage,
@@ -314,49 +351,129 @@ fn unpack_bits(input: &[u8], expected: usize) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-fn read_channel(reader: &mut Reader<'_>, width: usize, height: usize, length: u32) -> Result<Vec<u8>, String> {
-    let start = reader.pos;
-    if length < 2 {
-        reader.take(length as usize)?;
-        return Ok(vec![0; width * height]);
+/// Photoshop's largest document side (a PSB's; a PSD's is 30000).
+const MAX_SIDE: u32 = 300_000;
+
+const TRUNCATED_LAYER: &str = "PSD 레이어 데이터가 잘렸습니다.";
+
+/// Checks that a channel's `data` holds what a `bounds`-sized layer needs, before anything
+/// is allocated for it: raw rows, or RLE row byte counts and the rows they count.
+fn check_channel(data: &[u8], bounds: Bounds) -> Result<(), String> {
+    if data.len() < 2 {
+        return Ok(());
     }
-    let compression = reader.u16()?;
-    let data = match compression {
-        0 => reader.take(width * height)?.to_vec(),
+    let (width, height) = (bounds.width(), bounds.height());
+    let available = data.len() as u64 - 2;
+    match u16::from_be_bytes([data[0], data[1]]) {
+        0 if width * height <= available => Ok(()),
         1 => {
-            let counts: Vec<usize> = (0..height).map(|_| reader.u16().map(usize::from)).collect::<Result<_, _>>()?;
-            let mut pixels = Vec::with_capacity(width * height);
-            for count in counts {
-                pixels.extend(unpack_bits(reader.take(count)?, width)?);
+            let table = height * 2;
+            if table > available {
+                return Err(TRUNCATED_LAYER.into());
             }
-            pixels
+            let rows: u64 = data[2..2 + table as usize]
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|count| u64::from(u16::from_be_bytes(*count)))
+                .sum();
+            // A PackBits byte stands for at most 64 pixels (a run of 128 is 2 bytes), so
+            // fewer can't be the layer's rows.
+            if rows > available - table || rows.saturating_mul(64) < width * height {
+                return Err(TRUNCATED_LAYER.into());
+            }
+            Ok(())
         }
-        other => return Err(format!("지원하지 않는 PSD 압축 방식입니다 ({other}). 압축 없이 또는 RLE로 저장하세요.")),
-    };
-    reader.pos = start + length as usize;
-    Ok(data)
+        0 => Err(TRUNCATED_LAYER.into()),
+        other => Err(format!("지원하지 않는 PSD 압축 방식입니다 ({other}). 압축 없이 또는 RLE로 저장하세요.")),
+    }
+}
+
+/// Decodes the part of a `bounds`-sized channel inside `clip` (`check_channel` passed),
+/// handing `put` each value with its position in `clip`. A channel without data is zeros.
+fn decode_channel(
+    data: &[u8],
+    bounds: Bounds,
+    clip: Bounds,
+    mut put: impl FnMut(usize, usize, u8),
+) -> Result<(), String> {
+    let clip = clip.intersect(bounds);
+    let (width, rows) = (clip.width() as usize, clip.height() as usize);
+    if width == 0 || rows == 0 {
+        return Ok(());
+    }
+    let (skip_x, skip_y) = ((clip.left - bounds.left) as usize, (clip.top - bounds.top) as usize);
+    if data.len() < 2 {
+        (0..rows).for_each(|y| (0..width).for_each(|x| put(x, y, 0)));
+        return Ok(());
+    }
+    let stride = bounds.width() as usize;
+    if u16::from_be_bytes([data[0], data[1]]) == 0 {
+        for y in 0..rows {
+            let row = &data[2 + (skip_y + y) * stride + skip_x..][..width];
+            row.iter().enumerate().for_each(|(x, value)| put(x, y, *value));
+        }
+        return Ok(());
+    }
+    let height = bounds.height() as usize;
+    let counts = &data[2..2 + height * 2];
+    let mut offset = 2 + counts.len();
+    for (row, count) in counts.as_chunks::<2>().0.iter().enumerate().take(skip_y + rows) {
+        let count = usize::from(u16::from_be_bytes(*count));
+        let packed = &data[offset..offset + count];
+        offset += count;
+        if row >= skip_y {
+            let pixels = unpack_bits(packed, skip_x + width)?;
+            pixels[skip_x..].iter().enumerate().for_each(|(x, value)| put(x, row - skip_y, *value));
+        }
+    }
+    Ok(())
+}
+
+/// The record's color and transparency channels where the layer is on `canvas`.
+fn decode_layer(
+    record: &LayerRecord,
+    channels: &[(i16, &[u8])],
+    canvas: Bounds,
+) -> Result<(Bounds, RgbaImage), String> {
+    let pixel_channels = channels.iter().filter(|(id, _)| (-1..=2).contains(id));
+    for (_, data) in pixel_channels.clone() {
+        check_channel(data, record.bounds)?;
+    }
+    let area = record.bounds.intersect(canvas);
+    // At most the canvas, which fits u32.
+    let width = area.width() as u32;
+    let mut image = RgbaImage::from_pixel(width, area.height() as u32, image::Rgba([0, 0, 0, 255]));
+    for (id, data) in pixel_channels {
+        let channel = if *id == -1 { 3 } else { *id as usize };
+        let pixels = image.as_mut();
+        decode_channel(data, record.bounds, area, |x, y, value| {
+            pixels[(y * width as usize + x) * 4 + channel] = value;
+        })?;
+    }
+    Ok((area, image))
 }
 
 fn parse_extra(reader: &mut Reader<'_>, record: &mut LayerRecord, length: usize) -> Result<(), String> {
-    let end = reader.pos + length;
-    let mask_len = reader.u32()? as usize;
-    reader.take(mask_len)?;
-    let ranges_len = reader.u32()? as usize;
-    reader.take(ranges_len)?;
-    let name_len = reader.u8()? as usize;
-    let name = reader.take(name_len)?;
+    let mut extra = Reader { data: reader.take(length)?, pos: 0 };
+    let mask_len = extra.u32()? as usize;
+    extra.take(mask_len)?;
+    let ranges_len = extra.u32()? as usize;
+    extra.take(ranges_len)?;
+    let name_len = extra.u8()? as usize;
+    let name = extra.take(name_len)?;
     record.name = String::from_utf8_lossy(name).into_owned();
     let padded = (1 + name_len).div_ceil(4) * 4;
-    reader.take(padded - 1 - name_len)?;
-    while reader.pos + 12 <= end {
-        let signature = reader.take(4)?;
+    extra.take(padded - 1 - name_len)?;
+    while extra.remaining() >= 12 {
+        let signature = extra.take(4)?;
         if signature != b"8BIM" && signature != b"8B64" {
             break;
         }
-        let key = reader.take(4)?.to_vec();
-        let len = reader.u32()? as usize;
-        let block = reader.take(len)?;
-        match key.as_slice() {
+        let key = extra.take(4)?;
+        let len = extra.u32()? as usize;
+        let Ok(block) = extra.take(len) else { break };
+        match key {
             b"luni" if block.len() >= 4 => {
                 let count = u32::from_be_bytes([block[0], block[1], block[2], block[3]]) as usize;
                 let units: Vec<u16> = block[4..]
@@ -375,7 +492,6 @@ fn parse_extra(reader: &mut Reader<'_>, record: &mut LayerRecord, length: usize)
             _ => {}
         }
     }
-    reader.pos = end;
     Ok(())
 }
 
@@ -396,6 +512,9 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
     if depth != 8 || mode != 3 {
         return Err(format!("8비트 RGB PSD만 지원합니다 (현재: {depth}비트, 색상 모드 {mode})."));
     }
+    if width.max(height) > MAX_SIDE {
+        return Err(format!("PSD 크기가 너무 큽니다 ({width}x{height}, 한 변 최대 {MAX_SIDE}px)."));
+    }
     let color_len = reader.u32()? as usize;
     reader.take(color_len)?;
     let resources_len = reader.u32()? as usize;
@@ -411,13 +530,7 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
     let count = reader.i16()?.unsigned_abs() as usize;
     let mut records = Vec::with_capacity(count);
     for _ in 0..count {
-        let mut record = LayerRecord {
-            top: reader.i32()?,
-            left: reader.i32()?,
-            bottom: reader.i32()?,
-            right: reader.i32()?,
-            ..LayerRecord::default()
-        };
+        let mut record = LayerRecord { bounds: Bounds::read(&mut reader)?, ..LayerRecord::default() };
         let channel_count = reader.u16()?;
         for _ in 0..channel_count {
             record.channels.push((reader.i16()?, reader.u32()?));
@@ -432,36 +545,21 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
         parse_extra(&mut reader, &mut record, extra_len)?;
         records.push(record);
     }
+    let canvas = Bounds { top: 0, left: 0, bottom: i64::from(height), right: i64::from(width) };
     let mut images = Vec::with_capacity(count);
     for record in &records {
-        let (w, h) = ((record.right - record.left).max(0) as usize, (record.bottom - record.top).max(0) as usize);
-        let mut image = RgbaImage::from_pixel(w as u32, h as u32, image::Rgba([0, 0, 0, 255]));
-        let mut has_alpha = false;
-        for (id, length) in &record.channels {
-            let channel = read_channel(&mut reader, w, h, *length)?;
-            let index = match id {
-                0 => 0,
-                1 => 1,
-                2 => 2,
-                -1 => {
-                    has_alpha = true;
-                    3
-                }
-                _ => continue, // layer masks are ignored
-            };
-            for (pixel, value) in image.pixels_mut().zip(channel) {
-                pixel[index] = value;
-            }
-        }
-        if !has_alpha {
-            image.pixels_mut().for_each(|p| p[3] = 255);
-        }
-        images.push(image);
+        // Every channel's bytes must be in the file before any of the layer is allocated.
+        let channels = record
+            .channels
+            .iter()
+            .map(|(id, length)| Ok((*id, reader.take(*length as usize)?)))
+            .collect::<Result<Vec<_>, String>>()?;
+        images.push(decode_layer(record, &channels, canvas)?);
     }
 
     // Fold groups (bottom-to-top order: end marker, children, folder record).
     let mut stack: Vec<Vec<PsdLayer>> = vec![Vec::new()];
-    for (record, image) in records.into_iter().zip(images) {
+    for (record, (area, image)) in records.into_iter().zip(images) {
         match record.section {
             3 => stack.push(Vec::new()),
             1 | 2 => {
@@ -477,8 +575,9 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
             }
             _ => stack.last_mut().expect("root frame").push(PsdLayer {
                 name: record.name,
-                left: record.left,
-                top: record.top,
+                // Inside the canvas, whose sides fit i32.
+                left: area.left as i32,
+                top: area.top as i32,
                 image,
                 opacity: f32::from(record.opacity) / 255.0,
                 hidden: record.hidden,
@@ -683,6 +782,95 @@ mod tests {
             ]
         );
         assert_eq!(import_inpaint_layers(&document, 4, 3).unwrap(), import_inpaint_layers(&plain, 4, 3).unwrap());
+    }
+
+    /// A hand-made layer record: top, left, bottom, right and the channels' ids and lengths.
+    type Crafted<'a> = ([i32; 4], &'a [(i16, u32)]);
+
+    /// A 4×3 PSD around hand-made layer records followed by `channel_data`, the way a broken
+    /// or hostile file can be.
+    fn crafted(records: &[Crafted<'_>], channel_data: &[u8]) -> Vec<u8> {
+        let mut info = Vec::new();
+        push_u16(&mut info, records.len() as u16);
+        for (bounds, channels) in records {
+            bounds.iter().for_each(|value| push_i32(&mut info, *value));
+            push_u16(&mut info, channels.len() as u16);
+            for (id, length) in *channels {
+                info.extend_from_slice(&id.to_be_bytes());
+                push_u32(&mut info, *length);
+            }
+            info.extend_from_slice(b"8BIMnorm");
+            info.extend_from_slice(&[255, 0, 0, 0]);
+            let extra = [0, 0, 0, 0, 0, 0, 0, 0, 3, b'a', b'b', b'c'];
+            push_u32(&mut info, extra.len() as u32);
+            info.extend_from_slice(&extra);
+        }
+        info.extend_from_slice(channel_data);
+        let mut bytes = write_psd(4, 3, &RgbaImage::new(4, 3), &[]);
+        let layer_section = 26 + 4 + 4;
+        bytes.truncate(layer_section);
+        push_u32(&mut bytes, info.len() as u32 + 8);
+        push_u32(&mut bytes, info.len() as u32);
+        bytes.extend(info);
+        push_u32(&mut bytes, 0);
+        bytes
+    }
+
+    #[test]
+    fn broken_layer_records_are_errors_before_anything_is_allocated() {
+        let raw_header = [0u8, 0];
+        let cases: [(&str, Vec<u8>); 6] = [
+            // Used to overflow `right - left` (a panic).
+            ("overflowing bounds", crafted(&[([0, i32::MIN, 1, i32::MAX], &[(0, 2)])], &raw_header)),
+            // Used to overflow the image buffer's length (a panic).
+            ("2³¹ square", crafted(&[([0, 0, i32::MAX, i32::MAX], &[(0, 2)])], &raw_header)),
+            // Used to allocate 1.6GB before finding the data missing.
+            ("20000 square", crafted(&[([0, 0, 20000, 20000], &[(0, 2)])], &raw_header)),
+            ("RLE without rows", {
+                let mut data = vec![0, 1];
+                data.extend(std::iter::repeat_n(0, 2 * 20000));
+                crafted(&[([0, 0, 20000, 20000], &[(0, data.len() as u32)])], &data)
+            }),
+            ("channel past the end", crafted(&[([0, 0, 2, 2], &[(0, 1000)])], &[0, 0, 1, 2, 3, 4])),
+            ("RLE rows past the channel", crafted(&[([0, 0, 1, 2], &[(0, 6)])], &[0, 1, 0, 9, 1, 7])),
+        ];
+        for (case, bytes) in cases {
+            let error = read_psd(&bytes).unwrap_err();
+            assert!(error.contains("잘렸습니다"), "{case}: {error}");
+        }
+        // Raw and RLE data that fits reads.
+        let fits = crafted(&[([0, 0, 1, 2], &[(0, 4), (1, 7)])], &[0, 0, 10, 20, 0, 1, 0, 3, 1, 30, 40]);
+        let layer = &read_psd(&fits).unwrap().layers[0];
+        assert_eq!(layer.image.as_raw(), &[10, 30, 0, 255, 20, 40, 0, 255]);
+        let mut huge = write_psd(1, 1, &RgbaImage::new(1, 1), &[]);
+        huge[14..22].copy_from_slice(&[0, 0x10, 0, 0, 0, 0, 0, 1]);
+        assert!(read_psd(&huge).unwrap_err().contains("너무 큽니다"));
+    }
+
+    #[test]
+    fn layers_past_the_canvas_keep_only_their_part_on_it() {
+        let paint = RgbaImage::from_fn(5, 3, |x, y| image::Rgba([x as u8 * 10, y as u8 * 10, 7, 255]));
+        let empty = RgbaImage::new(0, 0);
+        let bytes = write_psd(
+            4,
+            3,
+            &RgbaImage::new(4, 3),
+            &[
+                ExportLayer { left: -2, top: 1, ..ExportLayer::new("걸친 레이어", &paint, false) },
+                ExportLayer { left: 10, top: 0, ..ExportLayer::new("밖", &paint, false) },
+                ExportLayer::new("빈 레이어", &empty, false),
+            ],
+        );
+        let document = read_psd(&bytes).unwrap();
+        let layer = &document.layers[0];
+        assert_eq!((layer.left, layer.top, layer.image.dimensions()), (0, 1, (3, 2)));
+        assert_eq!(layer.image.get_pixel(0, 0).0, [20, 0, 7, 255]);
+        assert_eq!(layer.image.get_pixel(2, 1).0, [40, 10, 7, 255]);
+        assert_eq!(document.layers[1].image.dimensions(), (0, 3));
+        assert_eq!(document.layers[2].image.dimensions(), (0, 0));
+        let (merged, _) = import_inpaint_layers(&document, 4, 3).unwrap();
+        assert_eq!(merged.get_pixel(1, 2).0, [30, 10, 7, 255]);
+        assert_eq!(merged.get_pixel(3, 0)[3], 0);
     }
 
     #[test]
