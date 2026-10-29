@@ -112,7 +112,7 @@ fn spawn_server() -> (String, SeenHeaders) {
                         (200, "text/event-stream", format!("data: {event}\n\ndata: [DONE]\n\n"))
                     }
                 }
-                "/models?client_version=0.164.0" => {
+                models if models.starts_with("/models?client_version=0.") => {
                     captured.lock().unwrap().push(request.headers.clone());
                     let bearer =
                         request.headers.iter().find(|(name, _)| name == "authorization").map(|(_, v)| v.clone());

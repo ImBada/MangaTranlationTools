@@ -10,7 +10,7 @@ use crate::error::{CoreError, CoreResult};
 use crate::json_io::write_json_atomic;
 use crate::model::JsonMap;
 
-pub const DEFAULT_CODEX_MODEL: &str = "gpt-5.5";
+pub const DEFAULT_CODEX_MODEL: &str = "gpt-6.1-sol";
 pub const DEFAULT_CODEX_OAUTH_PORT: u16 = 10531;
 pub const DEFAULT_OPENAI_COMPATIBLE_BASE_URL: &str = "http://127.0.0.1:11434/v1";
 pub const DEFAULT_OPENAI_COMPATIBLE_MODEL: &str = "gemma4:31b";

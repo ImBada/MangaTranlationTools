@@ -547,7 +547,14 @@ impl SettingsView {
         match draft.model_provider {
             ModelProvider::OpenAiCodex => {
                 row(ui, "모델", &mut |ui| {
-                    model_field(ui, "codex-models", &mut draft.codex.model, "gpt-5.5", models, &mut reload);
+                    model_field(
+                        ui,
+                        "codex-models",
+                        &mut draft.codex.model,
+                        mtt_core::settings::DEFAULT_CODEX_MODEL,
+                        models,
+                        &mut reload,
+                    );
                     if models.is_none() && self.codex_account.is_none() {
                         theme::hint(ui, "로그인하면 쓸 수 있는 모델 목록을 불러옵니다.");
                     }

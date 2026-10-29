@@ -320,10 +320,11 @@ pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
     get_models(endpoint).map(|_| ())
 }
 
-/// The Codex CLI release this asks the model catalog as. The catalog leaves out models
-/// newer than the asking client (0.146.0 got GPT-5.6 but no GPT-6), so keep this at a
-/// recent release.
-const CODEX_CLIENT_VERSION: &str = "0.164.0";
+/// The Codex CLI release to ask the model catalog as when GitHub can't say which is the
+/// newest. The catalog leaves out models newer than the asking client (0.146.0 got
+/// GPT-5.6 but no GPT-6).
+const CODEX_CLIENT_VERSION: &str = "0.165.0";
+const CODEX_LATEST_RELEASE_URL: &str = "https://api.github.com/repos/openai/codex/releases/latest";
 /// Model ids of an OpenAI-compatible server that can't translate a page.
 const NON_CHAT_MODELS: [&str; 6] = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe"];
 
@@ -356,7 +357,7 @@ pub fn list_models(endpoint: &Endpoint) -> Result<Vec<ModelOption>, String> {
 fn get_models(endpoint: &Endpoint) -> Result<String, String> {
     let base = endpoint.base_url.trim_end_matches('/');
     let url = match endpoint.auth {
-        Some(_) => format!("{base}/models?client_version={CODEX_CLIENT_VERSION}"),
+        Some(_) => format!("{base}/models?client_version={}", codex_client_version(base)),
         None => format!("{base}/models"),
     };
     let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose()?;
@@ -390,6 +391,48 @@ fn get_models(endpoint: &Endpoint) -> Result<String, String> {
         return Err(format!("엔드포인트 확인 실패 ({}). {hint} {}", status.as_u16(), preview(&text, 300)));
     }
     Ok(text)
+}
+
+/// The Codex CLI release to ask `base_url`'s catalog as: for ChatGPT, the newest stable
+/// release on GitHub (looked up once per run, again after a failure), never older than
+/// [`CODEX_CLIENT_VERSION`]; anything else (a mock, a proxy) gets that.
+fn codex_client_version(base_url: &str) -> String {
+    static LATEST: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+    if base_url != crate::codex::CODEX_BASE_URL {
+        return CODEX_CLIENT_VERSION.into();
+    }
+    let mut latest = LATEST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if latest.is_none() {
+        *latest = latest_codex_release();
+    }
+    match latest.as_deref() {
+        Some(version) if version_parts(version) > version_parts(CODEX_CLIENT_VERSION) => version.to_owned(),
+        _ => CODEX_CLIENT_VERSION.into(),
+    }
+}
+
+/// The version of the newest stable Codex CLI release on GitHub.
+fn latest_codex_release() -> Option<String> {
+    let mut response = agent(Duration::from_secs(5))
+        .get(CODEX_LATEST_RELEASE_URL)
+        .header("Accept", "application/vnd.github+json")
+        .header("User-Agent", "MangaTranslationTools")
+        .call()
+        .ok()
+        .filter(|response| response.status().is_success())?;
+    let release: Value = response.body_mut().read_json().ok()?;
+    release_version(release.get("tag_name")?.as_str()?)
+}
+
+/// `rust-v0.165.0` → `0.165.0`; `None` for anything but a plain release number.
+fn release_version(tag: &str) -> Option<String> {
+    let version = tag.trim().trim_start_matches("rust-").trim_start_matches('v');
+    (version.split('.').count() == 3 && version.split('.').all(|part| part.parse::<u64>().is_ok()))
+        .then(|| version.to_owned())
+}
+
+fn version_parts(version: &str) -> Vec<u64> {
+    version.split('.').map(|part| part.parse().unwrap_or(0)).collect()
 }
 
 /// Codex catalog rows (`{"models": [{"slug", "display_name", "visibility", "priority",
@@ -528,6 +571,24 @@ pub fn preview(text: &str, max_chars: usize) -> String {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn codex_release_tags_give_plain_versions() {
+        assert_eq!(release_version("rust-v0.165.0").as_deref(), Some("0.165.0"));
+        assert_eq!(release_version("v1.2.3").as_deref(), Some("1.2.3"));
+        assert_eq!(release_version("rust-v0.166.0-alpha.6"), None, "prerelease");
+        assert_eq!(release_version("latest"), None);
+        assert!(version_parts("0.165.0") > version_parts("0.99.9"), "numeric, not text, order");
+        // Only the real ChatGPT backend asks GitHub.
+        assert_eq!(codex_client_version("http://127.0.0.1:9/codex"), CODEX_CLIENT_VERSION);
+    }
+
+    #[test]
+    #[ignore = "asks GitHub"]
+    fn finds_the_latest_codex_release() {
+        let version = latest_codex_release().expect("a release");
+        assert!(version_parts(&version) >= version_parts(CODEX_CLIENT_VERSION), "{version}");
+    }
 
     #[test]
     fn codex_catalog_keeps_picker_models_that_read_images_best_first() {

@@ -68,7 +68,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 - 번역 엔진: `ChatGPT 계정 (Codex)` 또는 `OpenAI 호환 서버`(기본 `http://127.0.0.1:11434/v1`, 모델명 지정)
   - ChatGPT 계정은 설정 › 번역의 `ChatGPT 로그인`으로 앱 안에서 로그인합니다. 브라우저가 열리면 ChatGPT에 로그인하고 앱에 뜬 코드를 입력합니다.
-    토큰은 데이터 폴더의 `codex-auth.json`(macOS·Linux는 본인만 읽기 가능)에 두고 만료 전에 저절로 갱신합니다. 기본 모델 `gpt-5.5`, 생각 수준 없음~최고.
+    토큰은 데이터 폴더의 `codex-auth.json`(macOS·Linux는 본인만 읽기 가능)에 두고 만료 전에 저절로 갱신합니다. 기본 모델 `gpt-6.1-sol`, 생각 수준 없음~최고. 모델 목록은 GitHub에 올라온 최신 Codex CLI 버전으로 요청해 새 모델도 보입니다.
 - 번역 모드: `빠르게`, `정확하게`
 - 추가 지시문: 모든 번역 요청 끝에 붙는 말투·표기 규칙. 작품마다의 인물 이름·용어는 편집 화면 작품 › 화 메뉴의 `번역 메모…`에 적습니다(`work.json`의 `translationNotes`).
 - AI 번역 병렬 처리: 최대 동시 번역 수
