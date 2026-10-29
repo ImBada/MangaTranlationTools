@@ -5,6 +5,7 @@
 //! per text region with a 0..1000 box, the Japanese source and the Korean translation.
 
 pub mod client;
+pub mod codex;
 pub mod images;
 pub mod parser;
 
@@ -144,12 +145,15 @@ impl TranslationConfig {
     pub fn from_settings(settings: &AppSettings) -> Self {
         let mode = settings.mode_defaults();
         let endpoint = match settings.model_provider {
-            // Codex goes through a local `openai-oauth` proxy the user runs themselves.
+            // The ChatGPT account signed in from the settings.
             ModelProvider::OpenAiCodex => Endpoint {
-                base_url: format!("http://127.0.0.1:{}/v1", settings.codex.oauth_port),
+                base_url: codex::CODEX_BASE_URL.into(),
                 api_key: None,
                 model: settings.codex.model.clone(),
                 api: Api::Responses { reasoning_effort: effort_name(settings.codex.reasoning_effort).into() },
+                auth: Some(std::sync::Arc::new(codex::CodexAuth::new(
+                    mtt_core::paths::AppPaths::resolve().codex_auth_path,
+                ))),
             },
             ModelProvider::OpenAiCompatible => Endpoint {
                 base_url: settings.openai_compatible.base_url.clone(),
@@ -160,6 +164,7 @@ impl TranslationConfig {
                     top_p: env_number("MANGA_TRANSLATOR_TOP_P").unwrap_or(0.85),
                     max_tokens: env_number("MANGA_TRANSLATOR_MAX_TOKENS").map_or(mode.max_tokens, |v| v as u32),
                 },
+                auth: None,
             },
         };
         let concurrency = if settings.translation_parallel.enabled {
@@ -198,15 +203,9 @@ impl TranslationConfig {
     }
 }
 
-/// Checks the endpoint is reachable (`/models`), with a hint for the Codex proxy.
+/// Checks the endpoint is reachable (`/models`), or that the ChatGPT sign-in is usable.
 pub fn verify_endpoint(config: &TranslationConfig) -> Result<(), String> {
-    client::verify(&config.endpoint).map_err(|error| match config.endpoint.api {
-        Api::Responses { .. } => format!(
-            "{error}\nChatGPT(Codex) 계정 번역은 로컬 openai-oauth 프록시가 필요합니다. 터미널에서 `npx openai-oauth --port {}`를 실행한 뒤 다시 시도하세요.",
-            config.endpoint.base_url.trim_start_matches("http://127.0.0.1:").trim_end_matches("/v1")
-        ),
-        Api::ChatCompletions { .. } => error,
-    })
+    client::verify(&config.endpoint)
 }
 
 /// One request/parse attempt: `prompt` with `variants`, the output read by `parse`.
@@ -463,8 +462,9 @@ mod tests {
     fn config_from_settings_per_provider() {
         let mut settings = AppSettings::default();
         let codex = TranslationConfig::from_settings(&settings);
-        assert_eq!(codex.endpoint.base_url, "http://127.0.0.1:10531/v1");
+        assert_eq!(codex.endpoint.base_url, codex::CODEX_BASE_URL);
         assert!(matches!(codex.endpoint.api, Api::Responses { .. }));
+        assert!(codex.endpoint.auth.is_some(), "signed-in session instead of a key");
         assert_eq!(codex.concurrency, 1);
 
         settings.model_provider = ModelProvider::OpenAiCompatible;

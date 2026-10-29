@@ -14,6 +14,8 @@ pub struct AppPaths {
     pub models_dir: PathBuf,
     pub tools_dir: PathBuf,
     pub font_preset_backups_dir: PathBuf,
+    /// ChatGPT (Codex) sign-in tokens.
+    pub codex_auth_path: PathBuf,
 }
 
 impl AppPaths {
@@ -36,6 +38,7 @@ impl AppPaths {
             models_dir: data_root.join("models"),
             tools_dir: data_root.join("tools"),
             font_preset_backups_dir: data_root.join("font-preset-backups"),
+            codex_auth_path: data_root.join("codex-auth.json"),
             data_root,
         }
     }

@@ -43,6 +43,7 @@ pub enum AppEvent {
         event: crate::editor::translation::TranslationEvent,
     },
     ModelTest(Result<String, String>),
+    CodexLogin(crate::settings_view::CodexLoginEvent),
     Lama(crate::settings_view::LamaEvent),
     UpdateChecked(crate::update_check::UpdateStatus),
     Report {
@@ -121,6 +122,7 @@ impl MttApp {
                     }
                 }
                 (AppEvent::ModelTest(result), _) => self.settings.on_test_result(result),
+                (AppEvent::CodexLogin(event), _) => self.settings.on_codex_event(event),
                 (AppEvent::UpdateChecked(status), _) => self.settings.on_update_checked(status),
                 (AppEvent::Report { chapter_id, event }, Screen::Editor(editor)) => {
                     editor.on_report_event(&chapter_id, event)

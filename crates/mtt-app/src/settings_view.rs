@@ -33,6 +33,22 @@ pub enum LamaEvent {
     DownloadFinished(Result<(), String>),
 }
 
+/// ChatGPT sign-in progress from its worker thread.
+pub enum CodexLoginEvent {
+    /// Enter `user_code` at `url` (opened in the browser already).
+    Code {
+        user_code: String,
+        url: String,
+    },
+    Finished(Result<mtt_translate::codex::Account, String>),
+}
+
+/// A sign-in waiting for the user to approve the code in the browser.
+struct CodexLogin {
+    code: Option<(String, String)>,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ActionState {
     Success,
@@ -69,11 +85,17 @@ pub struct SettingsView {
     lama_requested: bool,
     /// The library's LaMa notice was closed (until the next launch).
     lama_banner_dismissed: bool,
+    /// The signed-in ChatGPT account (read when the settings open).
+    codex_account: Option<mtt_translate::codex::Account>,
+    codex_login: Option<CodexLogin>,
+    codex_message: Option<Result<String, String>>,
 }
 
 impl SettingsView {
     pub fn open(&mut self, services: &Services, worker: &Worker<AppEvent>) {
         self.open = true;
+        self.codex_account = mtt_translate::codex::CodexAuth::new(&services.paths.codex_auth_path).account();
+        self.codex_message = None;
         self.draft = Some(services.settings.clone());
         self.test_result = None;
         self.save_error = None;
@@ -359,6 +381,7 @@ impl SettingsView {
         can_submit: bool,
         base_url_valid: bool,
         base_url: &str,
+        codex_auth_path: &std::path::Path,
     ) {
         let label_width = 92.0;
         let row = |ui: &mut egui::Ui, label: &str, add: &mut dyn FnMut(&mut egui::Ui)| {
@@ -383,7 +406,7 @@ impl SettingsView {
                 ui,
                 draft.model_provider,
                 &[
-                    (ModelProvider::OpenAiCodex, "OpenAI (Codex 로그인)", ""),
+                    (ModelProvider::OpenAiCodex, "ChatGPT 계정 (Codex)", ""),
                     (ModelProvider::OpenAiCompatible, "OpenAI 호환 서버", ""),
                 ],
             ) {
@@ -391,6 +414,13 @@ impl SettingsView {
             }
             theme::hint(ui, provider_description(draft.model_provider));
         });
+        if draft.model_provider == ModelProvider::OpenAiCodex {
+            ui.horizontal(|ui| {
+                form_label(ui, "계정", label_width);
+                ui.vertical(|ui| self.codex_account_ui(ui, codex_auth_path, worker));
+            });
+            ui.add_space(4.0);
+        }
         match draft.model_provider {
             ModelProvider::OpenAiCodex => {
                 row(ui, "모델", &mut |ui| {
@@ -411,9 +441,6 @@ impl SettingsView {
                         draft.codex.reasoning_effort = effort;
                     }
                     theme::hint(ui, effort_description(draft.codex.reasoning_effort));
-                });
-                row(ui, "oauth 포트", &mut |ui| {
-                    ui.add(egui::DragValue::new(&mut draft.codex.oauth_port).range(0..=65535));
                 });
             }
             ModelProvider::OpenAiCompatible => {
@@ -446,9 +473,7 @@ impl SettingsView {
             }
         }
         let note = match draft.model_provider {
-            ModelProvider::OpenAiCodex => {
-                Some(("터미널에서 `npx openai-oauth`를 실행해 두세요. 앱이 직접 띄우지 않습니다.", theme::TEXT_WEAK))
-            }
+            ModelProvider::OpenAiCodex => None,
             ModelProvider::OpenAiCompatible if !base_url_valid => {
                 Some(("Base URL은 http:// 또는 https://로 시작해야 합니다.", theme::WARNING))
             }
@@ -540,6 +565,115 @@ impl SettingsView {
         self.open
     }
 
+    pub fn on_codex_event(&mut self, event: CodexLoginEvent) {
+        match event {
+            CodexLoginEvent::Code { user_code, url } => {
+                if let Some(login) = &mut self.codex_login {
+                    login.code = Some((user_code, url));
+                }
+            }
+            CodexLoginEvent::Finished(result) => {
+                self.codex_login = None;
+                self.codex_message = Some(match result {
+                    Ok(account) => {
+                        let message =
+                            format!("{}(으)로 로그인했습니다.", account.email.as_deref().unwrap_or(&account.id));
+                        self.codex_account = Some(account);
+                        Ok(message)
+                    }
+                    Err(error) => Err(error),
+                });
+            }
+        }
+    }
+
+    /// Starts the device sign-in on a worker thread: asks for a code, opens the browser
+    /// and waits for the approval.
+    fn start_codex_login(&mut self, auth_path: &std::path::Path, worker: &Worker<AppEvent>) {
+        let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.codex_login = Some(CodexLogin { code: None, cancel: std::sync::Arc::clone(&cancel) });
+        self.codex_message = None;
+        let auth = mtt_translate::codex::CodexAuth::new(auth_path);
+        let emitter = worker.emitter();
+        std::thread::spawn(move || {
+            let result = auth.start_device_login().and_then(|device| {
+                emitter.emit(AppEvent::CodexLogin(CodexLoginEvent::Code {
+                    user_code: device.user_code.clone(),
+                    url: device.verification_url.clone(),
+                }));
+                if let Err(error) =
+                    crate::editor::report::open_with_system(std::path::Path::new(&device.verification_url))
+                {
+                    log::warn!("could not open the sign-in page: {error}");
+                }
+                auth.finish_device_login(&device, &|| cancel.load(std::sync::atomic::Ordering::SeqCst))
+            });
+            emitter.emit(AppEvent::CodexLogin(CodexLoginEvent::Finished(result)));
+        });
+    }
+
+    /// The ChatGPT account row: signed in, signing in (the code), or signed out.
+    fn codex_account_ui(&mut self, ui: &mut egui::Ui, auth_path: &std::path::Path, worker: &Worker<AppEvent>) {
+        if let Some(login) = &self.codex_login {
+            match &login.code {
+                Some((code, url)) => {
+                    theme::hint(ui, "브라우저에서 ChatGPT에 로그인한 뒤 이 코드를 입력하세요.");
+                    ui.label(RichText::new(code).monospace().size(22.0).strong());
+                    ui.horizontal(|ui| {
+                        if ui.button("코드 복사").clicked() {
+                            ui.ctx().copy_text(code.clone());
+                        }
+                        if ui.button("브라우저 열기").clicked()
+                            && let Err(error) = crate::editor::report::open_with_system(std::path::Path::new(url))
+                        {
+                            self.codex_message = Some(Err(format!("브라우저를 열지 못했습니다: {error} ({url})")));
+                        }
+                        if ui.button("취소").clicked() {
+                            login.cancel.store(true, std::sync::atomic::Ordering::SeqCst);
+                        }
+                        ui.add(egui::Spinner::new().size(12.0));
+                    });
+                }
+                None => {
+                    ui.horizontal(|ui| {
+                        ui.add(egui::Spinner::new().size(12.0));
+                        ui.label(RichText::new("로그인 코드를 받는 중…").color(theme::TEXT_WEAK));
+                    });
+                }
+            }
+        } else if let Some(account) = &self.codex_account {
+            let mut logout = false;
+            ui.horizontal(|ui| {
+                let name = account.email.as_deref().unwrap_or(&account.id);
+                let plan = account.plan.as_deref().map(|plan| format!(" · {plan}")).unwrap_or_default();
+                ui.label(RichText::new(format!("{name}{plan}")).color(theme::SUCCESS));
+                logout = ui.button("로그아웃").clicked();
+            });
+            if logout {
+                let result = mtt_translate::codex::CodexAuth::new(auth_path).logout();
+                self.codex_message = Some(result.map(|()| "로그아웃했습니다.".to_owned()));
+                self.codex_account = None;
+            }
+        } else {
+            if ui.button(theme::icon_text(theme::icon::LINK_SIMPLE, "ChatGPT 로그인")).clicked() {
+                self.start_codex_login(auth_path, worker);
+            }
+            theme::hint(
+                ui,
+                "브라우저에서 ChatGPT 계정으로 로그인합니다. 토큰은 데이터 폴더의 codex-auth.json에 저장됩니다.",
+            );
+        }
+        match &self.codex_message {
+            Some(Ok(message)) => {
+                ui.label(RichText::new(message).small().color(theme::SUCCESS));
+            }
+            Some(Err(error)) => {
+                ui.label(RichText::new(error).small().color(theme::DANGER));
+            }
+            None => {}
+        }
+    }
+
     pub fn on_test_result(&mut self, result: Result<String, String>) {
         self.testing = false;
         self.test_result = Some(result);
@@ -603,6 +737,7 @@ impl SettingsView {
                             can_submit,
                             base_url_valid,
                             &base_url,
+                            &services.paths.codex_auth_path,
                         ),
                         SettingsTab::Inpaint => self.lama_section(ui, services, worker),
                         SettingsTab::Editing => {
@@ -744,7 +879,7 @@ fn translation_mode_description(mode: TranslationMode) -> &'static str {
 /// `MODEL_PROVIDER_OPTIONS` descriptions.
 fn provider_description(provider: ModelProvider) -> &'static str {
     match provider {
-        ModelProvider::OpenAiCodex => "Codex 로그인 토큰을 쓰는 openai-oauth 엔드포인트로 요청합니다.",
+        ModelProvider::OpenAiCodex => "ChatGPT 계정으로 로그인해 그 구독으로 Codex 모델에 요청합니다.",
         ModelProvider::OpenAiCompatible => "OpenAI 호환 /v1/chat/completions 엔드포인트로 요청합니다.",
     }
 }

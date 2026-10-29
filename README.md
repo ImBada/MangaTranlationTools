@@ -56,7 +56,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 ## 저장 위치
 
 - 데이터 폴더: `~/Documents/MangaTranslationTools/` (`MANGA_TRANSLATOR_DATA_DIR`로 변경)
-  - 보관함 `library/`, 설정 `settings.json`, 로그 `logs/native-app.log`(`MANGA_TRANSLATOR_LOG_PATH`로 변경)
+  - 보관함 `library/`, 설정 `settings.json`, ChatGPT 로그인 `codex-auth.json`, 로그 `logs/native-app.log`(`MANGA_TRANSLATOR_LOG_PATH`로 변경)
   - 위젯 배치·카드 순서·최근 글꼴 같은 화면 상태 `native-ui-state.json`
   - LaMa 모델 `models/`, LaMa용 LibTorch `tools/libtorch/`
 - 웹 버전이 쓰던 `chapter.json`을 처음 덮어쓸 때 `chapter.json.native-backup`을 한 번 만들어 둡니다.
@@ -64,8 +64,9 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 ## 설정
 
-- 번역 엔진: `OpenAI (Codex 로그인)` 또는 `OpenAI 호환 서버`(기본 `http://127.0.0.1:11434/v1`, 모델명 지정)
-  - Codex 로그인은 로컬 `openai-oauth` 프록시에 접속합니다(기본 포트 `10531`). 터미널에서 `npx openai-oauth`를 실행해 두세요. 기본 모델 `gpt-5.5`, 생각 수준 없음~최고.
+- 번역 엔진: `ChatGPT 계정 (Codex)` 또는 `OpenAI 호환 서버`(기본 `http://127.0.0.1:11434/v1`, 모델명 지정)
+  - ChatGPT 계정은 설정 › 번역의 `ChatGPT 로그인`으로 앱 안에서 로그인합니다. 브라우저가 열리면 ChatGPT에 로그인하고 앱에 뜬 코드를 입력합니다.
+    토큰은 데이터 폴더의 `codex-auth.json`(macOS·Linux는 본인만 읽기 가능)에 두고 만료 전에 저절로 갱신합니다. 기본 모델 `gpt-5.5`, 생각 수준 없음~최고.
 - 번역 모드: `빠르게`, `정확하게`
 - 추가 지시문: 모든 번역 요청 끝에 붙는 말투·표기 규칙. 작품마다의 인물 이름·용어는 편집 화면 작품 › 화 메뉴의 `번역 메모…`에 적습니다(`work.json`의 `translationNotes`).
 - AI 번역 병렬 처리: 최대 동시 번역 수
@@ -90,7 +91,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 | 변수 | 내용 |
 |---|---|
 | `MANGA_TRANSLATOR_DATA_DIR` | 데이터 폴더 |
-| `MANGA_TRANSLATOR_MODEL_PROVIDER`, `_CODEX_MODEL`, `_CODEX_REASONING_EFFORT`, `_CODEX_OAUTH_PORT` | 설정 기본값 |
+| `MANGA_TRANSLATOR_MODEL_PROVIDER`, `_CODEX_MODEL`, `_CODEX_REASONING_EFFORT` | 설정 기본값 |
 | `MANGA_TRANSLATOR_OPENAI_COMPATIBLE_BASE_URL`, `_API_KEY`, `_MODEL` | 설정 기본값 |
 | `MANGA_TRANSLATOR_PARALLEL_ENABLED`, `_PARALLEL_MAX_CONCURRENCY` | 설정 기본값 |
 | `MANGA_TRANSLATOR_TEMPERATURE`, `_TOP_P`, `_MAX_TOKENS`, `_PAGE_RETRIES` | 번역 요청 |

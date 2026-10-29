@@ -16,6 +16,8 @@ pub struct Endpoint {
     pub api_key: Option<String>,
     pub model: String,
     pub api: Api,
+    /// ChatGPT sign-in for the Codex endpoint (instead of an API key).
+    pub auth: Option<std::sync::Arc<crate::codex::CodexAuth>>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -250,19 +252,36 @@ pub fn send_cancellable(
     }
 }
 
-/// Posts a JSON body and returns the model's text output.
+/// Posts a JSON body and returns the model's text output. With a ChatGPT sign-in the
+/// request carries its session, refreshed once if the server says it expired.
 pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<String, SendError> {
     let path = match endpoint.api {
         Api::ChatCompletions { .. } => "chat/completions",
         Api::Responses { .. } => "responses",
     };
     let url = format!("{}/{path}", endpoint.base_url.trim_end_matches('/'));
-    let mut request = agent.post(&url).header("Content-Type", "application/json");
-    if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
-        request = request.header("Authorization", &format!("Bearer {}", key.trim()));
+    let session = match &endpoint.auth {
+        Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::No))?),
+        None => None,
+    };
+    let post = |session: Option<&crate::codex::Session>| {
+        let mut request = agent.post(&url).header("Content-Type", "application/json");
+        if let Some(session) = session {
+            for (name, value) in crate::codex::request_headers(session) {
+                request = request.header(name, &value);
+            }
+        } else if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
+            request = request.header("Authorization", &format!("Bearer {}", key.trim()));
+        }
+        request.send(body).map_err(|e| SendError::new(format!("요청 전송 실패 ({url}): {e}"), Retry::Later(None)))
+    };
+    let mut response = post(session.as_ref())?;
+    if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
+        && response.status().as_u16() == 401
+    {
+        let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::No))?;
+        response = post(Some(&fresh))?;
     }
-    let mut response =
-        request.send(body).map_err(|e| SendError::new(format!("요청 전송 실패 ({url}): {e}"), Retry::Later(None)))?;
     let status = response.status();
     let wait = retry_after(&response);
     let text = response
@@ -292,8 +311,12 @@ pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Resu
     Ok(output.trim().to_owned())
 }
 
-/// `GET /models` to check the base URL and key before a batch (`verifyEndpoint`).
+/// `GET /models` to check the base URL and key before a batch (`verifyEndpoint`); with a
+/// ChatGPT sign-in, that there is a usable session.
 pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
+    if let Some(auth) = &endpoint.auth {
+        return auth.session().map(|_| ());
+    }
     let url = format!("{}/models", endpoint.base_url.trim_end_matches('/'));
     let mut request = agent(Duration::from_secs(30)).get(&url);
     if let Some(key) = endpoint.api_key.as_deref().filter(|k| !k.trim().is_empty()) {
@@ -410,6 +433,7 @@ mod tests {
             api_key: None,
             model: "gemma".into(),
             api: Api::ChatCompletions { temperature: 0.0, top_p: 0.85, max_tokens: 900 },
+            auth: None,
         };
         let images =
             [ImageVariant { role: crate::images::VariantRole::Original, data_url: "data:image/png;base64,AA".into() }];
@@ -430,6 +454,7 @@ mod tests {
             api_key: None,
             model: "gpt".into(),
             api: Api::Responses { reasoning_effort: "low".into() },
+            auth: None,
         };
         let images =
             [ImageVariant { role: crate::images::VariantRole::Original, data_url: "data:image/png;base64,AA".into() }];
