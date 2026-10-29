@@ -1225,6 +1225,7 @@ impl Editor {
             text_position: Some(mtt_core::model::TextPosition::Center),
             background_color: "#fffdf5".into(),
             opacity: 0.88,
+            layout_version: Some(mtt_core::model::LAYOUT_VERSION),
             ..TranslationBlock::default()
         };
         self.visibility.overlay = true;
@@ -1251,6 +1252,7 @@ impl Editor {
             confidence: 1.0,
             background_color: "#fffdf5".into(),
             opacity: 0.88,
+            layout_version: Some(mtt_core::model::LAYOUT_VERSION),
             ..TranslationBlock::default()
         };
         apply_block_type_font_preset_to_block(&mut block, &presets);

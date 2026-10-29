@@ -14,7 +14,7 @@ use std::time::Duration;
 use mtt_core::font_presets::DEFAULT_LINE_HEIGHT;
 use mtt_core::geometry::{clamp_bbox, estimate_font_size_px};
 use mtt_core::model::{
-    BBox, BlockType, RenderTextDirection, SourceTextDirection, TextAlign, TextStyle, TranslationBlock,
+    BBox, BlockType, LAYOUT_VERSION, RenderTextDirection, SourceTextDirection, TextAlign, TextStyle, TranslationBlock,
 };
 use mtt_core::settings::{AppSettings, ModelProvider, ReasoningEffort};
 
@@ -311,6 +311,7 @@ pub fn overlay_item_to_block(
         },
         source_text: source,
         translated_text: translated,
+        layout_version: Some(LAYOUT_VERSION),
         ..TranslationBlock::default()
     }
 }

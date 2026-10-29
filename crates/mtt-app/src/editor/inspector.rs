@@ -562,6 +562,16 @@ fn placement_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlo
                 });
                 ui.end_row();
 
+                ui.label("조판");
+                let mut current = block.layout_version() >= mtt_core::model::LAYOUT_VERSION;
+                let toggle = ui.checkbox(&mut current, "새 규칙");
+                let hint = "새 조판 규칙\n줄 길이를 고르게 나누고 문장부호 뒤에서 줄을 바꿉니다. 자동 맞춤은 원문 글자 크기의 1.2배까지만 키우고, 9px보다 작게 줄이지 않습니다(넘치면 표시).\n새로 만든 블록은 처음부터 새 규칙입니다.";
+                if theme::tip(toggle, hint, "").changed() {
+                    let version = current.then_some(mtt_core::model::LAYOUT_VERSION);
+                    editor.edit_selected(|b| b.layout_version = version);
+                }
+                ui.end_row();
+
                 ui.label("블록 배경");
                 if let Some(hex) = super::color::color_field(editor, ui, "block-background", &block.background_color) {
                     editor.edit_selected(|b| b.background_color = hex.clone());

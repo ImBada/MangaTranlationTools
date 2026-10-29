@@ -25,6 +25,20 @@ const SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX: f64 = 8.0;
 const SYNTHETIC_BOLD_MIN_RATIO: f64 = 0.018;
 const SYNTHETIC_BOLD_MAX_RATIO: f64 = 0.05;
 const SYNTHETIC_ITALIC_SKEW_DEG: f64 = -12.0;
+/// Typesetting v2 (`LAYOUT_VERSION`): auto-fit grows text to at most this many times the
+/// estimated source glyph size,
+const SOURCE_GLYPH_GROWTH: f64 = 1.2;
+/// estimating each source glyph's cell as this many times its size (line and letter gaps),
+const SOURCE_GLYPH_SPACING: f64 = 1.2;
+/// and shrinks text no further than this many page pixels (it overflows instead).
+const READABLE_FONT_SIZE_PX: f64 = 9.0;
+/// Line breaking cost: (unused width in em)² per line, plus a penalty for where a line
+/// ends: nothing after sentence punctuation, then after a comma, anywhere else, or before
+/// a mark (`…`, `~`) that would start the next line. A mid-phrase break costs about as much
+/// as moving 1.5em of text between two lines, so "뭐야? / 너 누구야!" beats "뭐야? 너 / 누구야!".
+const BREAK_AFTER_COMMA_COST: f64 = 2.0;
+const BREAK_MID_PHRASE_COST: f64 = 6.0;
+const BREAK_BEFORE_MARK_COST: f64 = 20.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Default)]
 pub struct Size {
@@ -276,12 +290,30 @@ pub fn resolve_block_text_layout(
     let inner_height = (rect.height - padding_px * 2.0 - border_inset).max(MIN_INNER_SIZE_PX);
     let fit_inner_width = (inner_width - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let fit_inner_height = (inner_height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
-    let preferred = (block.font_size_px() * render_scale(page, stage)).floor().max(MIN_FONT_SIZE_PX);
+    let scale = render_scale(page, stage);
+    let preferred = (block.font_size_px() * scale).floor().max(MIN_FONT_SIZE_PX);
     let auto_fit = block.style.auto_fit_text.unwrap_or(true);
-    let max_font_size =
-        if auto_fit { MIN_FONT_SIZE_PX.max(preferred).max(fit_inner_width).max(fit_inner_height) } else { preferred };
-    let font_size_px =
-        resolve_text_font_size(ctx, fonts, block, text, max_font_size, fit_inner_width, fit_inner_height);
+    let v2 = block.layout_version() >= 2;
+    let max_font_size = if auto_fit {
+        let box_cap = fit_inner_width.max(fit_inner_height);
+        let cap = match source_glyph_size_px(block, rect).filter(|_| v2) {
+            Some(glyph) => box_cap.min(glyph * SOURCE_GLYPH_GROWTH),
+            None => box_cap,
+        };
+        MIN_FONT_SIZE_PX.max(preferred).max(cap)
+    } else {
+        preferred
+    };
+    let min_font_size = if v2 { (READABLE_FONT_SIZE_PX * scale).max(MIN_FONT_SIZE_PX) } else { MIN_FONT_SIZE_PX };
+    let font_size_px = resolve_text_font_size(
+        ctx,
+        fonts,
+        block,
+        text,
+        (min_font_size, max_font_size),
+        fit_inner_width,
+        fit_inner_height,
+    );
     let overflow = !text.trim().is_empty()
         && !does_text_fit(ctx, fonts, block, text, font_size_px, fit_inner_width, fit_inner_height);
     BlockTextLayout {
@@ -296,12 +328,23 @@ pub fn resolve_block_text_layout(
     }
 }
 
+/// Rough size of the source glyphs in `rect`: the box area shared by the source
+/// characters, at most the box's shorter side. `None` without source text.
+fn source_glyph_size_px(block: &TranslationBlock, rect: PixelRect) -> Option<f64> {
+    let count = block.source_text.chars().filter(|ch| !is_js_whitespace(*ch)).count();
+    (count > 0).then(|| {
+        let cell = (rect.width * rect.height / (count as f64 * SOURCE_GLYPH_SPACING)).sqrt();
+        cell.min(rect.width.min(rect.height))
+    })
+}
+
+/// The largest whole size in `min..=max` that fits (`min` when none does).
 fn resolve_text_font_size(
     ctx: &mut FontContext,
     fonts: &BlockFonts,
     block: &TranslationBlock,
     text: &str,
-    max_font_size: f64,
+    (min_font_size, max_font_size): (f64, f64),
     inner_width: f64,
     inner_height: f64,
 ) -> f64 {
@@ -309,7 +352,8 @@ fn resolve_text_font_size(
     if !block.style.auto_fit_text.unwrap_or(true) || text.trim().is_empty() {
         return capped;
     }
-    let (mut low, mut high, mut best) = (MIN_FONT_SIZE_PX as i64, capped as i64, MIN_FONT_SIZE_PX as i64);
+    let floor = min_font_size.ceil().min(capped) as i64;
+    let (mut low, mut high, mut best) = (floor, capped as i64, floor);
     while low <= high {
         let mid = (low + high).div_euclid(2);
         if does_text_fit(ctx, fonts, block, text, mid as f64, inner_width, inner_height) {
@@ -335,7 +379,8 @@ fn does_text_fit(
     if block.render_direction == RenderTextDirection::Vertical {
         return measure_vertical_text(block, text, font_size, inner_width, inner_height, line_height);
     }
-    let lines = wrap_text_to_width(ctx, fonts, block, text, font_size, inner_width);
+    // Balancing keeps the line count and widths within the limit, so the plain wrap decides.
+    let lines = wrap_lines(ctx, fonts, block, text, font_size, inner_width, false);
     let total_height = lines.len() as f64 * line_height;
     let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
     total_height <= inner_height && widest <= inner_width
@@ -368,7 +413,8 @@ pub struct WrappedLine {
 }
 
 /// `wrapTextToWidth`: greedy wrap at spaces and soft-wrap marks (ellipses, tildes, long
-/// dashes), never inside a word.
+/// dashes), never inside a word. With typesetting v2 the same number of lines is then
+/// balanced (see [`balanced_breaks`]).
 pub fn wrap_text_to_width(
     ctx: &mut FontContext,
     fonts: &BlockFonts,
@@ -376,6 +422,18 @@ pub fn wrap_text_to_width(
     text: &str,
     font_size: f64,
     max_width: f64,
+) -> Vec<WrappedLine> {
+    wrap_lines(ctx, fonts, block, text, font_size, max_width, block.layout_version() >= 2)
+}
+
+fn wrap_lines(
+    ctx: &mut FontContext,
+    fonts: &BlockFonts,
+    block: &TranslationBlock,
+    text: &str,
+    font_size: f64,
+    max_width: f64,
+    balance: bool,
 ) -> Vec<WrappedLine> {
     let spacing = letter_spacing_px(block, font_size);
     let mut lines = Vec::new();
@@ -387,29 +445,107 @@ pub fn wrap_text_to_width(
         }
         let run = ctx.shape(&normalized, &fonts.base, &fonts.spans_for(&normalized));
         let chars: Vec<char> = normalized.chars().collect();
+        // Advance sums up to each char, so a line's width is one subtraction.
+        let mut prefix = Vec::with_capacity(chars.len() + 1);
+        prefix.push(0.0f64);
+        for advance in &run.char_advances_em[..chars.len()] {
+            prefix.push(prefix.last().copied().unwrap_or_default() + f64::from(*advance));
+        }
         let width_of = |start: usize, end: usize| -> f64 {
-            let advance: f32 = run.char_advances_em[start..end].iter().sum();
             let count = (end - start) as f64;
-            f64::from(advance) * font_size + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
+            (prefix[end] - prefix[start]) * font_size + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
         };
         let segments = split_text_wrap_segments(&chars);
-        let (mut start, mut end) = segments[0];
-        for &(segment_start, segment_end) in &segments[1..] {
-            if width_of(start, segment_end) <= max_width {
-                end = segment_end;
-                continue;
+        // Segment index each line ends before.
+        let mut ends = Vec::new();
+        let mut start = segments[0].0;
+        for (index, &(segment_start, segment_end)) in segments.iter().enumerate().skip(1) {
+            if width_of(start, segment_end) > max_width {
+                ends.push(index);
+                start = segment_start;
             }
-            lines.push(WrappedLine { text: chars[start..end].iter().collect(), width: width_of(start, end) });
-            (start, end) = (segment_start, segment_end);
         }
-        if end > start {
-            lines.push(WrappedLine { text: chars[start..end].iter().collect(), width: width_of(start, end) });
+        ends.push(segments.len());
+        if balance
+            && ends.len() > 1
+            && let Some(balanced) = balanced_breaks(&chars, &segments, ends.len(), max_width, font_size, width_of)
+        {
+            ends = balanced;
+        }
+        let mut first = 0;
+        for end in ends {
+            let (start, end_char) = (segments[first].0, segments[end - 1].1);
+            lines.push(WrappedLine { text: chars[start..end_char].iter().collect(), width: width_of(start, end_char) });
+            first = end;
         }
     }
     if lines.is_empty() {
         lines.push(WrappedLine { text: text.to_owned(), width: 0.0 });
     }
     lines
+}
+
+/// Splits `segments` into exactly `line_count` lines no wider than `max_width` (a lone
+/// segment may be wider) with the least cost: even line lengths, breaks after punctuation.
+/// Returns the segment index each line ends before; `None` when no split fits.
+fn balanced_breaks(
+    chars: &[char],
+    segments: &[(usize, usize)],
+    line_count: usize,
+    max_width: f64,
+    font_size: f64,
+    width_of: impl Fn(usize, usize) -> f64,
+) -> Option<Vec<usize>> {
+    let count = segments.len();
+    let em = font_size.max(1.0);
+    let break_cost = |end: usize| -> f64 {
+        let next = chars[segments[end].0];
+        if matches!(next, '…' | '⋯' | '~' | '～' | '〜' | 'ー' | '—' | '―' | '.') {
+            return BREAK_BEFORE_MARK_COST;
+        }
+        match chars[segments[end - 1].1 - 1] {
+            '.' | '!' | '?' | '…' | '⋯' | '！' | '？' | '。' | '‼' | '~' | '～' | '〜' => 0.0,
+            ',' | '、' | '，' | ';' | ':' | '—' | '―' => BREAK_AFTER_COMMA_COST,
+            _ => BREAK_MID_PHRASE_COST,
+        }
+    };
+    // cost[k][j]: best cost of segments ..j in k lines; from[k][j]: where that last line starts.
+    let mut cost = vec![vec![f64::INFINITY; count + 1]; line_count + 1];
+    let mut from = vec![vec![0usize; count + 1]; line_count + 1];
+    cost[0][0] = 0.0;
+    for lines in 1..=line_count {
+        for end in lines..=count {
+            for start in (lines - 1..end).rev() {
+                let width = width_of(segments[start].0, segments[end - 1].1);
+                if width > max_width && end - start > 1 {
+                    break;
+                }
+                if !cost[lines - 1][start].is_finite() {
+                    continue;
+                }
+                let slack = (max_width - width).max(0.0) / em;
+                let mut total = cost[lines - 1][start] + slack * slack;
+                if end < count {
+                    total += break_cost(end);
+                }
+                if total < cost[lines][end] {
+                    cost[lines][end] = total;
+                    from[lines][end] = start;
+                }
+            }
+        }
+    }
+    if !cost[line_count][count].is_finite() {
+        return None;
+    }
+    let mut ends = vec![count];
+    let mut end = count;
+    for lines in (2..=line_count).rev() {
+        end = from[lines][end];
+        ends.push(end);
+    }
+    ends.reverse();
+    Some(ends)
 }
 
 /// Width of `text` with letter spacing (`measureTextWidthWithLetterSpacing`).
@@ -554,6 +690,87 @@ mod tests {
     fn wrap_segments_track_word_boundaries() {
         let chars: Vec<char> = "ab cd…ef".chars().collect();
         assert_eq!(split_text_wrap_segments(&chars), vec![(0, 2), (3, 5), (5, 6), (6, 8)]);
+    }
+
+    /// Lines `balanced_breaks` picks for `text` (1em per char, segments at spaces).
+    fn balance(text: &str, line_count: usize, max_width: f64) -> Option<Vec<String>> {
+        let chars: Vec<char> = text.chars().collect();
+        let segments = split_text_wrap_segments(&chars);
+        let ends = balanced_breaks(&chars, &segments, line_count, max_width, 1.0, |a, b| (b - a) as f64)?;
+        let mut first = 0;
+        Some(
+            ends.into_iter()
+                .map(|end| {
+                    let line = chars[segments[first].0..segments[end - 1].1].iter().collect();
+                    first = end;
+                    line
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn balanced_breaks_even_out_lines() {
+        // Greedy: "가 나 다 라" / "마".
+        assert_eq!(balance("가 나 다 라 마", 2, 7.0).unwrap(), ["가 나 다", "라 마"]);
+        assert_eq!(
+            balance("가나다 라마바 사아 자", 2, 7.0).unwrap(),
+            ["가나다 라마바", "사아 자"],
+            "only split that fits"
+        );
+        assert_eq!(balance("가나다라마바사", 2, 7.0), None, "one segment can't make two lines");
+    }
+
+    #[test]
+    fn balanced_breaks_prefer_punctuation() {
+        // Greedy: "뭐야? 너" / "누구야!".
+        assert_eq!(balance("뭐야? 너 누구야!", 2, 7.0).unwrap(), ["뭐야?", "너 누구야!"]);
+        // A line doesn't start with the ellipsis when it can be avoided.
+        assert_eq!(balance("그래서…정말 그랬어", 2, 6.0).unwrap(), ["그래서…", "정말 그랬어"]);
+    }
+
+    #[test]
+    fn source_glyph_size_follows_the_source_text() {
+        let rect = PixelRect { left: 0.0, top: 0.0, width: 60.0, height: 240.0 };
+        let block = |source: &str| TranslationBlock { source_text: source.into(), ..TranslationBlock::default() };
+        assert_eq!(source_glyph_size_px(&block(""), rect), None);
+        // 10 glyphs in 60×240: cells of 1440/1.2 → 34.6px.
+        let size = source_glyph_size_px(&block("あいうえおかきくけこ"), rect).unwrap();
+        assert!((size - 34.64).abs() < 0.01, "{size}");
+        assert_eq!(source_glyph_size_px(&block("あ"), rect), Some(60.0), "at most the shorter side");
+    }
+
+    #[test]
+    fn v2_caps_growth_by_the_source_glyphs_and_stops_at_a_readable_size() {
+        use mtt_core::model::{BBox, LAYOUT_VERSION};
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let size_of = |ctx: &mut FontContext, block: &TranslationBlock, text: &str| {
+            let fonts = BlockFonts::resolve(ctx, block);
+            let layout = resolve_block_text_layout(ctx, &fonts, block, text, page, page);
+            (layout.font_size_px, layout.overflow)
+        };
+        // 20 source glyphs in 300×300: cells of about 61px, so at most about 73px.
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 300.0, 300.0),
+            source_text: "あいうえおかきくけこさしすせそたちつてと".into(),
+            ..TranslationBlock::default()
+        };
+        let (v1, _) = size_of(&mut ctx, &block, "응?");
+        block.layout_version = Some(LAYOUT_VERSION);
+        let (v2, _) = size_of(&mut ctx, &block, "응?");
+        assert!(v2 <= 74.0 && v2 < v1, "v1 {v1}, v2 {v2}");
+
+        let long = "아주 긴 문장이 이 작은 상자에 들어갑니다 정말 길어요";
+        let mut tiny = TranslationBlock { bbox: BBox::new(0.0, 0.0, 30.0, 30.0), ..TranslationBlock::default() };
+        let (v1, _) = size_of(&mut ctx, &tiny, long);
+        tiny.layout_version = Some(LAYOUT_VERSION);
+        let (v2, overflow) = size_of(&mut ctx, &tiny, long);
+        // Only meaningful where some font measures the text.
+        if v1 < READABLE_FONT_SIZE_PX {
+            assert_eq!(v2, READABLE_FONT_SIZE_PX);
+            assert!(overflow);
+        }
     }
 
     #[test]

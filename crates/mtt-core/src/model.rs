@@ -357,6 +357,11 @@ fn default_opacity() -> f64 {
     1.0
 }
 
+/// Typesetting rules new blocks get: 2 caps auto-fit growth by the source glyph size,
+/// balances line lengths (preferring breaks after punctuation) and stops shrinking at a
+/// readable size.
+pub const LAYOUT_VERSION: u32 = 2;
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TranslationBlock {
@@ -402,6 +407,10 @@ pub struct TranslationBlock {
     /// later hand edits can be told apart (see [`TranslationBlock::is_user_work`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub generated_fingerprint: Option<String>,
+    /// Typesetting rules the block was made with ([`LAYOUT_VERSION`]); missing means the
+    /// original rules, so pages typeset before keep their look.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub layout_version: Option<u32>,
     #[serde(flatten)]
     pub links: PresetLinks,
     #[serde(flatten)]
@@ -433,6 +442,7 @@ impl Default for TranslationBlock {
             opacity: default_opacity(),
             inpainted: None,
             generated_fingerprint: None,
+            layout_version: None,
             links: PresetLinks::default(),
             style: TextStyle::default(),
             extra: JsonMap::new(),
@@ -462,6 +472,11 @@ impl TranslationBlock {
 
     pub fn text_color(&self) -> &str {
         self.style.text_color.as_deref().unwrap_or(DEFAULT_TEXT_COLOR)
+    }
+
+    /// The typesetting rules to use (see [`LAYOUT_VERSION`]).
+    pub fn layout_version(&self) -> u32 {
+        self.layout_version.unwrap_or(1)
     }
 
     /// Hash of what a hand edit changes: the id (so copies differ), texts (as saved), boxes,
