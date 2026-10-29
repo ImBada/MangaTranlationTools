@@ -320,8 +320,10 @@ pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
     get_models(endpoint).map(|_| ())
 }
 
-/// The Codex CLI release whose model catalog this reads (koharu asks as the same).
-const CODEX_CLIENT_VERSION: &str = "0.146.0";
+/// The Codex CLI release this asks the model catalog as. The catalog leaves out models
+/// newer than the asking client (0.146.0 got GPT-5.6 but no GPT-6), so keep this at a
+/// recent release.
+const CODEX_CLIENT_VERSION: &str = "0.164.0";
 /// Model ids of an OpenAI-compatible server that can't translate a page.
 const NON_CHAT_MODELS: [&str; 6] = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe"];
 
