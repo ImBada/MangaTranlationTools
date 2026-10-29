@@ -1401,6 +1401,5 @@ impl Editor {
     }
 }
 
-/// Copies a rect of a gray image into raw bytes.
 #[cfg(test)]
 mod tests;

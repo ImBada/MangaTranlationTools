@@ -352,7 +352,7 @@ impl Editor {
     }
 }
 
-/// Copy of `block` with a new id, shifted by `(dx, dy)` page pixels in normalized space.
+/// `image` as a PNG at the default compression.
 pub(super) fn encode_png(image: &RgbaImage) -> Result<Vec<u8>, String> {
     encode_png_raw(image.as_raw(), image.dimensions(), image::ExtendedColorType::Rgba8, false)
 }
