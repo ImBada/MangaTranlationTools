@@ -774,9 +774,9 @@ fn smoke_test(device: Device) -> Result<(), String> {
 }
 
 /// Downloads, checks and unpacks whatever is missing of the build "LaMa 받기" wants (the
-/// parts in turn, progress over all of them). Concurrent calls (LaMa's and the
-/// segmentation model's downloads) wait for each other.
-pub fn download(paths: &AppPaths, mut progress: impl FnMut(u64, Option<u64>)) -> Result<(), String> {
+/// parts in turn, progress over all of them; it returns false to stop). Concurrent calls
+/// (LaMa's and the segmentation model's downloads) wait for each other.
+pub fn download(paths: &AppPaths, mut progress: impl FnMut(u64, Option<u64>) -> bool) -> Result<(), String> {
     let Some(platform) = Platform::host() else {
         return Err("이 플랫폼용 LibTorch가 없습니다.".into());
     };
@@ -805,7 +805,7 @@ impl Part {
         }
     }
 
-    fn fetch(&self, mut progress: impl FnMut(u64)) -> Result<(), String> {
+    fn fetch(&self, mut progress: impl FnMut(u64) -> bool) -> Result<(), String> {
         let parent = self.dir.parent().expect("a part's folder has a parent");
         std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
         let archive = with_suffix(&self.dir, if self.wheel { ".whl" } else { ".tar.gz" });
@@ -1350,6 +1350,7 @@ mod tests {
                 println!("{written}/{total:?}");
                 last = written;
             }
+            true
         })
         .unwrap();
         let after = status(&paths);
