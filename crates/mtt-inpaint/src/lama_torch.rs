@@ -17,7 +17,7 @@ const GLOBAL: i64 = 384;
 const SPECTRAL: i64 = GLOBAL / 2;
 /// The generator halves the size three times, so inputs are padded to a multiple of this.
 const PAD_MULTIPLE: usize = 8;
-/// Mask values above this are inpainted (the old sidecar's `--threshold`).
+/// Mask values above this are inpainted.
 const MASK_THRESHOLD: u8 = 8;
 
 pub struct TorchLama {
@@ -156,7 +156,7 @@ impl TorchLama {
 }
 
 /// RGB with the masked pixels zeroed, then the mask, as `(4, H, W)` planes padded to
-/// `width`×`height` with the image reflected and the mask clear (the sidecar's `F.pad`).
+/// `width`×`height` with the image reflected and the mask clear.
 fn model_input(image: &RgbaImage, mask: &GrayImage, width: usize, height: usize) -> Vec<f32> {
     let plane = width * height;
     let mut input = vec![0f32; 4 * plane];

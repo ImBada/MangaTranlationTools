@@ -2,8 +2,6 @@
 //! parallelism, one-hand mode, a model connectivity test, the LaMa download
 //! (`LamaRuntimeSettingsSection.tsx`) and the version/update bar (`SettingsVersionBar.tsx`).
 
-use std::path::PathBuf;
-
 use eframe::egui::{self, RichText};
 use mtt_core::settings::{
     AppSettings, ModelProvider, ReasoningEffort, TRANSLATION_PARALLEL_MAX, TRANSLATION_PARALLEL_MIN, TranslationMode,
@@ -21,17 +19,11 @@ pub struct LamaRuntimeStatus {
     lama: mtt_inpaint::lama::LamaStatus,
     /// Where the model runs.
     device: &'static str,
-    /// What the Python runtime of earlier versions left behind.
-    legacy_python: Vec<PathBuf>,
 }
 
 impl LamaRuntimeStatus {
     fn detect(paths: &mtt_core::paths::AppPaths) -> Self {
-        Self {
-            lama: mtt_inpaint::lama::status(paths),
-            device: mtt_inpaint::lama::device_label(),
-            legacy_python: mtt_inpaint::lama::legacy_python_runtime(paths),
-        }
+        Self { lama: mtt_inpaint::lama::status(paths), device: mtt_inpaint::lama::device_label() }
     }
 }
 
@@ -318,16 +310,6 @@ impl SettingsView {
             match &status.lama.runtime_path {
                 Some(path) => theme::hint(ui, &format!("LibTorch 경로: {}", path.display())),
                 None => theme::hint(ui, "이 플랫폼용 LibTorch가 없어 LaMa 모델을 앱 안에서 돌릴 수 없습니다."),
-            }
-            if !status.legacy_python.is_empty() {
-                let folders: Vec<String> = status.legacy_python.iter().map(|path| path.display().to_string()).collect();
-                theme::hint(
-                    ui,
-                    &format!(
-                        "예전 버전이 쓰던 파이썬 환경이 남아 있습니다. 이제 쓰지 않으니 지워도 됩니다(예전 웹/Electron 버전을 계속 쓴다면 남겨 두세요): {}",
-                        folders.join(", ")
-                    ),
-                );
             }
         }
         if let Some(error) = &self.lama_last_error {

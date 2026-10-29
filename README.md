@@ -69,16 +69,14 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 ## LaMa 인페인트
 
-기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `LaMa 받기`를 합니다. 모델(약 200MB)과 모델을 돌릴 LibTorch(PyTorch의 C++ 엔진, 압축 약 70~120MB)를 받습니다. 파이썬은 필요 없습니다.
+기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `LaMa 받기`를 합니다. 모델(약 200MB)과 모델을 돌릴 LibTorch(PyTorch의 C++ 엔진, 압축 약 70~120MB)를 받습니다.
 모델은 앱 안에서 LibTorch로 돌아갑니다(Apple Silicon Mac은 GPU(MPS), Windows·Linux x64는 CPU). Intel Mac에는 LibTorch 빌드가 없어 LaMa를 쓸 수 없습니다.
 둘레가 한 가지 색인 글자(흰 말풍선 안 등)는 모델 없이 그 색으로 채우고, 나머지만 한 변 1024px 이하 영역으로 나눠 모델에 넘깁니다.
 
 - 모델: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`를 `~/Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`에 (직접 받아 둬도 됩니다)
 - LibTorch: [koharu](https://github.com/mayocream/koharu)가 C 연결 코드와 함께 빌드해 올린 [koharu-rs/torch](https://github.com/koharu-rs/torch/releases) `v2.13.0.7`. 받은 파일은 SHA-256을 확인한 뒤 데이터 폴더의 `tools/libtorch/`에 풉니다(풀면 Mac 약 340MB).
 
-다른 LaMa 실행 방식(예: CUDA로 도는 파이썬 스크립트)을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다. 지정하면 모델 대신 이 명령이 인페인트할 영역 전체를 받습니다.
-
-예전 버전이 만든 파이썬 환경(데이터 폴더의 `tools/lama-manga-venv`, `tools/Er0mangaInpaint`, `tools/native`, 약 1GB)은 더 이상 쓰지 않으니 지워도 됩니다. 예전 웹/Electron 버전을 계속 쓴다면 남겨 두세요.
+다른 LaMa 실행 방식(예: NVIDIA GPU에서 도는 다른 프로그램)을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다. 지정하면 모델 대신 이 명령이 인페인트할 영역 전체를 받습니다.
 
 ## 환경 변수
 

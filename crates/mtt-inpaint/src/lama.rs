@@ -77,15 +77,6 @@ pub fn device_label() -> &'static str {
     }
 }
 
-/// What the Python sidecar of earlier versions left under `<data>/tools`; no longer used.
-pub fn legacy_python_runtime(paths: &AppPaths) -> Vec<PathBuf> {
-    ["lama-manga-venv", "Er0mangaInpaint", "native", ".lama-runtime-ready.json"]
-        .into_iter()
-        .map(|name| paths.tools_dir.join(name))
-        .filter(|path| path.exists())
-        .collect()
-}
-
 impl Lama {
     /// The configured command, otherwise the model when it and the runtime have been
     /// downloaded.
@@ -306,9 +297,6 @@ mod tests {
         assert!(status.model_path.ends_with("models/lama-manga/lama-manga.safetensors"));
         assert!(!status.runtime_exists && !status.ready());
         assert!(Lama::detect(&paths).is_none() || status.command.is_some());
-        assert!(legacy_python_runtime(&paths).is_empty());
-        std::fs::create_dir_all(paths.tools_dir.join("lama-manga-venv")).unwrap();
-        assert_eq!(legacy_python_runtime(&paths), vec![paths.tools_dir.join("lama-manga-venv")]);
     }
 
     #[cfg(unix)]
