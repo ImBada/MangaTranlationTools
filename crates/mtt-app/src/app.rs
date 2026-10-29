@@ -14,19 +14,50 @@ use crate::worker::Worker;
 pub enum AppEvent {
     PageLoaded(Box<PageLoad>),
     Thumbnail(Box<crate::editor::thumbnails::ThumbLoad>),
-    ChapterSaved { chapter_id: String, seq: u64, error: Option<String> },
-    LayerSaved { page_id: String, error: Option<String> },
-    ExportProgress { current: usize, total: usize },
-    ExportFinished { written: usize, errors: Vec<String> },
-    InpaintFinished { chapter_id: String, page_id: String, outcome: Result<crate::editor::InpaintOutcome, String> },
-    Translation { chapter_id: String, event: crate::editor::translation::TranslationEvent },
+    ChapterSaved {
+        chapter_id: String,
+        seq: u64,
+        error: Option<String>,
+    },
+    LayerSaved {
+        page_id: String,
+        error: Option<String>,
+    },
+    ExportProgress {
+        current: usize,
+        total: usize,
+    },
+    /// `archive`: where the CBZ went, when one was asked for.
+    ExportFinished {
+        written: usize,
+        errors: Vec<String>,
+        archive: Option<Result<std::path::PathBuf, String>>,
+    },
+    InpaintFinished {
+        chapter_id: String,
+        page_id: String,
+        outcome: Result<crate::editor::InpaintOutcome, String>,
+    },
+    Translation {
+        chapter_id: String,
+        event: crate::editor::translation::TranslationEvent,
+    },
     ModelTest(Result<String, String>),
     Lama(crate::settings_view::LamaEvent),
     UpdateChecked(crate::update_check::UpdateStatus),
-    Report { chapter_id: String, event: crate::editor::report::ReportEvent },
-    ReportFocus { page_id: String, block_id: String },
+    Report {
+        chapter_id: String,
+        event: crate::editor::report::ReportEvent,
+    },
+    ReportFocus {
+        page_id: String,
+        block_id: String,
+    },
     Import(crate::library_view::ImportEvent),
-    EditorJob { chapter_id: String, job: crate::editor::EditorJob },
+    EditorJob {
+        chapter_id: String,
+        job: crate::editor::EditorJob,
+    },
 }
 
 enum Screen {
@@ -121,12 +152,20 @@ impl MttApp {
                 (AppEvent::ExportProgress { current, total }, Screen::Editor(editor)) => {
                     editor.export_progress = Some((current, total));
                 }
-                (AppEvent::ExportFinished { written, errors }, Screen::Editor(editor)) => {
+                (AppEvent::ExportFinished { written, errors, archive }, Screen::Editor(editor)) => {
                     editor.export_progress = None;
-                    editor.status = if errors.is_empty() {
+                    let pages = if errors.is_empty() {
                         format!("전체 페이지 출력 완료: {written}p")
                     } else {
                         format!("출력 {written}페이지, 실패 {}건: {}", errors.len(), errors.join(", "))
+                    };
+                    editor.status = match archive {
+                        None => pages,
+                        Some(Ok(path)) => format!(
+                            "{pages} · CBZ 저장: {}",
+                            path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
+                        ),
+                        Some(Err(error)) => format!("{pages} · CBZ 저장 실패: {error}"),
                     };
                 }
                 (AppEvent::ChapterSaved { error: Some(error), .. }, _)

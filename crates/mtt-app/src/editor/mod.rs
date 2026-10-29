@@ -2223,8 +2223,9 @@ impl Editor {
     }
 
     /// Renders every page in the background (decoding images there too), reporting
-    /// `전체 출력 {i}/{n}` progress.
-    pub fn export_all(&mut self, services: &mut Services, worker: &Worker<AppEvent>) -> Result<(), String> {
+    /// `전체 출력 {i}/{n}` progress. With `cbz` the pages also go, in order, into
+    /// `{work} {chapter}.cbz` in the downloads folder.
+    pub fn export_all(&mut self, services: &mut Services, worker: &Worker<AppEvent>, cbz: bool) -> Result<(), String> {
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
         // Its own font context: rendering every page must not hold the editor's.
         let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?.fork();
@@ -2233,10 +2234,15 @@ impl Editor {
         let chapter = self.chapter.clone();
         let emitter = worker.emitter();
         let total = chapter.pages.len();
+        let archive_name = cbz.then(|| {
+            let title = format!("{} {}", self.work_title, chapter.title);
+            format!("{}.cbz", layer_ops::sanitize_psd_basename(&format!("{}.cbz", title.trim()), &chapter.id))
+        });
         self.export_progress = Some((0, total));
         std::thread::spawn(move || {
             let mut written = 0usize;
             let mut errors = Vec::new();
+            let mut archived = Vec::new();
             for (index, page) in chapter.pages.iter().enumerate() {
                 emitter.emit(AppEvent::ExportProgress { current: index, total });
                 let load = assets::decode_page(&library, &chapter, page);
@@ -2258,14 +2264,25 @@ impl Editor {
                     continue;
                 };
                 let path = library.render_output_path(&chapter, page);
-                match encode_png(&rendered)
-                    .and_then(|bytes| mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|e| e.to_string()))
-                {
+                let bytes = match encode_png(&rendered) {
+                    Ok(bytes) => bytes,
+                    Err(error) => {
+                        errors.push(format!("{}: {error}", page.name));
+                        continue;
+                    }
+                };
+                match mtt_core::json_io::write_bytes_atomic(&path, &bytes) {
                     Ok(()) => written += 1,
                     Err(error) => errors.push(format!("{}: {error}", page.name)),
                 }
+                if archive_name.is_some() {
+                    archived.push(bytes);
+                }
             }
-            emitter.emit(AppEvent::ExportFinished { written, errors });
+            let archive = archive_name.map(|name| {
+                mtt_core::cbz::cbz_bytes(&archived).and_then(|bytes| layer_ops::write_unique_download(&name, &bytes))
+            });
+            emitter.emit(AppEvent::ExportFinished { written, errors, archive });
         });
         Ok(())
     }

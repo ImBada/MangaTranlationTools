@@ -224,7 +224,7 @@ impl Editor {
 }
 
 /// `sanitizePsdFileBasename`.
-fn sanitize_psd_basename(value: &str, fallback: &str) -> String {
+pub(super) fn sanitize_psd_basename(value: &str, fallback: &str) -> String {
     let without_extension = match value.rfind('.') {
         Some(index) if index > 0 && !value[index + 1..].contains(['/', '\\']) => &value[..index],
         _ => value,

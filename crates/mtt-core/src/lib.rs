@@ -1,5 +1,6 @@
 //! Core data model and storage for MangaTranslationTools (native).
 
+pub mod cbz;
 pub mod error;
 pub mod font_presets;
 pub mod geometry;

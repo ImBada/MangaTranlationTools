@@ -998,9 +998,15 @@ fn chapter_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
             None => "전체 페이지 출력".into(),
         };
         let unreviewed = total - completed;
-        let export =
-            theme::wide(ui, total > 0 && !job_active && !render_busy, theme::icon_button(theme::icon::EXPORT, label));
-        if export.clicked()
+        let enabled = total > 0 && !job_active && !render_busy;
+        let export = theme::wide(ui, enabled, theme::icon_button(theme::icon::EXPORT, label));
+        let cbz = theme::tip(
+            theme::wide(ui, enabled, theme::icon_button(theme::icon::FILE_ZIP, "전체 출력 + CBZ로 저장")),
+            "CBZ로 저장\n모든 페이지를 출력하고 페이지 순서대로 묶은 CBZ를 다운로드 폴더에 저장합니다",
+            "",
+        );
+        let archive = cbz.clicked();
+        if (export.clicked() || archive)
             && (unreviewed == 0
                 || theme::confirm(
                     "전체 페이지 출력",
@@ -1008,7 +1014,7 @@ fn chapter_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
                     "그래도 모든 페이지를 출력할까요?",
                 ))
         {
-            editor.status = match editor.export_all(services, worker) {
+            editor.status = match editor.export_all(services, worker, archive) {
                 Ok(()) => "전체 페이지 출력 시작".into(),
                 Err(error) => format!("출력 실패: {error}"),
             };
