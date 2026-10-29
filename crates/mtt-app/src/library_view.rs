@@ -230,7 +230,11 @@ impl LibraryView {
         let Some(dialog) = &mut self.import else { return };
         let works: Vec<(String, String)> =
             self.works.iter().map(|w| (w.work.id.clone(), w.work.title.clone())).collect();
-        let mut close = false;
+        // Esc is 취소 (a running import has its own stop button), unless it is closing an
+        // open list first.
+        let mut close = dialog.running.is_none()
+            && !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let mut start = false;
         let title = if dialog.preview.batch { "작품 일괄 번역 준비" } else { "보관함에 추가" };
         theme::modal(
@@ -317,7 +321,7 @@ impl LibraryView {
                 });
             },
         );
-        if start {
+        if start && !close {
             self.start_import(services, worker);
         }
         if close {
@@ -653,7 +657,8 @@ impl LibraryView {
     /// `RenameModal`: rename with 저장 (disabled when empty) or delete after confirming.
     fn pending_dialog(&mut self, ui: &mut egui::Ui, services: &mut Services) {
         let Some(pending) = &mut self.pending else { return };
-        let mut close = false;
+        // Esc is 취소.
+        let mut close = ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape));
         let mut save = false;
         let mut delete = false;
         let heading = if pending.work { "작품 이름 변경" } else { "화 이름 변경" };
