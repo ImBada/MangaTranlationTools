@@ -14,14 +14,18 @@ use crate::worker::Worker;
 pub enum AppEvent {
     PageLoaded(Box<PageLoad>),
     Thumbnail(Box<crate::editor::thumbnails::ThumbLoad>),
+    /// `skipped`: a synchronous flush wrote the data instead (see `WriteGeneration`).
     ChapterSaved {
         chapter_id: String,
         seq: u64,
         error: Option<String>,
+        skipped: bool,
     },
     LayerSaved {
         page_id: String,
+        layer: crate::editor::history::LayerKind,
         error: Option<String>,
+        skipped: bool,
     },
     ExportProgress {
         current: usize,
@@ -80,6 +84,8 @@ pub struct MttApp {
     automation: Option<Automation>,
     /// Chapters still to translate in a "작품 일괄 번역" run.
     batch_queue: std::collections::VecDeque<String>,
+    /// A window close was held back by a failed save; the next close goes through.
+    close_warned: bool,
 }
 
 impl MttApp {
@@ -98,6 +104,7 @@ impl MttApp {
             settings: SettingsView::default(),
             automation: Automation::from_env(),
             batch_queue: Default::default(),
+            close_warned: false,
         }
     }
 
@@ -112,11 +119,11 @@ impl MttApp {
                     let chapter_id = editor.chapter.id.clone();
                     editor.thumbnails.on_loaded(ctx, &chapter_id, *load);
                 }
-                (AppEvent::ChapterSaved { chapter_id, seq, error }, Screen::Editor(editor)) => {
-                    editor.on_chapter_saved(&chapter_id, seq, error)
+                (AppEvent::ChapterSaved { chapter_id, seq, error, skipped }, Screen::Editor(editor)) => {
+                    editor.on_chapter_saved(&chapter_id, seq, error, skipped)
                 }
-                (AppEvent::LayerSaved { page_id, error }, Screen::Editor(editor)) => {
-                    editor.on_layer_saved(&page_id, error)
+                (AppEvent::LayerSaved { page_id, layer, error, skipped }, Screen::Editor(editor)) => {
+                    editor.on_layer_saved(&page_id, layer, error, skipped)
                 }
                 (AppEvent::InpaintFinished { chapter_id, page_id, outcome }, Screen::Editor(editor)) => {
                     editor.on_inpaint_finished(&chapter_id, &page_id, outcome)
@@ -273,6 +280,22 @@ impl MttApp {
         }
     }
 
+    /// Closing the window saves first. When that fails the window stays open once, so the
+    /// error is seen while the edits are still on screen; closing again quits anyway (and
+    /// `on_exit` tries once more). ⌘Q can't be held back and only logs a failure.
+    fn handle_close_request(&mut self, ctx: &egui::Context) {
+        if !ctx.input(|input| input.viewport().close_requested()) || self.close_warned {
+            return;
+        }
+        let Screen::Editor(editor) = &mut self.screen else { return };
+        if let Err(error) = editor.flush(&mut self.services) {
+            log::error!("save before closing failed: {error}");
+            editor.status = format!("저장 실패: {error} · 그래도 닫으려면 창을 한 번 더 닫으세요.");
+            self.close_warned = true;
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+        }
+    }
+
     fn close_editor(&mut self) {
         if let Screen::Editor(editor) = &mut self.screen {
             if editor.translation_running() {
@@ -297,6 +320,7 @@ impl eframe::App for MttApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.handle_events(&ctx);
+        self.handle_close_request(&ctx);
         match &mut self.screen {
             Screen::Library => match self.library.ui(ui, &mut self.services, &mut |ui, services| {
                 self.settings.lama_empty_card(ui, services, &self.worker)
@@ -384,5 +408,48 @@ impl MttApp {
             }
             None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app_in(dir: &std::path::Path) -> (egui::Context, MttApp) {
+        let ctx = egui::Context::default();
+        let app = MttApp::new(&ctx, AppPaths::from_data_root(dir));
+        (ctx, app)
+    }
+
+    fn editor(app: &MttApp) -> &Editor {
+        let Screen::Editor(editor) = &app.screen else { panic!("the editor is open") };
+        editor
+    }
+
+    /// Runs a frame in which the window is asked to close; whether it was held open.
+    fn request_close(ctx: &egui::Context, app: &mut MttApp) -> bool {
+        let mut input = egui::RawInput::default();
+        input.viewports.entry(egui::ViewportId::ROOT).or_default().events.push(egui::ViewportEvent::Close);
+        let mut output = ctx.run_ui(input, |ui| app.handle_close_request(ui.ctx()));
+        output.textures_delta.clear();
+        output
+            .viewport_output
+            .get(&egui::ViewportId::ROOT)
+            .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::CancelClose))
+    }
+
+    #[test]
+    fn a_failed_save_holds_the_window_open_once() {
+        let dir = tempfile::tempdir().unwrap();
+        // Chapter writes fail: a file sits where the library folder goes.
+        std::fs::write(dir.path().join("library"), b"").unwrap();
+        let (ctx, mut app) = app_in(dir.path());
+        let mut chapter_editor =
+            Editor::new(mtt_core::model::Chapter { id: "c".into(), work_id: "w".into(), ..Default::default() });
+        chapter_editor.set_inpaint_aliased(true);
+        app.screen = Screen::Editor(Box::new(chapter_editor));
+        assert!(request_close(&ctx, &mut app), "the unsaved edit keeps the window open");
+        assert!(editor(&app).status.starts_with("저장 실패"));
+        assert!(!request_close(&ctx, &mut app), "closing again quits anyway");
     }
 }

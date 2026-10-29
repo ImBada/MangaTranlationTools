@@ -46,6 +46,8 @@ use overlay::OverlayCache;
 
 const AUTOSAVE_DELAY: Duration = Duration::from_millis(800);
 const LAYER_SAVE_DELAY: Duration = Duration::from_millis(1000);
+/// Failed layer writes retry after `LAYER_SAVE_DELAY` doubled per failure, up to 2^5.
+const LAYER_RETRY_BACKOFF_MAX: u32 = 5;
 const TEXT_COMMIT_DELAY: Duration = Duration::from_millis(900);
 const PAGE_CACHE_RADIUS: usize = 2;
 pub const MASK_BRUSH_MIN: f32 = 4.0;
@@ -185,14 +187,15 @@ impl WriteGeneration {
     }
 
     /// Runs `write` unless a flush happened after `queued_at` (the lock covers the write).
-    fn write_if_current(&self, queued_at: u64, write: impl FnOnce() -> Result<(), String>) -> Result<(), String> {
+    /// `Ok(false)`: skipped, the flush took the write over.
+    fn write_if_current(&self, queued_at: u64, write: impl FnOnce() -> Result<(), String>) -> Result<bool, String> {
         let guard = self.0.lock().unwrap_or_else(PoisonError::into_inner);
         if *guard != queued_at {
-            return Ok(());
+            return Ok(false);
         }
         let result = write();
         drop(guard);
-        result
+        result.map(|()| true)
     }
 
     /// Bumps the generation and runs `flush` while holding the lock.
@@ -407,8 +410,9 @@ pub struct Editor {
     pub size_repeat: Option<(Instant, Instant)>,
     last_inpaint: Option<LastInpaint>,
     last_run_mode: Option<translation::RunMode>,
-    /// Pages whose layer PNG failed to save (retried from the failure card).
-    failed_layer_pages: HashSet<String>,
+    /// Consecutive failed writes of layers still in `layer_dirty` (retry backoff; the
+    /// failure card's 재시도 resets it).
+    layer_failures: HashMap<(String, LayerKind), u32>,
     /// Running result report (`reportProgress`).
     pub report: Option<report::ReportProgress>,
     /// HTML file of the last generated report.
@@ -530,7 +534,7 @@ impl Editor {
             list_anchor: None,
             last_inpaint: None,
             last_run_mode: None,
-            failed_layer_pages: HashSet::new(),
+            layer_failures: HashMap::new(),
             psd_files: Default::default(),
             library_cache: None,
             export_progress: None,
@@ -1910,6 +1914,7 @@ impl Editor {
             queue.pages.retain(|id| id != page_id);
         }
         self.layer_dirty.retain(|(id, _), _| id != page_id);
+        self.layer_failures.retain(|(id, _), _| id != page_id);
         self.dirty_pages.remove(page_id);
         self.history.forget_page(page_id);
         self.checkpoint = None;
@@ -2000,7 +2005,7 @@ impl Editor {
         let due_layers: Vec<(String, LayerKind)> = self
             .layer_dirty
             .iter()
-            .filter(|(_, at)| at.elapsed() >= LAYER_SAVE_DELAY && !pointer_busy)
+            .filter(|(key, at)| at.elapsed() >= self.layer_save_delay(key) && !pointer_busy)
             .map(|(key, _)| key.clone())
             .collect();
         for (page_id, layer) in due_layers {
@@ -2022,7 +2027,7 @@ impl Editor {
     /// (A drag's release and a finished save run frames of their own.)
     fn next_tick_due(&self) -> Option<Duration> {
         let left = |at: &Instant, delay: Duration| delay.saturating_sub(at.elapsed());
-        let layers = self.layer_dirty.values().map(|at| left(at, LAYER_SAVE_DELAY));
+        let layers = self.layer_dirty.iter().map(|(key, at)| left(at, self.layer_save_delay(key)));
         let chapter = self
             .last_change
             .as_ref()
@@ -2064,20 +2069,25 @@ impl Editor {
         let queued_at = generation.current();
         worker.spawn_serial(move || {
             // A synchronous `flush` since queuing wrote newer data; don't overwrite it.
-            let error = catch_panic(|| {
+            let result = catch_panic(|| {
                 generation.write_if_current(queued_at, || library.write_chapter(&chapter).map_err(|e| e.to_string()))
             })
             .and_then(|written| written);
-            AppEvent::ChapterSaved { chapter_id: chapter.id.clone(), seq, error: error.err() }
+            let skipped = result == Ok(false);
+            AppEvent::ChapterSaved { chapter_id: chapter.id.clone(), seq, error: result.err(), skipped }
         });
     }
 
-    pub fn on_chapter_saved(&mut self, chapter_id: &str, seq: u64, error: Option<String>) {
+    /// `skipped`: a flush wrote the chapter instead and reported its own outcome.
+    pub fn on_chapter_saved(&mut self, chapter_id: &str, seq: u64, error: Option<String>, skipped: bool) {
         if chapter_id != self.chapter.id || seq < self.save.saved_seq {
             return;
         }
         self.save.saved_seq = seq;
         self.save.in_flight = seq < self.save.seq;
+        if skipped {
+            return;
+        }
         match error {
             Some(error) => {
                 log::error!("chapter save failed: {error}");
@@ -2135,12 +2145,39 @@ impl Editor {
         !self.dirty_pages.is_empty() || !self.layer_dirty.is_empty() || self.save.in_flight
     }
 
-    /// Re-queues layer saves that failed.
+    /// Re-queues layer saves that failed, without waiting out their backoff.
     fn retry_layer_saves(&mut self) {
-        let now = Instant::now() - LAYER_SAVE_DELAY;
-        for page_id in std::mem::take(&mut self.failed_layer_pages) {
-            self.layer_dirty.insert((page_id.clone(), LayerKind::Mask), now);
-            self.layer_dirty.insert((page_id, LayerKind::Result), now);
+        let due = Instant::now() - LAYER_SAVE_DELAY;
+        for (key, failures) in &mut self.layer_failures {
+            *failures = 0;
+            self.layer_dirty.insert(key.clone(), due);
+        }
+    }
+
+    /// How long a dirty layer waits before its background save; failed ones back off.
+    fn layer_save_delay(&self, key: &(String, LayerKind)) -> Duration {
+        let failures = self.layer_failures.get(key).copied().unwrap_or(0);
+        LAYER_SAVE_DELAY * 2u32.pow(failures.min(LAYER_RETRY_BACKOFF_MAX))
+    }
+
+    /// A layer write failed: the layer stays dirty, which keeps its page loaded, makes
+    /// `flush` write it, and retries it in the background after a backoff.
+    fn layer_save_failed(&mut self, key: (String, LayerKind), error: String) {
+        log::error!("layer save failed for {} {:?}: {error}", key.0, key.1);
+        self.save.error = Some(error);
+        *self.layer_failures.entry(key.clone()).or_default() += 1;
+        // An edit made since keeps its own (later) time.
+        self.layer_dirty.entry(key).or_insert_with(Instant::now);
+        self.notifications.report(
+            notifications::FailureId::LayerSave,
+            "인페인트 레이어 저장 실패",
+            "마스크와 결과 레이어는 현재 화면에 남아 있습니다. 다시 저장을 시도하세요.",
+        );
+    }
+
+    fn layer_save_succeeded(&mut self, key: &(String, LayerKind)) {
+        if self.layer_failures.remove(key).is_some() && self.layer_failures.is_empty() {
+            self.notifications.clear(notifications::FailureId::LayerSave);
         }
     }
 
@@ -2179,27 +2216,30 @@ impl Editor {
                 })
             })
             .and_then(|written| written);
-            AppEvent::LayerSaved { page_id, error: result.err() }
+            let skipped = result == Ok(false);
+            AppEvent::LayerSaved { page_id, layer, error: result.err(), skipped }
         });
     }
 
-    pub fn on_layer_saved(&mut self, page_id: &str, error: Option<String>) {
+    /// `skipped`: a flush took the write over (and keeps the layer dirty if it failed).
+    pub fn on_layer_saved(&mut self, page_id: &str, layer: LayerKind, error: Option<String>, skipped: bool) {
         self.layer_saves_in_flight = self.layer_saves_in_flight.saturating_sub(1);
         // Kept until every queued write is confirmed; rewriting a saved layer is harmless.
         if self.layer_saves_in_flight == 0 {
             self.layers_queued.clear();
         }
+        // A write of a deleted page (or of the chapter just left) has nothing to retry.
+        if skipped || !self.chapter.pages.iter().any(|page| page.id == page_id) {
+            return;
+        }
+        let key = (page_id.to_owned(), layer);
         if let Some(error) = error {
-            log::error!("layer save failed for {page_id}: {error}");
-            self.save.error = Some(error);
-            self.failed_layer_pages.insert(page_id.to_owned());
-            self.notifications.report(
-                notifications::FailureId::LayerSave,
-                "인페인트 레이어 저장 실패",
-                "마스크와 결과 레이어는 현재 화면에 남아 있습니다. 다시 저장을 시도하세요.",
-            );
-        } else if self.layer_saves_in_flight == 0 {
-            self.notifications.flash_saved();
+            self.layer_save_failed(key, error);
+        } else {
+            self.layer_save_succeeded(&key);
+            if self.layer_saves_in_flight == 0 {
+                self.notifications.flash_saved();
+            }
         }
     }
 
@@ -2219,22 +2259,16 @@ impl Editor {
                 pending.push(key);
             }
         }
-        for (page_id, layer) in pending {
-            let Some(PageAssets::Ready(loaded)) = self.assets.get(&page_id) else {
-                continue;
-            };
-            let Some(payload) = LayerImage::of(loaded, layer) else { continue };
-            let path = services.library.inpaint_layer_path(&self.chapter, &page_id, layer.page_layer());
-            let bytes = payload.encode()?;
-            mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())?;
-            if let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == page_id) {
-                let text = path.to_string_lossy().into_owned();
-                match layer {
-                    LayerKind::Mask => page.inpaint_mask_path = Some(text),
-                    LayerKind::Result => page.inpaint_result_path = Some(text),
+        // Every layer gets its try; the ones that fail stay dirty for the next flush.
+        let mut layer_error = None;
+        for key in pending {
+            match self.write_layer_now(services, &key) {
+                Ok(()) => self.layer_save_succeeded(&key),
+                Err(error) => {
+                    layer_error.get_or_insert_with(|| error.clone());
+                    self.layer_save_failed(key, error);
                 }
             }
-            self.chapter_dirty = true;
         }
         if self.chapter_dirty || self.save.in_flight {
             self.chapter.updated_at = mtt_core::time::now_iso();
@@ -2243,7 +2277,26 @@ impl Editor {
             mtt_core::text::normalize_chapter_translated_text(&mut chapter);
             services.library.write_chapter(&chapter).map_err(|error| error.to_string())?;
             self.chapter_dirty = false;
+            self.dirty_pages.clear();
         }
+        layer_error.map_or(Ok(()), Err)
+    }
+
+    /// Writes one layer PNG now and points the page at it.
+    fn write_layer_now(&mut self, services: &Services, (page_id, layer): &(String, LayerKind)) -> Result<(), String> {
+        let Some(PageAssets::Ready(loaded)) = self.assets.get(page_id) else { return Ok(()) };
+        let Some(payload) = LayerImage::of(loaded, *layer) else { return Ok(()) };
+        let path = services.library.inpaint_layer_path(&self.chapter, page_id, layer.page_layer());
+        let bytes = payload.encode()?;
+        mtt_core::json_io::write_bytes_atomic(&path, &bytes).map_err(|error| error.to_string())?;
+        if let Some(page) = self.chapter.pages.iter_mut().find(|page| &page.id == page_id) {
+            let text = path.to_string_lossy().into_owned();
+            match layer {
+                LayerKind::Mask => page.inpaint_mask_path = Some(text),
+                LayerKind::Result => page.inpaint_result_path = Some(text),
+            }
+        }
+        self.chapter_dirty = true;
         Ok(())
     }
 
@@ -3112,6 +3165,80 @@ mod tests {
         (ctx, services, worker)
     }
 
+    fn page_with_mask(ctx: &egui::Context, page_id: &str) -> PageAssets {
+        let mut mask = GrayImage::new(8, 8);
+        mask.put_pixel(1, 1, image::Luma([255]));
+        PageAssets::Ready(Box::new(LoadedPage::new(ctx, page_id, RgbaImage::new(8, 8), Some(mask), None)))
+    }
+
+    /// Makes writing a page's mask PNG fail: a folder sits where the file goes.
+    fn block_mask_path(services: &Services, editor: &Editor, page_id: &str) -> PathBuf {
+        let path = services.library.inpaint_layer_path(&editor.chapter, page_id, LayerKind::Mask.page_layer());
+        std::fs::create_dir_all(path.join("x")).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_failed_flush_keeps_every_unwritten_layer() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut services, _worker) = services_in(dir.path());
+        let mut editor = Editor::new(chapter_with_pages(2));
+        let mut paths = Vec::new();
+        for id in ["p0", "p1"] {
+            editor.assets.insert(id.into(), page_with_mask(&ctx, id));
+            editor.layer_dirty.insert((id.into(), LayerKind::Mask), Instant::now());
+            paths.push(block_mask_path(&services, &editor, id));
+        }
+        assert!(editor.flush(&mut services).is_err());
+        assert_eq!(editor.layer_dirty.len(), 2, "both layers are still to save");
+        assert!(editor.has_unsaved_changes());
+        assert!(editor.notifications.has_save_failure(), "the layer save card is up");
+        // A background write the flush made stale doesn't count as saved.
+        editor.on_layer_saved("p0", LayerKind::Mask, None, true);
+        assert!(editor.notifications.has_save_failure());
+        for path in &paths {
+            std::fs::remove_dir_all(path).unwrap();
+        }
+        editor.flush(&mut services).expect("the next flush writes them");
+        assert!(paths.iter().all(|path| path.is_file()));
+        assert!(!editor.has_unsaved_changes());
+        assert!(!editor.notifications.has_save_failure());
+    }
+
+    #[test]
+    fn a_failed_background_layer_save_stays_dirty_until_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut services, worker) = services_in(dir.path());
+        let mut editor = Editor::new(chapter_with_pages(1));
+        editor.assets.insert("p0".into(), page_with_mask(&ctx, "p0"));
+        let key = ("p0".to_owned(), LayerKind::Mask);
+        editor.layer_dirty.insert(key.clone(), Instant::now() - LAYER_SAVE_DELAY);
+        let path = block_mask_path(&services, &editor, "p0");
+        editor.tick(&mut services, &worker, false);
+        assert!(editor.layer_dirty.is_empty(), "handed to the writer");
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut answered = false;
+        while !answered && Instant::now() < deadline {
+            for event in worker.drain() {
+                if let AppEvent::LayerSaved { page_id, layer, error, skipped } = event {
+                    assert!(error.is_some(), "the write fails");
+                    editor.on_layer_saved(&page_id, layer, error, skipped);
+                    answered = true;
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(answered);
+        assert!(editor.layer_dirty.contains_key(&key), "still unsaved, so the page stays loaded");
+        assert!(editor.has_unsaved_changes());
+        assert!(editor.layer_save_delay(&key) > LAYER_SAVE_DELAY, "retried after a backoff");
+        std::fs::remove_dir_all(&path).unwrap();
+        editor.flush(&mut services).expect("leaving the chapter writes it");
+        assert!(path.is_file());
+        assert!(!editor.layer_dirty.contains_key(&key));
+        assert!(!editor.notifications.has_save_failure());
+    }
+
     #[test]
     fn pending_saves_schedule_a_frame() {
         let mut editor = Editor::new(chapter_with_pages(1));
@@ -3135,9 +3262,10 @@ mod tests {
             wrote = true;
             Ok(())
         });
-        assert_eq!(result, Ok(()));
+        assert_eq!(result, Ok(true));
         assert!(wrote, "the poisoned generation lock is recovered");
         generation.advance_while(|| ());
+        assert_eq!(generation.write_if_current(queued_at, || Ok(())), Ok(false), "stale after a flush");
         assert_eq!(generation.current(), queued_at + 1);
     }
 
