@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{CoreError, CoreResult};
-use crate::json_io::write_json_atomic;
+use crate::json_io::write_json_private;
 use crate::model::JsonMap;
 
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-6.1-sol";
@@ -237,9 +237,10 @@ impl AppSettings {
         }
     }
 
+    /// Writes `settings.json` readable by the owner only: it holds the API key.
     pub fn save(&self, path: &Path) -> CoreResult<Self> {
         let normalized = self.normalized();
-        write_json_atomic(path, &normalized)?;
+        write_json_private(path, &normalized)?;
         Ok(normalized)
     }
 
@@ -368,6 +369,19 @@ mod tests {
         assert_eq!(value["codex"]["reasoningEffort"], "medium");
         assert_eq!(value["modelProvider"], "openai-codex");
         assert_eq!(AppSettings::from_json(&value), AppSettings::default());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn saved_settings_are_readable_by_the_owner_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("settings.json");
+        let mut settings = AppSettings::default();
+        settings.openai_compatible.api_key = "sk-secret".into();
+        settings.save(&path).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        assert_eq!(AppSettings::load(&path).unwrap().openai_compatible.api_key, "sk-secret");
     }
 
     #[test]
