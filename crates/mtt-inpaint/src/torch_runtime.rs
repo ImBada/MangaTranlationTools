@@ -31,8 +31,8 @@ const MIN_COMPUTE_CAPABILITY: u32 = 75;
 
 /// In the runtime folder: `cpu` when the user chose the CPU.
 const PREFERENCE_FILE: &str = "device.txt";
-/// In the CUDA build's folder: why it failed to load, after a failure that left part of
-/// it loaded (the CPU build can't load in that process). The next run uses the CPU.
+/// In the CUDA build's folder: why it failed to load. Later runs use the CPU build, and
+/// "LaMa 받기" fetches it, until the user chooses the GPU again.
 const FAILED_FILE: &str = "load-failed.txt";
 
 /// A platform LibTorch builds are published for.
@@ -531,9 +531,14 @@ fn choose(preference: Preference, installed: &Installed, gpu: &Result<CudaGpu, S
     if installed.cpu.is_some() {
         Choice::Cpu(why_not_cuda.map(|why| format!("CUDA 대신 CPU로 실행합니다: {why}")))
     } else {
-        Choice::Nothing(why_not_cuda.map(|why| format!("CUDA를 쓸 수 없고({why}) CPU용 LibTorch도 없습니다.")))
+        Choice::Nothing(
+            why_not_cuda.map(|why| format!("CUDA를 쓸 수 없고({why}) CPU용 LibTorch도 없습니다. {GET_CPU}")),
+        )
     }
 }
+
+/// What to do without a CPU build when CUDA can't run: "LaMa 받기" then fetches it.
+const GET_CPU: &str = "설정 › 인페인트에서 LaMa 받기를 누르면 CPU용 LibTorch를 받습니다.";
 
 /// Whether a build that can run is installed: file checks only, for the UI thread (the
 /// GPU is only asked when the build loads).
@@ -696,8 +701,9 @@ pub(crate) fn activate(root: &Path) -> Result<Device, String> {
     Ok(device)
 }
 
-/// Loads the build `choose` picks in `root`; when CUDA fails to load, the CPU build unless
-/// part of the CUDA one has loaded (then the next run uses the CPU).
+/// Loads the build `choose` picks in `root`. When CUDA fails to load, that's recorded
+/// (`FAILED_FILE`) so later runs and "LaMa 받기" go for the CPU build, and the CPU build
+/// loads now unless part of the CUDA one has (then it waits for a restart).
 fn load_runtime(root: &Path, platform: Platform, gpu: Result<CudaGpu, String>) -> Result<Active, String> {
     let installed = Installed::find(root, platform);
     match (choose(read_preference(root), &installed, &gpu), &installed.cuda, gpu) {
@@ -710,14 +716,18 @@ fn load_runtime(root: &Path, platform: Platform, gpu: Result<CudaGpu, String>) -
                 let next = if installed.cpu.is_some() {
                     "앱을 다시 시작하면 CPU로 실행합니다."
                 } else {
-                    "설정 › 인페인트에서 CPU용 LibTorch를 받은 뒤 앱을 다시 시작해 주세요."
+                    "설정 › 인페인트에서 LaMa 받기로 CPU용 LibTorch를 받은 뒤 앱을 다시 시작해 주세요."
                 };
                 Err(format!("CUDA LibTorch를 불러오지 못했습니다: {error}. {next}"))
             }
             Err(error) => {
+                // Nothing of LibTorch opened, so the CPU build can stand in right away.
                 log::warn!("CUDA LibTorch failed to load, using the CPU build: {error}");
+                let _ = std::fs::write(cuda.torch.join(FAILED_FILE), &error.message);
                 let why = format!("CUDA LibTorch를 불러오지 못했습니다 ({error})");
-                let Some(cpu) = &installed.cpu else { return Err(format!("{why}. CPU용 LibTorch도 없습니다.")) };
+                let Some(cpu) = &installed.cpu else {
+                    return Err(format!("{why}. CPU용 LibTorch도 없습니다. {GET_CPU}"));
+                };
                 load_cpu(cpu, Some(format!("CUDA 대신 CPU로 실행합니다: {why}")))
                     .map_err(|e| format!("{why}. CPU용 LibTorch도 불러오지 못했습니다: {e}"))
             }
@@ -767,10 +777,39 @@ fn cuda_device(has_cuda: bool, devices: usize, gpu: &CudaGpu) -> Result<Device, 
     }
 }
 
-/// A small operation on `device`, which fails when its kernels can't run there.
+/// Small operations on `device` covering what the models need there: a plain kernel, a
+/// convolution (cuDNN), group norm and the FFT LaMa's spectral blocks use (cuFFT). Any of
+/// them failing (a library that can't load, kernels for another GPU) leaves the models on
+/// the CPU rather than failing every run.
 fn smoke_test(device: Device) -> Result<(), String> {
-    let values = mtt_torch::Tensor::from_f32(&[-1.0, 2.0], &[2])?.to(device)?.relu()?.to_f32_vec()?;
-    if values == [0.0, 2.0] { Ok(()) } else { Err(format!("GPU 시험 연산 결과가 틀립니다: {values:?}")) }
+    let run = || -> Result<(), String> {
+        let tensor = |data: &[f32], shape: &[i64]| mtt_torch::Tensor::from_f32(data, shape)?.to(device);
+        let relu = tensor(&[-1.0, 2.0], &[2])?.relu()?.to_f32_vec()?;
+        let ones = tensor(&[1.0; 9], &[1, 1, 3, 3])?;
+        let conv = ones.conv2d(&ones, None, 1, 1)?.to_f32_vec()?;
+        let (weight, bias) = (tensor(&[1.0; 2], &[2])?, tensor(&[0.0; 2], &[2])?);
+        let norm = tensor(&[1.0, 3.0, 5.0, 9.0], &[1, 2, 1, 2])?.group_norm(2, &weight, &bias, 1e-5)?.to_f32_vec()?;
+        let signal = [0.5, -1.0, 2.0, 0.0, 1.5, 3.0, -2.0, 1.0];
+        let fft = tensor(&signal, &[1, 1, 2, 4])?.rfft2()?.irfft2(2, 4)?.to_f32_vec()?;
+        smoke_results(&[
+            ("relu", &relu, &[0.0, 2.0]),
+            ("conv2d", &conv, &[4.0, 6.0, 4.0, 6.0, 9.0, 6.0, 4.0, 6.0, 4.0]),
+            ("group_norm", &norm, &[-1.0, 1.0, -1.0, 1.0]),
+            ("rfft2/irfft2", &fft, &signal),
+        ])
+    };
+    run().map_err(|error| if error.starts_with("GPU 시험") { error } else { format!("GPU 시험 연산 실패: {error}") })
+}
+
+/// Each smoke test operation's values against what they should be (within float error).
+fn smoke_results(results: &[(&str, &[f32], &[f32])]) -> Result<(), String> {
+    for (name, values, expected) in results {
+        let close = values.len() == expected.len() && values.iter().zip(*expected).all(|(a, b)| (a - b).abs() < 1e-3);
+        if !close {
+            return Err(format!("GPU 시험 연산({name}) 결과가 틀립니다: {values:?}"));
+        }
+    }
+    Ok(())
 }
 
 /// Downloads, checks and unpacks whatever is missing of the build "LaMa 받기" wants (the
@@ -1259,23 +1298,59 @@ mod tests {
 
     #[test]
     fn a_cuda_build_that_fails_to_load_falls_back_to_the_cpu_build() {
-        // Empty files: the first NVIDIA library fails before any of LibTorch opens, so the
-        // CPU build is tried next (and fails too, being empty).
+        // Empty files: the first NVIDIA library fails before any of LibTorch opens (as on a
+        // Linux whose glibc is older than the wheels'), so the CPU build is tried next.
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let platform = Platform::LinuxX64;
         install(root, platform, Flavor::Cuda);
         let error = load_runtime(root, platform, Ok(rtx())).unwrap_err();
         assert!(error.contains("CUDA LibTorch를 불러오지 못했습니다") && error.contains("libcudart.so.13"), "{error}");
-        assert!(error.contains("CPU용 LibTorch도 없습니다"), "{error}");
+        assert!(error.contains("CPU용 LibTorch도 없습니다") && error.contains("LaMa 받기"), "{error}");
+        // Recorded: it used to be tried (and fail) on every run, the status kept showing
+        // CUDA and "LaMa 받기" said all was there, so the CPU build never came.
+        let failed = Installed::find(root, platform).cuda.unwrap().failed.unwrap();
+        assert!(failed.contains("libcudart.so.13"), "{failed}");
+        let status = status_of(root, platform, Preference::Gpu, &Ok(rtx()), None);
+        assert_eq!((status.wanted, status.installed, status.usable), (Flavor::Cpu, false, false));
+        assert_eq!(status.device, "CPU");
+        assert!(status.note.as_deref().is_some_and(|note| note.contains("지난 실행")), "{:?}", status.note);
+
+        // With the CPU build there, CUDA isn't tried again (the empty CPU files fail).
         install(root, platform, Flavor::Cpu);
         let error = load_runtime(root, platform, Ok(rtx())).unwrap_err();
-        assert!(error.contains("CPU용 LibTorch도 불러오지 못했습니다"), "{error}");
-        let cuda = Installed::find(root, platform).cuda.unwrap();
-        assert_eq!(cuda.failed, None, "nothing of LibTorch loaded, so CUDA is tried again next time");
+        assert!(!error.contains("libcudart"), "{error}");
+        // Choosing the GPU again retries it.
+        save_preference(root, Some(platform), Preference::Gpu).unwrap();
+        assert_eq!(status_of(root, platform, Preference::Gpu, &Ok(rtx()), None).wanted, Flavor::Cuda);
+        let error = load_runtime(root, platform, Ok(rtx())).unwrap_err();
+        assert!(error.contains("libcudart") && error.contains("CPU용 LibTorch도 불러오지 못했습니다"), "{error}");
         // Without a usable GPU the CUDA build isn't touched.
+        save_preference(root, Some(platform), Preference::Gpu).unwrap();
         let error = load_runtime(root, platform, Err("NVIDIA GPU를 찾지 못했습니다".into())).unwrap_err();
         assert!(!error.contains("libcudart"), "{error}");
+        assert!(Installed::find(root, platform).cuda.unwrap().failed.is_none());
+    }
+
+    #[test]
+    fn the_smoke_test_names_the_operation_that_went_wrong() {
+        assert_eq!(smoke_results(&[("relu", &[0.0, 2.0], &[0.0, 2.0]), ("fft", &[1.0002], &[1.0])]), Ok(()));
+        let error = smoke_results(&[("relu", &[0.0, 2.0], &[0.0, 2.0]), ("conv2d", &[0.0; 9], &[1.0; 9])]).unwrap_err();
+        assert!(error.contains("conv2d"), "{error}");
+        assert!(smoke_results(&[("rfft2/irfft2", &[1.0], &[1.0, 2.0])]).unwrap_err().contains("rfft2"));
+    }
+
+    /// The smoke test's operations on this machine's devices: `MTT_TORCH_RUNTIME=<dir>
+    /// cargo test -p mtt-inpaint -- --ignored smoke_test_passes`.
+    #[test]
+    #[ignore = "needs a LibTorch runtime in MTT_TORCH_RUNTIME"]
+    fn smoke_test_passes_on_the_cpu_and_mps() {
+        let runtime = std::env::var("MTT_TORCH_RUNTIME").expect("MTT_TORCH_RUNTIME");
+        mtt_torch::load(runtime.as_ref()).unwrap();
+        smoke_test(Device::Cpu).unwrap();
+        if mtt_torch::mps_available() {
+            smoke_test(Device::Mps).unwrap();
+        }
     }
 
     #[test]
