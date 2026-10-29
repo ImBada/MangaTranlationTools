@@ -354,10 +354,19 @@ impl Library {
     }
 
     /// File cleanup half of `deletePage`, run after the chapter without `page` was saved:
-    /// unlinks the stored `imagePath` (errors ignored, like `safeUnlink`) and then
+    /// unlinks the page's image (errors ignored, like `safeUnlink`) and then
     /// [`Library::remove_page_artifacts`]. Rendered pages in `renders/` are kept, as in TS.
+    ///
+    /// The image is looked up by file name in this chapter's `pages/` folder, never at the
+    /// stored absolute `imagePath`: after the data folder was copied or moved, that path
+    /// points into the other library.
     pub fn remove_page_files(&self, work_id: &str, chapter_id: &str, page: &PageRecord) -> CoreResult<()> {
-        safe_unlink(Path::new(&page.image_path));
+        if !is_safe_id(work_id) || !is_safe_id(chapter_id) {
+            return Ok(());
+        }
+        if let Some(name) = stored_file_name(&page.image_path).filter(|name| is_safe_id(name)) {
+            safe_unlink(&self.chapter_dir(work_id, chapter_id).join("pages").join(name));
+        }
         self.remove_page_artifacts(work_id, chapter_id, &page.id)
     }
 
@@ -591,6 +600,12 @@ pub fn sanitize_title(title: &str, fallback: &str) -> String {
 
 fn non_empty_path(value: &str) -> Option<PathBuf> {
     (!value.trim().is_empty()).then(|| PathBuf::from(value))
+}
+
+/// Last component of a stored path, whichever OS wrote it (`C:\…\pages\x.png` or
+/// `/…/pages/x.png`).
+fn stored_file_name(path: &str) -> Option<&str> {
+    path.rsplit(['/', '\\']).next().filter(|name| !name.is_empty())
 }
 
 fn remove_dir_if_exists(path: &Path) -> CoreResult<()> {
@@ -943,6 +958,31 @@ mod tests {
         let unchanged = library.delete_page("c1", "missing").unwrap();
         assert_eq!(unchanged, stored);
         assert!(matches!(library.delete_page("missing", "p2"), Err(CoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn deleting_a_page_of_a_copied_library_keeps_the_original_image() {
+        let dir = tempfile::tempdir().unwrap();
+        let original = touch(dir.path(), "original/library/works/w/chapters/c1/pages/001-p1.png");
+        let library = Library::new(dir.path().join("copy/library"));
+        let work = library.create_work("w").unwrap();
+        let mut chapter = sample_chapter(&library, &work);
+        let copied = touch(&library.chapter_dir(&work.id, "c1"), "pages/001-p1.png");
+        // The copy still stores the original library's absolute path.
+        chapter.pages[0].image_path = original.to_string_lossy().into_owned();
+        library.write_chapter(&chapter).unwrap();
+
+        library.delete_page("c1", "p1").unwrap();
+        assert!(original.exists(), "the other library's image is untouched");
+        assert!(!copied.exists(), "this library's copy is removed");
+
+        // A path outside any `pages/` folder only ever matches by name inside this chapter.
+        let outside = touch(dir.path(), "elsewhere/002-p2.png");
+        let mut chapter = library.read_chapter(&work.id, "c1").unwrap().unwrap();
+        chapter.pages[0].image_path = outside.to_string_lossy().into_owned();
+        library.write_chapter(&chapter).unwrap();
+        library.delete_page("c1", "p2").unwrap();
+        assert!(outside.exists());
     }
 
     #[test]
