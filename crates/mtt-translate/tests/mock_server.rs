@@ -182,3 +182,49 @@ fn rejected_requests_are_not_retried() {
     assert!(error.contains("401"), "{error}");
     assert_eq!((failures, *requests.lock().unwrap()), (1, 1), "one attempt only");
 }
+
+#[test]
+fn translates_regions_with_close_ups() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let base_url = format!("http://{}/v1", listener.local_addr().unwrap());
+    let body = Arc::new(Mutex::new(String::new()));
+    let captured = Arc::clone(&body);
+    std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut content_length = 0usize;
+        loop {
+            let mut header = String::new();
+            reader.read_line(&mut header).unwrap();
+            if header == "\r\n" || header.is_empty() {
+                break;
+            }
+            if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                content_length = value.trim().parse().unwrap();
+            }
+        }
+        let mut request = vec![0u8; content_length];
+        reader.read_exact(&mut request).unwrap();
+        *captured.lock().unwrap() = String::from_utf8_lossy(&request).into_owned();
+        let content = "id: 2\\njp: いや\\nko: 아니\\n\\nid: 1\\njp: えっ\\nko: 엥?";
+        let response = format!(r#"{{"choices":[{{"message":{{"content":"{content}"}}}}]}}"#);
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{response}",
+            response.len()
+        )
+        .unwrap();
+    });
+    let (page, config) = page_and_config(base_url, 1);
+    let regions = [
+        mtt_translate::Region { id: 1, bbox: mtt_core::model::BBox::new(0.0, 0.0, 500.0, 500.0) },
+        mtt_translate::Region { id: 2, bbox: mtt_core::model::BBox::new(500.0, 500.0, 500.0, 500.0) },
+    ];
+    let texts = mtt_translate::translate_regions(&config, &page, &regions, |_, _| {}, || false).unwrap();
+    let ko: Vec<(u32, &str)> = texts.iter().map(|text| (text.id, text.ko.as_str())).collect();
+    assert_eq!(ko, [(2, "아니"), (1, "엥?")]);
+    let request = body.lock().unwrap();
+    assert!(request.contains("Image 2: close-up of region 1."), "close-ups captioned");
+    assert!(request.contains("Image 3: close-up of region 2."));
+    assert!(request.contains("id: 2, x: 500, y: 500, w: 500, h: 500"), "regions listed");
+}

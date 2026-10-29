@@ -9,7 +9,15 @@ use base64::Engine;
 pub enum VariantRole {
     Original,
     Enhanced,
+    /// Close-up of the region with this id.
+    Region(u32),
 }
+
+/// Context around a region close-up, as a share of the region's size (at least
+/// `REGION_MIN_PAD_PX`), and the longest close-up side.
+const REGION_PAD_SHARE: f64 = 0.15;
+const REGION_MIN_PAD_PX: f64 = 8.0;
+const REGION_MAX_LONG_SIDE: u32 = 1024;
 
 #[derive(Debug, Clone)]
 pub struct ImageVariant {
@@ -96,8 +104,27 @@ pub fn prepare_variants(path: &Path, include_enhanced: bool) -> Result<Vec<Image
     Ok(variants)
 }
 
+/// Close-up of `bbox` (0..1000 space) on `page` with a little context, as PNG.
+pub fn region_variant(page: &image::RgbaImage, id: u32, bbox: mtt_core::model::BBox) -> Result<ImageVariant, String> {
+    let (width, height) = (f64::from(page.width()), f64::from(page.height()));
+    let px = mtt_core::geometry::bbox_to_pixels(bbox, width, height);
+    let pad = (px.w.max(px.h) * REGION_PAD_SHARE).max(REGION_MIN_PAD_PX);
+    let left = (px.x - pad).floor().clamp(0.0, width - 1.0);
+    let top = (px.y - pad).floor().clamp(0.0, height - 1.0);
+    let right = (px.x + px.w + pad).ceil().clamp(left + 1.0, width);
+    let bottom = (px.y + px.h + pad).ceil().clamp(top + 1.0, height);
+    let crop = image::imageops::crop_imm(page, left as u32, top as u32, (right - left) as u32, (bottom - top) as u32)
+        .to_image();
+    let mut crop = image::DynamicImage::ImageRgba8(crop);
+    if crop.width().max(crop.height()) > REGION_MAX_LONG_SIDE {
+        crop = crop.resize(REGION_MAX_LONG_SIDE, REGION_MAX_LONG_SIDE, image::imageops::FilterType::Lanczos3);
+    }
+    Ok(ImageVariant { role: VariantRole::Region(id), data_url: data_url("image/png", &png_bytes(&crop)?) })
+}
+
 pub fn variant_caption(role: VariantRole, index: usize) -> String {
     match role {
+        VariantRole::Region(id) => format!("Image {}: close-up of region {id}.", index + 1),
         VariantRole::Enhanced => {
             format!("Image {}: the same full manga page rendered as grayscale/high-contrast assist view.", index + 1)
         }

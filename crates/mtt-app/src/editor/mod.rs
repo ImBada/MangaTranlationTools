@@ -404,6 +404,8 @@ pub struct Editor {
     pub thumbnails: thumbnails::Thumbnails,
     /// Tab / Shift+Tab presses taken before egui's focus handling (see `MttApp::raw_input_hook`).
     pub pending_block_step: i32,
+    /// "다시 번역" on the selected blocks, started next frame (where the services are).
+    pub block_translation_requested: bool,
     /// The shortcut sheet (`?` or the status bar button).
     pub shortcut_sheet: bool,
 }
@@ -513,6 +515,7 @@ impl Editor {
             work_title: String::new(),
             thumbnails: Default::default(),
             pending_block_step: 0,
+            block_translation_requested: false,
             shortcut_sheet: false,
         };
         editor.reset_checkpoint();
@@ -1988,8 +1991,10 @@ impl Editor {
     /// `selectedPageEditLocked`: during a translation run, pages not translated yet are
     /// read-only.
     pub fn page_edit_locked(&self) -> bool {
-        self.translation.is_some()
-            && self.page().is_some_and(|page| page.analysis_status != mtt_core::model::PageAnalysisStatus::Completed)
+        let Some(job) = &self.translation else { return false };
+        self.page().is_some_and(|page| {
+            page.analysis_status != mtt_core::model::PageAnalysisStatus::Completed || job.covers_blocks_of(&page.id)
+        })
     }
 
     /// Canvas "+/-" (`updateSelectedBlockIndividualFontSize`): sets the size on the block
@@ -2270,6 +2275,9 @@ impl Editor {
     ) -> Option<EditorAction> {
         let pointer_down = ui.input(|i| i.pointer.any_down());
         self.tick(services, worker, pointer_down);
+        if std::mem::take(&mut self.block_translation_requested) {
+            self.start_block_translation(services, worker);
+        }
         if let Some(wait) = self.next_tick_due() {
             ui.ctx().request_repaint_after(wait);
         }

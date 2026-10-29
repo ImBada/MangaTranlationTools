@@ -191,17 +191,17 @@ pub fn verify_endpoint(config: &TranslationConfig) -> Result<(), String> {
     })
 }
 
-/// One request/parse attempt with the page's prepared images.
-fn translate_attempt(
+/// One request/parse attempt: `prompt` with `variants`, the output read by `parse`.
+fn request_attempt<T>(
     config: &TranslationConfig,
     variants: &[images::ImageVariant],
-    retry: bool,
+    prompt: &str,
+    parse: impl Fn(&str) -> Result<T, String>,
     cancelled: &dyn Fn() -> bool,
-) -> Result<Vec<OverlayItem>, SendError> {
-    let prompt = if retry { RETRY_PROMPT } else { PROMPT };
+) -> Result<T, SendError> {
     let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, prompt, variants);
     let output = client::send_cancellable(&config.agent, &config.endpoint, body, cancelled)?;
-    parser::parse_items(&output).map_err(|error| SendError {
+    parse(&output).map_err(|error| SendError {
         message: format!("{error} 응답 미리보기: {}", client::preview(&output, 240)),
         retry: Retry::Now,
     })
@@ -213,31 +213,122 @@ fn translate_attempt(
 pub fn translate_page(
     config: &TranslationConfig,
     image_path: &Path,
-    mut on_attempt: impl FnMut(u32, &str),
+    on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<OverlayItem>, String> {
     // The images (and their base64) are the same for every attempt.
     let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
+    with_retries(
+        config,
+        |attempt, cancelled| {
+            let prompt = if attempt > 1 { RETRY_PROMPT } else { PROMPT };
+            request_attempt(config, &variants, prompt, parser::parse_items, cancelled)
+        },
+        on_attempt,
+        &cancelled,
+    )
+}
+
+/// A region of the page to read and translate on its own (a block's box, 0..1000 space).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Region {
+    pub id: u32,
+    pub bbox: BBox,
+}
+
+/// Prompt for [`translate_regions`]: the regions listed with their boxes.
+pub fn region_prompt(regions: &[Region]) -> String {
+    let list: String = regions
+        .iter()
+        .map(|region| {
+            let b = region.bbox;
+            format!(
+                "id: {}, x: {}, y: {}, w: {}, h: {}\n",
+                region.id,
+                b.x.round(),
+                b.y.round(),
+                b.w.round(),
+                b.h.round()
+            )
+        })
+        .collect();
+    format!(
+        "You are given a Japanese manga page and close-ups of some regions of it.
+Image 1 is the original full page; each following image is the close-up of one region, in the order listed below.
+Regions, as boxes in a 0..1000 coordinate space relative to the original page size:
+{list}
+For every region, read the Japanese text inside it and translate it into Korean.
+Return only plain text records in this exact field format, one per region, using the same ids:
+id: 1
+jp: 馬鹿者… 無理をするな
+ko: 바보 같은 녀석… 무리하지 마라.
+
+Rules:
+- Use only these keys: id, jp, ko. Put exactly one field on each line and one blank line between records.
+- Do not output JSON, braces, bullets, markdown fences, or commentary.
+- Keep jp and ko on a single line each. Replace internal newlines with spaces.
+- Translate only the text inside each region; use the rest of the page for context.
+- Keep Korean concise, natural, and short enough to fit the region as an on-image overlay.
+- If a region has no readable text, write ko: -
+- If OCR is uncertain, keep only the uncertain fragment as [?] and still give the best short Korean translation."
+    )
+}
+
+/// Reads and translates `regions` of a page with retries (like [`translate_page`]); the
+/// model gets the page and a close-up of each region. Regions it leaves out, or marks as
+/// having no text, are missing from the result.
+pub fn translate_regions(
+    config: &TranslationConfig,
+    image_path: &Path,
+    regions: &[Region],
+    on_attempt: impl FnMut(u32, &str),
+    cancelled: impl Fn() -> bool,
+) -> Result<Vec<parser::RegionText>, String> {
+    let mut variants = vec![images::original_variant(image_path)?];
+    let page = image::open(image_path).map_err(|e| format!("{}: {e}", image_path.display()))?.to_rgba8();
+    for region in regions {
+        variants.push(images::region_variant(&page, region.id, region.bbox)?);
+    }
+    let prompt = region_prompt(regions);
+    let ids: Vec<u32> = regions.iter().map(|region| region.id).collect();
+    with_retries(
+        config,
+        |_, cancelled| {
+            request_attempt(config, &variants, &prompt, |output| parser::parse_region_texts(output, &ids), cancelled)
+        },
+        on_attempt,
+        &cancelled,
+    )
+}
+
+/// Runs `attempt(number, cancelled)` up to `config.attempts` times, pausing after server
+/// errors and stopping early on errors that would repeat or on cancel.
+fn with_retries<T>(
+    config: &TranslationConfig,
+    mut attempt: impl FnMut(u32, &dyn Fn() -> bool) -> Result<T, SendError>,
+    mut on_attempt: impl FnMut(u32, &str),
+    cancelled: &dyn Fn() -> bool,
+) -> Result<T, String> {
     let attempts = config.attempts.max(1);
     let mut last_error = String::new();
-    for attempt in 1..=attempts {
+    for number in 1..=attempts {
         if cancelled() {
             return Err("취소됨".into());
         }
-        let error = match translate_attempt(config, &variants, attempt > 1, &cancelled) {
-            Ok(items) => return Ok(items),
+        let error = match attempt(number, cancelled) {
+            Ok(value) => return Ok(value),
             Err(error) => error,
         };
         if error.retry == Retry::Cancelled {
             return Err("취소됨".into());
         }
-        log::warn!("translation attempt {attempt} failed: {}", error.message);
-        on_attempt(attempt, &error.message);
+        log::warn!("translation attempt {number} failed: {}", error.message);
+        on_attempt(number, &error.message);
         last_error = error.message;
         match error.retry {
             Retry::No => return Err(format!("다시 시도해도 같은 오류라 멈췄습니다: {last_error}")),
             Retry::Later(asked)
-                if attempt < attempts && !wait_unless_cancelled(retry_delay(attempt, asked), &cancelled) =>
+                if number < attempts && !wait_unless_cancelled(retry_delay(number, asked), cancelled) =>
             {
                 return Err("취소됨".into());
             }

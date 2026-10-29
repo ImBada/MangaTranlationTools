@@ -10,7 +10,8 @@ use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
 use mtt_core::model::{BBox, PageAnalysisStatus, PageRecord, TranslationBlock};
 use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
-use mtt_translate::{TranslationConfig, overlay_item_to_block, translate_page};
+use mtt_translate::parser::RegionText;
+use mtt_translate::{Region, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
 
 use super::Editor;
 use super::history::{BlocksSnapshot, Entry};
@@ -26,6 +27,8 @@ pub enum RunMode {
     All,
     /// Only the current page.
     CurrentPage,
+    /// The selected blocks of the current page, read and translated again in place.
+    Blocks,
 }
 
 pub enum TranslationEvent {
@@ -45,6 +48,11 @@ pub enum TranslationEvent {
     PageDone {
         page_id: String,
         result: Result<Vec<(TranslationBlock, Option<SourceLettering>)>, String>,
+    },
+    /// Source and translation for blocks of a [`RunMode::Blocks`] run, by block id.
+    BlocksDone {
+        page_id: String,
+        result: Result<Vec<(String, RegionText)>, String>,
     },
     Finished {
         cancelled: bool,
@@ -72,6 +80,11 @@ pub struct TranslationJob {
 }
 
 impl TranslationJob {
+    /// Whether this is a [`RunMode::Blocks`] run on `page_id`.
+    pub fn covers_blocks_of(&self, page_id: &str) -> bool {
+        self.mode == RunMode::Blocks && self.page_ids.iter().any(|id| id == page_id)
+    }
+
     pub fn progress(&self) -> f32 {
         if self.total == 0 { 0.0 } else { self.done as f32 / self.total as f32 }
     }
@@ -105,6 +118,7 @@ pub fn summarize_warnings(warnings: &[String]) -> Option<&'static str> {
 pub fn is_target(page: &PageRecord, mode: RunMode, current_id: &str) -> bool {
     match mode {
         RunMode::CurrentPage => page.id == current_id,
+        RunMode::Blocks => false,
         _ if page.is_completed() => false,
         RunMode::All => true,
         RunMode::Pending => page.analysis_status != PageAnalysisStatus::Completed,
@@ -223,6 +237,78 @@ impl Editor {
             .expect("spawn translation thread");
     }
 
+    /// Reads and translates the selected blocks of the current page again, keeping their
+    /// boxes and styles (koharu's "Process Selected Layers").
+    pub fn start_block_translation(&mut self, services: &Services, worker: &Worker<AppEvent>) {
+        if self.translation.is_some() {
+            self.status = "번역이 이미 실행 중입니다.".into();
+            return;
+        }
+        let Some(page) = self.page() else { return };
+        let blocks = self.selected_blocks();
+        if blocks.is_empty() {
+            return;
+        }
+        let Some(path) = services.library.resolve_page_layer_path(&self.chapter, page, PageLayer::Source) else {
+            self.status = "페이지 원본 이미지를 찾지 못했습니다.".into();
+            return;
+        };
+        let page_id = page.id.clone();
+        let regions: Vec<Region> =
+            blocks.iter().enumerate().map(|(index, block)| Region { id: index as u32 + 1, bbox: block.bbox }).collect();
+        let block_ids: Vec<String> = blocks.into_iter().map(|block| block.id).collect();
+        self.commit_checkpoint();
+        let config = TranslationConfig::from_settings(&services.settings);
+        let cancel = Arc::new(AtomicBool::new(false));
+        self.translation = Some(TranslationJob {
+            cancel: Arc::clone(&cancel),
+            total: block_ids.len(),
+            done: 0,
+            failed: 0,
+            started: Instant::now(),
+            endpoint: config.describe(),
+            last_message: "엔드포인트 확인 중…".into(),
+            phase: format!("블록 {}개 번역 중", block_ids.len()),
+            warnings: Vec::new(),
+            attempts: config.attempts.max(1),
+            mode: RunMode::Blocks,
+            kept_blocks: 0,
+            page_ids: vec![page_id.clone()],
+        });
+        let chapter_id = self.chapter.id.clone();
+        let emitter = worker.emitter();
+        std::thread::Builder::new()
+            .name("mtt-block-translation".into())
+            .spawn(move || {
+                let send = |event| emitter.emit(AppEvent::Translation { chapter_id: chapter_id.clone(), event });
+                if let Err(error) = mtt_translate::verify_endpoint(&config) {
+                    send(TranslationEvent::Finished { cancelled: false, error: Some(error) });
+                    return;
+                }
+                send(TranslationEvent::Started { total: block_ids.len(), endpoint: config.describe() });
+                let result = translate_regions(
+                    &config,
+                    &path,
+                    &regions,
+                    |attempt, error| {
+                        send(TranslationEvent::Attempt { page_id: page_id.clone(), attempt, error: error.to_owned() })
+                    },
+                    || cancel.load(Ordering::SeqCst),
+                );
+                let cancelled = cancel.load(Ordering::SeqCst);
+                let error = result.as_ref().err().filter(|_| !cancelled).cloned();
+                if let Ok(texts) = result {
+                    let texts = texts
+                        .into_iter()
+                        .filter_map(|text| Some((block_ids.get((text.id as usize).checked_sub(1)?)?.clone(), text)))
+                        .collect();
+                    send(TranslationEvent::BlocksDone { page_id, result: Ok(texts) });
+                }
+                send(TranslationEvent::Finished { cancelled, error });
+            })
+            .expect("spawn block translation thread");
+    }
+
     pub fn cancel_translation(&mut self) {
         if let Some(job) = &self.translation {
             job.cancel.store(true, Ordering::SeqCst);
@@ -266,6 +352,7 @@ impl Editor {
                 }
             }
             TranslationEvent::PageDone { page_id, result } => self.apply_translated_page(&page_id, result),
+            TranslationEvent::BlocksDone { page_id, result } => self.apply_translated_blocks(&page_id, result),
             TranslationEvent::Finished { cancelled, error } => {
                 let job = self.translation.take()?;
                 let success = error.is_none() && !cancelled;
@@ -287,10 +374,10 @@ impl Editor {
                     job.failed
                 );
                 if error.is_some() {
-                    let title = if job.mode == RunMode::CurrentPage {
-                        "페이지 번역 실패"
-                    } else {
-                        "번역 실행 실패"
+                    let title = match job.mode {
+                        RunMode::CurrentPage => "페이지 번역 실패",
+                        RunMode::Blocks => "블록 번역 실패",
+                        _ => "번역 실행 실패",
                     };
                     self.notifications.report(
                         super::notifications::FailureId::AnalysisRun,
@@ -303,6 +390,7 @@ impl Editor {
                 self.status = match (error, cancelled) {
                     (Some(error), _) => error,
                     (None, true) => "작업이 취소됨".into(),
+                    (None, false) if job.mode == RunMode::Blocks => job.last_message.clone(),
                     (None, false) => {
                         let summary = summarize_warnings(&job.warnings)
                             .unwrap_or("번역 완료 · 문장을 확인한 뒤 인페인트(3)로 원문 글자를 지우세요");
@@ -409,6 +497,44 @@ impl Editor {
         self.revision += 1;
         self.chapter.status = resolve_chapter_status(&self.chapter.pages);
         self.mark_chapter_dirty();
+    }
+}
+
+impl Editor {
+    /// Puts the source and translation the model read for each block in place, as one undo
+    /// step. Blocks the translation made stay generated; the user's own stay the user's.
+    fn apply_translated_blocks(&mut self, page_id: &str, result: Result<Vec<(String, RegionText)>, String>) {
+        let Ok(texts) = result else { return };
+        self.commit_checkpoint();
+        let Some(page) = self.chapter.pages.iter_mut().find(|page| page.id == page_id) else { return };
+        let before = BlocksSnapshot::of(page);
+        let mut changed = 0;
+        for (block_id, text) in &texts {
+            let Some(block) = page.blocks.iter_mut().find(|block| block.id == *block_id) else { continue };
+            let generated = !block.is_user_work(page_id);
+            block.source_text = text.jp.clone();
+            block.translated_text = text.ko.clone();
+            if generated {
+                block.mark_generated();
+            }
+            changed += 1;
+        }
+        page.updated_at = mtt_core::time::now_iso();
+        let after = BlocksSnapshot::of(page);
+        if after != before {
+            self.history.push(Entry::Blocks { page_id: page_id.to_owned(), before, after });
+        }
+        self.dirty_pages.insert(page_id.to_owned());
+        self.revision += 1;
+        self.mark_chapter_dirty();
+        if let Some(job) = &mut self.translation {
+            job.done = changed;
+            let missed = job.total.saturating_sub(changed);
+            job.last_message = match missed {
+                0 => format!("블록 {changed}개를 다시 번역했습니다"),
+                _ => format!("블록 {changed}개를 다시 번역했습니다 · {missed}개는 글자를 찾지 못해 그대로 뒀습니다"),
+            };
+        }
     }
 }
 
@@ -552,6 +678,48 @@ mod tests {
         assert_eq!(ids.len(), blocks.len(), "ids stay unique");
         assert!(blocks[0].generated_fingerprint.is_some() && !blocks[0].is_user_work("p"));
         assert!(blocks[2].is_user_work("p"));
+    }
+
+    #[test]
+    fn block_translation_updates_texts_in_place() {
+        let mut generated = TranslationBlock {
+            id: "p-block-1".into(),
+            bbox: BBox::new(10.0, 10.0, 100.0, 100.0),
+            translated_text: "예전".into(),
+            ..TranslationBlock::default()
+        };
+        generated.mark_generated();
+        let manual = TranslationBlock {
+            id: "p-block-manual-1".into(),
+            bbox: BBox::new(300.0, 10.0, 100.0, 100.0),
+            ..TranslationBlock::default()
+        };
+        let chapter = Chapter {
+            id: "c".into(),
+            pages: vec![PageRecord {
+                id: "p".into(),
+                width: 1000,
+                height: 1000,
+                blocks: vec![generated, manual],
+                ..PageRecord::default()
+            }],
+            page_order: vec!["p".into()],
+            ..Chapter::default()
+        };
+        let mut editor = Editor::new(chapter);
+        let text = |jp: &str, ko: &str| RegionText { id: 1, jp: jp.into(), ko: ko.into() };
+        editor.apply_translated_blocks(
+            "p",
+            Ok(vec![("p-block-1".into(), text("えっ", "엥?")), ("p-block-manual-1".into(), text("いや", "아니"))]),
+        );
+        let blocks = &editor.chapter.pages[0].blocks;
+        assert_eq!((blocks[0].source_text.as_str(), blocks[0].translated_text.as_str()), ("えっ", "엥?"));
+        assert_eq!(blocks[0].bbox, BBox::new(10.0, 10.0, 100.0, 100.0), "box kept");
+        assert!(!blocks[0].is_user_work("p"), "still generated");
+        assert_eq!(blocks[1].translated_text, "아니");
+        assert!(blocks[1].is_user_work("p"), "still the user's");
+        editor.undo(&egui::Context::default());
+        assert_eq!(editor.chapter.pages[0].blocks[0].translated_text, "예전", "one undo step");
     }
 
     #[test]

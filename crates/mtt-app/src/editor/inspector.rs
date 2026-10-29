@@ -600,7 +600,16 @@ fn style_card(editor: &mut Editor, ui: &mut egui::Ui, first: &TranslationBlock, 
 
 fn selection_actions(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>, count: usize) {
     let busy = editor.inpaint_busy();
-    theme::button_row(ui, 3, |ui, size| {
+    theme::button_row(ui, 2, |ui, size| {
+        let hint = if count > 1 {
+            "다시 번역\n선택한 블록들 안의 원문을 다시 읽고 번역합니다. 위치와 스타일은 그대로입니다"
+        } else {
+            "다시 번역\n블록 안의 원문을 다시 읽고 번역합니다. 위치와 스타일은 그대로입니다"
+        };
+        let translate = theme::icon_button(theme::icon::TRANSLATE, "다시 번역").min_size(size);
+        if theme::tip(ui.add_enabled(!busy && !editor.translation_running(), translate), hint, "").clicked() {
+            editor.block_translation_requested = true;
+        }
         let hint = if count > 1 {
             "인페인트\n선택한 블록들 안의 원문 글자를 지웁니다"
         } else {
@@ -610,6 +619,8 @@ fn selection_actions(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<App
         if theme::tip(ui.add_enabled(!busy, inpaint), hint, "").clicked() {
             editor.start_inpaint(InpaintScope::SelectedBlocks, worker);
         }
+    });
+    theme::button_row(ui, 2, |ui, size| {
         let duplicate = theme::icon_button_key(theme::icon::COPY, "복제", "⌘D").min_size(size);
         if theme::tip(ui.add_enabled(!busy, duplicate), "블록 복제", "⌘D").clicked() {
             editor.duplicate_selected();

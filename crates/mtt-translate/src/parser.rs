@@ -32,6 +32,63 @@ pub fn parse_items(raw: &str) -> Result<Vec<OverlayItem>, String> {
     Ok(items.into_iter().enumerate().map(|(index, item)| OverlayItem { id: index as u32 + 1, ..item }).collect())
 }
 
+/// Source and translation the model gave for one region of [`crate::translate_regions`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionText {
+    pub id: u32,
+    pub jp: String,
+    pub ko: String,
+}
+
+/// Parses `id` / `jp` / `ko` records (or JSON with those keys) for the region `ids`;
+/// unknown ids, and regions marked as having no text (`ko: -`), are dropped. Errors when
+/// no region is answered.
+pub fn parse_region_texts(raw: &str, ids: &[u32]) -> Result<Vec<RegionText>, String> {
+    let mut texts: Vec<RegionText> = Vec::new();
+    let mut push = |id: Option<u32>, jp: Option<String>, ko: Option<String>| {
+        let (Some(id), Some(ko)) = (id, ko.map(|ko| ko.trim().to_owned())) else { return };
+        if ids.contains(&id) && !matches!(ko.as_str(), "" | "-") && !texts.iter().any(|text| text.id == id) {
+            texts.push(RegionText { id, jp: jp.unwrap_or_default().trim().to_owned(), ko });
+        }
+    };
+    let json = extract_json_candidate(raw).and_then(|candidate| parse_json_relaxed(&candidate));
+    if let Some(value) = json {
+        let list = value.as_array().or_else(|| value.get("items").and_then(Value::as_array));
+        for item in list.into_iter().flatten() {
+            push(
+                number(item.get("id")).map(|id| id as u32),
+                first_text(item, &["jp", "japanese", "source"]),
+                first_text(item, &["ko", "korean", "translation"]),
+            );
+        }
+    } else {
+        let (mut id, mut jp, mut ko) = (None, None, None);
+        let cleaned = raw.replace("```", "");
+        for line in cleaned.lines().map(str::trim).chain([""]) {
+            let Some((key, value)) = line.split_once(':') else {
+                if line.is_empty() {
+                    push(id.take(), jp.take(), ko.take());
+                }
+                continue;
+            };
+            let value = value.trim().trim_matches(|c| c == '"' || c == '\'' || c == ',').trim().to_owned();
+            match key.trim().trim_matches('"').to_ascii_lowercase().as_str() {
+                "id" => {
+                    push(id.take(), jp.take(), ko.take());
+                    id = value.parse().ok();
+                }
+                "jp" => jp = Some(value),
+                "ko" => ko = Some(value),
+                _ => {}
+            }
+        }
+    }
+    if texts.is_empty() {
+        return Err("모델 응답에서 블록 번역을 찾지 못했습니다.".into());
+    }
+    Ok(texts)
+}
+
 fn extract_json_candidate(raw: &str) -> Option<String> {
     static FENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)```(?:json)?\s*(.*?)```").unwrap());
     let trimmed = raw.trim();
@@ -206,6 +263,24 @@ fn parse_loose_items(raw: &str) -> Vec<OverlayItem> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parses_region_records() {
+        let raw = "id: 2\njp: なに\nko: 뭐?\n\nid: 1\njp:\nko: -\n\nid: 9\nko: 모름\nid: 3\nko: 셋";
+        let texts = parse_region_texts(raw, &[1, 2, 3]).unwrap();
+        assert_eq!(
+            texts,
+            [
+                RegionText { id: 2, jp: "なに".into(), ko: "뭐?".into() },
+                RegionText { id: 3, jp: String::new(), ko: "셋".into() },
+            ]
+        );
+        let json = r#"```json
+[{"id": 1, "jp": "あ", "ko": "아"},]
+```"#;
+        assert_eq!(parse_region_texts(json, &[1]).unwrap()[0].ko, "아");
+        assert!(parse_region_texts("죄송합니다", &[1]).is_err());
+    }
 
     #[test]
     fn parses_plain_records() {
