@@ -27,12 +27,18 @@ pub enum AppEvent {
         error: Option<String>,
         skipped: bool,
     },
+    /// "전체 페이지 출력" keeps running when the user leaves its chapter, so its events
+    /// name the chapter.
     ExportProgress {
+        chapter_id: String,
         current: usize,
         total: usize,
     },
     /// `archive`: where the CBZ went, when one was asked for.
     ExportFinished {
+        chapter_id: String,
+        /// Work and chapter title, for the message when another screen is in front.
+        chapter_title: String,
         written: usize,
         errors: Vec<String>,
         archive: Option<Result<std::path::PathBuf, String>>,
@@ -73,6 +79,38 @@ pub enum AppEvent {
 enum Screen {
     Library,
     Editor(Box<Editor>),
+}
+
+/// "전체 페이지 출력" result line, and whether a page or the CBZ failed.
+fn export_summary(
+    written: usize,
+    errors: &[String],
+    archive: Option<Result<std::path::PathBuf, String>>,
+) -> (String, bool) {
+    let pages = if errors.is_empty() {
+        format!("전체 페이지 출력 완료: {written}p")
+    } else {
+        format!("출력 {written}페이지, 실패 {}건: {}", errors.len(), errors.join(", "))
+    };
+    let failed = !errors.is_empty() || matches!(archive, Some(Err(_)));
+    let message = match archive {
+        None => pages,
+        Some(Ok(path)) => {
+            format!("{pages} · CBZ 저장: {}", path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default())
+        }
+        Some(Err(error)) => format!("{pages} · CBZ 저장 실패: {error}"),
+    };
+    (message, failed)
+}
+
+/// Shows what a job of a chapter the user has left reports, on the screen now in front
+/// (failures go to the library's error line).
+fn notify_elsewhere(screen: &mut Screen, library: &mut LibraryView, message: String, failed: bool) {
+    match screen {
+        Screen::Editor(editor) => editor.status = message,
+        Screen::Library if failed => library.error = Some(message),
+        Screen::Library => library.status = Some(message),
+    }
 }
 
 pub struct MttApp {
@@ -140,8 +178,15 @@ impl MttApp {
                 (AppEvent::Report { chapter_id, event }, Screen::Editor(editor)) => {
                     editor.on_report_event(&chapter_id, event)
                 }
-                (AppEvent::EditorJob { chapter_id, job }, Screen::Editor(editor)) => {
+                (AppEvent::EditorJob { chapter_id, job }, Screen::Editor(editor))
+                    if editor.chapter.id == chapter_id =>
+                {
                     editor.on_editor_job(&chapter_id, job, &self.services)
+                }
+                (AppEvent::EditorJob { job, .. }, screen) => {
+                    if let Some((message, failed)) = job.left_behind_message() {
+                        notify_elsewhere(screen, &mut self.library, message, failed);
+                    }
                 }
                 (AppEvent::ReportFocus { page_id, block_id }, Screen::Editor(editor)) => {
                     editor.focus_report_block(&page_id, &block_id);
@@ -164,24 +209,23 @@ impl MttApp {
                     }
                     _ => {}
                 },
-                (AppEvent::ExportProgress { current, total }, Screen::Editor(editor)) => {
+                (AppEvent::ExportProgress { chapter_id, current, total }, Screen::Editor(editor))
+                    if editor.chapter.id == chapter_id =>
+                {
                     editor.export_progress = Some((current, total));
                 }
-                (AppEvent::ExportFinished { written, errors, archive }, Screen::Editor(editor)) => {
-                    editor.export_progress = None;
-                    let pages = if errors.is_empty() {
-                        format!("전체 페이지 출력 완료: {written}p")
-                    } else {
-                        format!("출력 {written}페이지, 실패 {}건: {}", errors.len(), errors.join(", "))
-                    };
-                    editor.status = match archive {
-                        None => pages,
-                        Some(Ok(path)) => format!(
-                            "{pages} · CBZ 저장: {}",
-                            path.file_name().map(|name| name.to_string_lossy()).unwrap_or_default()
-                        ),
-                        Some(Err(error)) => format!("{pages} · CBZ 저장 실패: {error}"),
-                    };
+                (AppEvent::ExportFinished { chapter_id, chapter_title, written, errors, archive }, screen) => {
+                    let (message, failed) = export_summary(written, &errors, archive);
+                    match screen {
+                        Screen::Editor(editor) if editor.chapter.id == chapter_id => {
+                            editor.export_progress = None;
+                            editor.status = message;
+                        }
+                        screen => {
+                            let chapter = if chapter_title.is_empty() { "이전 화" } else { chapter_title.as_str() };
+                            notify_elsewhere(screen, &mut self.library, format!("{chapter}: {message}"), failed)
+                        }
+                    }
                 }
                 (AppEvent::ChapterSaved { error: Some(error), .. }, _)
                 | (AppEvent::LayerSaved { error: Some(error), .. }, _) => {
@@ -436,6 +480,46 @@ mod tests {
             .viewport_output
             .get(&egui::ViewportId::ROOT)
             .is_some_and(|viewport| viewport.commands.contains(&egui::ViewportCommand::CancelClose))
+    }
+
+    fn deliver(ctx: &egui::Context, app: &mut MttApp, event: AppEvent) {
+        app.worker.emitter().emit(event);
+        app.handle_events(ctx);
+    }
+
+    fn export_finished(chapter_id: &str, errors: Vec<String>) -> AppEvent {
+        let chapter_title = "작품 1화".into();
+        AppEvent::ExportFinished { chapter_id: chapter_id.into(), chapter_title, written: 3, errors, archive: None }
+    }
+
+    #[test]
+    fn export_results_stay_with_their_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut app) = app_in(dir.path());
+        let chapter = mtt_core::model::Chapter { id: "b".into(), ..Default::default() };
+        app.screen = Screen::Editor(Box::new(Editor::new(chapter)));
+
+        // Chapter A's export, still running after the user opened B.
+        deliver(&ctx, &mut app, AppEvent::ExportProgress { chapter_id: "a".into(), current: 1, total: 3 });
+        assert_eq!(editor(&app).export_progress, None, "B's export buttons stay free");
+        deliver(&ctx, &mut app, export_finished("a", Vec::new()));
+        assert_eq!(editor(&app).status, "작품 1화: 전체 페이지 출력 완료: 3p", "says which chapter");
+        let page = std::path::PathBuf::from("/renders/001.png");
+        let job = crate::editor::EditorJob::PageExported(Ok(page));
+        deliver(&ctx, &mut app, AppEvent::EditorJob { chapter_id: "a".into(), job });
+        assert_eq!(editor(&app).status, "이전 화의 페이지를 출력했습니다: 001.png");
+
+        deliver(&ctx, &mut app, AppEvent::ExportProgress { chapter_id: "b".into(), current: 1, total: 3 });
+        assert_eq!(editor(&app).export_progress, Some((1, 3)));
+        deliver(&ctx, &mut app, export_finished("b", Vec::new()));
+        assert_eq!(editor(&app).export_progress, None);
+        assert_eq!(editor(&app).status, "전체 페이지 출력 완료: 3p");
+
+        app.screen = Screen::Library;
+        deliver(&ctx, &mut app, export_finished("a", Vec::new()));
+        assert_eq!(app.library.status.as_deref(), Some("작품 1화: 전체 페이지 출력 완료: 3p"));
+        deliver(&ctx, &mut app, export_finished("a", vec!["002: 렌더링 실패".into()]));
+        assert_eq!(app.library.error.as_deref(), Some("작품 1화: 출력 3페이지, 실패 1건: 002: 렌더링 실패"));
     }
 
     #[test]

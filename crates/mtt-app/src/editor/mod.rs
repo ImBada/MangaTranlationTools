@@ -263,6 +263,28 @@ pub enum EditorJob {
     PsdImported { page_id: String, quick: bool, result: Result<InpaintOutcome, String> },
 }
 
+impl EditorJob {
+    /// What a job of a chapter the user has left reports on the screen now in front, and
+    /// whether it failed. An import has no page to go to any more.
+    pub fn left_behind_message(self) -> Option<(String, bool)> {
+        match self {
+            EditorJob::PageExported(Ok(path)) => {
+                Some((format!("이전 화의 페이지를 출력했습니다: {}", file_name(&path)), false))
+            }
+            EditorJob::PageExported(Err(error)) => Some((format!("이전 화의 페이지 출력 실패: {error}"), true)),
+            EditorJob::PsdExported(Ok(path)) => {
+                Some((format!("이전 화의 인페인트 PSD를 내보냈습니다: {}", file_name(&path)), false))
+            }
+            EditorJob::PsdExported(Err(error)) => Some((format!("이전 화의 PSD 내보내기 실패: {error}"), true)),
+            EditorJob::PsdImported { .. } => None,
+        }
+    }
+}
+
+fn file_name(path: &std::path::Path) -> String {
+    path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
+}
+
 /// A finished inpaint, ready to swap in: the new layers with their textures and the undo
 /// patches, all made on the worker.
 pub struct InpaintOutcome {
@@ -2370,9 +2392,6 @@ impl Editor {
         if chapter_id != self.chapter.id {
             return;
         }
-        let file_name = |path: &std::path::Path| {
-            path.file_name().map_or_else(|| path.display().to_string(), |name| name.to_string_lossy().into_owned())
-        };
         match job {
             EditorJob::PageExported(result) => {
                 self.page_export_running = false;
@@ -2419,17 +2438,16 @@ impl Editor {
         let chapter = self.chapter.clone();
         let emitter = worker.emitter();
         let total = chapter.pages.len();
-        let archive_name = cbz.then(|| {
-            let title = format!("{} {}", self.work_title, chapter.title);
-            format!("{}.cbz", layer_ops::sanitize_psd_basename(&format!("{}.cbz", title.trim()), &chapter.id))
-        });
+        let title = format!("{} {}", self.work_title, chapter.title).trim().to_owned();
+        let archive_name =
+            cbz.then(|| format!("{}.cbz", layer_ops::sanitize_psd_basename(&format!("{title}.cbz"), &chapter.id)));
         self.export_progress = Some((0, total));
         std::thread::spawn(move || {
             let mut written = 0usize;
             let mut errors = Vec::new();
             let mut archived = Vec::new();
             for (index, page) in chapter.pages.iter().enumerate() {
-                emitter.emit(AppEvent::ExportProgress { current: index, total });
+                emitter.emit(AppEvent::ExportProgress { chapter_id: chapter.id.clone(), current: index, total });
                 // A panic fails its page, not the rest of the run.
                 let rendered = catch_panic(|| {
                     let load = assets::decode_page(&library, &chapter, page);
@@ -2464,7 +2482,13 @@ impl Editor {
             let archive = archive_name.map(|name| {
                 mtt_core::cbz::cbz_bytes(&archived).and_then(|bytes| layer_ops::write_unique_download(&name, &bytes))
             });
-            emitter.emit(AppEvent::ExportFinished { written, errors, archive });
+            emitter.emit(AppEvent::ExportFinished {
+                chapter_id: chapter.id.clone(),
+                chapter_title: title,
+                written,
+                errors,
+                archive,
+            });
         });
         Ok(())
     }
