@@ -219,6 +219,33 @@ const TAG_CONTENT_HEIGHT: f32 = 18.0;
 struct TagRename {
     id: String,
     name: String,
+    /// Just opened: the field asks for keyboard focus once.
+    focus: bool,
+}
+
+/// What the preset rename field decided this frame.
+#[derive(Debug, PartialEq)]
+enum RenameOutcome {
+    Editing,
+    Save,
+    Cancel,
+}
+
+/// The rename field of a preset tag: Enter or clicking elsewhere saves, Esc cancels.
+fn rename_field(ui: &mut egui::Ui, edit: &mut TagRename) -> (egui::Response, RenameOutcome) {
+    let response = ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(110.0));
+    // Only when it opens: a field asked for focus every frame never loses it.
+    if std::mem::take(&mut edit.focus) {
+        response.request_focus();
+    }
+    let outcome = if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+        RenameOutcome::Cancel
+    } else if response.lost_focus() {
+        RenameOutcome::Save
+    } else {
+        RenameOutcome::Editing
+    };
+    (response, outcome)
 }
 
 /// The preset panel under the font controls (`font-preset-panel`).
@@ -289,13 +316,14 @@ pub(super) fn preset_panel(
                     .show(ui, |ui| {
                         if renaming {
                             let edit = rename.as_mut().expect("checked");
-                            let response = ui.add(egui::TextEdit::singleline(&mut edit.name).desired_width(110.0));
-                            response.request_focus();
-                            editor.text_editing = true;
-                            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                                commit_rename = Some(None);
-                            } else if response.lost_focus() {
-                                commit_rename = Some(Some(edit.clone()));
+                            let (response, outcome) = rename_field(ui, edit);
+                            if response.has_focus() {
+                                editor.text_editing = true;
+                            }
+                            match outcome {
+                                RenameOutcome::Editing => {}
+                                RenameOutcome::Save => commit_rename = Some(Some(edit.clone())),
+                                RenameOutcome::Cancel => commit_rename = Some(None),
                             }
                             return;
                         }
@@ -317,7 +345,8 @@ pub(super) fn preset_panel(
                         .on_hover_text(hint);
                         if response.clicked() {
                             if active {
-                                rename = Some(TagRename { id: preset.id.clone(), name: preset.name.clone() });
+                                rename =
+                                    Some(TagRename { id: preset.id.clone(), name: preset.name.clone(), focus: true });
                             } else {
                                 select = Some(preset.clone());
                             }
@@ -1589,4 +1618,87 @@ fn replace_single_match(editor: &mut Editor, page_index: usize, block_id: &str, 
         }
     });
     editor.status = "1개 문장을 바꿨습니다.".into();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A preset tag's rename field with a button beside it, as `preset_tags` shows it
+    /// until the field decides.
+    struct RenameHarness {
+        ctx: egui::Context,
+        edit: Option<TagRename>,
+        outcome: Option<(RenameOutcome, String)>,
+        elsewhere: egui::Rect,
+    }
+
+    impl RenameHarness {
+        fn open(name: &str) -> Self {
+            let edit = TagRename { id: "p".into(), name: name.into(), focus: true };
+            let mut harness =
+                Self { ctx: egui::Context::default(), edit: Some(edit), outcome: None, elsewhere: egui::Rect::NOTHING };
+            harness.frame(Vec::new());
+            harness
+        }
+
+        fn frame(&mut self, events: Vec<egui::Event>) {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 300.0))),
+                events,
+                ..Default::default()
+            };
+            let Self { ctx, edit, outcome, elsewhere } = self;
+            let mut output = ctx.run_ui(input, |ui| {
+                if let Some(rename) = edit {
+                    let (_, decided) = rename_field(ui, rename);
+                    if decided != RenameOutcome::Editing {
+                        *outcome = Some((decided, rename.name.clone()));
+                        *edit = None;
+                    }
+                }
+                *elsewhere = ui.button("elsewhere").rect;
+            });
+            output.textures_delta.clear();
+        }
+
+        fn key(&mut self, key: egui::Key) {
+            let event = |pressed| egui::Event::Key {
+                key,
+                physical_key: Some(key),
+                pressed,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(vec![event(true)]);
+            self.frame(vec![event(false)]);
+        }
+    }
+
+    #[test]
+    fn preset_rename_saves_on_enter_or_click_elsewhere_and_cancels_on_escape() {
+        let mut harness = RenameHarness::open("대사");
+        harness.frame(vec![egui::Event::Text("2".into())]);
+        harness.key(egui::Key::Enter);
+        assert_eq!(harness.outcome, Some((RenameOutcome::Save, "대사2".into())), "Enter saves");
+
+        let mut harness = RenameHarness::open("대사");
+        harness.frame(vec![egui::Event::Text("3".into())]);
+        let pos = harness.elsewhere.center();
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        harness.frame(vec![egui::Event::PointerMoved(pos)]);
+        harness.frame(vec![button(true)]);
+        harness.frame(vec![button(false)]);
+        assert_eq!(harness.outcome, Some((RenameOutcome::Save, "대사3".into())), "clicking elsewhere saves");
+
+        let mut harness = RenameHarness::open("대사");
+        harness.frame(vec![egui::Event::Text("4".into())]);
+        harness.key(egui::Key::Escape);
+        assert_eq!(harness.outcome.map(|(outcome, _)| outcome), Some(RenameOutcome::Cancel), "Esc cancels");
+    }
 }
