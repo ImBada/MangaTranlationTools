@@ -573,7 +573,10 @@ impl Editor {
         for (block_id, text) in &texts {
             let Some(block) = page.blocks.iter_mut().find(|block| block.id == *block_id) else { continue };
             let generated = !block.is_user_work(page_id);
-            block.source_text = text.jp.clone();
+            // A model that left out `jp:` read nothing new; the old source stays.
+            if !text.jp.trim().is_empty() {
+                block.source_text = text.jp.clone();
+            }
             block.translated_text = text.ko.clone();
             if generated {
                 block.mark_generated();
@@ -783,6 +786,27 @@ mod tests {
         assert!(blocks[1].is_user_work("p"), "still the user's");
         editor.undo(&egui::Context::default());
         assert_eq!(editor.chapter.pages[0].blocks[0].translated_text, "예전", "one undo step");
+    }
+
+    #[test]
+    fn block_translation_without_source_keeps_the_old_source() {
+        let block = TranslationBlock {
+            id: "p-block-1".into(),
+            source_text: "えっ".into(),
+            translated_text: "예전".into(),
+            ..TranslationBlock::default()
+        };
+        let chapter = Chapter {
+            id: "c".into(),
+            pages: vec![PageRecord { id: "p".into(), blocks: vec![block], ..PageRecord::default() }],
+            page_order: vec!["p".into()],
+            ..Chapter::default()
+        };
+        let mut editor = Editor::new(chapter);
+        let text = RegionText { id: 1, jp: String::new(), ko: "엥?".into() };
+        editor.apply_translated_blocks("p", Ok(vec![("p-block-1".into(), text)]));
+        let block = &editor.chapter.pages[0].blocks[0];
+        assert_eq!((block.source_text.as_str(), block.translated_text.as_str()), ("えっ", "엥?"));
     }
 
     /// Serves `GET /models` and answers every chat request with `status` and `body`.
