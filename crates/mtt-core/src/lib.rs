@@ -5,6 +5,7 @@ pub mod error;
 pub mod font_presets;
 pub mod geometry;
 pub mod groups;
+pub mod image_io;
 pub mod import;
 pub mod json_io;
 pub mod library;

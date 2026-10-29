@@ -10,6 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::error::{CoreError, CoreResult};
+use crate::image_io::probe_image;
 use crate::library::{
     DEFAULT_CHAPTER_TITLE, DEFAULT_WORK_TITLE, Library, resolve_chapter_status, sanitize_title, unique_title,
 };
@@ -525,7 +526,22 @@ fn materialize_page(
             fs::write(&output, render_pdf_page(pdf, *page)?).map_err(|source| CoreError::io(&output, source))?;
         }
     }
-    let (width, height) = image::image_dimensions(&output).unwrap_or((1000, 1400));
+    // By content: a `.jpg` may hold WebP or PNG, and a file that isn't an image (or is cut
+    // off before its size) must not become a page the editor can't open.
+    let (format, (width, height)) = probe_image(&output)
+        .map_err(|error| CoreError::Invalid(format!("{}: 이미지를 읽지 못했습니다: {error}", draft.name)))?;
+    // Stored under the extension of the format it holds.
+    let output = match format.and_then(|format| {
+        let extensions = format.extensions_str();
+        extensions.first().filter(|_| !extensions.contains(&extension.as_str()))
+    }) {
+        Some(detected) => {
+            let renamed = output.with_extension(detected);
+            fs::rename(&output, &renamed).map_err(|source| CoreError::io(&output, source))?;
+            renamed
+        }
+        None => output,
+    };
     let now = now_iso();
     Ok(PageRecord {
         id: page_id,
@@ -637,6 +653,52 @@ mod tests {
         // Separator-agnostic: Windows stores `\pages\001-…`.
         assert_eq!(image_path.parent().and_then(Path::file_name), Some(std::ffi::OsStr::new("pages")));
         assert!(image_path.file_name().unwrap().to_string_lossy().starts_with("001-"));
+    }
+
+    #[test]
+    fn images_are_stored_as_the_format_they_hold() {
+        let dir = tempfile::tempdir().unwrap();
+        let webp = dir.path().join("01.jpg");
+        image::RgbaImage::new(5, 7).save_with_format(&webp, image::ImageFormat::WebP).unwrap();
+        let png = dir.path().join("02.JPEG");
+        image::RgbaImage::new(3, 4).save_with_format(&png, image::ImageFormat::Png).unwrap();
+        let jpeg = dir.path().join("03.jpeg");
+        image::RgbImage::new(2, 2).save_with_format(&jpeg, image::ImageFormat::Jpeg).unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_images(&[webp, png, jpeg]);
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let stored: Vec<(String, (u32, u32))> = chapter
+            .pages
+            .iter()
+            .map(|page| {
+                let path = Path::new(&page.image_path);
+                assert!(path.is_file());
+                (path.extension().unwrap().to_string_lossy().into_owned(), (page.width, page.height))
+            })
+            .collect();
+        assert_eq!(
+            stored,
+            [("webp".to_owned(), (5, 7)), ("png".to_owned(), (3, 4)), ("jpeg".to_owned(), (2, 2))],
+            "names keep the right extension"
+        );
+        assert_eq!(chapter.pages[0].name, "01.jpg", "the page name stays as imported");
+    }
+
+    #[test]
+    fn a_page_that_is_not_an_image_fails_the_import() {
+        let dir = tempfile::tempdir().unwrap();
+        let good = dir.path().join("01.png");
+        write_png(&good, 2, 2);
+        let bad = dir.path().join("02.jpg");
+        fs::write(&bad, b"<html>404</html>").unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_images(&[good, bad]);
+        let error =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap_err();
+        assert!(error.to_string().contains("02.jpg"), "{error}");
+        assert!(library.list().unwrap().is_empty(), "rolled back, no 1000×1400 placeholder page");
     }
 
     #[test]

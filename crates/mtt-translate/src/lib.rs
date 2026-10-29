@@ -312,7 +312,8 @@ pub fn translate_regions(
     cancelled: impl Fn() -> bool,
 ) -> Result<Vec<parser::RegionText>, String> {
     let mut variants = vec![images::original_variant(image_path)?];
-    let page = image::open(image_path).map_err(|e| format!("{}: {e}", image_path.display()))?.to_rgba8();
+    let page =
+        mtt_core::image_io::open_image(image_path).map_err(|e| format!("{}: {e}", image_path.display()))?.to_rgba8();
     for region in regions {
         variants.push(images::region_variant(&page, region.id, region.bbox)?);
     }

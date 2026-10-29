@@ -8,6 +8,7 @@ use std::sync::Arc;
 
 use eframe::egui::{self, Color32};
 use image::{DynamicImage, GrayImage, RgbaImage};
+use mtt_core::image_io::open_image;
 use mtt_core::library::{Library, PageLayer};
 use mtt_core::model::{Chapter, PageRecord};
 
@@ -36,7 +37,7 @@ pub struct PageLoad {
 /// Decodes the source image and existing inpaint layers of `page`.
 pub fn decode_page(library: &Library, chapter: &Chapter, page: &PageRecord) -> DecodedPage {
     let decode = |path: Option<PathBuf>| -> Option<Result<DynamicImage, String>> {
-        path.map(|path| image::open(&path).map_err(|error| format!("{}: {error}", path.display())))
+        path.map(|path| open_image(&path).map_err(|error| format!("{}: {error}", path.display())))
     };
     let source = decode(library.resolve_page_layer_path(chapter, page, PageLayer::Source))
         .unwrap_or_else(|| Err(format!("원본 이미지를 찾지 못했습니다: {}", page.image_path)))
@@ -509,6 +510,29 @@ pub fn select_mask_islands(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pages_saved_under_the_wrong_extension_still_open() {
+        // The TS app imported files under their downloaded name: WebP data in `.jpg`.
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let chapter = Chapter { id: "c".into(), work_id: "w".into(), ..Chapter::default() };
+        let pages = library.chapter_dir("w", "c").join("pages");
+        std::fs::create_dir_all(&pages).unwrap();
+        let source = pages.join("001-p.jpg");
+        RgbaImage::from_pixel(4, 3, image::Rgba([9, 8, 7, 255]))
+            .save_with_format(&source, image::ImageFormat::WebP)
+            .unwrap();
+        let page = PageRecord {
+            id: "p".into(),
+            image_path: source.to_string_lossy().into_owned(),
+            width: 4,
+            height: 3,
+            ..PageRecord::default()
+        };
+        let decoded = decode_page(&library, &chapter, &page);
+        assert_eq!(decoded.source.unwrap().get_pixel(3, 2).0, [9, 8, 7, 255]);
+    }
 
     #[test]
     fn auto_eraser_picks_whole_touched_islands_only() {

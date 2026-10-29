@@ -213,7 +213,8 @@ impl Editor {
                                 )
                                 .map(|items| {
                                     // The lettering colors come from the page itself.
-                                    let source = image::open(path).ok().map(|image| image.to_rgba8());
+                                    let source =
+                                        mtt_core::image_io::open_image(path).ok().map(|image| image.to_rgba8());
                                     let blocks: Vec<TranslationBlock> = items
                                         .iter()
                                         .enumerate()

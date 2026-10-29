@@ -4,6 +4,7 @@
 use std::path::Path;
 
 use base64::Engine;
+use mtt_core::image_io::open_image;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VariantRole {
@@ -52,7 +53,7 @@ fn png_bytes(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
 pub fn original_variant(path: &Path) -> Result<ImageVariant, String> {
     let mime = mime_for(path);
     let data_url = if mime == "image/webp" {
-        let image = image::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let image = open_image(path).map_err(|e| format!("{}: {e}", path.display()))?;
         self::data_url("image/png", &png_bytes(&image)?)
     } else {
         let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -63,7 +64,7 @@ pub fn original_variant(path: &Path) -> Result<ImageVariant, String> {
 
 /// Grayscale, contrast-stretched, at most 1900px on the long side, flattened on white.
 pub fn enhanced_variant(path: &Path) -> Result<ImageVariant, String> {
-    let image = image::open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let image = open_image(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let (width, height) = (image.width(), image.height());
     let long_side = width.max(height);
     let image = if long_side > ENHANCED_MAX_LONG_SIDE {
