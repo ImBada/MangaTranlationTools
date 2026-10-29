@@ -116,7 +116,9 @@ fn read_request(stream: &std::net::TcpStream) {
 }
 
 fn page_and_config(base_url: String, attempts: u32) -> (std::path::PathBuf, TranslationConfig) {
-    let dir = std::env::temp_dir().join(format!("mtt-mock-{}-{attempts}", std::process::id()));
+    static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let test = NEXT.fetch_add(1, Ordering::SeqCst);
+    let dir = std::env::temp_dir().join(format!("mtt-mock-{}-{test}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
     let page = dir.join("page.png");
     image::RgbaImage::from_pixel(20, 30, image::Rgba([255, 255, 255, 255])).save(&page).unwrap();
@@ -276,4 +278,98 @@ fn lists_the_server_models() {
         mtt_translate::client::list_models(&endpoint).unwrap().into_iter().map(|model| model.id).collect();
     assert_eq!(ids, ["gemma4:31b", "qwen3-vl:8b"]);
     assert_eq!(*auth.lock().unwrap(), "bearer key-1");
+}
+
+/// Answers each request with the next of `replies` (status, content type, body); `/models`
+/// gets a one-model list. Returns the base URL and the request bodies.
+fn spawn_scripted(replies: Vec<(u16, &'static str, String)>) -> (String, Arc<Mutex<Vec<String>>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    let bodies = Arc::new(Mutex::new(Vec::new()));
+    let captured = Arc::clone(&bodies);
+    std::thread::spawn(move || {
+        let mut replies = replies.into_iter();
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut content_length = 0usize;
+            loop {
+                let mut header = String::new();
+                reader.read_line(&mut header).unwrap();
+                if header == "\r\n" || header.is_empty() {
+                    break;
+                }
+                if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = value.trim().parse().unwrap();
+                }
+            }
+            let mut body = vec![0u8; content_length];
+            reader.read_exact(&mut body).unwrap();
+            let (status, content_type, reply) = if request_line.contains("/models") {
+                (200, "application/json", r#"{"data":[{"id":"mock"}]}"#.to_owned())
+            } else {
+                captured.lock().unwrap().push(String::from_utf8_lossy(&body).into_owned());
+                replies.next().unwrap_or((500, "text/plain", "no more replies".into()))
+            };
+            let _ = write!(
+                stream,
+                "HTTP/1.1 {status} X\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+        }
+    });
+    (format!("http://{address}/v1"), bodies)
+}
+
+const RECORD: &str = "id: 1\ntype: dialogue\nx: 100\ny: 100\nw: 200\nh: 150\njp: こんにちは\nko: 안녕하세요";
+
+fn chat_reply(content: &str, finish_reason: &str) -> (u16, &'static str, String) {
+    let body =
+        serde_json::json!({ "choices": [{ "message": { "content": content }, "finish_reason": finish_reason }] });
+    (200, "application/json", body.to_string())
+}
+
+fn sse_reply(events: &[serde_json::Value]) -> (u16, &'static str, String) {
+    (200, "text/event-stream", events.iter().map(|event| format!("data: {event}\n\n")).collect())
+}
+
+#[test]
+fn cut_off_answers_are_asked_again_with_more_room() {
+    let (base_url, bodies) =
+        spawn_scripted(vec![chat_reply("id: 1\ntype: dialogue\nx: 1", "length"), chat_reply(RECORD, "stop")]);
+    let (page, config) = page_and_config(base_url, 3);
+    let mut failures = Vec::new();
+    let items = translate_page(&config, &page, |_, error| failures.push(error.to_owned()), || false).unwrap();
+    assert_eq!(items[0].ko, "안녕하세요");
+    assert_eq!(failures.len(), 1);
+    assert!(failures[0].contains("잘렸습니다"), "{}", failures[0]);
+    let bodies = bodies.lock().unwrap();
+    let max_tokens =
+        |index: usize| serde_json::from_str::<serde_json::Value>(&bodies[index]).unwrap()["max_tokens"].clone();
+    assert_eq!((max_tokens(0), max_tokens(1)), (900.into(), 1800.into()), "doubled after the cut");
+}
+
+#[test]
+fn failed_and_unfinished_streams_are_retried() {
+    let delta = serde_json::json!({ "type": "response.output_text.delta", "delta": RECORD });
+    let created = serde_json::json!({ "type": "response.created", "response": { "status": "in_progress" } });
+    let failed = serde_json::json!({ "type": "response.failed",
+        "response": { "error": { "code": "server_error", "message": "try again" } } });
+    let completed = serde_json::json!({ "type": "response.completed", "response": { "status": "completed" } });
+    let (base_url, bodies) = spawn_scripted(vec![
+        sse_reply(&[created.clone(), failed]),
+        sse_reply(&[created.clone(), delta.clone()]),
+        sse_reply(&[created, delta, completed]),
+    ]);
+    let (page, mut config) = page_and_config(base_url, 3);
+    config.endpoint.api = Api::Responses { reasoning_effort: "low".into() };
+    let mut failures = Vec::new();
+    let items = translate_page(&config, &page, |_, error| failures.push(error.to_owned()), || false).unwrap();
+    assert_eq!(items[0].ko, "안녕하세요");
+    assert_eq!(failures.len(), 2, "{failures:?}");
+    assert!(failures[0].contains("server_error: try again"), "{}", failures[0]);
+    assert!(failures[1].contains("끊겼습니다"), "{}", failures[1]);
+    assert_eq!(bodies.lock().unwrap().len(), 3);
 }

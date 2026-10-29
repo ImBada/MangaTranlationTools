@@ -214,9 +214,33 @@ pub fn list_models(config: &TranslationConfig) -> Result<Vec<ModelOption>, Strin
     client::list_models(&config.endpoint)
 }
 
+/// What the earlier attempts at a page ran into.
+#[derive(Debug, Clone, Copy, Default)]
+struct Tries {
+    /// Answers cut off at the output limit.
+    cut_off: u32,
+}
+
+/// The output limit for a request after `cut_off` answers were cut off at it: doubled for
+/// each, up to four times the setting.
+fn output_room(endpoint: &Endpoint, cut_off: u32) -> Option<Endpoint> {
+    match endpoint.api {
+        Api::ChatCompletions { temperature, top_p, max_tokens } if cut_off > 0 => Some(Endpoint {
+            api: Api::ChatCompletions {
+                temperature,
+                top_p,
+                max_tokens: max_tokens.saturating_mul(1 << cut_off.min(2)),
+            },
+            ..endpoint.clone()
+        }),
+        _ => None,
+    }
+}
+
 /// One request/parse attempt: `prompt` with `variants`, the output read by `parse`.
 fn request_attempt<T>(
     config: &TranslationConfig,
+    tries: Tries,
     variants: &[images::ImageVariant],
     prompt: &str,
     parse: impl Fn(&str) -> Result<T, String>,
@@ -226,8 +250,10 @@ fn request_attempt<T>(
         Some(instructions) => format!("{prompt}\n\n{instructions}"),
         None => prompt.to_owned(),
     };
-    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, &prompt, variants);
-    let output = client::send_cancellable(&config.agent, &config.endpoint, body, cancelled)?;
+    let roomier = output_room(&config.endpoint, tries.cut_off);
+    let endpoint = roomier.as_ref().unwrap_or(&config.endpoint);
+    let body = client::chat_request_body(endpoint, SYSTEM_PROMPT, &prompt, variants);
+    let output = client::send_cancellable(&config.agent, endpoint, body, cancelled)?;
     parse(&output).map_err(|error| SendError {
         message: format!("{error} 응답 미리보기: {}", client::preview(&output, 240)),
         retry: Retry::Now,
@@ -247,9 +273,9 @@ pub fn translate_page(
     let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
     with_retries(
         config,
-        |attempt, cancelled| {
+        |attempt, tries, cancelled| {
             let prompt = if attempt > 1 { RETRY_PROMPT } else { PROMPT };
-            request_attempt(config, &variants, prompt, parser::parse_items, cancelled)
+            request_attempt(config, tries, &variants, prompt, parser::parse_items, cancelled)
         },
         on_attempt,
         &cancelled,
@@ -320,29 +346,37 @@ pub fn translate_regions(
     let ids: Vec<u32> = regions.iter().map(|region| region.id).collect();
     with_retries(
         config,
-        |_, cancelled| {
-            request_attempt(config, &variants, &prompt, |output| parser::parse_region_texts(output, &ids), cancelled)
+        |_, tries, cancelled| {
+            request_attempt(
+                config,
+                tries,
+                &variants,
+                &prompt,
+                |output| parser::parse_region_texts(output, &ids),
+                cancelled,
+            )
         },
         on_attempt,
         &cancelled,
     )
 }
 
-/// Runs `attempt(number, cancelled)` up to `config.attempts` times, pausing after server
-/// errors and stopping early on errors that would repeat or on cancel.
+/// Runs `attempt(number, tries, cancelled)` up to `config.attempts` times, pausing after
+/// server errors and stopping early on errors that would repeat or on cancel.
 fn with_retries<T>(
     config: &TranslationConfig,
-    mut attempt: impl FnMut(u32, &dyn Fn() -> bool) -> Result<T, SendError>,
+    mut attempt: impl FnMut(u32, Tries, &dyn Fn() -> bool) -> Result<T, SendError>,
     mut on_attempt: impl FnMut(u32, &str),
     cancelled: &dyn Fn() -> bool,
 ) -> Result<T, String> {
     let attempts = config.attempts.max(1);
     let mut last_error = String::new();
+    let mut tries = Tries::default();
     for number in 1..=attempts {
         if cancelled() {
             return Err("취소됨".into());
         }
-        let error = match attempt(number, cancelled) {
+        let error = match attempt(number, tries, cancelled) {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
@@ -354,6 +388,7 @@ fn with_retries<T>(
         last_error = error.message;
         match error.retry {
             Retry::No => return Err(format!("다시 시도해도 같은 오류라 멈췄습니다: {last_error}")),
+            Retry::Longer => tries.cut_off += 1,
             Retry::Later(asked)
                 if number < attempts && !wait_unless_cancelled(retry_delay(number, asked), cancelled) =>
             {
@@ -491,6 +526,22 @@ mod tests {
         assert!(text.starts_with("Additional instructions from the user:\n반말로\n\n"), "{text}");
         assert!(text.ends_with("consistently):\n주인공: 하루"), "{text}");
         assert_eq!(TranslationConfig::from_settings(&settings).with_instructions("", " ").instructions, None);
+    }
+
+    #[test]
+    fn cut_off_answers_get_more_room() {
+        let endpoint = TranslationConfig::from_settings(&AppSettings {
+            model_provider: ModelProvider::OpenAiCompatible,
+            ..AppSettings::default()
+        })
+        .endpoint;
+        let Api::ChatCompletions { max_tokens, .. } = endpoint.api else { panic!("chat") };
+        assert!(output_room(&endpoint, 0).is_none());
+        let room = |cut_off| match output_room(&endpoint, cut_off).unwrap().api {
+            Api::ChatCompletions { max_tokens, .. } => max_tokens,
+            Api::Responses { .. } => unreachable!(),
+        };
+        assert_eq!((room(1), room(2), room(5)), (max_tokens * 2, max_tokens * 4, max_tokens * 4));
     }
 
     #[test]

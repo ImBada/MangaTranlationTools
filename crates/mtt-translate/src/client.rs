@@ -52,6 +52,8 @@ pub enum Retry {
     No,
     /// Right away (the model's answer could not be used; ask again).
     Now,
+    /// Right away with more room: the answer was cut off at the output limit.
+    Longer,
     /// After a pause; the server asked for one with `Retry-After`.
     Later(Option<Duration>),
     /// The job was cancelled.
@@ -65,7 +67,7 @@ pub struct SendError {
 }
 
 impl SendError {
-    fn new(message: impl Into<String>, retry: Retry) -> Self {
+    pub(crate) fn new(message: impl Into<String>, retry: Retry) -> Self {
         Self { message: message.into(), retry }
     }
 }
@@ -217,10 +219,12 @@ pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images
     body.expect("request bodies serialize")
 }
 
-/// Sends a request and returns the model's text output (settings' model test).
+/// Sends a request and returns the model's text output (settings' model test). An answer
+/// cut off at the output limit still counts.
 pub fn send(endpoint: &Endpoint, body: &Value, timeout: Duration) -> Result<String, String> {
     let bytes = serde_json::to_vec(body).map_err(|error| error.to_string())?;
-    send_bytes(&agent(timeout), endpoint, &bytes).map_err(|error| error.message)
+    let answer = request(&agent(timeout), endpoint, &bytes).map_err(|error| error.message)?;
+    nonempty(answer.text, &answer.raw).map_err(|error| error.message)
 }
 
 /// `send_bytes` on a helper thread, returning as soon as `cancelled` says so (checked every
@@ -252,9 +256,36 @@ pub fn send_cancellable(
     }
 }
 
-/// Posts a JSON body and returns the model's text output. With a ChatGPT sign-in the
-/// request carries its session, refreshed once if the server says it expired.
+/// Posts a JSON body and returns the model's text output; an answer cut off at the output
+/// limit is an error ([`Retry::Longer`]). With a ChatGPT sign-in the request carries its
+/// session, refreshed once if the server says it expired.
 pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<String, SendError> {
+    let answer = request(agent, endpoint, body)?;
+    if answer.cut_off {
+        return Err(SendError::new(
+            format!("응답이 출력 길이 제한에서 잘렸습니다: {}", preview(&answer.text, 200)),
+            Retry::Longer,
+        ));
+    }
+    nonempty(answer.text, &answer.raw)
+}
+
+/// What a request got back: the model's text, whether it stopped at the output limit, and
+/// the raw body (for error messages).
+struct Answer {
+    text: String,
+    cut_off: bool,
+    raw: String,
+}
+
+fn nonempty(text: String, raw: &str) -> Result<String, SendError> {
+    if text.trim().is_empty() {
+        return Err(SendError::new(format!("모델이 빈 응답을 반환했습니다: {}", preview(raw, 400)), Retry::Now));
+    }
+    Ok(text.trim().to_owned())
+}
+
+fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answer, SendError> {
     let path = match endpoint.api {
         Api::ChatCompletions { .. } => "chat/completions",
         Api::Responses { .. } => "responses",
@@ -296,19 +327,17 @@ pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Resu
             retry_for_status(status.as_u16(), wait),
         ));
     }
-    let output = match endpoint.api {
-        Api::Responses { .. } => parse_responses_sse(&text),
+    let (output, cut_off) = match endpoint.api {
+        Api::Responses { .. } => parse_responses_sse(&text)?,
         Api::ChatCompletions { .. } => {
             let parsed: Value = serde_json::from_str(&text).map_err(|e| {
                 SendError::new(format!("응답 JSON 파싱 실패: {e}: {}", preview(&text, 400)), Retry::Now)
             })?;
-            extract_output_text(&parsed)
+            let finish = parsed.pointer("/choices/0/finish_reason").and_then(Value::as_str);
+            (extract_output_text(&parsed), matches!(finish, Some("length" | "max_tokens")))
         }
     };
-    if output.trim().is_empty() {
-        return Err(SendError::new(format!("모델이 빈 응답을 반환했습니다: {}", preview(&text, 400)), Retry::Now));
-    }
-    Ok(output.trim().to_owned())
+    Ok(Answer { text: output, cut_off, raw: text })
 }
 
 /// `GET /models` to check the base URL and key before a batch (`verifyEndpoint`); with a
@@ -525,10 +554,15 @@ pub fn extract_output_text(parsed: &Value) -> String {
     parts.join("\n").trim().to_owned()
 }
 
-/// `parseResponsesSseText`: concatenates `response.output_text.delta` events.
-pub fn parse_responses_sse(raw: &str) -> String {
+/// `parseResponsesSseText`: concatenates `response.output_text.delta` events, and says
+/// whether the answer stopped at the output limit (`response.incomplete`). A failed stream
+/// (`response.failed`, `error`) is an error with the server's code and message, and so is a
+/// Responses stream that ends without saying it is done.
+fn parse_responses_sse(raw: &str) -> Result<(String, bool), SendError> {
     let normalized = raw.replace("\r\n", "\n");
     let mut deltas = Vec::new();
+    // Whether this is a Responses event stream, and whether it said it is done.
+    let (mut responses_stream, mut finished) = (false, false);
     for block in normalized.split("\n\n") {
         let data: Vec<&str> =
             block.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim_start).collect();
@@ -541,21 +575,62 @@ pub fn parse_responses_sse(raw: &str) -> String {
         }
         let Ok(event) = serde_json::from_str::<Value>(&data) else { continue };
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-        if kind == "response.output_text.delta" {
-            if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                deltas.push(delta.to_owned());
+        responses_stream |= kind.starts_with("response.");
+        match kind {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                    deltas.push(delta.to_owned());
+                }
             }
-            continue;
-        }
-        if kind == "response.completed" || kind == "response.incomplete" {
-            continue;
-        }
-        let nested = extract_output_text(&event);
-        if !nested.is_empty() {
-            deltas.push(nested);
+            "response.completed" => finished = true,
+            "response.incomplete" => {
+                let reason = event.pointer("/response/incomplete_details/reason").and_then(Value::as_str);
+                if reason != Some("max_output_tokens") {
+                    return Err(SendError::new(
+                        format!("모델이 응답을 끝내지 못했습니다 ({})", reason.unwrap_or("이유 없음")),
+                        Retry::No,
+                    ));
+                }
+                return Ok((deltas.concat(), true));
+            }
+            "response.failed" => return Err(stream_error(event.pointer("/response/error").unwrap_or(&Value::Null))),
+            // `{"type": "error", "code", "message"}`, or with the details under `error`.
+            "error" => return Err(stream_error(event.get("error").unwrap_or(&event))),
+            _ => {
+                let nested = extract_output_text(&event);
+                if !nested.is_empty() {
+                    deltas.push(nested);
+                }
+            }
         }
     }
-    deltas.concat()
+    if responses_stream && !finished {
+        return Err(SendError::new(
+            format!("응답 스트림이 끝나기 전에 끊겼습니다: {}", preview(&deltas.concat(), 200)),
+            Retry::Later(None),
+        ));
+    }
+    Ok((deltas.concat(), false))
+}
+
+/// A failed stream's `{"code", "message"}` as an error: retried after a pause unless the
+/// code says this request can't succeed (a rejected prompt or image).
+fn stream_error(error: &Value) -> SendError {
+    let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or("").trim().to_owned();
+    let (code, message) = (text("code"), text("message"));
+    let code = if code.is_empty() { text("type") } else { code };
+    let retry = if code == "invalid_prompt" || code.contains("image") || code.contains("context_length") {
+        Retry::No
+    } else {
+        Retry::Later(None)
+    };
+    let what = match (code.is_empty(), message.is_empty()) {
+        (true, true) => "알 수 없는 오류".to_owned(),
+        (false, true) => code,
+        (true, false) => message,
+        (false, false) => format!("{code}: {message}"),
+    };
+    SendError::new(format!("모델 응답 실패 ({what})"), retry)
 }
 
 pub fn preview(text: &str, max_chars: usize) -> String {
@@ -698,6 +773,39 @@ mod tests {
     #[test]
     fn sse_deltas_are_joined() {
         let raw = "event: x\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"id: \"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"1\"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n";
-        assert_eq!(parse_responses_sse(raw), "id: 1");
+        assert_eq!(parse_responses_sse(raw).unwrap(), ("id: 1".to_owned(), false));
+    }
+
+    fn sse(events: &[Value]) -> String {
+        events.iter().map(|event| format!("data: {event}\n\n")).collect()
+    }
+
+    #[test]
+    fn cut_off_failed_and_broken_streams_are_not_answers() {
+        let delta = json!({ "type": "response.output_text.delta", "delta": "id: 1" });
+        let created = json!({ "type": "response.created", "response": { "status": "in_progress" } });
+        let incomplete = |reason: &str| json!({ "type": "response.incomplete", "response": { "incomplete_details": { "reason": reason } } });
+        assert!(parse_responses_sse(&sse(&[delta.clone(), incomplete("max_output_tokens")])).unwrap().1, "cut off");
+        let filtered = parse_responses_sse(&sse(&[delta.clone(), incomplete("content_filter")])).unwrap_err();
+        assert_eq!(filtered.retry, Retry::No);
+
+        let broken = parse_responses_sse(&sse(&[created.clone(), delta.clone()])).unwrap_err();
+        assert_eq!(broken.retry, Retry::Later(None), "{}", broken.message);
+
+        let failed = json!({ "type": "response.failed", "response": { "status": "failed",
+            "error": { "code": "rate_limit_exceeded", "message": "Slow down" } } });
+        let error = parse_responses_sse(&sse(&[created.clone(), failed])).unwrap_err();
+        assert_eq!(error.retry, Retry::Later(None));
+        assert!(error.message.contains("rate_limit_exceeded: Slow down"), "{}", error.message);
+
+        let rejected = json!({ "type": "error", "code": "invalid_prompt", "message": "Rejected" });
+        let error = parse_responses_sse(&sse(&[created, rejected])).unwrap_err();
+        assert_eq!(error.retry, Retry::No);
+        assert!(error.message.contains("invalid_prompt: Rejected"), "{}", error.message);
+        let nested = json!({ "type": "error", "error": { "type": "server_error", "message": "Oops" } });
+        assert!(parse_responses_sse(&sse(&[nested])).unwrap_err().message.contains("server_error: Oops"));
+
+        // A stream of whole answers without Responses events is taken as it is.
+        assert_eq!(parse_responses_sse(&sse(&[json!({ "output_text": "가" })])).unwrap(), ("가".to_owned(), false));
     }
 }

@@ -109,7 +109,8 @@ fn spawn_server() -> (String, SeenHeaders) {
                         (401, "application/json", r#"{"error":"expired"}"#.to_owned())
                     } else {
                         let event = serde_json::json!({ "type": "response.output_text.delta", "delta": "안녕" });
-                        (200, "text/event-stream", format!("data: {event}\n\ndata: [DONE]\n\n"))
+                        let done = serde_json::json!({ "type": "response.completed", "response": {} });
+                        (200, "text/event-stream", format!("data: {event}\n\ndata: {done}\n\n"))
                     }
                 }
                 models if models.starts_with("/models?client_version=0.") => {
