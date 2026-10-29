@@ -22,9 +22,29 @@ use mtt_core::settings::{AppSettings, ModelProvider, ReasoningEffort};
 pub use client::{Api, Endpoint, ModelOption, Retry, SendError};
 pub use parser::OverlayItem;
 
-pub const PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
-Image 1 is the original full page. Another image is a grayscale/high-contrast assist view of the exact same page.
-Task: detect each speech bubble, narration box, name call, or sound-effect block that contains visible Japanese text and return a Korean replacement text with one bounding box per item.
+/// How the page prompts start: what the images are, the original alone (fast mode) or with
+/// the assist view (accuracy mode).
+fn page_intro(assist_view: bool) -> &'static str {
+    if assist_view {
+        "You are given the same Japanese manga page in multiple full-page renderings.
+Image 1 is the original full page. Another image is a grayscale/high-contrast assist view of the exact same page."
+    } else {
+        "You are given a Japanese manga page.
+Image 1 is the original full page."
+    }
+}
+
+/// The page prompt for the images sent (see [`page_intro`]).
+pub fn page_prompt(assist_view: bool) -> String {
+    format!("{}\n{PAGE_TASK}", page_intro(assist_view))
+}
+
+/// Shorter prompt used after an answer that could not be read (`buildRetryPrompt`).
+pub fn retry_prompt(assist_view: bool) -> String {
+    format!("{}\n{RETRY_TASK}", page_intro(assist_view))
+}
+
+const PAGE_TASK: &str = "Task: detect each speech bubble, narration box, name call, or sound-effect block that contains visible Japanese text and return a Korean replacement text with one bounding box per item.
 Use coordinates for the ORIGINAL page only.
 Return only plain text records in this exact field format:
 id: 1
@@ -59,9 +79,7 @@ Rules:
 - Keep jp and ko on a single line each. Replace internal newlines with spaces.
 - If OCR is uncertain, keep only the uncertain fragment as [?] and still give the best short Korean translation.";
 
-/// Shorter prompt used for retries (`buildRetryPrompt`).
-pub const RETRY_PROMPT: &str = "You are given the same Japanese manga page in multiple full-page renderings.
-Return only plain text records for a downstream parser.
+const RETRY_TASK: &str = "Return only plain text records for a downstream parser.
 Use this exact field format and nothing else:
 id: 1
 type: dialogue
@@ -214,9 +232,35 @@ pub fn list_models(config: &TranslationConfig) -> Result<Vec<ModelOption>, Strin
     client::list_models(&config.endpoint)
 }
 
+/// What the earlier attempts at a page ran into.
+#[derive(Debug, Clone, Copy, Default)]
+struct Tries {
+    /// Answers cut off at the output limit.
+    cut_off: u32,
+    /// Whether the model answered something that could not be read.
+    unreadable: bool,
+}
+
+/// The output limit for a request after `cut_off` answers were cut off at it: doubled for
+/// each, up to four times the setting.
+fn output_room(endpoint: &Endpoint, cut_off: u32) -> Option<Endpoint> {
+    match endpoint.api {
+        Api::ChatCompletions { temperature, top_p, max_tokens } if cut_off > 0 => Some(Endpoint {
+            api: Api::ChatCompletions {
+                temperature,
+                top_p,
+                max_tokens: max_tokens.saturating_mul(1 << cut_off.min(2)),
+            },
+            ..endpoint.clone()
+        }),
+        _ => None,
+    }
+}
+
 /// One request/parse attempt: `prompt` with `variants`, the output read by `parse`.
 fn request_attempt<T>(
     config: &TranslationConfig,
+    tries: Tries,
     variants: &[images::ImageVariant],
     prompt: &str,
     parse: impl Fn(&str) -> Result<T, String>,
@@ -226,8 +270,10 @@ fn request_attempt<T>(
         Some(instructions) => format!("{prompt}\n\n{instructions}"),
         None => prompt.to_owned(),
     };
-    let body = client::chat_request_body(&config.endpoint, SYSTEM_PROMPT, &prompt, variants);
-    let output = client::send_cancellable(&config.agent, &config.endpoint, body, cancelled)?;
+    let roomier = output_room(&config.endpoint, tries.cut_off);
+    let endpoint = roomier.as_ref().unwrap_or(&config.endpoint);
+    let body = client::chat_request_body(endpoint, SYSTEM_PROMPT, &prompt, variants);
+    let output = client::send_cancellable(&config.agent, endpoint, body, cancelled)?;
     parse(&output).map_err(|error| SendError {
         message: format!("{error} 응답 미리보기: {}", client::preview(&output, 240)),
         retry: Retry::Now,
@@ -235,21 +281,28 @@ fn request_attempt<T>(
 }
 
 /// Translates a page with retries. `on_attempt(attempt, error)` reports failed attempts.
-/// `cancelled` stops waiting for a request in flight, a pause, or the next attempt.
-/// Errors that would repeat (a bad key, a rejected request) are not retried.
+/// `cancelled` stops waiting for a request in flight, a pause, or the next attempt (the
+/// error is then [`Retry::Cancelled`]). Errors that would repeat (a rejected request) are
+/// not retried; those every page would run into (a bad key, an unknown model, a used-up
+/// quota) come back as [`Retry::Stop`].
 pub fn translate_page(
     config: &TranslationConfig,
     image_path: &Path,
     on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
-) -> Result<Vec<OverlayItem>, String> {
+) -> Result<Vec<OverlayItem>, SendError> {
     // The images (and their base64) are the same for every attempt.
-    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
+    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)
+        .map_err(|error| SendError::new(error, Retry::No))?;
+    let assist_view = variants.iter().any(|variant| variant.role == images::VariantRole::Enhanced);
+    let (prompt, retry) = (page_prompt(assist_view), retry_prompt(assist_view));
     with_retries(
         config,
-        |attempt, cancelled| {
-            let prompt = if attempt > 1 { RETRY_PROMPT } else { PROMPT };
-            request_attempt(config, &variants, prompt, parser::parse_items, cancelled)
+        |tries, cancelled| {
+            // The shorter, format-only prompt helps an answer that could not be read; after a
+            // network or server error the page is asked the same way again.
+            let prompt = if tries.unreadable { &retry } else { &prompt };
+            request_attempt(config, tries, &variants, prompt, parser::parse_items, cancelled)
         },
         on_attempt,
         &cancelled,
@@ -310,59 +363,78 @@ pub fn translate_regions(
     regions: &[Region],
     on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
-) -> Result<Vec<parser::RegionText>, String> {
-    let mut variants = vec![images::original_variant(image_path)?];
-    let page = image::open(image_path).map_err(|e| format!("{}: {e}", image_path.display()))?.to_rgba8();
+) -> Result<Vec<parser::RegionText>, SendError> {
+    let unreadable = |error: String| SendError::new(error, Retry::No);
+    let mut variants = vec![images::original_variant(image_path).map_err(unreadable)?];
+    let page = image::open(image_path).map_err(|e| unreadable(format!("{}: {e}", image_path.display())))?.to_rgba8();
     for region in regions {
-        variants.push(images::region_variant(&page, region.id, region.bbox)?);
+        variants.push(images::region_variant(&page, region.id, region.bbox).map_err(unreadable)?);
     }
     let prompt = region_prompt(regions);
     let ids: Vec<u32> = regions.iter().map(|region| region.id).collect();
     with_retries(
         config,
-        |_, cancelled| {
-            request_attempt(config, &variants, &prompt, |output| parser::parse_region_texts(output, &ids), cancelled)
+        |tries, cancelled| {
+            request_attempt(
+                config,
+                tries,
+                &variants,
+                &prompt,
+                |output| parser::parse_region_texts(output, &ids),
+                cancelled,
+            )
         },
         on_attempt,
         &cancelled,
     )
 }
 
-/// Runs `attempt(number, cancelled)` up to `config.attempts` times, pausing after server
-/// errors and stopping early on errors that would repeat or on cancel.
+/// Runs `attempt(tries, cancelled)` up to `config.attempts` times, pausing after
+/// server errors and stopping early on errors that would repeat or on cancel. The error
+/// keeps the last attempt's [`Retry`], so callers can tell a job-stopping one.
 fn with_retries<T>(
     config: &TranslationConfig,
-    mut attempt: impl FnMut(u32, &dyn Fn() -> bool) -> Result<T, SendError>,
+    mut attempt: impl FnMut(Tries, &dyn Fn() -> bool) -> Result<T, SendError>,
     mut on_attempt: impl FnMut(u32, &str),
     cancelled: &dyn Fn() -> bool,
-) -> Result<T, String> {
+) -> Result<T, SendError> {
     let attempts = config.attempts.max(1);
-    let mut last_error = String::new();
+    let cancel = || SendError::new("취소됨", Retry::Cancelled);
+    let mut last_error = SendError::new("", Retry::Now);
+    let mut tries = Tries::default();
     for number in 1..=attempts {
         if cancelled() {
-            return Err("취소됨".into());
+            return Err(cancel());
         }
-        let error = match attempt(number, cancelled) {
+        let error = match attempt(tries, cancelled) {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
         if error.retry == Retry::Cancelled {
-            return Err("취소됨".into());
+            return Err(cancel());
         }
         log::warn!("translation attempt {number} failed: {}", error.message);
         on_attempt(number, &error.message);
-        last_error = error.message;
         match error.retry {
-            Retry::No => return Err(format!("다시 시도해도 같은 오류라 멈췄습니다: {last_error}")),
+            Retry::No => {
+                return Err(SendError::new(
+                    format!("다시 시도해도 같은 오류라 멈췄습니다: {}", error.message),
+                    Retry::No,
+                ));
+            }
+            Retry::Stop => return Err(error),
+            Retry::Longer => tries.cut_off += 1,
+            Retry::Now => tries.unreadable = true,
             Retry::Later(asked)
                 if number < attempts && !wait_unless_cancelled(retry_delay(number, asked), cancelled) =>
             {
-                return Err("취소됨".into());
+                return Err(cancel());
             }
             _ => {}
         }
+        last_error = error;
     }
-    Err(format!("{attempts}회 시도 후 실패: {last_error}"))
+    Err(SendError::new(format!("{attempts}회 시도 후 실패: {}", last_error.message), last_error.retry))
 }
 
 /// `mapOverlayType`.
@@ -438,16 +510,23 @@ pub fn overlay_item_to_block(
 pub fn test_model(config: &TranslationConfig) -> Result<String, String> {
     verify_endpoint(config)?;
     let body = match &config.endpoint.api {
-        Api::ChatCompletions { temperature, top_p, .. } => serde_json::json!({
-            "model": config.endpoint.model,
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": 32,
-            "messages": [
-                { "role": "system", "content": [{ "type": "text", "text": "Reply in one short sentence." }] },
-                { "role": "user", "content": [{ "type": "text", "text": "Say 'model test ok'." }] }
-            ]
-        }),
+        Api::ChatCompletions { temperature, top_p, .. } => {
+            let mut body = serde_json::json!({
+                "model": config.endpoint.model,
+                "messages": [
+                    { "role": "system", "content": [{ "type": "text", "text": "Reply in one short sentence." }] },
+                    { "role": "user", "content": [{ "type": "text", "text": "Say 'model test ok'." }] }
+                ]
+            });
+            // A reasoning model thinks before answering, so it gets room for that.
+            let limits = client::chat_limits(&config.endpoint.model, *temperature, *top_p, 32);
+            if let (Some(fields), Ok(serde_json::Value::Object(limits))) =
+                (body.as_object_mut(), serde_json::to_value(limits))
+            {
+                fields.extend(limits);
+            }
+            body
+        }
         Api::Responses { reasoning_effort } => serde_json::json!({
             "model": config.endpoint.model,
             "instructions": "Reply in one short sentence.",
@@ -491,6 +570,22 @@ mod tests {
         assert!(text.starts_with("Additional instructions from the user:\n반말로\n\n"), "{text}");
         assert!(text.ends_with("consistently):\n주인공: 하루"), "{text}");
         assert_eq!(TranslationConfig::from_settings(&settings).with_instructions("", " ").instructions, None);
+    }
+
+    #[test]
+    fn cut_off_answers_get_more_room() {
+        let endpoint = TranslationConfig::from_settings(&AppSettings {
+            model_provider: ModelProvider::OpenAiCompatible,
+            ..AppSettings::default()
+        })
+        .endpoint;
+        let Api::ChatCompletions { max_tokens, .. } = endpoint.api else { panic!("chat") };
+        assert!(output_room(&endpoint, 0).is_none());
+        let room = |cut_off| match output_room(&endpoint, cut_off).unwrap().api {
+            Api::ChatCompletions { max_tokens, .. } => max_tokens,
+            Api::Responses { .. } => unreachable!(),
+        };
+        assert_eq!((room(1), room(2), room(5)), (max_tokens * 2, max_tokens * 4, max_tokens * 4));
     }
 
     #[test]

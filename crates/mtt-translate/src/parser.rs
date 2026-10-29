@@ -19,12 +19,11 @@ pub struct OverlayItem {
 
 /// Parses model output into items. Errors when nothing usable is found.
 pub fn parse_items(raw: &str) -> Result<Vec<OverlayItem>, String> {
-    let items = match extract_json_candidate(raw) {
-        Some(candidate) => match parse_json_relaxed(&candidate) {
-            Some(value) => normalize_items(&value),
-            None => parse_loose_items(&candidate),
-        },
-        None => parse_loose_items(raw),
+    // A JSON-looking part is only trusted when it parses: `[?]` or `{웃음}` inside a record
+    // would otherwise cut the records down to the text between them.
+    let items = match parse_json_candidate(raw).map(|value| normalize_items(&value)) {
+        Some(items) if !items.is_empty() => items,
+        _ => parse_loose_items(raw),
     };
     if items.is_empty() {
         return Err("모델 응답에서 번역 블록을 찾지 못했습니다.".into());
@@ -45,36 +44,37 @@ pub struct RegionText {
 /// no region is answered.
 pub fn parse_region_texts(raw: &str, ids: &[u32]) -> Result<Vec<RegionText>, String> {
     let mut texts: Vec<RegionText> = Vec::new();
-    let mut push = |id: Option<u32>, jp: Option<String>, ko: Option<String>| {
+    let push = |texts: &mut Vec<RegionText>, id: Option<u32>, jp: Option<String>, ko: Option<String>| {
         let (Some(id), Some(ko)) = (id, ko.map(|ko| ko.trim().to_owned())) else { return };
         if ids.contains(&id) && !matches!(ko.as_str(), "" | "-") && !texts.iter().any(|text| text.id == id) {
             texts.push(RegionText { id, jp: jp.unwrap_or_default().trim().to_owned(), ko });
         }
     };
-    let json = extract_json_candidate(raw).and_then(|candidate| parse_json_relaxed(&candidate));
-    if let Some(value) = json {
+    if let Some(value) = parse_json_candidate(raw) {
         let list = value.as_array().or_else(|| value.get("items").and_then(Value::as_array));
         for item in list.into_iter().flatten() {
             push(
+                &mut texts,
                 number(item.get("id")).map(|id| id as u32),
                 first_text(item, &["jp", "japanese", "source"]),
                 first_text(item, &["ko", "korean", "translation"]),
             );
         }
-    } else {
+    }
+    if texts.is_empty() {
         let (mut id, mut jp, mut ko) = (None, None, None);
         let cleaned = raw.replace("```", "");
         for line in cleaned.lines().map(str::trim).chain([""]) {
             let Some((key, value)) = line.split_once(':') else {
                 if line.is_empty() {
-                    push(id.take(), jp.take(), ko.take());
+                    push(&mut texts, id.take(), jp.take(), ko.take());
                 }
                 continue;
             };
             let value = value.trim().trim_matches(|c| c == '"' || c == '\'' || c == ',').trim().to_owned();
             match key.trim().trim_matches('"').to_ascii_lowercase().as_str() {
                 "id" => {
-                    push(id.take(), jp.take(), ko.take());
+                    push(&mut texts, id.take(), jp.take(), ko.take());
                     id = value.parse().ok();
                 }
                 "jp" => jp = Some(value),
@@ -89,26 +89,28 @@ pub fn parse_region_texts(raw: &str, ids: &[u32]) -> Result<Vec<RegionText>, Str
     Ok(texts)
 }
 
-fn extract_json_candidate(raw: &str) -> Option<String> {
+/// The JSON in `raw`, when there is some that parses: the whole text, a fenced block, or
+/// the span between the outermost brackets (the one that opens first is tried first).
+fn parse_json_candidate(raw: &str) -> Option<Value> {
     static FENCE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?is)```(?:json)?\s*(.*?)```").unwrap());
     let trimmed = raw.trim();
-    if trimmed.starts_with('{') || trimmed.starts_with('[') {
-        return Some(trimmed.to_owned());
+    let mut candidates = vec![trimmed];
+    if let Some(inner) = FENCE.captures(trimmed).and_then(|captures| captures.get(1)) {
+        candidates.push(inner.as_str().trim());
     }
-    if let Some(captures) = FENCE.captures(trimmed)
-        && let Some(inner) = captures.get(1)
-        && !inner.as_str().trim().is_empty()
-    {
-        return Some(inner.as_str().trim().to_owned());
-    }
-    for (open, close) in [('{', '}'), ('[', ']')] {
-        if let (Some(first), Some(last)) = (trimmed.find(open), trimmed.rfind(close))
-            && last > first
-        {
-            return Some(trimmed[first..=last].to_owned());
-        }
-    }
-    None
+    let mut spans: Vec<(usize, &str)> = [('{', '}'), ('[', ']')]
+        .into_iter()
+        .filter_map(|(open, close)| {
+            let (first, last) = (trimmed.find(open)?, trimmed.rfind(close)?);
+            (last > first).then(|| (first, &trimmed[first..=last]))
+        })
+        .collect();
+    spans.sort_by_key(|(first, _)| *first);
+    candidates.extend(spans.into_iter().map(|(_, span)| span));
+    candidates
+        .into_iter()
+        .filter(|candidate| candidate.starts_with('{') || candidate.starts_with('['))
+        .find_map(parse_json_relaxed)
 }
 
 fn parse_json_relaxed(candidate: &str) -> Option<Value> {
@@ -206,7 +208,11 @@ fn parse_loose_items(raw: &str) -> Vec<OverlayItem> {
         LazyLock::new(|| Regex::new(r#"^(?i)(?:\{?\s*)?(?:"?id[^:"]*"?|a)\s*:\s*["']?([A-Za-z0-9_-]+)["']?"#).unwrap());
     static TYPE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r#"^(?i)"?type[^:"]*"?\s*:\s*["']?([^"',}]+)["']?"#).unwrap());
-    static COORD: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"["']?([xywh])["']?\s*:\s*([0-9.]+)"#).unwrap());
+    // A box line starts with a coordinate key and may hold several (`"x": 1, "y": 2,`); a key
+    // inside other text (`ko: Crash: 2`) is not one.
+    static COORD_LINE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^\{?\s*["']?[xywh]["']?\s*:"#).unwrap());
+    static COORD: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r#"(?:^|[{,\s])["']?([xywh])["']?\s*:\s*([0-9.]+)"#).unwrap());
     static JP: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^(?i)"?jp[^:"]*"?\s*:\s*["']?(.+?)["']?,?$"#).unwrap());
     static KO: LazyLock<Regex> = LazyLock::new(|| Regex::new(r#"^(?i)"?ko[^:"]*"?\s*:\s*["']?(.+?)["']?,?$"#).unwrap());
     static A_KEY: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\ba\s*:").unwrap());
@@ -233,9 +239,8 @@ fn parse_loose_items(raw: &str) -> Vec<OverlayItem> {
             draft.item_type = Some(captures[1].trim().to_owned());
             continue;
         }
-        let coords: Vec<_> = COORD.captures_iter(&line).collect();
-        if !coords.is_empty() {
-            for captures in coords {
+        if COORD_LINE.is_match(&line) {
+            for captures in COORD.captures_iter(&line) {
                 let value = captures[2].parse().ok();
                 match &captures[1] {
                     "x" => draft.x = value,
@@ -306,6 +311,58 @@ mod tests {
         assert!(parse_items("id: 1\nx: 1\ny: 1\nw: 1\nh: 1\njp: あ").is_err());
         let items = parse_items("[{\"x\":1,\"y\":2,\"w\":3,\"h\":4,\"ko\":\"가\"},{\"ko\":\"나\"}]").unwrap();
         assert_eq!(items.len(), 1);
+    }
+
+    /// Records in the prompt's format, one per `(jp, ko)`.
+    fn records(texts: &[(&str, &str)]) -> String {
+        texts
+            .iter()
+            .enumerate()
+            .map(|(i, (jp, ko))| {
+                format!("id: {}\ntype: dialogue\nx: {}\ny: 10\nw: 50\nh: 60\njp: {jp}\nko: {ko}", i + 1, i * 100)
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n")
+    }
+
+    #[test]
+    fn brackets_and_braces_inside_records_are_text() {
+        let raw = records(&[("あ", "아"), ("[?]だ", "[?]다"), ("う", "우")]);
+        let items = parse_items(&raw).unwrap();
+        let ko: Vec<&str> = items.iter().map(|item| item.ko.as_str()).collect();
+        assert_eq!(ko, ["아", "[?]다", "우"]);
+
+        let raw = records(&[("[?]", "[?]"), ("い", "이"), ("う", "우"), ("え[?]", "에[?]"), ("お", "오")]);
+        let items = parse_items(&raw).unwrap();
+        assert_eq!(items.len(), 5, "no record lost between the brackets");
+        assert_eq!((items[0].ko.as_str(), items[4].ko.as_str()), ("[?]", "오"));
+
+        let raw = records(&[("ふふ", "{웃음} 후후"), ("い", "이 {웃음}")]);
+        let items = parse_items(&raw).unwrap();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[1].ko, "이 {웃음}");
+
+        let regions = "id: 1\njp: [?]\nko: [?]\n\nid: 2\njp: え\nko: {웃음}";
+        let texts = parse_region_texts(regions, &[1, 2]).unwrap();
+        let ko: Vec<&str> = texts.iter().map(|text| text.ko.as_str()).collect();
+        assert_eq!(ko, ["[?]", "{웃음}"]);
+    }
+
+    #[test]
+    fn coordinates_are_only_read_from_box_lines() {
+        let raw = "id: 1\nx: 10\ny: 20\nw: 30\nh: 40\njp: クラッシュ\nko: Crash: 2";
+        let items = parse_items(raw).unwrap();
+        assert_eq!(items[0].bbox, (10.0, 20.0, 30.0, 40.0));
+        assert_eq!(items[0].ko, "Crash: 2");
+        let raw = "id: 1\n{x: 1, y: 2, w: 3, h: 4}\nko: 가";
+        assert_eq!(parse_items(raw).unwrap()[0].bbox, (1.0, 2.0, 3.0, 4.0));
+    }
+
+    #[test]
+    fn json_after_prose_is_found() {
+        let raw =
+            "Here: [{\"x\":1,\"y\":2,\"w\":3,\"h\":4,\"ko\":\"가\"},{\"x\":5,\"y\":6,\"w\":7,\"h\":8,\"ko\":\"나\"}]";
+        assert_eq!(parse_items(raw).unwrap().len(), 2);
     }
 
     #[test]

@@ -12,7 +12,7 @@ use mtt_core::model::{BBox, BlockType, PageAnalysisStatus, PageRecord, Translati
 use mtt_inpaint::bubble::find_balloons;
 use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
 use mtt_translate::parser::RegionText;
-use mtt_translate::{Region, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
+use mtt_translate::{Region, Retry, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
 
 use super::Editor;
 use super::history::{BlocksSnapshot, Entry};
@@ -78,6 +78,8 @@ pub struct TranslationJob {
     /// The user's own blocks left in place on translated pages.
     pub kept_blocks: usize,
     page_ids: Vec<String>,
+    /// The latest page failure.
+    last_error: Option<String>,
 }
 
 impl TranslationJob {
@@ -182,6 +184,7 @@ impl Editor {
             mode,
             kept_blocks: 0,
             page_ids: ids,
+            last_error: None,
         });
         let chapter_id = self.chapter.id.clone();
         let emitter = worker.emitter();
@@ -196,11 +199,15 @@ impl Editor {
                 }
                 send(TranslationEvent::Started { total: targets.len(), endpoint: config.describe() });
                 let next = AtomicUsize::new(0);
+                // An error every page would run into (a bad key, an unknown model, a used-up
+                // quota) stops the job.
+                let stopped = std::sync::OnceLock::<String>::new();
+                let stopping = || cancel.load(Ordering::SeqCst) || stopped.get().is_some();
                 std::thread::scope(|scope| {
                     for _ in 0..config.concurrency.min(targets.len()).max(1) {
                         scope.spawn(|| {
                             loop {
-                                if cancel.load(Ordering::SeqCst) {
+                                if stopping() {
                                     return;
                                 }
                                 let index = next.fetch_add(1, Ordering::SeqCst);
@@ -216,9 +223,17 @@ impl Editor {
                                             error: error.to_owned(),
                                         })
                                     },
-                                    || cancel.load(Ordering::SeqCst),
-                                )
-                                .map(|items| {
+                                    stopping,
+                                );
+                                if let Err(error) = &result {
+                                    let stops =
+                                        error.retry == Retry::Stop && stopped.set(error.message.clone()).is_ok();
+                                    // Cancelled, or another page already stopped the job.
+                                    if !stops && stopping() {
+                                        return;
+                                    }
+                                }
+                                let result = result.map_err(|error| error.message).map(|items| {
                                     // The lettering colors come from the page itself.
                                     let source = image::open(path).ok().map(|image| image.to_rgba8());
                                     let blocks: Vec<TranslationBlock> = items
@@ -253,15 +268,15 @@ impl Editor {
                                         })
                                         .collect()
                                 });
-                                if cancel.load(Ordering::SeqCst) && result.is_err() {
-                                    return;
-                                }
                                 send(TranslationEvent::PageDone { page_id: page_id.clone(), result });
                             }
                         });
                     }
                 });
-                send(TranslationEvent::Finished { cancelled: cancel.load(Ordering::SeqCst), error: None });
+                let error = stopped
+                    .into_inner()
+                    .map(|error| format!("모든 페이지에서 같은 오류가 날 것이라 번역을 멈췄습니다: {error}"));
+                send(TranslationEvent::Finished { cancelled: cancel.load(Ordering::SeqCst), error });
             })
             .expect("spawn translation thread");
     }
@@ -303,6 +318,7 @@ impl Editor {
             mode: RunMode::Blocks,
             kept_blocks: 0,
             page_ids: vec![page_id.clone()],
+            last_error: None,
         });
         let chapter_id = self.chapter.id.clone();
         let emitter = worker.emitter();
@@ -326,7 +342,7 @@ impl Editor {
                     || cancel.load(Ordering::SeqCst),
                 );
                 let cancelled = cancel.load(Ordering::SeqCst);
-                let error = result.as_ref().err().filter(|_| !cancelled).cloned();
+                let error = result.as_ref().err().filter(|_| !cancelled).map(|error| error.message.clone());
                 if let Ok(texts) = result {
                     let texts = texts
                         .into_iter()
@@ -398,6 +414,15 @@ impl Editor {
             TranslationEvent::BlocksDone { page_id, result } => self.apply_translated_blocks(&page_id, result),
             TranslationEvent::Finished { cancelled, error } => {
                 let job = self.translation.take()?;
+                // A run where no page could be translated did not succeed either.
+                let error = error.or_else(|| {
+                    (!cancelled && job.total > 0 && job.failed >= job.total).then(|| {
+                        format!(
+                            "모든 페이지 번역에 실패했습니다: {}",
+                            job.last_error.as_deref().unwrap_or("알 수 없는 오류")
+                        )
+                    })
+                });
                 let success = error.is_none() && !cancelled;
                 let reset_to = if error.is_some() { PageAnalysisStatus::Failed } else { PageAnalysisStatus::Idle };
                 for page in self.chapter.pages.iter_mut() {
@@ -484,6 +509,7 @@ impl Editor {
                     }
                 }
                 Err(error) => {
+                    job.last_error = Some(error.clone());
                     job.phase = format!("{number} / {} 페이지 건너뜀", job.total);
                     job.warnings.push(format!(
                         "{name}: {}회 재시도 후 실패하여 이 페이지는 건너뜁니다. 마지막 오류: {}",
@@ -555,7 +581,10 @@ impl Editor {
         for (block_id, text) in &texts {
             let Some(block) = page.blocks.iter_mut().find(|block| block.id == *block_id) else { continue };
             let generated = !block.is_user_work(page_id);
-            block.source_text = text.jp.clone();
+            // A model that left out `jp:` read nothing new; the old source stays.
+            if !text.jp.trim().is_empty() {
+                block.source_text = text.jp.clone();
+            }
             block.translated_text = text.ko.clone();
             if generated {
                 block.mark_generated();
@@ -639,6 +668,8 @@ pub fn apply_for_test(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::Services;
+    use crate::worker::Worker;
     use mtt_core::model::{BlockType, Chapter};
 
     fn page(id: &str, status: PageAnalysisStatus, completed: bool) -> PageRecord {
@@ -763,6 +794,132 @@ mod tests {
         assert!(blocks[1].is_user_work("p"), "still the user's");
         editor.undo(&egui::Context::default());
         assert_eq!(editor.chapter.pages[0].blocks[0].translated_text, "예전", "one undo step");
+    }
+
+    #[test]
+    fn block_translation_without_source_keeps_the_old_source() {
+        let block = TranslationBlock {
+            id: "p-block-1".into(),
+            source_text: "えっ".into(),
+            translated_text: "예전".into(),
+            ..TranslationBlock::default()
+        };
+        let chapter = Chapter {
+            id: "c".into(),
+            pages: vec![PageRecord { id: "p".into(), blocks: vec![block], ..PageRecord::default() }],
+            page_order: vec!["p".into()],
+            ..Chapter::default()
+        };
+        let mut editor = Editor::new(chapter);
+        let text = RegionText { id: 1, jp: String::new(), ko: "엥?".into() };
+        editor.apply_translated_blocks("p", Ok(vec![("p-block-1".into(), text)]));
+        let block = &editor.chapter.pages[0].blocks[0];
+        assert_eq!((block.source_text.as_str(), block.translated_text.as_str()), ("えっ", "엥?"));
+    }
+
+    /// Serves `GET /models` and answers every chat request with `status` and `body`.
+    /// Returns the base URL and how many chat requests came in.
+    fn mock_server(status: u16, body: &'static str) -> (String, Arc<AtomicUsize>) {
+        use std::io::{BufRead, BufReader, Read, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let chats = Arc::new(AtomicUsize::new(0));
+        let counted = Arc::clone(&chats);
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(mut stream) = stream else { return };
+                let mut reader = BufReader::new(stream.try_clone().unwrap());
+                let (mut line, mut length) = (String::new(), 0usize);
+                reader.read_line(&mut line).unwrap();
+                loop {
+                    let mut header = String::new();
+                    reader.read_line(&mut header).unwrap();
+                    if header.trim().is_empty() {
+                        break;
+                    }
+                    if let Some(value) = header.to_ascii_lowercase().strip_prefix("content-length:") {
+                        length = value.trim().parse().unwrap();
+                    }
+                }
+                reader.read_exact(&mut vec![0; length]).unwrap();
+                let (status, reply) = if line.contains("/models") {
+                    (200, r#"{"data":[{"id":"mock"}]}"#)
+                } else {
+                    counted.fetch_add(1, Ordering::SeqCst);
+                    (status, body)
+                };
+                let _ = write!(
+                    stream,
+                    "HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                    reply.len()
+                );
+            }
+        });
+        (format!("http://{address}/v1"), chats)
+    }
+
+    /// Translates every page of a three-page chapter against `base_url` and returns the
+    /// editor and what the job reported when it finished.
+    fn translate_all(base_url: &str) -> (Editor, Option<bool>) {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let mut services = Services::new(&ctx, mtt_core::paths::AppPaths::from_data_root(dir.path()));
+        services.settings.model_provider = mtt_core::settings::ModelProvider::OpenAiCompatible;
+        services.settings.openai_compatible.base_url = base_url.into();
+        services.settings.openai_compatible.model = "mock".into();
+        services.settings.translation_parallel.enabled = false;
+        let image = dir.path().join("page.png");
+        image::RgbaImage::from_pixel(20, 30, image::Rgba([255, 255, 255, 255])).save(&image).unwrap();
+        let pages: Vec<PageRecord> = (0..3)
+            .map(|index| PageRecord {
+                id: format!("p{index}"),
+                name: format!("{index}.png"),
+                image_path: image.to_string_lossy().into_owned(),
+                width: 20,
+                height: 30,
+                ..PageRecord::default()
+            })
+            .collect();
+        let chapter = Chapter {
+            id: "c".into(),
+            page_order: pages.iter().map(|page| page.id.clone()).collect(),
+            pages,
+            ..Chapter::default()
+        };
+        let worker = Worker::new(&ctx, 1);
+        let mut editor = Editor::new(chapter);
+        editor.start_translation(RunMode::All, &services, &worker);
+        let deadline = Instant::now() + std::time::Duration::from_secs(20);
+        while Instant::now() < deadline {
+            for event in worker.drain() {
+                if let AppEvent::Translation { chapter_id, event } = event
+                    && let Some(success) = editor.on_translation_event(&chapter_id, event)
+                {
+                    return (editor, Some(success));
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        (editor, None)
+    }
+
+    #[test]
+    fn an_error_every_page_would_hit_stops_the_job() {
+        let (base_url, chats) = mock_server(401, r#"{"error":{"message":"Incorrect API key"}}"#);
+        let (editor, success) = translate_all(&base_url);
+        assert_eq!(success, Some(false));
+        assert_eq!(chats.load(Ordering::SeqCst), 1, "the other pages are not sent");
+        assert!(editor.chapter.pages.iter().all(|page| page.analysis_status == PageAnalysisStatus::Failed));
+        assert!(editor.status.contains("번역을 멈췄습니다"), "{}", editor.status);
+    }
+
+    #[test]
+    fn a_run_where_every_page_failed_is_not_a_success() {
+        let (base_url, chats) = mock_server(400, r#"{"error":{"message":"Invalid image data"}}"#);
+        let (editor, success) = translate_all(&base_url);
+        assert_eq!(success, Some(false));
+        assert_eq!(chats.load(Ordering::SeqCst), 3, "a rejected page doesn't stop the others");
+        assert!(editor.status.starts_with("모든 페이지 번역에 실패했습니다"), "{}", editor.status);
     }
 
     #[test]

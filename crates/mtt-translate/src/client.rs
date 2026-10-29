@@ -48,10 +48,15 @@ pub fn job_agent(timeout: Duration) -> ureq::Agent {
 /// Whether a failed request is worth repeating, and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retry {
-    /// It will fail the same way (bad key, wrong URL, rejected request).
+    /// It will fail the same way (a page the server rejects).
     No,
+    /// Every request will fail the same way (bad key, wrong URL or model, quota used up):
+    /// stop the whole job.
+    Stop,
     /// Right away (the model's answer could not be used; ask again).
     Now,
+    /// Right away with more room: the answer was cut off at the output limit.
+    Longer,
     /// After a pause; the server asked for one with `Retry-After`.
     Later(Option<Duration>),
     /// The job was cancelled.
@@ -65,17 +70,41 @@ pub struct SendError {
 }
 
 impl SendError {
-    fn new(message: impl Into<String>, retry: Retry) -> Self {
+    pub(crate) fn new(message: impl Into<String>, retry: Retry) -> Self {
         Self { message: message.into(), retry }
     }
 }
 
-/// How an HTTP error status should be retried.
-pub fn retry_for_status(status: u16, retry_after: Option<Duration>) -> Retry {
+/// How an HTTP error should be retried, from its status and body: a bad key, a wrong
+/// address or model, an unsupported parameter or a used-up quota stop the job.
+pub fn retry_for_status(status: u16, body: &str, retry_after: Option<Duration>) -> Retry {
+    let body = body.to_ascii_lowercase();
     match status {
+        401 | 403 | 404 => Retry::Stop,
+        429 if is_quota_error(&body) => Retry::Stop,
+        400 | 422 if is_setup_error(&body) => Retry::Stop,
         408 | 409 | 425 | 429 | 500..=599 => Retry::Later(retry_after),
         _ => Retry::No,
     }
+}
+
+/// An OpenAI `insufficient_quota` or Codex `usage_limit_reached` error (lowercase `body`):
+/// waiting a few seconds won't help.
+fn is_quota_error(body: &str) -> bool {
+    ["insufficient_quota", "usage_limit_reached", "usage_not_included", "billing", "exceeded your current quota"]
+        .iter()
+        .any(|marker| body.contains(marker))
+}
+
+/// A request rejected for its model or parameters rather than its page (lowercase `body`).
+fn is_setup_error(body: &str) -> bool {
+    let codes =
+        ["model_not_found", "invalid_model", "unsupported_parameter", "unsupported_value", "\"param\":\"model\""];
+    let model_phrases =
+        ["not found", "does not exist", "not supported", "does not support", "unknown model", "invalid model"];
+    let compact = body.replace(' ', "");
+    codes.iter().any(|code| compact.contains(code))
+        || (body.contains("model") && model_phrases.iter().any(|phrase| body.contains(phrase)))
 }
 
 /// `Retry-After` in seconds (the HTTP-date form is rare for APIs and ignored).
@@ -118,14 +147,86 @@ struct OllamaFlags {
     reasoning_effort: &'static str,
 }
 
+/// The output limit and sampling fields of a Chat Completions request.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub(crate) struct ChatLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+}
+
+/// Room for an OpenAI reasoning model's thinking on top of the answer: its limit counts
+/// both, and OpenAI suggests reserving at least 25,000 tokens.
+const REASONING_ROOM: u32 = 25_000;
+
+/// Whether `model` is an OpenAI reasoning model (o-series, GPT-5), also behind a provider
+/// prefix (`openai/o3`).
+pub fn is_reasoning_model(model: &str) -> bool {
+    let id = model.trim().to_ascii_lowercase();
+    let id = id.rsplit('/').next().unwrap_or_default();
+    let o_series = id.strip_prefix('o').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    o_series || id.starts_with("gpt-5")
+}
+
+/// The limit and sampling fields for `model`: reasoning models reject `max_tokens` and
+/// sampling values other than the default, so they get `max_completion_tokens` (with
+/// room to think) and nothing else.
+pub(crate) fn chat_limits(model: &str, temperature: f64, top_p: f64, max_tokens: u32) -> ChatLimits {
+    if is_reasoning_model(model) {
+        return ChatLimits {
+            max_completion_tokens: Some(max_tokens.saturating_add(REASONING_ROOM)),
+            ..ChatLimits::default()
+        };
+    }
+    ChatLimits {
+        temperature: Some(temperature),
+        top_p: Some(top_p),
+        presence_penalty: Some(0),
+        frequency_penalty: Some(0),
+        max_tokens: Some(max_tokens),
+        max_completion_tokens: None,
+    }
+}
+
+/// `body` without the parameter a 400 `error` names as unsupported (`max_tokens` becomes
+/// `max_completion_tokens` with room to think); `None` when it names none of the limit or
+/// sampling parameters, or one already gone.
+fn without_rejected_parameter(body: &[u8], error: &str) -> Option<Vec<u8>> {
+    const DROPPABLE: [&str; 5] = ["max_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty"];
+    let error: Value = serde_json::from_str(error).ok()?;
+    let error = error.get("error")?;
+    let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or("");
+    let message = text("message");
+    let unsupported = matches!(text("code"), "unsupported_parameter" | "unsupported_value")
+        || message.to_ascii_lowercase().starts_with("unsupported");
+    // "Unsupported parameter: 'max_tokens' is not supported with this model."
+    let named = Some(text("param")).filter(|param| !param.is_empty()).or_else(|| message.split('\'').nth(1))?;
+    let param = DROPPABLE.into_iter().find(|known| *known == named).filter(|_| unsupported)?;
+    let mut request: Value = serde_json::from_slice(body).ok()?;
+    let fields = request.as_object_mut()?;
+    let value = fields.remove(param)?;
+    log::info!("the model rejected {param}; sending the request again without it");
+    if param == "max_tokens" && !fields.contains_key("max_completion_tokens") {
+        let limit = value.as_u64().unwrap_or(0).saturating_add(u64::from(REASONING_ROOM));
+        fields.insert("max_completion_tokens".into(), limit.into());
+    }
+    serde_json::to_vec(&request).ok()
+}
+
 #[derive(Serialize)]
 struct ChatBody<'a> {
     model: &'a str,
-    temperature: f64,
-    top_p: f64,
-    presence_penalty: u8,
-    frequency_penalty: u8,
-    max_tokens: u32,
+    #[serde(flatten)]
+    limits: ChatLimits,
     messages: [ChatMessage<'a>; 2],
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     ollama: Option<OllamaFlags>,
@@ -178,11 +279,7 @@ pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images
             user.push(ChatPart::Text { text: prompt });
             serde_json::to_vec(&ChatBody {
                 model: &endpoint.model,
-                temperature: *temperature,
-                top_p: *top_p,
-                presence_penalty: 0,
-                frequency_penalty: 0,
-                max_tokens: *max_tokens,
+                limits: chat_limits(&endpoint.model, *temperature, *top_p, *max_tokens),
                 messages: [
                     ChatMessage { role: "system", content: vec![ChatPart::Text { text: system }] },
                     ChatMessage { role: "user", content: user },
@@ -217,10 +314,12 @@ pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images
     body.expect("request bodies serialize")
 }
 
-/// Sends a request and returns the model's text output (settings' model test).
+/// Sends a request and returns the model's text output (settings' model test). An answer
+/// cut off at the output limit still counts.
 pub fn send(endpoint: &Endpoint, body: &Value, timeout: Duration) -> Result<String, String> {
     let bytes = serde_json::to_vec(body).map_err(|error| error.to_string())?;
-    send_bytes(&agent(timeout), endpoint, &bytes).map_err(|error| error.message)
+    let answer = request(&agent(timeout), endpoint, &bytes).map_err(|error| error.message)?;
+    nonempty(answer.text, &answer.raw).map_err(|error| error.message)
 }
 
 /// `send_bytes` on a helper thread, returning as soon as `cancelled` says so (checked every
@@ -252,19 +351,46 @@ pub fn send_cancellable(
     }
 }
 
-/// Posts a JSON body and returns the model's text output. With a ChatGPT sign-in the
-/// request carries its session, refreshed once if the server says it expired.
+/// Posts a JSON body and returns the model's text output; an answer cut off at the output
+/// limit is an error ([`Retry::Longer`]). With a ChatGPT sign-in the request carries its
+/// session, refreshed once if the server says it expired.
 pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<String, SendError> {
+    let answer = request(agent, endpoint, body)?;
+    if answer.cut_off {
+        return Err(SendError::new(
+            format!("응답이 출력 길이 제한에서 잘렸습니다: {}", preview(&answer.text, 200)),
+            Retry::Longer,
+        ));
+    }
+    nonempty(answer.text, &answer.raw)
+}
+
+/// What a request got back: the model's text, whether it stopped at the output limit, and
+/// the raw body (for error messages).
+struct Answer {
+    text: String,
+    cut_off: bool,
+    raw: String,
+}
+
+fn nonempty(text: String, raw: &str) -> Result<String, SendError> {
+    if text.trim().is_empty() {
+        return Err(SendError::new(format!("모델이 빈 응답을 반환했습니다: {}", preview(raw, 400)), Retry::Now));
+    }
+    Ok(text.trim().to_owned())
+}
+
+fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answer, SendError> {
     let path = match endpoint.api {
         Api::ChatCompletions { .. } => "chat/completions",
         Api::Responses { .. } => "responses",
     };
     let url = format!("{}/{path}", endpoint.base_url.trim_end_matches('/'));
     let session = match &endpoint.auth {
-        Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::No))?),
+        Some(auth) => Some(auth.session()?),
         None => None,
     };
-    let post = |session: Option<&crate::codex::Session>| {
+    let post = |session: Option<&crate::codex::Session>, body: &[u8]| {
         let mut request = agent.post(&url).header("Content-Type", "application/json");
         if let Some(session) = session {
             for (name, value) in crate::codex::request_headers(session) {
@@ -275,47 +401,60 @@ pub fn send_bytes(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Resu
         }
         request.send(body).map_err(|e| SendError::new(format!("요청 전송 실패 ({url}): {e}"), Retry::Later(None)))
     };
-    let mut response = post(session.as_ref())?;
-    if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
-        && response.status().as_u16() == 401
-    {
-        let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::No))?;
-        response = post(Some(&fresh))?;
-    }
-    let status = response.status();
-    let wait = retry_after(&response);
-    let text = response
-        .body_mut()
-        .with_config()
-        .limit(64 * 1024 * 1024)
-        .read_to_string()
-        .map_err(|e| SendError::new(format!("응답을 읽지 못했습니다: {e}"), Retry::Later(None)))?;
+    let mut session = session;
+    let mut body = std::borrow::Cow::Borrowed(body);
+    let (status, wait, text) = loop {
+        let mut response = post(session.as_ref(), &body)?;
+        if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
+            && response.status().as_u16() == 401
+        {
+            let fresh = auth.force_refresh(stale)?;
+            response = post(Some(&fresh), &body)?;
+            session = Some(fresh);
+        }
+        let status = response.status();
+        let wait = retry_after(&response);
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024 * 1024)
+            .read_to_string()
+            .map_err(|e| SendError::new(format!("응답을 읽지 못했습니다: {e}"), Retry::Later(None)))?;
+        // A model that rejects one of the limit or sampling parameters is asked again
+        // without it (each at most once).
+        if status.as_u16() == 400
+            && matches!(endpoint.api, Api::ChatCompletions { .. })
+            && let Some(adjusted) = without_rejected_parameter(&body, &text)
+        {
+            body = std::borrow::Cow::Owned(adjusted);
+            continue;
+        }
+        break (status, wait, text);
+    };
     if !status.is_success() {
         return Err(SendError::new(
             format!("요청 실패 ({}): {}", status.as_u16(), preview(&text, 600)),
-            retry_for_status(status.as_u16(), wait),
+            retry_for_status(status.as_u16(), &text, wait),
         ));
     }
-    let output = match endpoint.api {
-        Api::Responses { .. } => parse_responses_sse(&text),
+    let (output, cut_off) = match endpoint.api {
+        Api::Responses { .. } => parse_responses_sse(&text)?,
         Api::ChatCompletions { .. } => {
             let parsed: Value = serde_json::from_str(&text).map_err(|e| {
                 SendError::new(format!("응답 JSON 파싱 실패: {e}: {}", preview(&text, 400)), Retry::Now)
             })?;
-            extract_output_text(&parsed)
+            let finish = parsed.pointer("/choices/0/finish_reason").and_then(Value::as_str);
+            (extract_output_text(&parsed), matches!(finish, Some("length" | "max_tokens")))
         }
     };
-    if output.trim().is_empty() {
-        return Err(SendError::new(format!("모델이 빈 응답을 반환했습니다: {}", preview(&text, 400)), Retry::Now));
-    }
-    Ok(output.trim().to_owned())
+    Ok(Answer { text: output, cut_off, raw: text })
 }
 
 /// `GET /models` to check the base URL and key before a batch (`verifyEndpoint`); with a
 /// ChatGPT sign-in, that there is a usable session.
 pub fn verify(endpoint: &Endpoint) -> Result<(), String> {
     if let Some(auth) = &endpoint.auth {
-        return auth.session().map(|_| ());
+        return auth.session().map(|_| ()).map_err(|error| error.message);
     }
     get_models(endpoint).map(|_| ())
 }
@@ -360,7 +499,7 @@ fn get_models(endpoint: &Endpoint) -> Result<String, String> {
         Some(_) => format!("{base}/models?client_version={}", codex_client_version(base)),
         None => format!("{base}/models"),
     };
-    let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose()?;
+    let session = endpoint.auth.as_ref().map(|auth| auth.session()).transpose().map_err(|error| error.message)?;
     let get = |session: Option<&crate::codex::Session>| {
         let mut request = agent(Duration::from_secs(30)).get(&url).header("Accept", "application/json");
         if let Some(session) = session {
@@ -376,7 +515,7 @@ fn get_models(endpoint: &Endpoint) -> Result<String, String> {
     if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
         && response.status().as_u16() == 401
     {
-        response = get(Some(&auth.force_refresh(stale)?))?;
+        response = get(Some(&auth.force_refresh(stale).map_err(|error| error.message)?))?;
     }
     let status = response.status();
     let text = response.body_mut().read_to_string().unwrap_or_default();
@@ -525,10 +664,15 @@ pub fn extract_output_text(parsed: &Value) -> String {
     parts.join("\n").trim().to_owned()
 }
 
-/// `parseResponsesSseText`: concatenates `response.output_text.delta` events.
-pub fn parse_responses_sse(raw: &str) -> String {
+/// `parseResponsesSseText`: concatenates `response.output_text.delta` events, and says
+/// whether the answer stopped at the output limit (`response.incomplete`). A failed stream
+/// (`response.failed`, `error`) is an error with the server's code and message, and so is a
+/// Responses stream that ends without saying it is done.
+fn parse_responses_sse(raw: &str) -> Result<(String, bool), SendError> {
     let normalized = raw.replace("\r\n", "\n");
     let mut deltas = Vec::new();
+    // Whether this is a Responses event stream, and whether it said it is done.
+    let (mut responses_stream, mut finished) = (false, false);
     for block in normalized.split("\n\n") {
         let data: Vec<&str> =
             block.lines().filter_map(|line| line.strip_prefix("data:")).map(str::trim_start).collect();
@@ -541,21 +685,66 @@ pub fn parse_responses_sse(raw: &str) -> String {
         }
         let Ok(event) = serde_json::from_str::<Value>(&data) else { continue };
         let kind = event.get("type").and_then(Value::as_str).unwrap_or("");
-        if kind == "response.output_text.delta" {
-            if let Some(delta) = event.get("delta").and_then(Value::as_str) {
-                deltas.push(delta.to_owned());
+        responses_stream |= kind.starts_with("response.");
+        match kind {
+            "response.output_text.delta" => {
+                if let Some(delta) = event.get("delta").and_then(Value::as_str) {
+                    deltas.push(delta.to_owned());
+                }
             }
-            continue;
-        }
-        if kind == "response.completed" || kind == "response.incomplete" {
-            continue;
-        }
-        let nested = extract_output_text(&event);
-        if !nested.is_empty() {
-            deltas.push(nested);
+            "response.completed" => finished = true,
+            "response.incomplete" => {
+                let reason = event.pointer("/response/incomplete_details/reason").and_then(Value::as_str);
+                if reason != Some("max_output_tokens") {
+                    return Err(SendError::new(
+                        format!("모델이 응답을 끝내지 못했습니다 ({})", reason.unwrap_or("이유 없음")),
+                        Retry::No,
+                    ));
+                }
+                return Ok((deltas.concat(), true));
+            }
+            "response.failed" => return Err(stream_error(event.pointer("/response/error").unwrap_or(&Value::Null))),
+            // `{"type": "error", "code", "message"}`, or with the details under `error`.
+            "error" => return Err(stream_error(event.get("error").unwrap_or(&event))),
+            _ => {
+                let nested = extract_output_text(&event);
+                if !nested.is_empty() {
+                    deltas.push(nested);
+                }
+            }
         }
     }
-    deltas.concat()
+    if responses_stream && !finished {
+        return Err(SendError::new(
+            format!("응답 스트림이 끝나기 전에 끊겼습니다: {}", preview(&deltas.concat(), 200)),
+            Retry::Later(None),
+        ));
+    }
+    Ok((deltas.concat(), false))
+}
+
+/// A failed stream's `{"code", "message"}` as an error: retried after a pause unless the
+/// code says this request can't succeed (a rejected prompt or image) or no request will
+/// (a used-up quota, an unknown model).
+fn stream_error(error: &Value) -> SendError {
+    let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or("").trim().to_owned();
+    let (code, message) = (text("code"), text("message"));
+    let code = if code.is_empty() { text("type") } else { code };
+    let lower = code.to_ascii_lowercase();
+    let retry = if is_quota_error(&lower) || is_setup_error(&lower) {
+        Retry::Stop
+    } else if lower == "invalid_prompt" || lower.contains("image") || lower.contains("context_length") {
+        Retry::No
+    } else {
+        Retry::Later(None)
+    };
+    let what = match (code.is_empty(), message.is_empty()) {
+        (true, true) => "알 수 없는 오류".to_owned(),
+        (false, true) => code,
+        (true, false) => message,
+        (false, false) => format!("{code}: {message}"),
+    };
+    SendError::new(format!("모델 응답 실패 ({what})"), retry)
 }
 
 pub fn preview(text: &str, max_chars: usize) -> String {
@@ -653,6 +842,49 @@ mod tests {
     }
 
     #[test]
+    fn reasoning_models_get_a_completion_limit_and_no_sampling() {
+        assert!(is_reasoning_model("gpt-5-mini"));
+        assert!(is_reasoning_model("o3"));
+        assert!(is_reasoning_model("openai/o4-mini"));
+        assert!(!is_reasoning_model("gpt-4o-mini"));
+        assert!(!is_reasoning_model("ollama-model"));
+        assert!(!is_reasoning_model("qwen3-vl:8b"));
+        let endpoint = Endpoint {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: None,
+            model: "gpt-5.5".into(),
+            api: Api::ChatCompletions { temperature: 0.0, top_p: 0.85, max_tokens: 900 },
+            auth: None,
+        };
+        let body: Value = serde_json::from_slice(&chat_request_body(&endpoint, "sys", "p", &[])).unwrap();
+        assert_eq!(body["max_completion_tokens"], 900 + REASONING_ROOM);
+        for absent in ["max_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty"] {
+            assert!(body.get(absent).is_none(), "{absent}");
+        }
+    }
+
+    #[test]
+    fn a_rejected_parameter_is_dropped_once() {
+        let body = br#"{"model":"m","temperature":0.0,"max_tokens":900,"messages":[]}"#;
+        let rejected = |param: &str| {
+            json!({ "error": { "message": format!("Unsupported parameter: '{param}' is not supported with this model."),
+                "type": "invalid_request_error", "param": param, "code": "unsupported_parameter" } })
+            .to_string()
+        };
+        let adjusted: Value =
+            serde_json::from_slice(&without_rejected_parameter(body, &rejected("max_tokens")).unwrap()).unwrap();
+        assert_eq!(adjusted["max_completion_tokens"], 900 + REASONING_ROOM);
+        assert!(adjusted.get("max_tokens").is_none());
+        let without_temperature = without_rejected_parameter(body, &rejected("temperature")).unwrap();
+        assert!(without_rejected_parameter(&without_temperature, &rejected("temperature")).is_none(), "only once");
+        assert!(without_rejected_parameter(body, &rejected("messages")).is_none());
+        let message_only =
+            r#"{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model."}}"#;
+        assert!(without_rejected_parameter(body, message_only).is_some());
+        assert!(without_rejected_parameter(body, r#"{"error":{"message":"Invalid image"}}"#).is_none());
+    }
+
+    #[test]
     fn responses_body_matches_the_api_shape() {
         let endpoint = Endpoint {
             base_url: "http://127.0.0.1:10531/v1".into(),
@@ -677,10 +909,27 @@ mod tests {
 
     #[test]
     fn statuses_that_cannot_succeed_are_not_retried() {
-        assert_eq!(retry_for_status(401, None), Retry::No);
-        assert_eq!(retry_for_status(400, None), Retry::No);
-        assert_eq!(retry_for_status(429, Some(Duration::from_secs(3))), Retry::Later(Some(Duration::from_secs(3))));
-        assert_eq!(retry_for_status(503, None), Retry::Later(None));
+        assert_eq!(retry_for_status(401, "", None), Retry::Stop);
+        assert_eq!(retry_for_status(404, "", None), Retry::Stop);
+        assert_eq!(retry_for_status(400, r#"{"error":{"message":"Invalid image"}}"#, None), Retry::No);
+        assert_eq!(retry_for_status(413, "", None), Retry::No);
+        assert_eq!(retry_for_status(429, "", Some(Duration::from_secs(3))), Retry::Later(Some(Duration::from_secs(3))));
+        assert_eq!(retry_for_status(503, "", None), Retry::Later(None));
+    }
+
+    #[test]
+    fn errors_every_page_would_hit_stop_the_job() {
+        let quota = r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#;
+        assert_eq!(retry_for_status(429, quota, None), Retry::Stop);
+        let usage = r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}"#;
+        assert_eq!(retry_for_status(429, usage, Some(Duration::from_secs(9))), Retry::Stop);
+        let model = r#"{"error":{"message":"The model `gpt-9` does not exist","code":"model_not_found"}}"#;
+        assert_eq!(retry_for_status(400, model, None), Retry::Stop);
+        let parameter = r#"{"error":{"message":"Unsupported parameter: 'max_tokens'","param":"max_tokens","code":"unsupported_parameter"}}"#;
+        assert_eq!(retry_for_status(400, parameter, None), Retry::Stop);
+        let ollama = r#"{"error":"model \"qwen\" not found, try pulling it first"}"#;
+        assert_eq!(retry_for_status(404, ollama, None), Retry::Stop);
+        assert_eq!(stream_error(&json!({ "code": "insufficient_quota", "message": "x" })).retry, Retry::Stop);
     }
 
     #[test]
@@ -698,6 +947,39 @@ mod tests {
     #[test]
     fn sse_deltas_are_joined() {
         let raw = "event: x\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"id: \"}\n\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"1\"}\r\n\r\ndata: {\"type\":\"response.completed\",\"response\":{}}\n\ndata: [DONE]\n\n";
-        assert_eq!(parse_responses_sse(raw), "id: 1");
+        assert_eq!(parse_responses_sse(raw).unwrap(), ("id: 1".to_owned(), false));
+    }
+
+    fn sse(events: &[Value]) -> String {
+        events.iter().map(|event| format!("data: {event}\n\n")).collect()
+    }
+
+    #[test]
+    fn cut_off_failed_and_broken_streams_are_not_answers() {
+        let delta = json!({ "type": "response.output_text.delta", "delta": "id: 1" });
+        let created = json!({ "type": "response.created", "response": { "status": "in_progress" } });
+        let incomplete = |reason: &str| json!({ "type": "response.incomplete", "response": { "incomplete_details": { "reason": reason } } });
+        assert!(parse_responses_sse(&sse(&[delta.clone(), incomplete("max_output_tokens")])).unwrap().1, "cut off");
+        let filtered = parse_responses_sse(&sse(&[delta.clone(), incomplete("content_filter")])).unwrap_err();
+        assert_eq!(filtered.retry, Retry::No);
+
+        let broken = parse_responses_sse(&sse(&[created.clone(), delta.clone()])).unwrap_err();
+        assert_eq!(broken.retry, Retry::Later(None), "{}", broken.message);
+
+        let failed = json!({ "type": "response.failed", "response": { "status": "failed",
+            "error": { "code": "rate_limit_exceeded", "message": "Slow down" } } });
+        let error = parse_responses_sse(&sse(&[created.clone(), failed])).unwrap_err();
+        assert_eq!(error.retry, Retry::Later(None));
+        assert!(error.message.contains("rate_limit_exceeded: Slow down"), "{}", error.message);
+
+        let rejected = json!({ "type": "error", "code": "invalid_prompt", "message": "Rejected" });
+        let error = parse_responses_sse(&sse(&[created, rejected])).unwrap_err();
+        assert_eq!(error.retry, Retry::No);
+        assert!(error.message.contains("invalid_prompt: Rejected"), "{}", error.message);
+        let nested = json!({ "type": "error", "error": { "type": "server_error", "message": "Oops" } });
+        assert!(parse_responses_sse(&sse(&[nested])).unwrap_err().message.contains("server_error: Oops"));
+
+        // A stream of whole answers without Responses events is taken as it is.
+        assert_eq!(parse_responses_sse(&sse(&[json!({ "output_text": "가" })])).unwrap(), ("가".to_owned(), false));
     }
 }

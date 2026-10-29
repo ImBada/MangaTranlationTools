@@ -237,7 +237,16 @@ impl MttApp {
         }
         match batch_finished {
             Some(true) if !self.batch_queue.is_empty() => self.advance_batch(),
-            Some(false) => self.batch_queue.clear(),
+            Some(false) if !self.batch_queue.is_empty() => {
+                if let Screen::Editor(editor) = &mut self.screen {
+                    editor.status = format!(
+                        "{} · 작품 일괄 번역을 멈췄습니다 (남은 화 {}개)",
+                        editor.status,
+                        self.batch_queue.len()
+                    );
+                }
+                self.batch_queue.clear();
+            }
             _ => {}
         }
         if let Some(chapter_id) = pending_open {
@@ -285,7 +294,16 @@ impl MttApp {
             return;
         }
         let Some(chapter_id) = self.batch_queue.pop_front() else { return };
-        self.open_chapter(&chapter_id);
+        // Translating on would run on the chapter still open.
+        if !self.open_chapter(&chapter_id) {
+            const STOPPED: &str = " · 작품 일괄 번역을 멈춥니다";
+            match &mut self.screen {
+                Screen::Editor(editor) => editor.status.push_str(STOPPED),
+                Screen::Library => self.library.error.get_or_insert_default().push_str(STOPPED),
+            }
+            self.batch_queue.clear();
+            return;
+        }
         if let Screen::Editor(editor) = &mut self.screen {
             editor.start_translation(crate::editor::translation::RunMode::Pending, &self.services, &self.worker);
             let remaining = self.batch_queue.len();
@@ -295,10 +313,21 @@ impl MttApp {
         }
     }
 
-    fn open_chapter(&mut self, chapter_id: &str) {
+    /// Opens a chapter in the editor; `false` when it could not be read. The screen then
+    /// stays as it was and shows the error (the editor's status, or the library's error line).
+    fn open_chapter(&mut self, chapter_id: &str) -> bool {
         match self.services.library.open_chapter(chapter_id) {
-            Ok(chapter) => self.screen = Screen::Editor(Box::new(Editor::open(chapter, &self.services))),
-            Err(error) => self.library.error = Some(error.to_string()),
+            Ok(chapter) => {
+                self.screen = Screen::Editor(Box::new(Editor::open(chapter, &self.services)));
+                true
+            }
+            Err(error) => {
+                match &mut self.screen {
+                    Screen::Editor(editor) => editor.status = format!("화를 열지 못했습니다: {error}"),
+                    Screen::Library => self.library.error = Some(error.to_string()),
+                }
+                false
+            }
         }
     }
 
@@ -310,7 +339,9 @@ impl MttApp {
         };
         match automation.tick(ctx, editor, &mut self.services, Some(&self.worker)) {
             Some(Request::OpenFirstChapter) => match self.library.first_chapter_id() {
-                Some(id) => self.open_chapter(&id),
+                Some(id) => {
+                    self.open_chapter(&id);
+                }
                 None => log::error!("automation: library is empty"),
             },
             Some(Request::ImportFolder(path)) => self.library.auto_import(&path, &self.services, &self.worker),
@@ -369,7 +400,9 @@ impl eframe::App for MttApp {
             Screen::Library => match self.library.ui(ui, &mut self.services, &mut |ui, services| {
                 self.settings.lama_empty_card(ui, services, &self.worker)
             }) {
-                Some(LibraryAction::Open(chapter_id)) => self.open_chapter(&chapter_id),
+                Some(LibraryAction::Open(chapter_id)) => {
+                    self.open_chapter(&chapter_id);
+                }
                 Some(LibraryAction::OpenBatch(ids)) => {
                     self.batch_queue = ids.into();
                     self.advance_batch();
@@ -522,5 +555,30 @@ mod tests {
         assert!(request_close(&ctx, &mut app), "the unsaved edit keeps the window open");
         assert!(editor(&app).status.starts_with("저장 실패"));
         assert!(!request_close(&ctx, &mut app), "closing again quits anyway");
+    }
+
+    #[test]
+    fn a_batch_stops_when_the_next_chapter_cannot_be_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let ctx = egui::Context::default();
+        let services = Services::new(&ctx, AppPaths::from_data_root(dir.path()));
+        let chapter = mtt_core::model::Chapter { id: "open".into(), ..Default::default() };
+        let mut app = MttApp {
+            services,
+            worker: Worker::new(&ctx, 1),
+            screen: Screen::Editor(Box::new(Editor::new(chapter))),
+            library: LibraryView::default(),
+            settings: SettingsView::default(),
+            automation: None,
+            batch_queue: ["missing".to_owned(), "after".to_owned()].into(),
+            close_warned: false,
+        };
+        app.advance_batch();
+        let Screen::Editor(editor) = &app.screen else { panic!("the editor stays") };
+        assert_eq!(editor.chapter.id, "open");
+        assert!(!editor.translation_running(), "nothing runs on the chapter still open");
+        assert!(editor.status.contains("화를 열지 못했습니다"), "{}", editor.status);
+        assert!(editor.status.ends_with("작품 일괄 번역을 멈춥니다"), "{}", editor.status);
+        assert!(app.batch_queue.is_empty());
     }
 }
