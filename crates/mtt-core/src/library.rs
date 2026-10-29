@@ -705,12 +705,37 @@ impl Library {
             .join(format!("{}-{suffix}.png", sanitize_file_basename(page_id, "page")))
     }
 
-    /// `renders/<page name>.png` (`saveRenderedPage`).
+    /// `renders/<page name>.png` (`saveRenderedPage`). Pages whose names make the same file
+    /// (`001.jpg` and `001.png`, `1권/001.jpg` and `2권/001.jpg`, or names differing only in
+    /// case) get ` (2)`, ` (3)`… in page order, so exporting every page never overwrites one
+    /// page with another, and exporting one page writes the same file as exporting all.
     pub fn render_output_path(&self, chapter: &Chapter, page: &PageRecord) -> PathBuf {
         self.chapter_dir(&chapter.work_id, &chapter.id)
             .join("renders")
-            .join(format!("{}.png", sanitize_file_basename(&page.name, &page.id)))
+            .join(format!("{}.png", render_stem(chapter, page)))
     }
+}
+
+/// File name (without `.png`) of `page`'s render; see [`Library::render_output_path`].
+fn render_stem(chapter: &Chapter, page: &PageRecord) -> String {
+    let stems: Vec<String> = chapter.pages.iter().map(|page| sanitize_file_basename(&page.name, &page.id)).collect();
+    // Compared case-insensitively: macOS and Windows file systems are.
+    let own: HashSet<String> = stems.iter().map(|stem| stem.to_lowercase()).collect();
+    let mut used = HashSet::new();
+    for (other, stem) in chapter.pages.iter().zip(&stems) {
+        let mut name = stem.clone();
+        let mut n = 1;
+        // A numbered name must not take another page's own name either.
+        while used.contains(&name.to_lowercase()) || (n > 1 && own.contains(&name.to_lowercase())) {
+            n += 1;
+            name = format!("{stem} ({n})");
+        }
+        if other.id == page.id {
+            return name;
+        }
+        used.insert(name.to_lowercase());
+    }
+    sanitize_file_basename(&page.name, &page.id)
 }
 
 /// `resolveChapterStatus`.
@@ -1161,6 +1186,32 @@ mod tests {
                 "{stored}"
             );
         }
+    }
+
+    #[test]
+    fn pages_with_the_same_name_export_to_different_files() {
+        let library = Library::new("/library");
+        let names = ["001.jpg", "001.png", "1권/001.jpg", "001 (2).png", "A.png", "a.jpg", "002.png"];
+        let chapter = Chapter {
+            id: "c".into(),
+            work_id: "w".into(),
+            pages: names
+                .iter()
+                .enumerate()
+                .map(|(index, name)| PageRecord { id: format!("p{index}"), name: (*name).into(), ..Default::default() })
+                .collect(),
+            ..Chapter::default()
+        };
+        let files: Vec<String> = chapter
+            .pages
+            .iter()
+            .map(|page| {
+                let path = library.render_output_path(&chapter, page);
+                assert_eq!(path.parent(), Some(library.chapter_dir("w", "c").join("renders").as_path()));
+                path.file_name().unwrap().to_string_lossy().into_owned()
+            })
+            .collect();
+        assert_eq!(files, ["001.png", "001 (3).png", "001 (4).png", "001 (2).png", "A.png", "a (2).png", "002.png"]);
     }
 
     #[test]
