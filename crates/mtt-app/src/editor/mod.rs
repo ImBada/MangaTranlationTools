@@ -1883,11 +1883,15 @@ impl Editor {
     /// Writes the inline draft into the block as one undo step.
     pub fn commit_inline_edit(&mut self) {
         let Some(edit) = self.inline_edit.take() else { return };
-        let current = self
+        // The block may be gone (its page deleted while the editor was open).
+        let Some(current) = self
             .page()
             .and_then(|page| page.blocks.iter().find(|b| b.id == edit.block_id))
-            .map(|b| b.translated_text.clone());
-        if current.as_deref() == Some(edit.draft.as_str()) {
+            .map(|b| b.translated_text.clone())
+        else {
+            return;
+        };
+        if current == edit.draft {
             return;
         }
         let draft = edit.draft;
@@ -2251,6 +2255,8 @@ impl Editor {
     }
 
     fn flush_now(&mut self, services: &mut Services) -> Result<(), String> {
+        // Text typed into the canvas editor is kept, as if it lost focus.
+        self.commit_inline_edit();
         self.commit_checkpoint();
         // Queued background writes are skipped after this flush, so cover them here too.
         let mut pending: Vec<(String, LayerKind)> = self.layer_dirty.drain().map(|(key, _)| key).collect();
@@ -3176,6 +3182,19 @@ mod tests {
         let path = services.library.inpaint_layer_path(&editor.chapter, page_id, LayerKind::Mask.page_layer());
         std::fs::create_dir_all(path.join("x")).unwrap();
         path
+    }
+
+    #[test]
+    fn flush_keeps_the_text_typed_on_the_canvas() {
+        let dir = tempfile::tempdir().unwrap();
+        let (_ctx, mut services, _worker) = services_in(dir.path());
+        let mut editor = Editor::new(chapter_with_pages(1));
+        editor.start_inline_edit("b0");
+        editor.inline_edit.as_mut().unwrap().draft = "고친 문장".into();
+        editor.flush(&mut services).unwrap();
+        assert!(editor.inline_edit.is_none());
+        let saved = services.library.read_chapter("w", "c").unwrap().unwrap();
+        assert_eq!(saved.pages[0].blocks[0].translated_text, "고친 문장");
     }
 
     #[test]
