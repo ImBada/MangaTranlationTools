@@ -661,8 +661,10 @@ impl Library {
         let (stored, fallback) = match layer {
             PageLayer::Source => {
                 let stored = non_empty_path(&page.image_path);
-                let fallback =
-                    stored.as_ref().and_then(|path| path.file_name()).map(|name| chapter_dir.join("pages").join(name));
+                // By file name: the stored path may come from another OS (`C:\…\pages\x.png`).
+                let fallback = stored_file_name(&page.image_path)
+                    .filter(|name| is_safe_id(name))
+                    .map(|name| chapter_dir.join("pages").join(name));
                 (stored, fallback)
             }
             PageLayer::InpaintMask => (
@@ -1147,6 +1149,18 @@ mod tests {
         assert_eq!(library.resolve_page_layer_path(&chapter, &page, PageLayer::InpaintMask), None, "unclaimed layer");
         let page = PageRecord { inpaint_mask_path: Some("/old/mask.png".into()), ..page };
         assert_eq!(library.resolve_page_layer_path(&chapter, &page, PageLayer::InpaintMask), Some(mask));
+
+        // Imported on Windows, opened elsewhere (and the other way round).
+        for stored in
+            [r"C:\Users\a\Documents\MangaTranslationTools\library\pages\001-p.jpg", "/Users/a/pages/001-p.jpg"]
+        {
+            let page = PageRecord { id: "p".into(), image_path: stored.into(), ..PageRecord::default() };
+            assert_eq!(
+                library.resolve_page_layer_path(&chapter, &page, PageLayer::Source),
+                Some(pages_dir.join("001-p.jpg")),
+                "{stored}"
+            );
+        }
     }
 
     #[test]
