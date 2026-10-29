@@ -3,6 +3,8 @@
 //! Drawing happens in page pixel space through [`Canvas`]; the pixmap covers the block's
 //! dirty rect so blocks can be cached and moved independently in the editor.
 
+use std::sync::Arc;
+
 use mtt_core::geometry::{parse_hex_color, resolve_block_rotation_deg};
 use mtt_core::model::{FontRenderingMode, RenderTextDirection, TextAlign, TextDecoration, TranslationBlock};
 use tiny_skia::{FilterQuality, LineCap, Path, PathBuilder, Pattern, Pixmap, Shader, SpreadMode, Transform};
@@ -11,7 +13,7 @@ use crate::canvas::{Canvas, circles_path, hex_color, round_rect_path, solid};
 use crate::effects::{
     apply_font_filter_effects, filter_effect_margin_px, gaussian_blur, harden_text_pixels, has_active_filter_effects,
 };
-use crate::fonts::FontContext;
+use crate::fonts::{ColorGlyph, FontContext, MAX_COLOR_GLYPH_PPEM};
 use crate::layout::{
     BlockFonts, BlockTextLayout, PixelRect, Size, VERTICAL_COLUMN_ADVANCE, WrappedLine, display_text,
     font_background_enabled, font_background_opacity, font_background_radius_px, font_background_scale,
@@ -339,8 +341,16 @@ struct EllipsisDots {
     radius: f64,
 }
 
+/// A colour glyph and where it goes: its pixels to page pixels.
+struct PlacedColorGlyph {
+    glyph: Arc<ColorGlyph>,
+    transform: Transform,
+}
+
 struct ItemGeometry {
     glyphs: Option<Path>,
+    /// Glyphs drawn in their own colours (emoji).
+    colors: Vec<PlacedColorGlyph>,
     dots: Vec<EllipsisDots>,
     /// Pivot for the synthetic italic skew (`y + fontSize / 2`).
     pivot_y: f64,
@@ -632,12 +642,13 @@ impl<'a> BlockPainter<'a> {
     fn item_geometry(&mut self, item: &TextItem) -> ItemGeometry {
         let segments = self.place_segments(item);
         let mut builder = PathBuilder::new();
+        let mut colors = Vec::new();
         let mut dots = Vec::new();
         for segment in &segments {
             if segment.centered_ellipsis {
                 dots.push(self.ellipsis_dots(segment, item.y));
             } else {
-                self.append_glyphs(&mut builder, &segment.text, segment.x, item.y);
+                self.append_glyphs(&mut builder, &mut colors, &segment.text, segment.x, item.y);
             }
         }
         let mut glyphs = builder.finish();
@@ -656,6 +667,9 @@ impl<'a> BlockPainter<'a> {
         };
         if let Some(form) = form {
             glyphs = glyphs.and_then(|path| path.transform(form));
+            for color in &mut colors {
+                color.transform = form.pre_concat(color.transform);
+            }
             for dots in &mut dots {
                 for center in &mut dots.centers {
                     let mut point = [tiny_skia::Point::from_xy(center.0 as f32, center.1 as f32)];
@@ -669,20 +683,37 @@ impl<'a> BlockPainter<'a> {
                 let width = measure_text_width(self.ctx, self.fonts, self.block, &item.text, self.font_size);
                 (aligned_start(item.x, width, item.align), item.y + self.font_size * 1.05, width)
             });
-        ItemGeometry { glyphs, dots, pivot_y: item.y + self.font_size / 2.0, underline }
+        ItemGeometry { glyphs, colors, dots, pivot_y: item.y + self.font_size / 2.0, underline }
     }
 
-    fn append_glyphs(&mut self, builder: &mut PathBuilder, text: &str, x: f64, top: f64) {
+    /// Adds the glyphs of `text` to `builder`, or to `colors` for glyphs with colour images.
+    fn append_glyphs(
+        &mut self,
+        builder: &mut PathBuilder,
+        colors: &mut Vec<PlacedColorGlyph>,
+        text: &str,
+        x: f64,
+        top: f64,
+    ) {
         let spans = self.fonts.spans_for(text);
         let run = self.ctx.shape(text, &self.fonts.base, &spans);
         let baseline = top + f64::from(self.ctx.vertical_metrics(&self.fonts.base).top_to_baseline_em) * self.font_size;
         let size = self.font_size as f32;
+        // Colour glyphs are rasterized for the device pixels they cover.
+        let ppem = (self.font_size * self.device_scale).round().max(1.0) as u32;
         for glyph in &run.glyphs {
+            let gx = x as f32 + (glyph.x_em + glyph.x_offset_em) * size;
+            let gy = baseline as f32 - glyph.y_offset_em * size;
+            if let Some(color) = self.ctx.color_glyph(glyph.font_id, glyph.weight, glyph.glyph_id, ppem) {
+                let scale = size / ppem.min(MAX_COLOR_GLYPH_PPEM) as f32;
+                let (left, top) = (color.left as f32 * scale, color.top as f32 * scale);
+                let transform = Transform::from_row(scale, 0.0, 0.0, scale, gx + left, gy + top);
+                colors.push(PlacedColorGlyph { glyph: color, transform });
+                continue;
+            }
             let Some(outline) = self.ctx.glyph_outline(glyph.font_id, glyph.weight, glyph.glyph_id) else {
                 continue;
             };
-            let gx = x as f32 + (glyph.x_em + glyph.x_offset_em) * size;
-            let gy = baseline as f32 - glyph.y_offset_em * size;
             if let Some(placed) = (*outline).clone().transform(Transform::from_row(size, 0.0, 0.0, size, gx, gy)) {
                 builder.push_path(&placed);
             }
@@ -772,6 +803,9 @@ impl<'a> BlockPainter<'a> {
                 let outline_radius = if secondary > 0.0 { outline / 2.0 + secondary } else { outline / 2.0 };
                 for dots in &geometry.dots {
                     Self::draw_dots(layer, dots, dots.radius + self.bold_px / 2.0 + outline_radius, solid(opaque));
+                }
+                for color in &geometry.colors {
+                    layer.draw_image(&silhouette(&color.glyph.pixmap, opaque), color.transform);
                 }
             });
         }
@@ -863,6 +897,9 @@ impl<'a> BlockPainter<'a> {
                 }
                 Self::draw_dots(canvas, dots, radius, fill_shader(&tile, text_color));
             }
+            for color in &geometry.colors {
+                canvas.draw_image(&color.glyph.pixmap, color.transform);
+            }
         });
     }
 }
@@ -902,6 +939,18 @@ fn split_by_centered_ellipsis(text: &str) -> Vec<String> {
         }
     }
     parts
+}
+
+/// `image`'s coverage in `color`, for a colour glyph's shadow.
+fn silhouette(image: &Pixmap, color: tiny_skia::Color) -> Pixmap {
+    let mut out = image.clone();
+    for pixel in out.pixels_mut() {
+        let alpha = pixel.alpha();
+        let mut shade = color;
+        shade.apply_opacity(f32::from(alpha) / 255.0);
+        *pixel = shade.premultiply().to_color_u8();
+    }
+    out
 }
 
 /// Screentone tile (`createScreentonePattern`): white tile with one dot.
@@ -1103,6 +1152,31 @@ mod tests {
         if let Some((width, _)) = render(&mut ctx, "2024", Some(2)) {
             assert!(width <= 41, "longer runs stay upright, one per cell");
         }
+    }
+
+    #[test]
+    fn colour_emoji_are_drawn_in_colour() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 300.0, 100.0),
+            translated_text: "😂".into(),
+            ..TranslationBlock::default()
+        };
+        // Only where an installed font has a colour image for it.
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        let run = ctx.shape("😂", &fonts.base, &[]);
+        let Some(glyph) = run.glyphs.first() else { return };
+        if ctx.color_glyph(glyph.font_id, glyph.weight, glyph.glyph_id, 40).is_none() {
+            return;
+        }
+        let raster = render_block(&mut ctx, Size::new(1000.0, 1000.0), &block, BlockRenderOptions::default()).unwrap();
+        let colourful = raster.pixmap.pixels().iter().filter(|pixel| {
+            let pixel = pixel.demultiply();
+            let channels = [pixel.red(), pixel.green(), pixel.blue()];
+            pixel.alpha() > 128 && channels.iter().max().unwrap() - channels.iter().min().unwrap() > 60
+        });
+        assert!(colourful.count() > 50, "the emoji has colour");
     }
 
     #[test]

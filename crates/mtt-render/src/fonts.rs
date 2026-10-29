@@ -9,14 +9,18 @@ use std::sync::Arc;
 
 use cosmic_text::fontdb;
 use cosmic_text::{Attrs, AttrsList, Family, FontSystem, ShapeLine, Shaping, Weight};
-use swash::scale::ScaleContext;
+use swash::scale::image::Content;
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Command, PathData};
-use tiny_skia::{Path, PathBuilder};
+use tiny_skia::{ColorU8, Path, PathBuilder, Pixmap, PremultipliedColorU8};
 use unicode_normalization::UnicodeNormalization;
 
 /// Weight at which a face counts as bold (`SYNTHETIC_BOLD_MIN_WEIGHT`).
 pub const BOLD_WEIGHT_THRESHOLD: u16 = 600;
 const MEASURE_CACHE_LIMIT: usize = 4096;
+const COLOR_GLYPH_CACHE_LIMIT: usize = 512;
+/// Colour glyphs are rasterized at most this many pixels per em and scaled up beyond.
+pub const MAX_COLOR_GLYPH_PPEM: u32 = 1024;
 
 /// A system font family as listed in the font picker (`SystemFont`).
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +144,15 @@ struct OutlineKey {
     glyph_id: u16,
 }
 
+/// A colour glyph (emoji) rasterized at some pixels per em: premultiplied pixels and the
+/// image's top-left corner relative to the glyph origin, in pixels with y down.
+#[derive(Debug)]
+pub struct ColorGlyph {
+    pub pixmap: Pixmap,
+    pub left: i32,
+    pub top: i32,
+}
+
 pub struct FontContext {
     font_system: FontSystem,
     scale_context: ScaleContext,
@@ -148,6 +161,9 @@ pub struct FontContext {
     measure_cache: HashMap<MeasureKey, Arc<ShapedRun>>,
     outline_cache: HashMap<OutlineKey, Option<Arc<Path>>>,
     metrics_cache: HashMap<FontSpec, VerticalMetrics>,
+    /// Whether a face has colour glyphs (`COLR`, `CBDT` or `sbix`).
+    color_faces: HashMap<fontdb::ID, bool>,
+    color_cache: HashMap<(OutlineKey, u32), Option<Arc<ColorGlyph>>>,
 }
 
 impl FontContext {
@@ -179,6 +195,8 @@ impl FontContext {
             measure_cache: HashMap::new(),
             outline_cache: HashMap::new(),
             metrics_cache: HashMap::new(),
+            color_faces: HashMap::new(),
+            color_cache: HashMap::new(),
         }
     }
 
@@ -302,6 +320,66 @@ impl FontContext {
             }
         }
         path.finish()
+    }
+
+    /// The colour image of a glyph (layered `COLR` outlines or an embedded colour bitmap,
+    /// as emoji fonts draw them) at `ppem` pixels per em (at most 1024), `None` for glyphs
+    /// without one.
+    pub fn color_glyph(
+        &mut self,
+        font_id: fontdb::ID,
+        weight: u16,
+        glyph_id: u16,
+        ppem: u32,
+    ) -> Option<Arc<ColorGlyph>> {
+        if !self.has_color_glyphs(font_id, weight) {
+            return None;
+        }
+        let key = (OutlineKey { font_id, weight, glyph_id }, ppem.clamp(1, MAX_COLOR_GLYPH_PPEM));
+        if let Some(glyph) = self.color_cache.get(&key) {
+            return glyph.clone();
+        }
+        if self.color_cache.len() >= COLOR_GLYPH_CACHE_LIMIT {
+            self.color_cache.clear();
+        }
+        let glyph = self.render_color_glyph(key.0, key.1).map(Arc::new);
+        self.color_cache.insert(key, glyph.clone());
+        glyph
+    }
+
+    fn has_color_glyphs(&mut self, font_id: fontdb::ID, weight: u16) -> bool {
+        if let Some(color) = self.color_faces.get(&font_id) {
+            return *color;
+        }
+        let color = self.font_system.get_font(font_id, Weight(weight)).is_some_and(|font| {
+            let font = font.as_swash();
+            [*b"COLR", *b"CBDT", *b"sbix"].into_iter().any(|tag| font.table(swash::Tag::from_be_bytes(tag)).is_some())
+        });
+        self.color_faces.insert(font_id, color);
+        color
+    }
+
+    fn render_color_glyph(&mut self, key: OutlineKey, ppem: u32) -> Option<ColorGlyph> {
+        let font = self.font_system.get_font(key.font_id, Weight(key.weight))?;
+        let mut scaler = self.scale_context.builder(font.as_swash()).size(ppem as f32).hint(false).build();
+        let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit)])
+            .render(&mut scaler, key.glyph_id)
+            .filter(|image| image.content == Content::Color)?;
+        let (width, height) = (image.placement.width, image.placement.height);
+        let mut pixmap = Pixmap::new(width, height)?;
+        // Layers are blended over transparent black, so they come out premultiplied;
+        // embedded bitmaps are decoded PNGs with straight alpha.
+        let premultiplied = matches!(image.source, Source::ColorOutline(_));
+        for (pixel, rgba) in pixmap.pixels_mut().iter_mut().zip(image.data.chunks_exact(4)) {
+            let [r, g, b, a] = [rgba[0], rgba[1], rgba[2], rgba[3]];
+            *pixel = if premultiplied {
+                PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
+                    .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+            } else {
+                ColorU8::from_rgba(r, g, b, a).premultiply()
+            };
+        }
+        Some(ColorGlyph { pixmap, left: image.placement.left, top: -image.placement.top })
     }
 
     /// Em-box top → baseline distance for `spec`, following Chromium's normalized typo
