@@ -82,6 +82,7 @@ pub mod icon {
     pub const HAND: &str = "\u{E298}";
     pub const IMAGE: &str = "\u{E2CA}";
     pub const INFO: &str = "\u{E2CE}";
+    pub const LOCK_SIMPLE: &str = "\u{E308}";
     pub const LINK_SIMPLE: &str = "\u{E2E6}";
     pub const LINK_SIMPLE_BREAK: &str = "\u{E2E8}";
     pub const FIRST_AID_KIT: &str = "\u{E570}";

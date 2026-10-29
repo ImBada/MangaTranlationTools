@@ -229,6 +229,15 @@ pub enum InpaintScope {
     Heal,
 }
 
+/// The smart brush's last stroke: the area to heal on its page.
+#[derive(Debug, Clone)]
+pub struct HealStroke {
+    pub page_id: String,
+    pub mask: Arc<GrayImage>,
+    /// Fill the result only and leave the inpaint mask as it was (`BrushSettings::keep_mask`).
+    pub keep_mask: bool,
+}
+
 /// What the "인페인트 실패" card's 재시도 runs again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LastInpaint {
@@ -385,7 +394,7 @@ pub struct Editor {
     /// draws a straight line on from it).
     pub last_stroke_end: Option<(String, egui::Pos2)>,
     /// Page and mask of the last smart brush stroke; kept so a failed fill can retry.
-    pub heal_stroke: Option<(String, Arc<GrayImage>)>,
+    pub heal_stroke: Option<HealStroke>,
     /// A smart brush stroke ended and waits for `tick` to start its fill.
     pub heal_requested: bool,
     pub font_previews: font_picker::FontPreviews,
@@ -448,6 +457,7 @@ impl Editor {
             .as_deref()
             .and_then(|id| chapter.pages.iter().position(|page| page.id == id))
             .unwrap_or(0);
+        let anti_alias = !chapter.inpaint_aliased;
         let mut editor = Self {
             chapter,
             current,
@@ -491,7 +501,8 @@ impl Editor {
             focus_text_requested: false,
             range: None,
             result_tool: result_tools::ResultTool::Brush,
-            result_brush: result_tools::BrushSettings::default(),
+            // Pages inpainted without anti-aliasing get hard-edged touch-ups too.
+            result_brush: result_tools::BrushSettings { anti_alias, ..result_tools::BrushSettings::default() },
             inpaint_engine: InpaintEngine::LocalFillFallback,
             lama: None,
             text_segmentation: None,
@@ -851,6 +862,19 @@ impl Editor {
         self.result_tool = tool;
         self.result_tool_active = true;
         self.tool = self.layer_tool();
+    }
+
+    /// "마스크 유지" (`/`): result tools leave the inpaint mask alone, or cover what they
+    /// change with it again.
+    pub fn toggle_keep_mask(&mut self) {
+        let keep = !self.result_brush.keep_mask;
+        self.result_brush.keep_mask = keep;
+        self.status = if keep {
+            "마스크 유지: 결과 레이어만 고치고 마스크는 그대로 둡니다."
+        } else {
+            "마스크 유지 끔: 고친 곳을 마스크로도 덮습니다."
+        }
+        .into();
     }
 
     /// `setSelectedBlockOrGroupId`: a grouped block selects its whole group unless it is
@@ -1369,6 +1393,7 @@ impl Editor {
     /// Turns anti-aliasing off (or back on) for this chapter's next inpaint runs.
     pub fn set_inpaint_aliased(&mut self, aliased: bool) {
         self.chapter.inpaint_aliased = aliased;
+        self.result_brush.anti_alias = !aliased;
         self.mark_chapter_dirty();
         self.status = if aliased {
             "이 화는 안티앨리어싱 없이 인페인트합니다."
@@ -1412,10 +1437,7 @@ impl Editor {
             self.status = "부분 인페인트할 범위를 먼저 선택하세요.".into();
             return;
         }
-        let heal = match &self.heal_stroke {
-            Some((stroke_page, mask)) if stroke_page == page_id => Some(Arc::clone(mask)),
-            _ => None,
-        };
+        let heal = self.heal_stroke.clone().filter(|stroke| stroke.page_id == page_id);
         if scope == InpaintScope::Heal && heal.is_none() {
             return;
         }
@@ -1463,7 +1485,7 @@ impl Editor {
                 mask,
                 result,
                 range,
-                heal.as_deref(),
+                heal.as_ref(),
                 &blocks,
                 engine,
                 &settings,
@@ -1954,7 +1976,7 @@ impl Editor {
         self.request_assets(services, worker);
         self.advance_inpaint_queue(worker);
         if std::mem::take(&mut self.heal_requested)
-            && let Some((page_id, _)) = self.heal_stroke.clone()
+            && let Some(page_id) = self.heal_stroke.as_ref().map(|stroke| stroke.page_id.clone())
         {
             self.start_inpaint_on(&page_id, InpaintScope::Heal, worker);
         }
@@ -2475,7 +2497,7 @@ fn compute_inpaint(
     before_mask: Option<Arc<GrayImage>>,
     before_result: Option<Arc<RgbaImage>>,
     range: Option<mtt_inpaint::Rect>,
-    heal: Option<&GrayImage>,
+    heal: Option<&HealStroke>,
     blocks: &[TranslationBlock],
     engine: InpaintEngine,
     settings: &InpaintSettings,
@@ -2500,11 +2522,11 @@ fn compute_inpaint(
                 .ok_or("선택 범위 안에 마스크 픽셀이 없습니다.")?
         }
         InpaintScope::Heal => {
-            let stroke = heal.ok_or("복구할 영역이 없습니다.")?;
+            let stroke = &heal.ok_or("복구할 영역이 없습니다.")?.mask;
             if !stroke.iter().any(|value| *value > 0) {
                 return Err("복구할 영역이 없습니다.".into());
             }
-            stroke.clone()
+            (**stroke).clone()
         }
         InpaintScope::SelectedBlocks | InpaintScope::AllBlocks => {
             let refs: Vec<&TranslationBlock> = blocks.iter().collect();
@@ -2538,6 +2560,12 @@ fn compute_inpaint(
         let mut merged_mask = mask.cloned().unwrap_or_else(|| GrayImage::new(width, height));
         mtt_inpaint::merge_masks_in(&mut merged_mask, &patch_mask, region);
         (merged_mask, merged_result)
+    };
+    // A heal that keeps the mask changes the result layer only.
+    let mask = if scope == InpaintScope::Heal && heal.is_some_and(|stroke| stroke.keep_mask) {
+        before_mask.as_deref().cloned().unwrap_or_else(|| GrayImage::new(width, height))
+    } else {
+        mask
     };
     let local = engine == InpaintEngine::LocalFillFallback;
     let multi = blocks.len() > 1;
@@ -2808,25 +2836,33 @@ mod tests {
         let mut existing = RgbaImage::new(40, 40);
         existing.put_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
         let settings = InpaintSettings { artifact_cleanup_px: Some(0.0), ..InpaintSettings::default() };
-        let outcome = compute_inpaint(
-            InpaintScope::Heal,
-            &source,
-            Some(Arc::new(mask)),
-            Some(Arc::new(existing)),
-            None,
-            Some(&stroke),
-            &[],
-            InpaintEngine::LocalFillFallback,
-            &settings,
-            None,
-            None,
-        )
-        .unwrap();
-        let healed = outcome.result.get_pixel(20, 20);
-        assert!(healed[3] == 255 && healed[0] > 200, "speck filled with paper: {healed:?}");
-        assert_eq!(outcome.mask.get_pixel(20, 20)[0], 255, "the stroke joins the mask");
-        assert_eq!(outcome.result.get_pixel(2, 2).0, [1, 2, 3, 255], "earlier result kept");
-        assert_eq!(outcome.mask.get_pixel(2, 2)[0], 255, "earlier mask kept");
+        let (mask, existing, stroke) = (Arc::new(mask), Arc::new(existing), Arc::new(stroke));
+        let heal = |keep_mask| {
+            let stroke = HealStroke { page_id: "p".into(), mask: Arc::clone(&stroke), keep_mask };
+            compute_inpaint(
+                InpaintScope::Heal,
+                &source,
+                Some(Arc::clone(&mask)),
+                Some(Arc::clone(&existing)),
+                None,
+                Some(&stroke),
+                &[],
+                InpaintEngine::LocalFillFallback,
+                &settings,
+                None,
+                None,
+            )
+            .unwrap()
+        };
+        for keep_mask in [false, true] {
+            let outcome = heal(keep_mask);
+            let healed = outcome.result.get_pixel(20, 20);
+            assert!(healed[3] == 255 && healed[0] > 200, "speck filled with paper: {healed:?}");
+            assert_eq!(outcome.result.get_pixel(2, 2).0, [1, 2, 3, 255], "earlier result kept");
+            assert_eq!(outcome.mask.get_pixel(2, 2)[0], 255, "earlier mask kept");
+            let joined = if keep_mask { 0 } else { 255 };
+            assert_eq!(outcome.mask.get_pixel(20, 20)[0], joined, "the stroke joins the mask unless kept");
+        }
 
         let empty = compute_inpaint(
             InpaintScope::Heal,
@@ -2834,7 +2870,7 @@ mod tests {
             None,
             None,
             None,
-            Some(&GrayImage::new(40, 40)),
+            Some(&HealStroke { page_id: "p".into(), mask: Arc::new(GrayImage::new(40, 40)), keep_mask: false }),
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,
@@ -3176,6 +3212,10 @@ mod tests {
         editor.select_layer_shortcut(4);
         assert_eq!(editor.layer, Layer::InpaintMask);
         assert_eq!(editor.mode(), Mode::Inpaint);
+        editor.toggle_keep_mask();
+        assert!(editor.result_brush.keep_mask);
+        editor.toggle_keep_mask();
+        assert!(!editor.result_brush.keep_mask);
         assert_eq!(editor.tool, Tool::Select, "entering the mask layer keeps the pointer");
         assert_eq!(editor.opacity.inpaint_mask, 1.0);
         editor.select_shared_inpaint_tool(Tool::MaskBrush);

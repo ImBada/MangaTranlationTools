@@ -865,14 +865,25 @@ fn brush_card(editor: &mut Editor, ui: &mut egui::Ui) {
                     ui.add(egui::Slider::new(&mut brush.flow, 0.01..=1.0).custom_formatter(percent));
                     ui.end_row();
                 } else {
-                    ui.label("강도");
+                    let hint = match tool {
+                        ResultTool::Blur => "강도\n흐리게 하는 반경입니다\n한 획 안에서는 여러 번 문질러도 더 흐려지지 않습니다",
+                        ResultTool::Sharpen => "강도\n경계를 또렷하게 하는 정도입니다\n한 획 안에서는 여러 번 문질러도 더 세지지 않습니다",
+                        _ => "강도\n색을 끌고 가는 양입니다",
+                    };
+                    theme::tip(ui.label("강도"), hint, "");
                     ui.add(egui::Slider::new(&mut brush.strength, 0.05..=1.0).custom_formatter(percent));
                     ui.end_row();
                 }
-                theme::tip(ui.label("보정"), "손떨림 보정\n브러시가 커서를 끈처럼 따라와 선이 매끄러워집니다", "");
+                theme::tip(ui.label("떨림 보정"), "손떨림 보정\n브러시가 커서를 끈처럼 따라와 선이 매끄러워집니다", "");
                 ui.add(egui::Slider::new(&mut brush.smoothing, 0.0..=1.0).custom_formatter(percent));
                 ui.end_row();
             });
+            let toggle = ui.checkbox(&mut editor.result_brush.anti_alias, "안티앨리어싱");
+            theme::tip(
+                toggle,
+                "안티앨리어싱\n끄면 경계가 픽셀 단위로 딱 떨어지고, 흐림 · 선명 · 뭉개기는 주변 원고에 있던 색만 씁니다\n흑백 1비트 원고용입니다. 이 화의 \"안티앨리어싱 없이 채우기\"를 바꾸면 함께 바뀝니다",
+                "",
+            );
             if let Some(rgb) = picked.as_deref().and_then(super::color::parse_hex) {
                 editor.result_brush.color = rgb;
             }

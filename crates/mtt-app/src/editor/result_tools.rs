@@ -2,6 +2,7 @@
 //! brush, smart brush, eraser, blur, sharpen, smudge and color picking.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use image::{GrayImage, RgbaImage};
 
@@ -34,6 +35,13 @@ pub struct BrushSettings {
     pub flow: f32,
     /// 0..1: how far the brush trails the pointer to steady the line.
     pub smoothing: f32,
+    /// Leave the inpaint mask alone. By default brush, smart brush and the blur / sharpen /
+    /// smudge tools also cover what they change with the mask so it shows in the output;
+    /// with this on they edit the result layer only, showing where the mask already is.
+    pub keep_mask: bool,
+    /// Soft edges and in-between tones. Off for pages drawn without anti-aliasing: paint
+    /// snaps to on/off and blur / sharpen / smudge keep to the colors already there.
+    pub anti_alias: bool,
     pub color: [u8; 3],
 }
 
@@ -46,6 +54,8 @@ impl Default for BrushSettings {
             opacity: 1.0,
             flow: 1.0,
             smoothing: 0.1,
+            keep_mask: false,
+            anti_alias: true,
             color: [255, 255, 255],
         }
     }
@@ -103,10 +113,21 @@ fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
 
 const COVERAGE_TILE: u32 = 64;
 
+/// Least pixels (and share of a window) a color needs to count as one the page is drawn
+/// with when an aliased edit snaps to the page's own colors.
+const PALETTE_MIN_PIXELS: u32 = 3;
+const PALETTE_MIN_SHARE: f32 = 0.001;
+const PALETTE_MAX: usize = 16;
+
 /// The layer as it was before the stroke and how much the stroke covers it, per tile.
 struct CoverageTile {
     original: Vec<[u8; 4]>,
     coverage: Vec<f32>,
+    /// Blur / sharpen: what the output showed before the stroke, the filtered image of it
+    /// (premultiplied), and the colors an aliased edit may use.
+    shown: Vec<[u8; 4]>,
+    filtered: Option<Vec<[f32; 4]>>,
+    palette: Vec<[f32; 4]>,
 }
 
 /// One drag of a result tool.
@@ -129,15 +150,19 @@ pub struct Stroke {
     /// Path length since the last dab.
     travelled: f32,
     tiles: HashMap<(u32, u32), CoverageTile>,
-    smudge: Option<RgbaImage>,
+    /// Smudge: the paint the brush carries (premultiplied), centered on the last dab.
+    smudge: Option<Vec<Option<[f32; 4]>>>,
     /// Snap coverage to on/off (pages drawn without anti-aliasing).
     aliased: bool,
+    /// The page image, so blur / sharpen / smudge work on what the output shows.
+    source: Option<Arc<RgbaImage>>,
 }
 
 impl Stroke {
     /// `string` is the smoothing reach in page pixels.
-    pub fn new(string: f32, aliased: bool) -> Self {
+    pub fn new(string: f32, aliased: bool, source: Option<Arc<RgbaImage>>) -> Self {
         Self {
+            source,
             string: string.max(0.0),
             pen: None,
             previous: None,
@@ -262,11 +287,10 @@ impl Stroke {
         let size = settings.size.clamp(RESULT_BRUSH_MIN, RESULT_BRUSH_MAX);
         let spacing = match tool {
             // Dense dabs keep the stroke-buffer edge free of scallops.
-            ResultTool::Brush | ResultTool::Eraser => size * 0.08,
-            ResultTool::Smudge => size / 6.0,
-            _ => size / 4.0,
-        }
-        .max(0.5);
+            ResultTool::Brush | ResultTool::Eraser | ResultTool::Blur | ResultTool::Sharpen => (size * 0.08).max(0.5),
+            // Smudge carries paint from dab to dab; far-apart dabs leave stripes.
+            _ => (size * 0.05).max(1.0),
+        };
         let length = distance(from, to);
         let mut dirty = None;
         let mut next = spacing - self.travelled;
@@ -289,8 +313,10 @@ impl Stroke {
         match tool {
             ResultTool::Brush => self.paint_dab(result, mask, center, settings, false),
             ResultTool::Eraser => self.paint_dab(result, mask, center, settings, true),
-            ResultTool::Blur | ResultTool::Sharpen => filter_stamp(result, center, settings, tool == ResultTool::Blur),
-            ResultTool::Smudge => smudge_stamp(result, center, settings, &mut self.smudge),
+            ResultTool::Blur | ResultTool::Sharpen => {
+                self.filter_dab(result, mask, center, settings, tool == ResultTool::Blur)
+            }
+            ResultTool::Smudge => self.smudge_dab(result, mask, center, settings),
             ResultTool::SmartBrush | ResultTool::ColorPicker => None,
         }
     }
@@ -309,21 +335,13 @@ impl Stroke {
         let flow = settings.flow.clamp(0.01, 1.0);
         let opacity = settings.opacity.clamp(0.0, 1.0);
         let color = settings.color.map(f32::from);
-        let (width, height) = result.dimensions();
+        let aliased = self.aliased;
         let mut changed = false;
         let (right, bottom) = (rect.0 + rect.2, rect.1 + rect.3);
         for tile_y in rect.1 / COVERAGE_TILE..=(bottom - 1) / COVERAGE_TILE {
             for tile_x in rect.0 / COVERAGE_TILE..=(right - 1) / COVERAGE_TILE {
                 let (left, top) = (tile_x * COVERAGE_TILE, tile_y * COVERAGE_TILE);
-                let tile = self.tiles.entry((tile_x, tile_y)).or_insert_with(|| {
-                    let mut original = Vec::with_capacity((COVERAGE_TILE * COVERAGE_TILE) as usize);
-                    for y in top..top + COVERAGE_TILE {
-                        for x in left..left + COVERAGE_TILE {
-                            original.push(if x < width && y < height { result.get_pixel(x, y).0 } else { [0; 4] });
-                        }
-                    }
-                    CoverageTile { original, coverage: vec![0.0; (COVERAGE_TILE * COVERAGE_TILE) as usize] }
-                });
+                let tile = self.tile((tile_x, tile_y), result, mask, false);
                 for y in rect.1.max(top)..bottom.min(top + COVERAGE_TILE) {
                     for x in rect.0.max(left)..right.min(left + COVERAGE_TILE) {
                         let alpha = brush_alpha(x as f32 + 0.5, y as f32 + 0.5, center, radius, settings.hardness);
@@ -334,7 +352,7 @@ impl Stroke {
                         }
                         *coverage += (alpha - *coverage) * flow;
                         let mut amount = *coverage * opacity;
-                        if self.aliased {
+                        if aliased {
                             amount = if amount >= 0.5 { 1.0 } else { 0.0 };
                         }
                         let original = tile.original[index];
@@ -356,7 +374,9 @@ impl Stroke {
                             }
                             pixel[3] = clamp_byte(out_alpha * 255.0);
                             // Painted pixels must be covered by the mask to show in the output.
-                            mask.put_pixel(x, y, image::Luma([255]));
+                            if !settings.keep_mask {
+                                mask.put_pixel(x, y, image::Luma([255]));
+                            }
                         }
                         changed = true;
                     }
@@ -367,110 +387,298 @@ impl Stroke {
     }
 }
 
-fn filter_stamp(result: &mut RgbaImage, center: (f32, f32), settings: &BrushSettings, blur: bool) -> Option<DirtyRect> {
-    let radius = (settings.size / 2.0).round().max(1.0);
-    let rect = bounds(center, radius, result.width(), result.height())?;
-    let source = image::imageops::crop_imm(result, rect.0, rect.1, rect.2, rect.3).to_image();
-    let (w, h) = (rect.2 as i32, rect.3 as i32);
-    let read = |x: i32, y: i32| source.get_pixel(x.clamp(0, w - 1) as u32, y.clamp(0, h - 1) as u32).0;
-    let strength = settings.strength.clamp(0.0, 1.0);
-    for y in 0..h {
-        for x in 0..w {
-            let alpha = brush_alpha(
-                (rect.0 as i32 + x) as f32 + 0.5,
-                (rect.1 as i32 + y) as f32 + 0.5,
-                center,
-                radius,
-                settings.hardness,
-            ) * strength;
-            if alpha <= 0.0 {
-                continue;
-            }
-            let center_pixel = read(x, y);
-            let filtered: [f32; 3] = if blur {
-                let mut sum = [0f32; 3];
-                for dy in -1..=1 {
-                    for dx in -1..=1 {
-                        let p = read(x + dx, y + dy);
-                        for c in 0..3 {
-                            sum[c] += f32::from(p[c]);
-                        }
-                    }
-                }
-                sum.map(|v| v / 9.0)
-            } else {
-                let neighbours = [read(x - 1, y), read(x + 1, y), read(x, y - 1), read(x, y + 1)];
-                let mut out = [0f32; 3];
-                for c in 0..3 {
-                    let ring: f32 = neighbours.iter().map(|p| f32::from(p[c])).sum();
-                    out[c] = f32::from(clamp_byte(f32::from(center_pixel[c]) * 5.0 - ring));
-                }
-                out
-            };
-            let target = result.get_pixel_mut(rect.0 + x as u32, rect.1 + y as u32);
-            for c in 0..3 {
-                let src = f32::from(center_pixel[c]);
-                target[c] = clamp_byte(src + (filtered[c] - src) * alpha);
-            }
-        }
+/// Covers an edited result pixel with the mask (unless `keep_mask`) so the edit shows.
+/// Pixels without result content are left out: the mask would only grow over nothing.
+fn reveal(mask: &mut GrayImage, x: u32, y: u32, pixel: &image::Rgba<u8>, settings: &BrushSettings) {
+    if !settings.keep_mask && pixel[3] > 0 {
+        mask.put_pixel(x, y, image::Luma([255]));
     }
-    Some(rect)
 }
 
-/// Draws the patch picked up at the previous point here, then picks up a new patch.
-fn smudge_stamp(
-    result: &mut RgbaImage,
-    center: (f32, f32),
-    settings: &BrushSettings,
-    patch: &mut Option<RgbaImage>,
-) -> Option<DirtyRect> {
-    let radius = (settings.size / 2.0).round().max(1.0) as i32;
-    let (left, top) = (center.0.round() as i32 - radius, center.1.round() as i32 - radius);
-    let mut dirty = None;
-    if let Some(previous) = patch.as_ref() {
+/// What the output shows at a pixel (the result over the page where the mask covers it),
+/// or the result alone without a page.
+fn shown_pixel(source: Option<&RgbaImage>, result: &RgbaImage, mask: &GrayImage, x: u32, y: u32) -> [u8; 4] {
+    let over = result.get_pixel(x, y).0;
+    let Some(source) = source else { return over };
+    const FULL: u32 = 255 * 255;
+    let base = source.get_pixel(x, y).0;
+    let alpha = u32::from(over[3]) * u32::from(mask.get_pixel(x, y)[0]);
+    let mut out = [0, 0, 0, 255];
+    for c in 0..3 {
+        out[c] = ((u32::from(base[c]) * (FULL - alpha) + u32::from(over[c]) * alpha + FULL / 2) / FULL) as u8;
+    }
+    out
+}
+
+/// RGB scaled by alpha, all in 0..255.
+fn premultiply(pixel: [u8; 4]) -> [f32; 4] {
+    let alpha = f32::from(pixel[3]) / 255.0;
+    [f32::from(pixel[0]) * alpha, f32::from(pixel[1]) * alpha, f32::from(pixel[2]) * alpha, f32::from(pixel[3])]
+}
+
+fn unpremultiply(pixel: [f32; 4]) -> [u8; 4] {
+    let alpha = pixel[3].clamp(0.0, 255.0);
+    if alpha < 0.5 {
+        return [0; 4];
+    }
+    let scale = 255.0 / alpha;
+    [clamp_byte(pixel[0] * scale), clamp_byte(pixel[1] * scale), clamp_byte(pixel[2] * scale), clamp_byte(alpha)]
+}
+
+fn mix(a: [f32; 4], b: [f32; 4], t: f32) -> [f32; 4] {
+    std::array::from_fn(|c| a[c] + (b[c] - a[c]) * t)
+}
+
+/// The colors `pixels` are drawn with, most common first, leaving out rare ones
+/// (anti-aliasing, noise): what an aliased edit snaps to so it adds no in-between tones.
+fn palette(pixels: impl Iterator<Item = [u8; 4]>) -> Vec<[f32; 4]> {
+    let mut counts: HashMap<[u8; 4], u32> = HashMap::new();
+    let mut total = 0u32;
+    for pixel in pixels {
+        *counts.entry(if pixel[3] == 0 { [0; 4] } else { pixel }).or_default() += 1;
+        total += 1;
+    }
+    let mut colors: Vec<([u8; 4], u32)> = counts.into_iter().collect();
+    colors.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let least = PALETTE_MIN_PIXELS.max((total as f32 * PALETTE_MIN_SHARE).ceil() as u32);
+    let common = colors.iter().filter(|(_, count)| *count >= least).count().clamp(1, PALETTE_MAX);
+    colors.iter().take(common).map(|(color, _)| premultiply(*color)).collect()
+}
+
+/// The palette color nearest `value`.
+fn snap(value: [f32; 4], palette: &[[f32; 4]]) -> [f32; 4] {
+    let distance = |color: &[f32; 4]| (0..4).map(|c| (color[c] - value[c]).powi(2)).sum::<f32>();
+    palette.iter().min_by(|a, b| distance(a).total_cmp(&distance(b))).copied().unwrap_or(value)
+}
+
+fn gaussian(sigma: f32) -> Vec<f32> {
+    let reach = (sigma * 3.0).ceil() as i32;
+    let weights: Vec<f32> = (-reach..=reach).map(|i| (-(i * i) as f32 / (2.0 * sigma * sigma)).exp()).collect();
+    let sum: f32 = weights.iter().sum();
+    weights.into_iter().map(|w| w / sum).collect()
+}
+
+impl Stroke {
+    fn source_for(&self, result: &RgbaImage) -> Option<Arc<RgbaImage>> {
+        self.source.clone().filter(|source| source.dimensions() == result.dimensions())
+    }
+
+    /// The tile at `key`, capturing the layer (and with `shown`, the output) before the
+    /// stroke changes it.
+    fn tile(&mut self, key: (u32, u32), result: &RgbaImage, mask: &GrayImage, shown: bool) -> &mut CoverageTile {
+        let source = if shown { self.source_for(result) } else { None };
+        self.tiles.entry(key).or_insert_with(|| {
+            let (width, height) = result.dimensions();
+            let (left, top) = (key.0 * COVERAGE_TILE, key.1 * COVERAGE_TILE);
+            let cells = (COVERAGE_TILE * COVERAGE_TILE) as usize;
+            let (mut original, mut seen) = (Vec::with_capacity(cells), Vec::new());
+            for y in top..top + COVERAGE_TILE {
+                for x in left..left + COVERAGE_TILE {
+                    let inside = x < width && y < height;
+                    original.push(if inside { result.get_pixel(x, y).0 } else { [0; 4] });
+                    if shown {
+                        seen.push(if inside { shown_pixel(source.as_deref(), result, mask, x, y) } else { [0; 4] });
+                    }
+                }
+            }
+            CoverageTile { original, coverage: vec![0.0; cells], shown: seen, filtered: None, palette: Vec::new() }
+        })
+    }
+
+    /// The output before the stroke at a pixel (clamped to the page).
+    fn shown_before(
+        &self,
+        source: Option<&RgbaImage>,
+        result: &RgbaImage,
+        mask: &GrayImage,
+        x: i64,
+        y: i64,
+    ) -> [u8; 4] {
+        let x = x.clamp(0, i64::from(result.width()) - 1) as u32;
+        let y = y.clamp(0, i64::from(result.height()) - 1) as u32;
+        match self.tiles.get(&(x / COVERAGE_TILE, y / COVERAGE_TILE)) {
+            Some(tile) if !tile.shown.is_empty() => {
+                tile.shown[((y % COVERAGE_TILE) * COVERAGE_TILE + x % COVERAGE_TILE) as usize]
+            }
+            // Tiles the stroke hasn't reached still show what they did before it.
+            _ => shown_pixel(source, result, mask, x, y),
+        }
+    }
+
+    /// Gaussian blur (or an unsharp mask of it) of the pre-stroke output over one tile,
+    /// and with `aliased` the colors around it.
+    fn filter_tile(
+        &self,
+        key: (u32, u32),
+        result: &RgbaImage,
+        mask: &GrayImage,
+        settings: &BrushSettings,
+        blur: bool,
+    ) -> (Vec<[f32; 4]>, Vec<[f32; 4]>) {
         let strength = settings.strength.clamp(0.0, 1.0);
-        for py in 0..previous.height() as i32 {
-            for px in 0..previous.width() as i32 {
-                let (x, y) = (left + px, top + py);
-                if x < 0 || y < 0 || x >= result.width() as i32 || y >= result.height() as i32 {
-                    continue;
-                }
-                let mask = brush_alpha(
-                    px as f32 + 0.5,
-                    py as f32 + 0.5,
-                    (radius as f32, radius as f32),
-                    radius as f32,
-                    settings.hardness,
-                );
-                let src = previous.get_pixel(px as u32, py as u32).0;
-                let alpha = f32::from(src[3]) / 255.0 * mask * strength;
-                if alpha <= 0.0 {
-                    continue;
-                }
-                let dst = result.get_pixel_mut(x as u32, y as u32);
-                let dst_alpha = f32::from(dst[3]) / 255.0;
-                let out_alpha = alpha + dst_alpha * (1.0 - alpha);
-                for c in 0..3 {
-                    dst[c] = clamp_byte(
-                        (f32::from(src[c]) * alpha + f32::from(dst[c]) * dst_alpha * (1.0 - alpha))
-                            / out_alpha.max(1e-6),
-                    );
-                }
-                dst[3] = clamp_byte(out_alpha * 255.0);
+        let sigma = if blur { 0.5 + 3.5 * strength } else { 1.0 };
+        let kernel = gaussian(sigma);
+        let reach = (kernel.len() / 2) as i64;
+        let source = self.source_for(result);
+        let (left, top) = (i64::from(key.0 * COVERAGE_TILE), i64::from(key.1 * COVERAGE_TILE));
+        let size = i64::from(COVERAGE_TILE);
+        let span = (size + 2 * reach) as usize;
+        let mut window = Vec::with_capacity(span * span);
+        for y in top - reach..top + size + reach {
+            for x in left - reach..left + size + reach {
+                window.push(self.shown_before(source.as_deref(), result, mask, x, y));
             }
         }
-        dirty = bounds(center, radius as f32, result.width(), result.height());
-    }
-    let size = (radius * 2) as u32;
-    *patch = Some(RgbaImage::from_fn(size, size, |px, py| {
-        let (x, y) = (left + px as i32, top + py as i32);
-        if x < 0 || y < 0 || x >= result.width() as i32 || y >= result.height() as i32 {
-            image::Rgba([0, 0, 0, 0])
-        } else {
-            *result.get_pixel(x as u32, y as u32)
+        let palette = if self.aliased { palette(window.iter().copied()) } else { Vec::new() };
+        let window: Vec<[f32; 4]> = window.into_iter().map(premultiply).collect();
+        // Separable: rows over the whole window height, then columns.
+        let tile = size as usize;
+        let mut rows = vec![[0f32; 4]; span * tile];
+        for y in 0..span {
+            for x in 0..tile {
+                let mut sum = [0f32; 4];
+                for (k, weight) in kernel.iter().enumerate() {
+                    let pixel = window[y * span + x + k];
+                    (0..4).for_each(|c| sum[c] += pixel[c] * weight);
+                }
+                rows[y * tile + x] = sum;
+            }
         }
-    }));
-    dirty
+        let mut out = Vec::with_capacity(tile * tile);
+        for y in 0..tile {
+            for x in 0..tile {
+                let mut sum = [0f32; 4];
+                for (k, weight) in kernel.iter().enumerate() {
+                    let pixel = rows[(y + k) * tile + x];
+                    (0..4).for_each(|c| sum[c] += pixel[c] * weight);
+                }
+                if !blur {
+                    // Unsharp mask: push away from the blur, alpha unchanged.
+                    let amount = 0.4 + 2.6 * strength;
+                    let original = window[(y + reach as usize) * span + x + reach as usize];
+                    for c in 0..3 {
+                        sum[c] = (original[c] + (original[c] - sum[c]) * amount).clamp(0.0, original[3]);
+                    }
+                    sum[3] = original[3];
+                }
+                out.push(sum);
+            }
+        }
+        (out, palette)
+    }
+
+    /// Blur / sharpen through the stroke buffer: the pre-stroke output, filtered once, shows
+    /// through as far as the brush has covered it, so going over a spot again within one
+    /// stroke doesn't keep eating into it.
+    fn filter_dab(
+        &mut self,
+        result: &mut RgbaImage,
+        mask: &mut GrayImage,
+        center: (f32, f32),
+        settings: &BrushSettings,
+        blur: bool,
+    ) -> Option<DirtyRect> {
+        let radius = settings.size.clamp(RESULT_BRUSH_MIN, RESULT_BRUSH_MAX) / 2.0;
+        let rect = bounds(center, radius + 0.5, result.width(), result.height())?;
+        let (right, bottom) = (rect.0 + rect.2, rect.1 + rect.3);
+        let aliased = self.aliased;
+        let mut changed = false;
+        for tile_y in rect.1 / COVERAGE_TILE..=(bottom - 1) / COVERAGE_TILE {
+            for tile_x in rect.0 / COVERAGE_TILE..=(right - 1) / COVERAGE_TILE {
+                let key = (tile_x, tile_y);
+                self.tile(key, result, mask, true);
+                if self.tiles[&key].filtered.is_none() {
+                    let (filtered, palette) = self.filter_tile(key, result, mask, settings, blur);
+                    let tile = self.tiles.get_mut(&key).expect("captured above");
+                    tile.filtered = Some(filtered);
+                    tile.palette = palette;
+                }
+                let tile = self.tiles.get_mut(&key).expect("captured above");
+                let (left, top) = (tile_x * COVERAGE_TILE, tile_y * COVERAGE_TILE);
+                for y in rect.1.max(top)..bottom.min(top + COVERAGE_TILE) {
+                    for x in rect.0.max(left)..right.min(left + COVERAGE_TILE) {
+                        let alpha = brush_alpha(x as f32 + 0.5, y as f32 + 0.5, center, radius, settings.hardness);
+                        let index = ((y - top) * COVERAGE_TILE + x - left) as usize;
+                        if alpha <= tile.coverage[index] {
+                            continue;
+                        }
+                        tile.coverage[index] = alpha;
+                        let filtered = tile.filtered.as_ref().expect("filtered above")[index];
+                        let mut value = mix(premultiply(tile.shown[index]), filtered, alpha);
+                        if aliased {
+                            value = snap(value, &tile.palette);
+                        }
+                        let pixel = result.get_pixel_mut(x, y);
+                        pixel.0 = unpremultiply(value);
+                        reveal(mask, x, y, pixel, settings);
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed.then_some(rect)
+    }
+
+    /// Lays down the paint picked up at the last dab, then picks up what is here now.
+    fn smudge_dab(
+        &mut self,
+        result: &mut RgbaImage,
+        mask: &mut GrayImage,
+        center: (f32, f32),
+        settings: &BrushSettings,
+    ) -> Option<DirtyRect> {
+        let radius = settings.size.clamp(RESULT_BRUSH_MIN, RESULT_BRUSH_MAX) / 2.0;
+        let reach = radius.ceil() as i64;
+        let side = (2 * reach + 1) as usize;
+        let (cx, cy) = (center.0.floor() as i64, center.1.floor() as i64);
+        let (width, height) = (i64::from(result.width()), i64::from(result.height()));
+        let source = self.source_for(result);
+        let inside = |x: i64, y: i64| x >= 0 && y >= 0 && x < width && y < height;
+        let offsets = || (-reach..=reach).flat_map(move |dy| (-reach..=reach).map(move |dx| (dx, dy)));
+        let mut dirty = None;
+        if let Some(patch) = self.smudge.take() {
+            let strength = settings.strength.clamp(0.0, 1.0);
+            let palette = if self.aliased {
+                let here = offsets()
+                    .map(|(dx, dy)| (cx + dx, cy + dy))
+                    .filter(|&(x, y)| inside(x, y))
+                    .map(|(x, y)| shown_pixel(source.as_deref(), result, mask, x as u32, y as u32));
+                palette(here.chain(patch.iter().flatten().map(|pixel| unpremultiply(*pixel))))
+            } else {
+                Vec::new()
+            };
+            for (index, (dx, dy)) in offsets().enumerate() {
+                let (x, y) = (cx + dx, cy + dy);
+                let Some(carried) = patch[index] else { continue };
+                if !inside(x, y) {
+                    continue;
+                }
+                let falloff = brush_alpha(x as f32 + 0.5, y as f32 + 0.5, center, radius, settings.hardness);
+                if falloff <= 0.0 {
+                    continue;
+                }
+                let (x, y) = (x as u32, y as u32);
+                let here = premultiply(shown_pixel(source.as_deref(), result, mask, x, y));
+                let mut value = mix(here, carried, falloff * strength);
+                if self.aliased {
+                    value = snap(value, &palette);
+                }
+                let pixel = result.get_pixel_mut(x, y);
+                pixel.0 = unpremultiply(value);
+                reveal(mask, x, y, pixel, settings);
+                dirty = union(dirty, Some((x, y, 1, 1)));
+            }
+        }
+        let mut patch = Vec::with_capacity(side * side);
+        for (dx, dy) in offsets() {
+            let (x, y) = (cx + dx, cy + dy);
+            patch.push(
+                inside(x, y).then(|| premultiply(shown_pixel(source.as_deref(), result, mask, x as u32, y as u32))),
+            );
+        }
+        self.smudge = Some(patch);
+        dirty
+    }
 }
 
 #[cfg(test)]
@@ -484,7 +692,7 @@ mod tests {
         points: &[(f32, f32)],
         settings: &BrushSettings,
     ) -> Option<DirtyRect> {
-        let mut stroke = Stroke::new(0.0, false);
+        let mut stroke = Stroke::new(0.0, false, None);
         let mut dirty = None;
         for &point in points {
             dirty = union(dirty, stroke.add_point(tool, result, mask, point, settings));
@@ -518,6 +726,26 @@ mod tests {
     }
 
     #[test]
+    fn keep_mask_edits_the_result_only() {
+        let opaque = |_, _| image::Rgba([90, 90, 90, 255]);
+        for tool in [ResultTool::Brush, ResultTool::Blur, ResultTool::Sharpen, ResultTool::Smudge] {
+            for keep_mask in [false, true] {
+                let settings = BrushSettings { size: 10.0, keep_mask, color: [200, 0, 0], ..BrushSettings::default() };
+                let mut result = RgbaImage::from_fn(40, 20, opaque);
+                let mut mask = GrayImage::new(40, 20);
+                draw(tool, &mut result, &mut mask, &[(10.0, 10.0), (30.0, 10.0)], &settings);
+                let covered = mask.get_pixel(20, 10)[0];
+                assert_eq!(covered, if keep_mask { 0 } else { 255 }, "{tool:?} keep_mask={keep_mask}");
+            }
+        }
+        // Filters don't grow the mask where the result has nothing to show.
+        let settings = BrushSettings { size: 10.0, ..BrushSettings::default() };
+        let (mut result, mut mask) = (RgbaImage::new(40, 20), GrayImage::new(40, 20));
+        draw(ResultTool::Blur, &mut result, &mut mask, &[(10.0, 10.0), (30.0, 10.0)], &settings);
+        assert!(mask.iter().all(|value| *value == 0));
+    }
+
+    #[test]
     fn overlapping_dabs_keep_the_soft_edge_and_opacity() {
         let settings = BrushSettings { size: 20.0, hardness: 0.0, color: [0, 0, 0], ..BrushSettings::default() };
         // A stroke crossing itself keeps the edge of a single pass.
@@ -539,7 +767,7 @@ mod tests {
     #[test]
     fn dabs_are_evenly_spaced_across_samples() {
         let settings = BrushSettings { size: 10.0, hardness: 1.0, ..BrushSettings::default() };
-        let mut stroke = Stroke::new(0.0, false);
+        let mut stroke = Stroke::new(0.0, false, None);
         let (mut result, mut mask) = (RgbaImage::new(80, 20), GrayImage::new(80, 20));
         for x in 0..60 {
             stroke.add_point(ResultTool::Brush, &mut result, &mut mask, (10.0 + x as f32 * 0.3, 10.0), &settings);
@@ -550,7 +778,7 @@ mod tests {
     #[test]
     fn aliased_brush_paints_only_full_pixels() {
         let settings = BrushSettings { size: 9.0, hardness: 0.3, color: [0, 0, 0], ..BrushSettings::default() };
-        let mut stroke = Stroke::new(0.0, true);
+        let mut stroke = Stroke::new(0.0, true, None);
         let (mut result, mut mask) = (RgbaImage::new(30, 30), GrayImage::new(30, 30));
         stroke.add_point(ResultTool::Brush, &mut result, &mut mask, (15.0, 15.0), &settings);
         assert!(result.pixels().all(|pixel| pixel[3] == 0 || pixel[3] == 255));
@@ -560,13 +788,94 @@ mod tests {
     #[test]
     fn smoothing_trails_the_pointer_and_catches_up() {
         let settings = BrushSettings { size: 4.0, hardness: 1.0, color: [0, 0, 0], ..BrushSettings::default() };
-        let mut stroke = Stroke::new(10.0, false);
+        let mut stroke = Stroke::new(10.0, false, None);
         let (mut result, mut mask) = (RgbaImage::new(60, 10), GrayImage::new(60, 10));
         stroke.add_point(ResultTool::Brush, &mut result, &mut mask, (5.0, 5.0), &settings);
         stroke.add_point(ResultTool::Brush, &mut result, &mut mask, (40.0, 5.0), &settings);
         assert_eq!(result.get_pixel(38, 5)[3], 0, "the pen lags behind");
         stroke.finish(ResultTool::Brush, &mut result, &mut mask, Some((40.0, 5.0)), &settings);
         assert_eq!(result.get_pixel(38, 5)[3], 255, "and reaches the pointer on release");
+    }
+
+    /// A black-and-white page split at x = 20, no result or mask yet.
+    fn split_page() -> (Arc<RgbaImage>, RgbaImage, GrayImage) {
+        let source = RgbaImage::from_fn(40, 20, |x, _| {
+            if x < 20 { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        (Arc::new(source), RgbaImage::new(40, 20), GrayImage::new(40, 20))
+    }
+
+    fn draw_on_page(
+        tool: ResultTool,
+        source: &Arc<RgbaImage>,
+        result: &mut RgbaImage,
+        mask: &mut GrayImage,
+        points: &[(f32, f32)],
+        settings: &BrushSettings,
+    ) {
+        let mut stroke = Stroke::new(0.0, !settings.anti_alias, Some(Arc::clone(source)));
+        for &point in points {
+            stroke.add_point(tool, result, mask, point, settings);
+        }
+        stroke.finish(tool, result, mask, points.last().copied(), settings);
+    }
+
+    #[test]
+    fn filters_work_on_what_the_page_shows() {
+        let (source, mut result, mut mask) = split_page();
+        let settings = BrushSettings { size: 12.0, strength: 0.5, ..BrushSettings::default() };
+        draw_on_page(ResultTool::Blur, &source, &mut result, &mut mask, &[(20.0, 10.0)], &settings);
+        let edge = result.get_pixel(20, 10);
+        assert!(edge[3] == 255 && edge[0] > 0 && edge[0] < 255, "page edge blurred: {edge:?}");
+        assert_eq!(mask.get_pixel(20, 10)[0], 255, "and shows in the output");
+
+        let (source, mut result, mut mask) = split_page();
+        let keep = BrushSettings { keep_mask: true, ..settings };
+        draw_on_page(ResultTool::Blur, &source, &mut result, &mut mask, &[(20.0, 10.0)], &keep);
+        assert!(mask.iter().all(|value| *value == 0), "keep_mask leaves the mask");
+    }
+
+    #[test]
+    fn blur_does_not_build_up_within_a_stroke() {
+        let settings = BrushSettings { size: 12.0, strength: 0.5, ..BrushSettings::default() };
+        let (source, mut once, mut mask) = split_page();
+        draw_on_page(ResultTool::Blur, &source, &mut once, &mut mask, &[(20.0, 4.0), (20.0, 16.0)], &settings);
+        let (source, mut scrubbed, mut mask) = split_page();
+        let back_and_forth = [(20.0, 4.0), (20.0, 16.0), (20.0, 4.0), (20.0, 16.0)];
+        draw_on_page(ResultTool::Blur, &source, &mut scrubbed, &mut mask, &back_and_forth, &settings);
+        assert_eq!(once.get_pixel(19, 10), scrubbed.get_pixel(19, 10));
+    }
+
+    #[test]
+    fn sharpen_raises_contrast_at_an_edge() {
+        let source = Arc::new(RgbaImage::from_fn(40, 20, |x, _| {
+            if x < 20 { image::Rgba([100, 100, 100, 255]) } else { image::Rgba([150, 150, 150, 255]) }
+        }));
+        let (mut result, mut mask) = (RgbaImage::new(40, 20), GrayImage::new(40, 20));
+        let settings = BrushSettings { size: 12.0, strength: 0.5, ..BrushSettings::default() };
+        draw_on_page(ResultTool::Sharpen, &source, &mut result, &mut mask, &[(20.0, 10.0)], &settings);
+        assert!(result.get_pixel(19, 10)[0] < 100 && result.get_pixel(20, 10)[0] > 150);
+        assert_eq!(result.get_pixel(14, 10)[0], 100, "flat areas stay flat");
+    }
+
+    #[test]
+    fn aliased_filters_keep_to_the_page_colors() {
+        let settings = BrushSettings { size: 12.0, strength: 1.0, anti_alias: false, ..BrushSettings::default() };
+        for tool in [ResultTool::Blur, ResultTool::Sharpen, ResultTool::Smudge] {
+            let (source, mut result, mut mask) = split_page();
+            draw_on_page(tool, &source, &mut result, &mut mask, &[(14.0, 10.0), (26.0, 10.0)], &settings);
+            let colors: std::collections::HashSet<[u8; 4]> =
+                result.pixels().filter(|pixel| pixel[3] > 0).map(|pixel| pixel.0).collect();
+            assert!(
+                colors.iter().all(|color| *color == [0, 0, 0, 255] || *color == [255, 255, 255, 255]),
+                "{tool:?} added tones: {colors:?}"
+            );
+        }
+        // With anti-aliasing the smudge leaves in-between tones.
+        let (source, mut result, mut mask) = split_page();
+        let soft = BrushSettings { anti_alias: true, ..settings };
+        draw_on_page(ResultTool::Smudge, &source, &mut result, &mut mask, &[(14.0, 10.0), (26.0, 10.0)], &soft);
+        assert!(result.pixels().any(|pixel| pixel[3] > 0 && pixel[0] > 0 && pixel[0] < 255));
     }
 
     #[test]

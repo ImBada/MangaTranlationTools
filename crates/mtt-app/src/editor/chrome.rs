@@ -946,6 +946,13 @@ fn inpaint_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
     {
         pick = Some(ResultTool::ColorPicker);
     }
+    ui.separator();
+    // Applies to every result tool that paints (`BrushSettings::keep_mask`).
+    let keep = editor.result_brush.keep_mask;
+    let hint = "마스크 유지\n끄면 브러시 · 스마트 브러시 · 보정이 고친 곳을 마스크로도 덮어 출력에 바로 보입니다\n켜면 결과 레이어만 고치고 마스크는 그대로 둡니다. 이미 마스크가 덮인 곳에서만 보입니다";
+    if theme::icon_tool(ui, paint, keep, icon::LOCK_SIMPLE, "/", hint).clicked() {
+        editor.toggle_keep_mask();
+    }
     match pick {
         Some(ResultTool::Brush) => editor.select_shared_inpaint_tool(Tool::MaskBrush),
         Some(ResultTool::Eraser) => editor.select_shared_inpaint_tool(Tool::MaskEraser),

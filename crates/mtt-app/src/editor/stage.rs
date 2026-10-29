@@ -1046,7 +1046,9 @@ fn start_drag(
                 let before_mask = StrokeBackup::new(width, height, 1);
                 // The smoothing string is measured on screen, like Photoshop's.
                 let string = editor.result_brush.smoothing.clamp(0.0, 1.0) * RESULT_SMOOTHING_REACH / editor.view.zoom;
-                let stroke = Box::new(super::result_tools::Stroke::new(string, editor.chapter.inpaint_aliased));
+                let aliased = !editor.result_brush.anti_alias;
+                let source = Some(std::sync::Arc::clone(&loaded.source));
+                let stroke = Box::new(super::result_tools::Stroke::new(string, aliased, source));
                 let start = line_start(editor, &page.id, modifiers);
                 let mut drag =
                     Drag::ResultPaint { last: start.unwrap_or(point), stroke, before_result, before_mask, dirty: None };
@@ -1410,7 +1412,11 @@ fn finish_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord) {
     if let Drag::Heal { mask, .. } = drag {
         // `tick` has the worker to start the fill with.
         if mask.iter().any(|value| *value > 0) {
-            editor.heal_stroke = Some((page.id.clone(), std::sync::Arc::new(mask)));
+            editor.heal_stroke = Some(super::HealStroke {
+                page_id: page.id.clone(),
+                mask: std::sync::Arc::new(mask),
+                keep_mask: editor.result_brush.keep_mask,
+            });
             editor.heal_requested = true;
             ctx.request_repaint();
         }
@@ -1678,6 +1684,14 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
             actions.push(Box::new(|editor, _| {
                 if !editor.page_edit_locked() {
                     editor.select_range_tool()
+                }
+            }));
+        }
+        // `/` like Photoshop's lock transparent pixels (`?` is the shortcut sheet).
+        if input.consume_key(Modifiers::NONE, Key::Slash) {
+            actions.push(Box::new(|editor, _| {
+                if editor.mode() == super::Mode::Inpaint {
+                    editor.toggle_keep_mask();
                 }
             }));
         }
