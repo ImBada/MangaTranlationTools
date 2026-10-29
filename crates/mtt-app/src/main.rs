@@ -42,6 +42,12 @@ fn main() -> eframe::Result {
             log::info!("another instance is running; asked it to come to the front");
             return Ok(());
         }
+        single_instance::Instance::Unresponsive => {
+            startup_error(
+                "이미 실행 중인 MangaTranslationTools가 응답하지 않습니다. 그 앱을 종료한 뒤 다시 실행하세요.",
+            );
+            return Ok(());
+        }
         single_instance::Instance::Primary { ref listener, .. } => listener.as_ref().and_then(|l| l.try_clone().ok()),
     };
 
