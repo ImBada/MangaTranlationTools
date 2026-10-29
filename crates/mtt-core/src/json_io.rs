@@ -109,7 +109,34 @@ fn write_bytes(path: &Path, bytes: &[u8], sync: bool) -> CoreResult<()> {
     fs::rename(&temp_path, path).map_err(|source| {
         let _ = fs::remove_file(&temp_path);
         CoreError::io(path, source)
-    })
+    })?;
+    if sync {
+        sync_dir(parent);
+    }
+    Ok(())
+}
+
+/// Flushes a directory entry change (the rename above) to disk, so a power cut can't bring
+/// back the old file or an empty one. Best effort: some file systems refuse it, and on
+/// Windows a directory can't be opened as a file (NTFS journals the rename itself).
+fn sync_dir(dir: &Path) {
+    #[cfg(unix)]
+    if let Ok(dir) = fs::File::open(dir) {
+        let _ = dir.sync_all();
+    }
+    #[cfg(not(unix))]
+    let _ = dir;
+}
+
+/// Moves a file that couldn't be read out of the way (`<name>.bad`, `<name>.bad-2`, …) so it
+/// is kept for the user while a repaired one takes its place. Returns where it went.
+pub fn set_aside_broken(path: &Path) -> CoreResult<PathBuf> {
+    let target = (1..)
+        .map(|n| append_extension(path, &if n == 1 { "bad".to_owned() } else { format!("bad-{n}") }))
+        .find(|candidate| !candidate.exists())
+        .expect("an unused name");
+    fs::rename(path, &target).map_err(|source| CoreError::io(path, source))?;
+    Ok(target)
 }
 
 /// Copies `path` to `<path>.native-backup` the first time the native app overwrites it.
@@ -198,6 +225,18 @@ mod tests {
             .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
             .collect();
         assert!(leftovers.is_empty());
+    }
+
+    #[test]
+    fn broken_files_are_set_aside_without_replacing_earlier_ones() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("work.json");
+        fs::write(&path, "{").unwrap();
+        assert_eq!(set_aside_broken(&path).unwrap(), dir.path().join("work.json.bad"));
+        fs::write(&path, "").unwrap();
+        assert_eq!(set_aside_broken(&path).unwrap(), dir.path().join("work.json.bad-2"));
+        assert!(!path.exists());
+        assert_eq!(fs::read_to_string(dir.path().join("work.json.bad")).unwrap(), "{");
     }
 
     #[test]

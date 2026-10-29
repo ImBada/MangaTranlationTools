@@ -13,7 +13,7 @@ use std::time::SystemTime;
 use serde::Deserialize;
 
 use crate::error::{CoreError, CoreResult};
-use crate::json_io::{backup_once, read_json_optional, write_json_atomic, write_json_replace};
+use crate::json_io::{backup_once, read_json_optional, set_aside_broken, write_json_atomic, write_json_replace};
 use crate::model::{
     Chapter, ChapterStatus, LibraryIndexFile, PageAnalysisStatus, PageRecord, Work, de_null_as_default,
     de_string_lenient,
@@ -47,6 +47,25 @@ pub struct ChapterSummary {
 pub struct WorkSummary {
     pub work: Work,
     pub chapters: Vec<ChapterSummary>,
+}
+
+/// A library file that couldn't be read, or was rebuilt, while listing.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnreadableEntry {
+    /// The damaged file (or, after a rebuild, where it was set aside).
+    pub path: PathBuf,
+    /// What happened, for the library screen.
+    pub message: String,
+    /// The file was replaced by one rebuilt from the folders. Reported only by the listing
+    /// that repaired it.
+    pub rebuilt: bool,
+}
+
+/// [`Library::list_all`]: the readable works plus what had to be skipped or rebuilt.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct LibraryListing {
+    pub works: Vec<WorkSummary>,
+    pub unreadable: Vec<UnreadableEntry>,
 }
 
 /// Clones share the summary cache and the metadata lock.
@@ -98,6 +117,9 @@ impl Library {
 
     /// The summary of one chapter: from the cache when its file is unchanged, else read.
     fn chapter_summary(&self, work_id: &str, chapter_id: &str) -> CoreResult<Option<ChapterSummary>> {
+        if !is_safe_id(work_id) || !is_safe_id(chapter_id) {
+            return Ok(None);
+        }
         let path = self.chapter_file(work_id, chapter_id);
         let Some(stamp) = FileStamp::of(&path) else { return Ok(None) };
         if let Some((cached, summary)) = self.cache().summaries.get(&path)
@@ -191,7 +213,7 @@ impl Library {
         sync: bool,
         change: impl FnOnce(&mut Work) -> R,
     ) -> CoreResult<Option<R>> {
-        let Some(mut work) = self.read_work(work_id)? else { return Ok(None) };
+        let Some(mut work) = self.read_work_repairing_locked(work_id, &mut Vec::new())? else { return Ok(None) };
         let result = change(&mut work);
         let path = self.work_file(&work.id);
         if sync { write_json_atomic(&path, &work) } else { write_json_replace(&path, &work) }?;
@@ -201,7 +223,7 @@ impl Library {
     /// Reads `index.json`, applies `change` and writes it back under the metadata lock.
     fn update_index<R>(&self, change: impl FnOnce(&mut LibraryIndexFile) -> R) -> CoreResult<R> {
         let _lock = self.metadata_lock();
-        let mut index = self.read_index()?;
+        let mut index = self.read_index_repairing_locked(&mut Vec::new())?;
         let result = change(&mut index);
         self.write_index(&index)?;
         Ok(result)
@@ -261,8 +283,9 @@ impl Library {
         {
             return Ok(Some(work_id));
         }
-        for work_id in self.read_index()?.work_order {
-            if let Some(work) = self.read_work(&work_id)?
+        // A work that can't be read doesn't hide the chapters of the others.
+        for work_id in self.readable_index(&mut Vec::new())?.work_order {
+            if let Ok(Some(work)) = self.read_work(&work_id)
                 && work.chapter_order.iter().any(|id| id == chapter_id)
             {
                 self.cache().owners.insert(chapter_id.to_owned(), work_id.clone());
@@ -283,17 +306,56 @@ impl Library {
         Ok(chapter)
     }
 
-    /// `listLibrary`: works in index order with lightweight chapter summaries.
+    /// `listLibrary`: works in index order with lightweight chapter summaries. Works and
+    /// chapters that can't be read are left out (see [`Library::list_all`]).
     pub fn list(&self) -> CoreResult<Vec<WorkSummary>> {
+        Ok(self.list_all()?.works)
+    }
+
+    /// [`Library::list`] plus what it left out, so one damaged file never hides the rest of
+    /// the library: a chapter that can't be read is skipped, and an `index.json` or
+    /// `work.json` that isn't valid JSON (a power cut can leave it empty) is rebuilt from
+    /// the folders, keeping the damaged file next to it as `<name>.bad`.
+    pub fn list_all(&self) -> CoreResult<LibraryListing> {
+        let mut unreadable = Vec::new();
         let mut works = Vec::new();
-        for work_id in self.read_index()?.work_order {
-            let Some(work) = self.read_work(&work_id)? else {
-                continue;
+        for work_id in self.readable_index(&mut unreadable)?.work_order {
+            let work = match self.read_work(&work_id) {
+                Ok(Some(work)) => work,
+                Ok(None) => continue,
+                Err(CoreError::Json { .. }) => {
+                    let _lock = self.metadata_lock();
+                    match self.read_work_repairing_locked(&work_id, &mut unreadable) {
+                        Ok(Some(work)) => work,
+                        Ok(None) => continue,
+                        Err(error) => {
+                            unreadable.push(unreadable_work(&self.work_file(&work_id), &work_id, &error));
+                            continue;
+                        }
+                    }
+                }
+                Err(error) => {
+                    unreadable.push(unreadable_work(&self.work_file(&work_id), &work_id, &error));
+                    continue;
+                }
             };
             let mut chapters = Vec::new();
             for chapter_id in &work.chapter_order {
-                if let Some(summary) = self.chapter_summary(&work_id, chapter_id)? {
-                    chapters.push(summary);
+                match self.chapter_summary(&work_id, chapter_id) {
+                    Ok(Some(summary)) => chapters.push(summary),
+                    Ok(None) => {}
+                    Err(error) => {
+                        log::warn!("skipping unreadable chapter: {error}");
+                        unreadable.push(UnreadableEntry {
+                            path: self.chapter_file(&work_id, chapter_id),
+                            message: format!(
+                                "{} › 화 폴더 {chapter_id}: 화 파일을 읽지 못했습니다. ({})",
+                                work.title,
+                                error_reason(&error)
+                            ),
+                            rebuilt: false,
+                        });
+                    }
                 }
             }
             let mut cache = self.cache();
@@ -303,7 +365,117 @@ impl Library {
             drop(cache);
             works.push(WorkSummary { work, chapters });
         }
-        Ok(works)
+        Ok(LibraryListing { works, unreadable })
+    }
+
+    /// `index.json`, rebuilt from the work folders when it isn't valid JSON.
+    fn readable_index(&self, unreadable: &mut Vec<UnreadableEntry>) -> CoreResult<LibraryIndexFile> {
+        match self.read_index() {
+            Err(CoreError::Json { .. }) => {
+                let _lock = self.metadata_lock();
+                self.read_index_repairing_locked(unreadable)
+            }
+            other => other,
+        }
+    }
+
+    /// [`Library::read_index`], repairing a damaged file. The caller holds the metadata lock
+    /// (another thread may have repaired it already, so it is read again here).
+    fn read_index_repairing_locked(&self, unreadable: &mut Vec<UnreadableEntry>) -> CoreResult<LibraryIndexFile> {
+        let error = match self.read_index() {
+            Err(error @ CoreError::Json { .. }) => error,
+            other => return other,
+        };
+        let path = self.index_path();
+        let mut works: Vec<(String, String)> = Vec::new();
+        if self.works_root().is_dir() {
+            for entry in read_dir_entries(&self.works_root())? {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if is_safe_id(&id) && entry.file_type().is_ok_and(|kind| kind.is_dir()) && self.work_file(&id).is_file()
+                {
+                    let created_at = self.read_work(&id).ok().flatten().map(|work| work.created_at).unwrap_or_default();
+                    works.push((created_at, id));
+                }
+            }
+        }
+        // New works are appended to the order, so creation time is the best guess.
+        works.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| crate::import::natural_cmp(&a.1, &b.1)));
+        let index =
+            LibraryIndexFile { work_order: works.into_iter().map(|(_, id)| id).collect(), ..Default::default() };
+        let kept = set_aside_broken(&path)?;
+        self.write_index(&index)?;
+        log::warn!("rebuilt {} from the work folders ({error}); the old file is {}", path.display(), kept.display());
+        unreadable.push(UnreadableEntry {
+            message: format!(
+                "보관함 목록(index.json)을 읽지 못해 작품 폴더로 다시 만들었습니다. 원래 파일은 {}에 있습니다. ({})",
+                file_name_of(&kept),
+                error_reason(&error)
+            ),
+            path: kept,
+            rebuilt: true,
+        });
+        Ok(index)
+    }
+
+    /// [`Library::read_work`], rebuilding a `work.json` that isn't valid JSON from the
+    /// chapter folders (title and notes are kept when they can still be read). The caller
+    /// holds the metadata lock.
+    fn read_work_repairing_locked(
+        &self,
+        work_id: &str,
+        unreadable: &mut Vec<UnreadableEntry>,
+    ) -> CoreResult<Option<Work>> {
+        let error = match self.read_work(work_id) {
+            Err(error @ CoreError::Json { .. }) => error,
+            other => return other,
+        };
+        let path = self.work_file(work_id);
+        let damaged = fs::read(&path).map_err(|source| CoreError::io(&path, source))?;
+        let damaged = String::from_utf8_lossy(&damaged);
+        let mut chapters: Vec<(String, String)> = Vec::new();
+        let chapters_root = self.work_dir(work_id).join("chapters");
+        if chapters_root.is_dir() {
+            for entry in read_dir_entries(&chapters_root)? {
+                let id = entry.file_name().to_string_lossy().into_owned();
+                if is_safe_id(&id) && self.chapter_file(work_id, &id).is_file() {
+                    let created_at =
+                        self.chapter_summary(work_id, &id).ok().flatten().map(|chapter| chapter.created_at);
+                    chapters.push((created_at.unwrap_or_default(), id));
+                }
+            }
+        }
+        chapters.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| crate::import::natural_cmp(&a.1, &b.1)));
+        let now = now_iso();
+        let work = Work {
+            id: work_id.to_owned(),
+            title: salvage_string(&damaged, "title")
+                .map(|title| sanitize_title(&title, DEFAULT_WORK_TITLE))
+                .unwrap_or_else(|| DEFAULT_WORK_TITLE.to_owned()),
+            created_at: chapters
+                .iter()
+                .map(|(created_at, _)| created_at)
+                .find(|value| !value.is_empty())
+                .cloned()
+                .unwrap_or_else(|| now.clone()),
+            updated_at: now,
+            translation_notes: salvage_string(&damaged, "translationNotes").unwrap_or_default(),
+            chapter_order: chapters.into_iter().map(|(_, id)| id).collect(),
+            ..Work::default()
+        };
+        let kept = set_aside_broken(&path)?;
+        write_json_atomic(&path, &work)?;
+        log::warn!("rebuilt {} from its chapter folders ({error}); the old file is {}", path.display(), kept.display());
+        unreadable.push(UnreadableEntry {
+            message: format!(
+                "{}: 작품 정보(work.json)를 읽지 못해 화 폴더로 다시 만들었습니다. 원래 파일은 {}에 있습니다. ({})",
+                work.title,
+                file_name_of(&kept),
+                error_reason(&error)
+            ),
+            path: kept,
+            rebuilt: true,
+        });
+        Ok(Some(work))
     }
 
     pub fn create_work(&self, title: &str) -> CoreResult<Work> {
@@ -474,7 +646,8 @@ impl Library {
             self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("선택한 작품을 찾지 못했습니다.".into()))?;
         let mut used = HashSet::new();
         for chapter_id in work.chapter_order.iter().filter(|id| Some(id.as_str()) != excluded) {
-            if let Some(summary) = self.chapter_summary(work_id, chapter_id)? {
+            // An unreadable chapter can't clash with a title.
+            if let Ok(Some(summary)) = self.chapter_summary(work_id, chapter_id) {
                 used.insert(summary.title);
             }
         }
@@ -641,6 +814,37 @@ pub fn sanitize_title(title: &str, fallback: &str) -> String {
 
 fn non_empty_path(value: &str) -> Option<PathBuf> {
     (!value.trim().is_empty()).then(|| PathBuf::from(value))
+}
+
+/// A work file that couldn't be read at all.
+fn unreadable_work(path: &Path, work_id: &str, error: &CoreError) -> UnreadableEntry {
+    log::warn!("skipping unreadable work: {error}");
+    UnreadableEntry {
+        path: path.to_path_buf(),
+        message: format!("작품 폴더 {work_id}: 작품 정보를 읽지 못했습니다. ({})", error_reason(error)),
+        rebuilt: false,
+    }
+}
+
+/// The error without the file path (shown separately).
+fn error_reason(error: &CoreError) -> String {
+    match error {
+        CoreError::Io { source, .. } => source.to_string(),
+        CoreError::Json { source, .. } => format!("JSON 형식 오류: {source}"),
+        other => other.to_string(),
+    }
+}
+
+fn file_name_of(path: &Path) -> String {
+    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+}
+
+/// The string value of `"key"` in a damaged JSON file, when the file still has it (a
+/// truncated file keeps its first keys).
+fn salvage_string(damaged: &str, key: &str) -> Option<String> {
+    let rest = &damaged[damaged.find(&format!("\"{key}\""))? + key.len() + 2..];
+    let rest = rest.trim_start().strip_prefix(':')?;
+    serde_json::Deserializer::from_str(rest).into_iter::<String>().next()?.ok()
 }
 
 /// Last component of a stored path, whichever OS wrote it (`C:\…\pages\x.png` or
@@ -834,6 +1038,82 @@ mod tests {
         saver.join().unwrap();
         let order = library.read_work(&work.id).unwrap().unwrap().chapter_order;
         assert_eq!(order.len(), 1 + 4 * 20, "no chapter id lost");
+    }
+
+    #[test]
+    fn one_damaged_file_does_not_hide_the_rest_of_the_library() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let first = library.create_work("첫째").unwrap();
+        sample_chapter(&library, &first);
+        let mut broken = Chapter { id: "c2".into(), work_id: first.id.clone(), ..Chapter::default() };
+        library.write_chapter(&broken).unwrap();
+        library.update_work(&first.id, |work| work.chapter_order.push("c2".into())).unwrap();
+        fs::write(library.chapter_file(&first.id, "c2"), "").unwrap();
+
+        let second = library.create_work("둘째").unwrap();
+        for (id, created_at) in [("b", "2026-02-02T00:00:00.000Z"), ("a", "2026-01-01T00:00:00.000Z")] {
+            let chapter = Chapter {
+                id: id.into(),
+                work_id: second.id.clone(),
+                created_at: created_at.into(),
+                ..Chapter::default()
+            };
+            library.write_chapter_file(&chapter).unwrap();
+        }
+        library.update_work(&second.id, |work| work.translation_notes = "말투".into()).unwrap();
+        let damaged = fs::read_to_string(library.work_file(&second.id)).unwrap().replace("[]", "[,]");
+        fs::write(library.work_file(&second.id), &damaged).unwrap();
+
+        let listing = library.list_all().unwrap();
+        assert_eq!(listing.works.len(), 2);
+        assert_eq!(listing.works[0].chapters.iter().map(|c| c.id.as_str()).collect::<Vec<_>>(), ["c1"]);
+        let rebuilt = &listing.works[1];
+        assert_eq!(rebuilt.work.title, "둘째", "title salvaged from the damaged file");
+        assert_eq!(rebuilt.work.chapter_order, ["a", "b"], "chapters in creation order");
+        assert_eq!(listing.unreadable.len(), 2, "{:?}", listing.unreadable);
+        assert!(listing.unreadable.iter().any(|entry| entry.path == library.chapter_file(&first.id, "c2")));
+        let kept = library.work_dir(&second.id).join("work.json.bad");
+        assert!(listing.unreadable.iter().any(|entry| entry.path == kept));
+        assert_eq!(fs::read_to_string(&kept).unwrap(), damaged);
+        let stored = library.read_work(&second.id).unwrap().unwrap();
+        assert_eq!((stored.chapter_order.len(), stored.translation_notes.as_str()), (2, "말투"));
+
+        // Repaired once; the damaged chapter is still reported and still opens nothing else.
+        let again = library.list_all().unwrap();
+        assert_eq!(again.unreadable.len(), 1);
+        assert!(library.open_chapter("a").is_ok());
+        assert!(library.open_chapter("c2").is_err());
+        broken.title = "고침".into();
+        library.write_chapter(&broken).unwrap();
+        assert!(library.list_all().unwrap().unreadable.is_empty());
+    }
+
+    #[test]
+    fn damaged_index_and_work_files_are_rebuilt_by_saves_and_lookups() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let older = library.create_work("older").unwrap();
+        let chapter = sample_chapter(&library, &older);
+        let newer = library.create_work("newer").unwrap();
+        fs::write(library.index_path(), "").unwrap();
+        // Cut off mid-write.
+        let text = fs::read_to_string(library.work_file(&older.id)).unwrap();
+        fs::write(library.work_file(&older.id), &text[..text.find("chapterOrder").unwrap()]).unwrap();
+
+        // Saving a chapter repairs its work instead of failing every autosave.
+        library.write_chapter(&chapter).unwrap();
+        let work = library.read_work(&older.id).unwrap().unwrap();
+        assert_eq!((work.title.as_str(), work.chapter_order.as_slice()), ("older", &["c1".to_owned()][..]));
+        fs::write(library.work_file(&older.id), "").unwrap();
+        library.write_chapter(&chapter).unwrap();
+        assert_eq!(library.read_work(&older.id).unwrap().unwrap().title, DEFAULT_WORK_TITLE, "nothing to salvage");
+        assert_eq!(library.find_chapter_work_id("missing").unwrap(), None);
+        assert!(library.index_path().with_file_name("index.json.bad").is_file());
+        let order = library.read_index().unwrap().work_order;
+        assert_eq!(order.len(), 2);
+        assert!(order.contains(&older.id) && order.contains(&newer.id));
+        assert_eq!(library.list().unwrap().len(), 2);
     }
 
     #[test]
