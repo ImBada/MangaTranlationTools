@@ -128,6 +128,25 @@ impl Harness {
     fn block_count(&self) -> usize {
         self.editor.page().unwrap().blocks.len()
     }
+
+    /// The canvas quick controls by the selected block were drawn last frame.
+    fn quick_controls_shown(&self) -> bool {
+        let layer = egui::LayerId::new(egui::Order::Foreground, egui::Id::unique("block-quick-controls"));
+        self.ctx.memory(|memory| memory.areas().is_visible(&layer))
+    }
+
+    /// Keys that would delete the block, switch the mode and turn the page.
+    fn press_editor_keys(&mut self) {
+        self.press(egui::Key::Backspace, egui::Modifiers::NONE);
+        self.type_key(egui::Key::Num1, "1");
+        self.type_key(egui::Key::F, "f");
+    }
+
+    fn assert_untouched(&self, context: &str) {
+        assert_eq!(self.block_count(), 2, "{context}: block deleted");
+        assert_eq!(self.editor.mode(), Mode::Translate, "{context}: mode switched");
+        assert_eq!(self.editor.current, 0, "{context}: page turned");
+    }
 }
 
 fn key_event(key: egui::Key, pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
@@ -161,4 +180,37 @@ fn number_and_colour_fields_keep_their_keys() {
         harness.press(egui::Key::Backspace, egui::Modifiers::NONE);
         assert_eq!(harness.block_count(), 1, "Backspace deletes the block again");
     }
+}
+
+#[test]
+fn work_notes_and_the_shortcut_sheet_hold_the_editor_keys() {
+    let mut harness = Harness::new(2);
+    harness.editor.selection = vec!["b0".into()];
+    harness.idle(2);
+    assert!(harness.quick_controls_shown(), "quick controls by the selected block");
+
+    harness.editor.work_notes_draft = Some(String::new());
+    harness.idle(2);
+    assert!(!harness.quick_controls_shown(), "not drawn over the 번역 메모 dialog");
+    harness.press_editor_keys();
+    harness.assert_untouched("번역 메모");
+    harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(harness.editor.work_notes_draft.is_none(), "Esc closes 번역 메모");
+
+    harness.frame(vec![egui::Event::Text("?".into())]);
+    harness.idle(1);
+    assert!(harness.editor.shortcut_sheet, "? opens the sheet");
+    assert!(!harness.quick_controls_shown(), "not drawn over the sheet");
+    harness.press_editor_keys();
+    harness.assert_untouched("shortcut sheet");
+    harness.frame(vec![egui::Event::Text("?".into())]);
+    assert!(!harness.editor.shortcut_sheet, "? closes the sheet");
+    harness.editor.shortcut_sheet = true;
+    harness.idle(1);
+    harness.press(egui::Key::Escape, egui::Modifiers::NONE);
+    assert!(!harness.editor.shortcut_sheet, "Esc closes the sheet");
+
+    harness.idle(1);
+    harness.press(egui::Key::Backspace, egui::Modifiers::NONE);
+    assert_eq!(harness.block_count(), 1, "the editor has its keys back");
 }

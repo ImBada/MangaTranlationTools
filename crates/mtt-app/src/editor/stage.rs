@@ -502,11 +502,7 @@ fn canvas_notice(editor: &Editor, painter: &egui::Painter, stage: Rect) {
 /// and hold repeats), and copying the font settings.
 fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecord) {
     // Areas draw above windows, so stay out of the way while a dialog is open.
-    let dialog_open = editor.shortcut_sheet
-        || editor.find.open
-        || editor.app_modal_open
-        || editor.preset_backup_dialog.is_some()
-        || editor.character_dialog.is_some();
+    let dialog_open = editor.dialog_open();
     if editor.layer != Layer::Overlay
         || editor.final_output_preview()
         || editor.selection.len() != 1
@@ -1744,6 +1740,18 @@ fn click(editor: &mut Editor, page: &PageRecord, point: Pos2, modifiers: Modifie
 
 type ShortcutAction = Box<dyn FnOnce(&mut Editor, &mut Services)>;
 
+/// Keys while the shortcut sheet is open: Esc and `?` close it, nothing reaches the page
+/// behind it.
+pub fn shortcut_sheet_keys(editor: &mut Editor, ctx: &egui::Context) {
+    let close = ctx.input_mut(|input| {
+        input.consume_key(Modifiers::NONE, Key::Escape)
+            || input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "?"))
+    });
+    if close {
+        editor.shortcut_sheet = false;
+    }
+}
+
 /// Editor keyboard shortcuts (only while no text field has focus).
 pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Services) {
     let one_hand = services.settings.one_hand_mode;
@@ -1753,17 +1761,13 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
         let command = Modifiers::COMMAND;
         let command_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         if input.consume_key(Modifiers::NONE, Key::Escape) {
-            // Esc closes the shortcut sheet, else leaves the zoom tool, then the range tool.
+            // Esc leaves the zoom tool, then the range tool.
             actions.push(Box::new(|editor, _| {
-                if editor.shortcut_sheet {
-                    editor.shortcut_sheet = false;
-                } else {
-                    editor.escape_tool();
-                }
+                editor.escape_tool();
             }));
         }
         if input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "?")) {
-            actions.push(Box::new(|editor, _| editor.shortcut_sheet = !editor.shortcut_sheet));
+            actions.push(Box::new(|editor, _| editor.shortcut_sheet = true));
         }
         if input.consume_key(command_shift, Key::Z) || input.consume_key(command, Key::Y) {
             let ctx = ctx.clone();

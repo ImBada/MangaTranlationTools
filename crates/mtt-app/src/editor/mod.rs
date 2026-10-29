@@ -2391,6 +2391,17 @@ impl Editor {
         Ok(())
     }
 
+    /// A dialog is up (`modalOpen`): the editor behind it takes no keys and the canvas
+    /// quick controls stay hidden.
+    fn dialog_open(&self) -> bool {
+        self.app_modal_open
+            || self.shortcut_sheet
+            || self.work_notes_draft.is_some()
+            || self.find.open
+            || self.preset_backup_dialog.is_some()
+            || self.character_dialog.is_some()
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -2418,11 +2429,7 @@ impl Editor {
         // Tab / Shift+Tab taken by `MttApp::raw_input_hook`, applied before drawing so the
         // new selection shows this frame.
         let step = std::mem::take(&mut self.pending_block_step);
-        let dialog_open = self.app_modal_open
-            || self.work_notes_draft.is_some()
-            || self.find.open
-            || self.preset_backup_dialog.is_some()
-            || self.character_dialog.is_some();
+        let dialog_open = self.dialog_open();
         if step != 0 && !dialog_open && self.mode() == Mode::Translate {
             self.select_adjacent_block(step);
         }
@@ -2474,15 +2481,16 @@ impl Editor {
         panels::find_replace_window(self, ui);
         panels::preset_backup_window(self, ui, services);
         panels::character_override_window(self, ui, services);
-        // `modalOpen`: no editor shortcuts while a dialog is up. A focused text field keeps
-        // its keys, number and colour fields too.
-        let modal_open = self.app_modal_open
-            || self.find.open
-            || self.preset_backup_dialog.is_some()
-            || self.character_dialog.is_some();
-        let text_focused = self.text_editing || ui.ctx().text_edit_focused();
-        if !text_focused && !modal_open {
-            stage::shortcuts(self, &ui.ctx().clone(), services);
+        // `modalOpen`: no editor shortcuts while a dialog is up (or was when the frame
+        // began: the Esc that closed it is not the editor's); the shortcut sheet only takes
+        // the keys that close it. A focused text field keeps its keys, number and colour
+        // fields too.
+        let ctx = ui.ctx().clone();
+        let text_focused = self.text_editing || ctx.text_edit_focused();
+        if self.shortcut_sheet && !self.app_modal_open {
+            stage::shortcut_sheet_keys(self, &ctx);
+        } else if !text_focused && !dialog_open && !self.dialog_open() {
+            stage::shortcuts(self, &ctx, services);
         }
         let ui_state = &mut services.ui_state;
         if self.widgets.store(&mut ui_state.widgets, &mut ui_state.inspector_order, &mut ui_state.widget_canvas) {
