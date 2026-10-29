@@ -79,6 +79,8 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `LaMa 받기`를 합니다. 모델(약 200MB)과 모델을 돌릴 LibTorch(PyTorch의 C++ 엔진, 압축 약 70~120MB)를 받습니다.
 모델은 앱 안에서 LibTorch로 돌아갑니다(Apple Silicon Mac은 GPU(MPS), Windows·Linux x64는 CPU). Intel Mac에는 LibTorch 빌드가 없어 LaMa를 쓸 수 없습니다.
+Windows·Linux x64에서 NVIDIA GPU(CUDA 13.3 이상을 지원하는 드라이버, Turing 이상)가 있으면 인페인트 탭의 `실행 장치`에서 `GPU (CUDA)`를 골라 CUDA용 LibTorch와 NVIDIA 런타임 라이브러리(Windows 약 2.3GB, Linux 약 2.7GB)를 받습니다.
+CUDA로 못 돌면 CPU로 돌아가고 이유를 설정에 표시합니다. (CUDA 경로는 아직 실제 NVIDIA 장비에서 확인하지 않았습니다.)
 둘레가 한 가지 색인 글자(흰 말풍선 안 등)는 모델 없이 그 색으로 채우고, 나머지만 한 변 1024px 이하 영역으로 나눠 모델에 넘깁니다.
 그보다 큰 영역은 줄이지 않고, 주변 128px을 붙인 타일로 나눠 원래 해상도로 차례로 채웁니다.
 

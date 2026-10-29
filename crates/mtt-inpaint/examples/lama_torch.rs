@@ -14,7 +14,7 @@ fn main() {
     let cpu = args.last().map(String::as_str) == Some("cpu");
     let started = Instant::now();
     mtt_torch::load(args[0].as_ref()).expect("runtime");
-    let device = if cpu { Device::Cpu } else { TorchLama::default_device() };
+    let device = if !cpu && mtt_torch::mps_available() { Device::Mps } else { Device::Cpu };
     let model = TorchLama::load(args[1].as_ref(), device).expect("model");
     println!("device={:?} load={:.2}s", model.device(), started.elapsed().as_secs_f32());
     let args = &args[1..];

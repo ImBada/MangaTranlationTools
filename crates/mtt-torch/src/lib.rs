@@ -2,15 +2,20 @@
 //! `koharu-torch`, the C shim koharu builds against them (tch-rs's C API). Only the
 //! operations LaMa and the text segmentation model need are bound.
 //!
-//! `load` opens the libraries once per process and they stay loaded. All the unsafe code
-//! is in `ffi`.
+//! `load` (or `load_with`, for a build whose libraries go elsewhere, like CUDA's) opens
+//! the libraries once per process and they stay loaded. `cuda_driver` asks NVIDIA's driver
+//! about the GPUs without LibTorch. All the unsafe code is in `ffi`.
 
 mod ffi;
 
-pub use ffi::{Device, Tensor, is_loaded, load, mps_available};
+pub use ffi::{
+    CudaDriver, CudaGpu, Device, LoadError, Tensor, cuda_device_count, cuda_driver, has_cuda, is_loaded, load,
+    load_with, mps_available,
+};
 
-/// The runtime's libraries for this platform, in the order they're opened: each one's
-/// dependencies are already loaded when it opens, and the shim comes last.
+/// The CPU (on macOS the MPS) runtime's libraries for this platform, in the order they're
+/// opened: each one's dependencies are already loaded when it opens, and the shim comes
+/// last.
 pub const LIBRARIES: &[&str] = if cfg!(target_os = "windows") {
     &["libiomp5md.dll", "c10.dll", "torch_global_deps.dll", "torch_cpu.dll", "torch.dll", "koharu-torch.dll"]
 } else if cfg!(target_os = "macos") {

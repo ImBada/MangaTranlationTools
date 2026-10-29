@@ -1,6 +1,6 @@
 //! LaMa on LibTorch (`mtt-torch`): Big-LaMa's `FFCResNetGenerator` written out with
-//! torch operations, on MPS when the Mac has it and otherwise the CPU. BatchNorm is folded
-//! into the convolutions when the weights load.
+//! torch operations, in float32 on the device `torch_runtime` picks (CUDA, MPS or the
+//! CPU). BatchNorm is folded into the convolutions when the weights load.
 
 use std::path::Path;
 
@@ -52,11 +52,6 @@ impl TorchLama {
             std::fs::read(path).map_err(|e| format!("LaMa 모델을 읽지 못했습니다 ({}): {e}", path.display()))?;
         let weights = Weights::parse(&bytes).map_err(|e| format!("LaMa 모델을 읽지 못했습니다: {e}"))?;
         Self::from_weights(&weights, device).map_err(|e| format!("LaMa 모델 구조가 맞지 않습니다: {e}"))
-    }
-
-    /// MPS when available, otherwise the CPU.
-    pub fn default_device() -> Device {
-        crate::torch_runtime::default_device()
     }
 
     pub fn device(&self) -> Device {

@@ -1,11 +1,16 @@
 //! The shim's C API (`torch_api.h`, `torch_api_generated.h` of koharu-rs/torch) and safe
 //! wrappers over it. Every operation returns a new tensor through an `out__` array and
-//! reports C++ exceptions through `get_and_reset_last_err`.
+//! reports C++ exceptions through `get_and_reset_last_err`. `cuda_driver` probes NVIDIA's
+//! driver API.
 
 #![allow(unsafe_code)]
 
+mod cuda_driver;
+
+pub use cuda_driver::{CudaDriver, CudaGpu, cuda_driver};
+
 use std::ffi::{CStr, c_char, c_int, c_void};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 use std::sync::{Mutex, OnceLock};
 
@@ -36,6 +41,9 @@ macro_rules! api {
 api! {
     get_and_reset_last_err: fn() -> *mut c_char;
     at_context_has_mps: fn() -> bool;
+    at_context_has_cuda: fn() -> bool;
+    atc_cuda_is_available: fn() -> c_int;
+    atc_cuda_device_count: fn() -> c_int;
     at_tensor_of_data: fn(*const c_void, *const i64, usize, usize, c_int) -> Raw;
     at_copy_data: fn(Raw, *mut c_void, usize, usize);
     at_shallow_clone: fn(Raw) -> Raw;
@@ -80,21 +88,82 @@ static RUNTIME: OnceLock<Runtime> = OnceLock::new();
 /// Opens the runtime in `directory` (`crate::LIBRARIES`). Later calls return at once,
 /// whatever directory they name.
 pub fn load(directory: &Path) -> Result<(), String> {
-    static LOADING: Mutex<()> = Mutex::new(());
-    let _guard = LOADING.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    load_with(&[], directory, crate::LIBRARIES).map_err(|error| error.message)
+}
+
+/// Why [`load_with`] failed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoadError {
+    pub message: String,
+    /// Some of this build's own libraries had opened before the failure. They stay loaded
+    /// (unloading LibTorch half-way isn't safe), so no other build can load in this
+    /// process.
+    pub partial: bool,
+}
+
+impl std::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)
+    }
+}
+
+/// Opens `dependencies` (full paths, such as the CUDA build's NVIDIA libraries), then
+/// `libraries` from `directory`, in order: each one's dependencies are already loaded
+/// when it opens (they resolve by name to the loaded ones), and the shim comes last.
+/// Later calls return at once once one has succeeded, whatever they name. Libraries
+/// opened by a failed call stay loaded.
+pub fn load_with(dependencies: &[PathBuf], directory: &Path, libraries: &[&str]) -> Result<(), LoadError> {
+    /// The build a failed call opened part of: no other may load after it.
+    static PARTIAL: Mutex<Option<PathBuf>> = Mutex::new(None);
+    let mut partial = PARTIAL.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     if RUNTIME.get().is_some() {
         return Ok(());
     }
-    let mut libraries = Vec::new();
-    for name in crate::LIBRARIES {
-        let path = directory.join(name);
-        let library = unsafe { open(&path) }.map_err(|e| format!("{}: {e}", path.display()))?;
-        libraries.push(library);
+    if let Some(loaded) = partial.as_deref().filter(|loaded| *loaded != directory) {
+        return Err(LoadError {
+            message: format!(
+                "{}의 LibTorch가 일부 로드되어 있어 다른 LibTorch를 불러올 수 없습니다. 앱을 다시 시작해 주세요.",
+                loaded.display()
+            ),
+            // None of this build's opened.
+            partial: false,
+        });
     }
-    let shim = libraries.last().expect("the shim is listed");
-    let api = unsafe { Api::load(shim) }?;
-    let _ = RUNTIME.set(Runtime { api, _libraries: libraries });
-    Ok(())
+    let mut opened = Vec::new();
+    let paths = dependencies.iter().cloned().chain(libraries.iter().map(|name| directory.join(name)));
+    for (index, path) in paths.enumerate() {
+        match unsafe { open(&path) } {
+            Ok(library) => opened.push(library),
+            Err(error) => {
+                let failure =
+                    LoadError { message: format!("{}: {error}", path.display()), partial: index > dependencies.len() };
+                if failure.partial {
+                    *partial = Some(directory.to_owned());
+                }
+                // Closing them could run LibTorch's or CUDA's teardown half-initialised.
+                std::mem::forget(opened);
+                return Err(failure);
+            }
+        }
+    }
+    let api = match opened[dependencies.len()..].last() {
+        Some(shim) => unsafe { Api::load(shim) },
+        None => Err("라이브러리 목록이 비어 있습니다".to_owned()),
+    };
+    match api {
+        Ok(api) => {
+            let _ = RUNTIME.set(Runtime { api, _libraries: opened });
+            Ok(())
+        }
+        Err(message) => {
+            let partial_load = opened.len() > dependencies.len();
+            if partial_load {
+                *partial = Some(directory.to_owned());
+            }
+            std::mem::forget(opened);
+            Err(LoadError { message, partial: partial_load })
+        }
+    }
 }
 
 #[cfg(windows)]
@@ -139,11 +208,35 @@ pub fn mps_available() -> bool {
     })
 }
 
+/// Whether the loaded LibTorch build has CUDA (whatever the machine has).
+pub fn has_cuda() -> bool {
+    api().is_ok_and(|api| {
+        let has = unsafe { (api.at_context_has_cuda)() };
+        check(api).is_ok() && has
+    })
+}
+
+/// The CUDA devices LibTorch can use: none without a CUDA build, a driver or a GPU.
+pub fn cuda_device_count() -> usize {
+    let Ok(api) = api() else { return 0 };
+    let available = unsafe { (api.atc_cuda_is_available)() };
+    if check(api).is_err() || available != 1 {
+        return 0;
+    }
+    let count = unsafe { (api.atc_cuda_device_count)() };
+    if check(api).is_err() {
+        return 0;
+    }
+    usize::try_from(count).unwrap_or(0)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Device {
     Cpu,
     /// Apple's Metal Performance Shaders.
     Mps,
+    /// The NVIDIA GPU with this CUDA device index.
+    Cuda(usize),
 }
 
 impl Device {
@@ -152,6 +245,7 @@ impl Device {
         match self {
             Self::Cpu => -1,
             Self::Mps => -2,
+            Self::Cuda(index) => c_int::try_from(index).expect("a CUDA device index fits an int"),
         }
     }
 }

@@ -7,6 +7,7 @@ use eframe::egui::{self, RichText};
 use mtt_core::settings::{
     AppSettings, ModelProvider, ReasoningEffort, TRANSLATION_PARALLEL_MAX, TRANSLATION_PARALLEL_MIN, TranslationMode,
 };
+use mtt_inpaint::torch_runtime::{Flavor, Preference, RuntimeStatus};
 
 use crate::app::AppEvent;
 use crate::services::Services;
@@ -15,24 +16,21 @@ use crate::update_check::{self, UpdateStatus};
 use crate::worker::Worker;
 
 /// `LamaRuntimeStatus` without the job flags (those live in [`SettingsView`]), with the
-/// text segmentation model's.
+/// text segmentation model's. Both carry the LibTorch runtime they share.
 #[derive(Debug, Clone)]
 pub struct LamaRuntimeStatus {
     lama: mtt_inpaint::lama::LamaStatus,
-    /// Where the model runs.
-    device: &'static str,
     segmentation: mtt_inpaint::text_segmentation::SegmentationStatus,
-    segmentation_device: &'static str,
 }
 
 impl LamaRuntimeStatus {
+    /// Asks the NVIDIA driver: on a worker thread.
     fn detect(paths: &mtt_core::paths::AppPaths) -> Self {
-        Self {
-            lama: mtt_inpaint::lama::status(paths),
-            device: mtt_inpaint::lama::device_label(),
-            segmentation: mtt_inpaint::text_segmentation::status(paths),
-            segmentation_device: mtt_inpaint::text_segmentation::device_label(),
-        }
+        Self { lama: mtt_inpaint::lama::status(paths), segmentation: mtt_inpaint::text_segmentation::status(paths) }
+    }
+
+    fn runtime(&self) -> &RuntimeStatus {
+        &self.lama.runtime
     }
 }
 
@@ -44,7 +42,7 @@ pub enum ModelJob {
 }
 
 pub enum LamaEvent {
-    Status(LamaRuntimeStatus),
+    Status(Box<LamaRuntimeStatus>),
     Progress(ModelJob, String),
     DownloadFinished(ModelJob, Result<(), String>),
 }
@@ -101,6 +99,8 @@ pub struct SettingsView {
     lama_status: Option<LamaRuntimeStatus>,
     lama: DownloadState,
     segmentation: DownloadState,
+    /// Saving the CPU/CUDA choice failed.
+    runtime_error: Option<String>,
     update: Option<UpdateStatus>,
     update_busy: bool,
     test_endpoint: Option<String>,
@@ -124,6 +124,7 @@ impl SettingsView {
         self.save_error = None;
         self.lama.action = None;
         self.segmentation.action = None;
+        self.runtime_error = None;
         self.reset_message = None;
         self.refresh_lama_status(services, worker);
         if !self.update.as_ref().is_some_and(UpdateStatus::fresh) {
@@ -133,7 +134,7 @@ impl SettingsView {
 
     fn refresh_lama_status(&self, services: &Services, worker: &Worker<AppEvent>) {
         let paths = services.paths.clone();
-        worker.spawn(move || AppEvent::Lama(LamaEvent::Status(LamaRuntimeStatus::detect(&paths))));
+        worker.spawn(move || AppEvent::Lama(LamaEvent::Status(Box::new(LamaRuntimeStatus::detect(&paths)))));
     }
 
     fn refresh_update(&mut self, worker: &Worker<AppEvent>) {
@@ -154,7 +155,7 @@ impl SettingsView {
     pub fn on_lama_event(&mut self, event: LamaEvent, services: &Services, worker: &Worker<AppEvent>) -> bool {
         match event {
             LamaEvent::Status(status) => {
-                self.lama_status = Some(status);
+                self.lama_status = Some(*status);
                 false
             }
             LamaEvent::Progress(job, line) => {
@@ -196,11 +197,11 @@ impl SettingsView {
     /// `downloadLamaModel`: the model and the LibTorch runtime, whichever are missing.
     fn download_lama(&mut self, services: &Services, worker: &Worker<AppEvent>) {
         if let Some(status) = self.lama_status.as_ref().map(|status| &status.lama) {
-            if status.model_exists && status.runtime_exists {
+            if status.model_exists && status.runtime.installed {
                 self.lama.action = Some((ActionState::Success, "LaMa가 이미 준비되어 있습니다.".into()));
                 return;
             }
-            if status.runtime_path.is_none() {
+            if status.runtime.path.is_none() {
                 self.lama.action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
                 return;
             }
@@ -214,12 +215,12 @@ impl SettingsView {
     /// The text segmentation model and the LibTorch runtime, whichever are missing.
     fn download_segmentation(&mut self, services: &Services, worker: &Worker<AppEvent>) {
         if let Some(status) = self.lama_status.as_ref().map(|status| &status.segmentation) {
-            if status.ready() {
+            if status.model_exists && status.runtime.installed {
                 self.segmentation.action =
                     Some((ActionState::Success, "글자 분할 모델이 이미 준비되어 있습니다.".into()));
                 return;
             }
-            if status.runtime_path.is_none() {
+            if status.runtime.path.is_none() {
                 self.segmentation.action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
                 return;
             }
@@ -296,12 +297,24 @@ impl SettingsView {
         self.tab = SettingsTab::Inpaint;
     }
 
-    /// The 인페인트 tab: LaMa, then the text segmentation model.
+    /// The 인페인트 tab: on Windows and Linux the runtime's CUDA/CPU choice, then LaMa and
+    /// the text segmentation model.
     fn inpaint_tab(&mut self, ui: &mut egui::Ui, services: &Services, worker: &Worker<AppEvent>) {
         let status = self.lama_status.clone();
+        let runtime = status.as_ref().map(LamaRuntimeStatus::runtime);
+        if let Some(runtime) = runtime.filter(|runtime| runtime.cuda_offered) {
+            self.runtime_section(ui, runtime, services, worker);
+            ui.add_space(18.0);
+        }
         let runtime_note = |path: Option<&std::path::Path>, missing: &str| match path {
             Some(path) => format!("LibTorch 경로: {}", path.display()),
             None => missing.to_owned(),
+        };
+        let cuda = runtime.is_some_and(|runtime| runtime.wanted == Flavor::Cuda);
+        let runtime_label = if cuda { "LibTorch (CUDA)" } else { "LibTorch" };
+        let runtime_size = |cpu: &str| match runtime.filter(|_| cuda) {
+            Some(runtime) => format!("CUDA용 LibTorch와 CUDA 라이브러리 약 {}", gigabytes(runtime.size)),
+            None => cpu.to_owned(),
         };
         let lama = status.as_ref().map(|status| &status.lama);
         let mut notes = Vec::new();
@@ -311,10 +324,11 @@ impl SettingsView {
         if let Some(lama) = lama {
             notes.push(format!("모델 경로: {}", lama.model_path.display()));
             notes.push(runtime_note(
-                lama.runtime_path.as_deref(),
+                lama.runtime.path.as_deref(),
                 "이 플랫폼용 LibTorch가 없어 LaMa 모델을 앱 안에서 돌릴 수 없습니다.",
             ));
         }
+        let sizes = format!("모델 약 200MB, {} (압축)", runtime_size("LibTorch 약 70~120MB"));
         let (download, refresh) = model_section(
             ui,
             &self.lama,
@@ -322,10 +336,12 @@ impl SettingsView {
                 title: "LaMa 인페인트",
                 description: "원문 글자를 더 자연스럽게 지우는 인페인트 모델입니다. 모델과 실행용 LibTorch를 받기 전에는 로컬 채우기를 씁니다.",
                 button: "LaMa 받기",
-                sizes: "모델 약 200MB, LibTorch 약 70~120MB (압축)",
+                sizes: &sizes,
                 model_exists: lama.is_some_and(|lama| lama.model_exists),
-                runtime_exists: lama.is_some_and(|lama| lama.runtime_exists),
-                device: status.as_ref().map(|status| status.device),
+                runtime_label,
+                runtime_exists: lama.is_some_and(|lama| lama.runtime.installed),
+                runtime_usable: lama.is_some_and(|lama| lama.runtime.usable),
+                device: runtime.map(|runtime| runtime.device.as_str()),
                 notes,
             },
         );
@@ -342,12 +358,13 @@ impl SettingsView {
                 vec![
                     format!("모델 경로: {}", segmentation.model_path.display()),
                     runtime_note(
-                        segmentation.runtime_path.as_deref(),
+                        segmentation.runtime.path.as_deref(),
                         "이 플랫폼용 LibTorch가 없어 글자 분할 모델을 앱 안에서 돌릴 수 없습니다.",
                     ),
                 ]
             })
             .unwrap_or_default();
+        let sizes = format!("모델 약 210MB, {} (압축, LaMa와 함께 씀)", runtime_size("LibTorch 약 70~120MB"));
         let (download, refresh) = model_section(
             ui,
             &self.segmentation,
@@ -355,10 +372,12 @@ impl SettingsView {
                 title: "글자 분할 모델",
                 description: "블록을 지울 때 글자 픽셀을 찾아 마스크를 만드는 모델입니다(Manga109로 학습, 라이선스 표기 없음). 받기 전이거나 실행에 실패하면 밝기로 글자를 찾습니다.",
                 button: "글자 분할 모델 받기",
-                sizes: "모델 약 210MB, LibTorch 약 70~120MB (압축, LaMa와 함께 씀)",
+                sizes: &sizes,
                 model_exists: segmentation.is_some_and(|segmentation| segmentation.model_exists),
-                runtime_exists: segmentation.is_some_and(|segmentation| segmentation.runtime_exists),
-                device: status.as_ref().map(|status| status.segmentation_device),
+                runtime_label,
+                runtime_exists: segmentation.is_some_and(|segmentation| segmentation.runtime.installed),
+                runtime_usable: segmentation.is_some_and(|segmentation| segmentation.runtime.usable),
+                device: runtime.map(|runtime| runtime.device.as_str()),
                 notes,
             },
         );
@@ -367,6 +386,52 @@ impl SettingsView {
         }
         if refresh {
             self.refresh_lama_status(services, worker);
+        }
+    }
+
+    /// Windows and Linux: the GPU (CUDA) or the CPU for the LibTorch runtime both models
+    /// share, what the driver reports and why CUDA isn't used.
+    fn runtime_section(
+        &mut self,
+        ui: &mut egui::Ui,
+        runtime: &RuntimeStatus,
+        services: &Services,
+        worker: &Worker<AppEvent>,
+    ) {
+        ui.label(theme::semibold("실행 장치"));
+        theme::hint(
+            ui,
+            "LaMa와 글자 분할 모델이 함께 쓰는 LibTorch입니다. NVIDIA GPU가 있으면 CUDA용을 받아 GPU에서 돌립니다.",
+        );
+        ui.add_space(8.0);
+        match &runtime.gpu {
+            Ok(gpu) => {
+                let current = if runtime.wanted == Flavor::Cuda { Preference::Gpu } else { Preference::Cpu };
+                let gpu_hint = format!(
+                    "{gpu}에서 실행합니다. 받기 버튼이 CUDA용 LibTorch와 CUDA 라이브러리(약 {})를 받습니다.",
+                    gigabytes(runtime.cuda_size)
+                );
+                let options = [
+                    (Preference::Gpu, "GPU (CUDA)", gpu_hint.as_str()),
+                    (Preference::Cpu, "CPU", "CPU용 LibTorch(약 70~120MB)로 실행합니다."),
+                ];
+                if let Some(choice) = theme::segmented(ui, current, &options) {
+                    self.runtime_error = mtt_inpaint::torch_runtime::set_preference(&services.paths, choice).err();
+                    self.refresh_lama_status(services, worker);
+                }
+                theme::hint(ui, &format!("NVIDIA GPU: {gpu}"));
+            }
+            // An installed CUDA build says the same in its note.
+            Err(reason) if runtime.note.is_none() => {
+                theme::hint(ui, &format!("GPU(CUDA)를 쓸 수 없어 CPU로 실행합니다: {reason}"))
+            }
+            Err(_) => {}
+        }
+        if let Some(note) = &runtime.note {
+            ui.label(RichText::new(note).small().color(theme::WARNING));
+        }
+        if let Some(error) = &self.runtime_error {
+            ui.label(RichText::new(format!("설정을 저장하지 못했습니다: {error}")).small().color(theme::DANGER));
         }
     }
 
@@ -934,9 +999,13 @@ struct ModelSection<'a> {
     /// The download sizes, on the button's hover.
     sizes: &'a str,
     model_exists: bool,
+    /// `LibTorch`, or `LibTorch (CUDA)` when that's the build to get.
+    runtime_label: &'a str,
     runtime_exists: bool,
+    /// Another build runs meanwhile (the CPU one while CUDA's isn't there).
+    runtime_usable: bool,
     /// Where the model runs, once the status is known.
-    device: Option<&'static str>,
+    device: Option<&'a str>,
     /// Paths and the like, under the status.
     notes: Vec<String>,
 }
@@ -949,8 +1018,9 @@ fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSectio
     ui.add_space(8.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 18.0;
-        runtime_state(ui, "모델", section.model_exists, state.running);
-        runtime_state(ui, "LibTorch", section.runtime_exists, state.running);
+        runtime_state(ui, "모델", section.model_exists, state.running, None);
+        let stand_in = section.runtime_usable.then_some("받으면 GPU로 실행");
+        runtime_state(ui, section.runtime_label, section.runtime_exists, state.running, stand_in);
         if let Some(device) = section.device {
             ui.label(RichText::new(format!("실행: {device}")).small().color(theme::TEXT_WEAK));
         }
@@ -1025,11 +1095,19 @@ fn spawn_download(
     });
 }
 
-fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool) {
+/// `bytes` as `2.2GB`.
+fn gigabytes(bytes: u64) -> String {
+    format!("{:.1}GB", bytes as f64 / f64::from(1u32 << 30))
+}
+
+/// `optional`: what to say when it's missing but not needed.
+fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool, optional: Option<&str>) {
     let (text, color) = if ready {
         ("준비됨", theme::SUCCESS)
     } else if busy {
         ("진행 중", theme::WARNING)
+    } else if let Some(text) = optional {
+        (text, theme::WARNING)
     } else {
         ("필요", theme::DANGER)
     };

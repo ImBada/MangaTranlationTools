@@ -95,7 +95,7 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 - [x] PSD 내보내기/가져오기 직접 구현 (RLE·그룹·한글 레이어 이름 지원, 실제 포토샵 파일과 psd-tools로 교차 검증)
 - [x] Codex(ChatGPT 계정): 처음에는 사용자가 실행한 로컬 프록시(`npx openai-oauth`)에 접속했으나, koharu처럼 앱 안의 기기 인증 로그인으로 바꿈(#42, `mtt-translate/src/codex.rs`)
 - [x] LaMa 네이티브 추론 (LibTorch를 실행 중에 불러옴: macOS MPS, Windows·Linux CPU). 결과와 속도는 PyTorch MPS와 같고(실제 영역 8개 3.3~3.6초), 앞서 쓰던 candle 이식(5.9초)보다 약 1.7배 빠름
-- [ ] Windows·Linux NVIDIA GPU: koharu-rs/torch CUDA 빌드(약 800MB~1GB)와 CUDA 런타임 라이브러리를 받아 쓰기
+- [~] Windows·Linux NVIDIA GPU: koharu-rs/torch CUDA 빌드와 NVIDIA PyPI 휠(CUDA 13.3 런타임·cuBLAS·cuDNN 등)을 받아 쓰기(#41). 코드와 다운로드 고정값은 넣었고, 실제 NVIDIA 장비에서 로드·결과 확인 필요(`MTT_RUNTIME_TEST_DATA=<폴더> cargo test -p mtt-inpaint -- --ignored --nocapture downloads_and_loads`)
 - [x] 폰트 프리셋 백업/복원
 - [x] 결과 리포트 (HTML은 TS와 바이트 단위 동일, "이동" 버튼은 로컬 HTTP 포커스 엔드포인트로 연결)
 - [x] 작품 일괄 번역 (가져오기 + 번역 한 번에)

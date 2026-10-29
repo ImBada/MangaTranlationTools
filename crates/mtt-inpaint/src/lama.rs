@@ -11,13 +11,13 @@ use mtt_core::paths::AppPaths;
 
 use crate::lama_torch::TorchLama;
 use crate::model_cache::{self, ModelCache};
-use crate::torch_runtime;
+use crate::torch_runtime::{self, RuntimeStatus};
 
 pub const MODEL_URL: &str = "https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors";
 
 #[derive(Debug, Clone)]
 pub enum Lama {
-    /// The model file on the LibTorch runtime in `runtime`, window by window
+    /// The model file on the LibTorch runtime in the folder `runtime`, window by window
     /// (`windows.rs`).
     Torch { model: PathBuf, runtime: PathBuf },
     /// A configured command, given the whole crop.
@@ -35,16 +35,15 @@ pub struct LamaCommand {
 pub struct LamaStatus {
     pub model_exists: bool,
     pub model_path: PathBuf,
-    /// The LibTorch runtime's folder; `None` where none is published for this platform.
-    pub runtime_path: Option<PathBuf>,
-    pub runtime_exists: bool,
+    /// The LibTorch runtime (shared with the text segmentation model).
+    pub runtime: RuntimeStatus,
     /// The configured command, which is used instead of the model.
     pub command: Option<PathBuf>,
 }
 
 impl LamaStatus {
     pub fn ready(&self) -> bool {
-        (self.model_exists && self.runtime_exists) || self.command.is_some()
+        (self.model_exists && self.runtime.usable) || self.command.is_some()
     }
 }
 
@@ -52,33 +51,27 @@ pub fn model_path(paths: &AppPaths) -> PathBuf {
     paths.models_dir.join("lama-manga").join("lama-manga.safetensors")
 }
 
+/// Asks the NVIDIA driver (`torch_runtime::status`), so not on the UI thread.
 pub fn status(paths: &AppPaths) -> LamaStatus {
     let model_path = model_path(paths);
-    let runtime_path = torch_runtime::runtime_dir(paths);
     LamaStatus {
         model_exists: model_path.is_file(),
         model_path,
-        runtime_exists: runtime_path.as_deref().is_some_and(torch_runtime::installed),
-        runtime_path,
+        runtime: torch_runtime::status(paths),
         command: LamaCommand::from_env().map(|command| command.program),
     }
 }
 
-/// Where the model runs (or will, before it has loaded).
-pub fn device_label() -> &'static str {
-    MODEL.device_label()
-}
-
 impl Lama {
-    /// The configured command, otherwise the model when it and the runtime have been
+    /// The configured command, otherwise the model when it and a runtime have been
     /// downloaded.
     pub fn detect(paths: &AppPaths) -> Option<Self> {
         if let Some(command) = LamaCommand::from_env() {
             return Some(Self::Command(command));
         }
         let model = model_path(paths);
-        let runtime = torch_runtime::runtime_dir(paths).filter(|dir| torch_runtime::installed(dir))?;
-        model.is_file().then_some(Self::Torch { model, runtime })
+        (model.is_file() && torch_runtime::available(paths))
+            .then(|| Self::Torch { model, runtime: torch_runtime::libtorch_dir(paths) })
     }
 
     /// Inpaints a crop. `mask` is coverage (white = inpaint); the result matches `source`
@@ -86,7 +79,7 @@ impl Lama {
     pub fn inpaint(&self, source: &RgbaImage, mask: &GrayImage) -> Result<RgbaImage, String> {
         match self {
             Self::Torch { model, runtime } => {
-                let model = MODEL.get(model, runtime, || TorchLama::load(model, TorchLama::default_device()))?;
+                let model = MODEL.get(model, runtime, |device| TorchLama::load(model, device))?;
                 let _running = model_cache::exclusive();
                 crate::windows::inpaint_by_windows(source, mask, |image, mask| model.inpaint(image, mask))
             }
@@ -162,7 +155,8 @@ pub enum Download {
 }
 
 /// `startLamaModelDownload`: whatever is missing of the model (into
-/// `models/lama-manga/`) and the LibTorch runtime.
+/// `models/lama-manga/`) and the LibTorch runtime (CUDA's when the GPU allows,
+/// `torch_runtime::download`).
 pub fn download_lama(paths: &AppPaths, mut progress: impl FnMut(Download, u64, Option<u64>)) -> Result<(), String> {
     let model = model_path(paths);
     if !model.is_file() {
@@ -238,7 +232,7 @@ mod tests {
         let status = status(&paths);
         assert!(!status.model_exists);
         assert!(status.model_path.ends_with("models/lama-manga/lama-manga.safetensors"));
-        assert!(!status.runtime_exists && !status.ready());
+        assert!(!status.runtime.installed && !status.runtime.usable && !status.ready());
         assert!(Lama::detect(&paths).is_none() || status.command.is_some());
     }
 

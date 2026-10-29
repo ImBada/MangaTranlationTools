@@ -21,7 +21,8 @@ use crate::lama::Download;
 use crate::model_cache::{self, ModelCache};
 use crate::text_mask::{self, Glyphs};
 use crate::text_segmentation_torch::{PAD_MULTIPLE, TorchSegmenter};
-use crate::{Rect, dilate, torch_runtime};
+use crate::torch_runtime::{self, RuntimeStatus};
+use crate::{Rect, dilate};
 
 /// `mayocream/manga-text-segmentation-2025` (a safetensors port of
 /// `a-b-c-x-y-z/Manga-Text-Segmentation-2025`, trained on Manga109; no license is stated),
@@ -56,34 +57,23 @@ pub fn model_path(paths: &AppPaths) -> PathBuf {
 pub struct SegmentationStatus {
     pub model_exists: bool,
     pub model_path: PathBuf,
-    /// The LibTorch runtime's folder; `None` where none is published for this platform.
-    pub runtime_path: Option<PathBuf>,
-    pub runtime_exists: bool,
+    /// The LibTorch runtime (shared with LaMa).
+    pub runtime: RuntimeStatus,
 }
 
 impl SegmentationStatus {
     pub fn ready(&self) -> bool {
-        self.model_exists && self.runtime_exists
+        self.model_exists && self.runtime.usable
     }
 }
 
+/// Asks the NVIDIA driver (`torch_runtime::status`), so not on the UI thread.
 pub fn status(paths: &AppPaths) -> SegmentationStatus {
     let model_path = model_path(paths);
-    let runtime_path = torch_runtime::runtime_dir(paths);
-    SegmentationStatus {
-        model_exists: model_path.is_file(),
-        model_path,
-        runtime_exists: runtime_path.as_deref().is_some_and(torch_runtime::installed),
-        runtime_path,
-    }
+    SegmentationStatus { model_exists: model_path.is_file(), model_path, runtime: torch_runtime::status(paths) }
 }
 
-/// Where the model runs (or will, before it has loaded).
-pub fn device_label() -> &'static str {
-    MODEL.device_label()
-}
-
-/// The downloaded model on the LibTorch runtime in `runtime`.
+/// The downloaded model on the LibTorch runtime in the folder `runtime`.
 #[derive(Debug, Clone)]
 pub struct TextSegmentation {
     model: PathBuf,
@@ -94,18 +84,17 @@ pub struct TextSegmentation {
 static MODEL: ModelCache<TorchSegmenter> = ModelCache::new("Text segmentation", TorchSegmenter::device);
 
 impl TextSegmentation {
-    /// The model when it and the runtime have been downloaded.
+    /// The model when it and a runtime have been downloaded.
     pub fn detect(paths: &AppPaths) -> Option<Self> {
         let model = model_path(paths);
-        let runtime = torch_runtime::runtime_dir(paths).filter(|dir| torch_runtime::installed(dir))?;
-        model.is_file().then_some(Self { model, runtime })
+        (model.is_file() && torch_runtime::available(paths))
+            .then(|| Self { model, runtime: torch_runtime::libtorch_dir(paths) })
     }
 
     /// The glyph mask (white = glyph) of `crop`, part of a page whose long side is
     /// `page_side`.
     pub fn glyph_mask(&self, crop: &RgbaImage, page_side: u32) -> Result<GrayImage, String> {
-        let model = MODEL
-            .get(&self.model, &self.runtime, || TorchSegmenter::load(&self.model, torch_runtime::default_device()))?;
+        let model = MODEL.get(&self.model, &self.runtime, |device| TorchSegmenter::load(&self.model, device))?;
         let _running = model_cache::exclusive();
         segment(crop, page_side, |input, height, width| model.probabilities(input, height, width))
             .map_err(|e| format!("글자 분할 실패: {e}"))
@@ -428,7 +417,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = AppPaths::from_data_root(dir.path());
         let status = status(&paths);
-        assert!(!status.model_exists && !status.runtime_exists && !status.ready());
+        assert!(!status.model_exists && !status.runtime.installed && !status.ready());
         assert!(status.model_path.ends_with("models/manga-text-segmentation/model.safetensors"));
         assert!(TextSegmentation::detect(&paths).is_none());
     }

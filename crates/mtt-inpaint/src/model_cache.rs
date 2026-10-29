@@ -1,6 +1,7 @@
 //! The LibTorch models (LaMa, the text segmentation model) stay loaded between uses and
-//! are unloaded after `IDLE_LIMIT` without one; LibTorch itself stays loaded. They run one
-//! inference at a time between them.
+//! are unloaded after `IDLE_LIMIT` without one; LibTorch itself stays loaded, and picks the
+//! device they load onto (`torch_runtime::activate`). They run one inference at a time
+//! between them.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -34,13 +35,13 @@ impl<T: Send + Sync + 'static> ModelCache<T> {
         self.slot.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// The model from `path`, loaded with `load` (once LibTorch is, from `runtime`) unless
-    /// it already is.
+    /// The model from `path`, loaded with `load` onto the device LibTorch runs on (once it
+    /// has loaded from the runtime folder `runtime`) unless it already is.
     pub(crate) fn get(
         &'static self,
         path: &Path,
         runtime: &Path,
-        load: impl FnOnce() -> Result<T, String>,
+        load: impl FnOnce(Device) -> Result<T, String>,
     ) -> Result<Arc<T>, String> {
         let mut guard = self.lock();
         if let Some(loaded) = guard.as_mut().filter(|loaded| loaded.path == path) {
@@ -48,8 +49,9 @@ impl<T: Send + Sync + 'static> ModelCache<T> {
             return Ok(Arc::clone(&loaded.model));
         }
         let started = Instant::now();
-        mtt_torch::load(runtime).map_err(|e| format!("LibTorch를 불러오지 못했습니다: {e}"))?;
-        let model = Arc::new(load()?);
+        let device =
+            crate::torch_runtime::activate(runtime).map_err(|e| format!("LibTorch를 불러오지 못했습니다: {e}"))?;
+        let model = Arc::new(load(device)?);
         log::info!("{} loaded on {:?} in {:.2}s", self.name, (self.device)(&model), started.elapsed().as_secs_f32());
         let was_loaded = guard.is_some();
         *guard = Some(Loaded { path: path.to_owned(), model: Arc::clone(&model), last_used: Instant::now() });
@@ -57,16 +59,6 @@ impl<T: Send + Sync + 'static> ModelCache<T> {
             self.start_idle_watch();
         }
         Ok(model)
-    }
-
-    /// Where the model runs (or will, before it has loaded).
-    pub(crate) fn device_label(&self) -> &'static str {
-        match self.lock().as_ref().map(|loaded| (self.device)(&loaded.model)) {
-            Some(Device::Mps) => "GPU (MPS)",
-            Some(Device::Cpu) => "CPU",
-            None if cfg!(target_os = "macos") => "GPU (MPS)",
-            None => "CPU",
-        }
     }
 
     /// Unloads the model once it has been idle for `IDLE_LIMIT`.
@@ -90,7 +82,7 @@ impl<T: Send + Sync + 'static> ModelCache<T> {
 }
 
 /// Held for an inference: the GPU (or every CPU core) is busy anyway, and LibTorch's MPS
-/// stream is shared.
+/// or CUDA stream is shared.
 pub(crate) fn exclusive() -> MutexGuard<'static, ()> {
     static RUNNING: Mutex<()> = Mutex::new(());
     RUNNING.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
