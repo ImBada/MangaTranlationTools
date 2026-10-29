@@ -99,6 +99,11 @@ struct ModelList {
 /// address isn't asked at every keystroke.
 const MODEL_LIST_SETTLE: std::time::Duration = std::time::Duration::from_millis(700);
 
+/// A base URL as the settings store it.
+fn normalized_base_url(url: &str) -> String {
+    url.trim().trim_end_matches('/').to_owned()
+}
+
 #[derive(Default)]
 pub struct SettingsView {
     open: bool,
@@ -128,6 +133,10 @@ pub struct SettingsView {
     models: Option<ModelList>,
     /// The engine and address the model field is for, and since when.
     model_source: Option<(String, std::time::Instant)>,
+    /// Base URLs whose models load by themselves (with the API key): the saved one and
+    /// those the user finished typing, reloaded or tested. A URL still being typed
+    /// (`https://api.openai.co`) is not sent the key.
+    confirmed_base_urls: Vec<String>,
 }
 
 impl SettingsView {
@@ -137,6 +146,7 @@ impl SettingsView {
         self.codex_message = None;
         self.models = None;
         self.model_source = None;
+        self.confirmed_base_urls = vec![normalized_base_url(&services.settings.openai_compatible.base_url)];
         self.draft = Some(services.settings.clone());
         self.test_result = None;
         self.save_error = None;
@@ -541,9 +551,25 @@ impl SettingsView {
                 base_url_valid.then(|| format!("{base_url}\n{}", draft.openai_compatible.api_key.trim()))
             }
         };
-        self.load_models(ui.ctx(), source.clone(), draft, base_url, worker);
+        // The list loads by itself only for the signed-in account or a confirmed address, and
+        // not while a translation is running; the reload button asks any time.
+        let automatic = match draft.model_provider {
+            ModelProvider::OpenAiCodex => true,
+            ModelProvider::OpenAiCompatible => self.confirmed_base_urls.iter().any(|url| url == base_url),
+        };
+        if automatic && !job_active {
+            self.load_models(ui.ctx(), source.clone(), draft, base_url, worker);
+        }
         let mut reload = false;
         let models = self.models.as_ref().filter(|list| source.as_ref() == Some(&list.source));
+        let waiting = match (models, &source) {
+            (None, Some(_)) if job_active => Some("번역 작업이 끝나면 모델 목록을 불러옵니다."),
+            (None, Some(_)) if !automatic => Some("주소를 다 입력하고 칸을 벗어나면 모델 목록을 불러옵니다."),
+            _ => None,
+        };
+        let can_load = source.is_some();
+        // Leaving the Base URL field (or Enter) finishes typing the address.
+        let mut url_entered = false;
         match draft.model_provider {
             ModelProvider::OpenAiCodex => {
                 row(ui, "모델", &mut |ui| {
@@ -553,10 +579,14 @@ impl SettingsView {
                         &mut draft.codex.model,
                         mtt_core::settings::DEFAULT_CODEX_MODEL,
                         models,
+                        can_load,
                         &mut reload,
                     );
                     if models.is_none() && self.codex_account.is_none() {
                         theme::hint(ui, "로그인하면 쓸 수 있는 모델 목록을 불러옵니다.");
+                    }
+                    if let Some(waiting) = waiting {
+                        theme::hint(ui, waiting);
                     }
                 });
                 row(ui, "생각 수준", &mut |ui| {
@@ -593,11 +623,13 @@ impl SettingsView {
             ModelProvider::OpenAiCompatible => {
                 let show_key = &mut self.show_key;
                 row(ui, "Base URL", &mut |ui| {
-                    ui.add(
-                        egui::TextEdit::singleline(&mut draft.openai_compatible.base_url)
-                            .hint_text("http://127.0.0.1:1234/v1")
-                            .desired_width(300.0),
-                    );
+                    url_entered = ui
+                        .add(
+                            egui::TextEdit::singleline(&mut draft.openai_compatible.base_url)
+                                .hint_text("http://127.0.0.1:1234/v1")
+                                .desired_width(300.0),
+                        )
+                        .lost_focus();
                 });
                 row(ui, "API Key", &mut |ui| {
                     ui.horizontal(|ui| {
@@ -617,12 +649,20 @@ impl SettingsView {
                         &mut draft.openai_compatible.model,
                         "gpt-4o-mini",
                         models,
+                        can_load,
                         &mut reload,
                     );
+                    if let Some(waiting) = waiting {
+                        theme::hint(ui, waiting);
+                    }
                 });
             }
         }
+        if url_entered {
+            self.confirm_base_url(&draft.openai_compatible.base_url);
+        }
         if reload && let Some(source) = source {
+            self.confirm_base_url(base_url);
             self.fetch_models(source, draft, base_url, worker);
         }
         let note = match draft.model_provider {
@@ -679,6 +719,7 @@ impl SettingsView {
                 settings.openai_compatible.base_url = base_url.to_owned();
                 let config = mtt_translate::TranslationConfig::from_settings(&settings);
                 self.test_endpoint = Some(config.endpoint.base_url.clone());
+                self.confirm_base_url(base_url);
                 worker.spawn(move || {
                     AppEvent::ModelTest(
                         mtt_translate::test_model(&config).map(|reply| format!("모델 응답 확인 완료: {reply}")),
@@ -741,6 +782,14 @@ impl SettingsView {
                 self.model_source = Some((source, std::time::Instant::now()));
                 ctx.request_repaint_after(MODEL_LIST_SETTLE);
             }
+        }
+    }
+
+    /// Lets the models of `url` load by themselves from now on (see `confirmed_base_urls`).
+    fn confirm_base_url(&mut self, url: &str) {
+        let url = normalized_base_url(url);
+        if !self.confirmed_base_urls.contains(&url) {
+            self.confirmed_base_urls.push(url);
         }
     }
 
@@ -1223,13 +1272,15 @@ fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool, option
 }
 
 /// The model name field with the engine's models to pick from beside it, and what
-/// loading them said. Sets `reload` when asked to load them again.
+/// loading them said. Sets `reload` when asked to load them (again); `can_load` when there
+/// is an engine or address to ask.
 fn model_field(
     ui: &mut egui::Ui,
     id: &str,
     model: &mut String,
     hint: &str,
     list: Option<&ModelList>,
+    can_load: bool,
     reload: &mut bool,
 ) {
     let options = list.and_then(|list| list.result.as_ref()?.as_ref().ok());
@@ -1260,7 +1311,7 @@ fn model_field(
                 })
             })
         });
-        let idle = list.is_some_and(|list| list.result.is_some());
+        let idle = can_load && list.is_none_or(|list| list.result.is_some());
         if ui.add_enabled(idle, egui::Button::new("새로고침")).on_hover_text("모델 목록 다시 불러오기").clicked()
         {
             *reload = true;
@@ -1295,5 +1346,46 @@ fn effort_label(effort: ReasoningEffort) -> &'static str {
         ReasoningEffort::Medium => "보통",
         ReasoningEffort::High => "높음",
         ReasoningEffort::Xhigh => "최고",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Draws the translation tab for `draft` once its address and key have long settled.
+    fn draw(view: &mut SettingsView, draft: &mut AppSettings, job_active: bool) {
+        let ctx = egui::Context::default();
+        theme::install_icon_font(&ctx);
+        let worker = Worker::new(&ctx, 1);
+        let base_url = normalized_base_url(&draft.openai_compatible.base_url);
+        let source = format!("{base_url}\n{}", draft.openai_compatible.api_key);
+        view.model_source = Some((source, std::time::Instant::now() - MODEL_LIST_SETTLE * 2));
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 900.0))),
+            ..Default::default()
+        };
+        let path = std::env::temp_dir().join("mtt-settings-test-codex-auth.json");
+        let mut output = ctx.run_ui(input, |ui| {
+            view.translation_tab(ui, draft, &worker, job_active, true, true, &base_url, &path);
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn models_load_by_themselves_only_from_a_confirmed_address() {
+        let mut draft = AppSettings { model_provider: ModelProvider::OpenAiCompatible, ..AppSettings::default() };
+        // Still typing `https://api.openai.com/v1`, with the key filled in.
+        draft.openai_compatible.base_url = "http://127.0.0.1:9/v".into();
+        draft.openai_compatible.api_key = "secret".into();
+        let mut view = SettingsView::default();
+        draw(&mut view, &mut draft, false);
+        assert!(view.models.is_none(), "the key isn't sent to an address still being typed");
+
+        view.confirm_base_url("http://127.0.0.1:9/v/");
+        draw(&mut view, &mut draft, true);
+        assert!(view.models.is_none(), "nothing is asked while a translation runs");
+        draw(&mut view, &mut draft, false);
+        assert!(view.models.is_some(), "a finished address loads its models");
     }
 }
