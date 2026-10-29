@@ -18,9 +18,9 @@ use crate::layout::{
     BlockFonts, BlockTextLayout, PixelRect, Size, VERTICAL_COLUMN_ADVANCE, WrappedLine, display_text,
     font_background_enabled, font_background_opacity, font_background_radius_px, font_background_scale,
     letter_spacing_px, measure_text_width, resolve_block_text_layout, scaled_rect, screentone_dot_radius_px,
-    screentone_tile_size_px, secondary_outline_enabled, shaped_lines, style_line_height,
-    synthetic_bold_stroke_width_px, synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units,
-    vertical_columns, wrap_text_to_width,
+    screentone_tile_size_px, secondary_outline_enabled, style_line_height, synthetic_bold_stroke_width_px,
+    synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units, vertical_columns,
+    wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -313,7 +313,7 @@ const ROTATED_IN_VERTICAL: &[char] = &[
     '‘', '’',
 ];
 
-/// The form of the vertical cell `cell` ([`vertical_units`]) under v2.
+/// The form of the vertical cell `cell` ([`crate::layout::vertical_units`]) under v2.
 fn vertical_cell_form(cell: &str) -> CellForm {
     let mut chars = cell.chars();
     match (chars.next(), chars.next()) {
@@ -405,7 +405,7 @@ impl<'a> BlockPainter<'a> {
 
     /// What to draw, and the em boxes it covers.
     fn items(&mut self) -> (Vec<TextItem>, PixelRect) {
-        let layout = *self.layout;
+        let layout = self.layout;
         let y_offset = self.font_size * RENDER_Y_OFFSET_RATIO;
         let (left, top) = (layout.inner.left, layout.inner.top + y_offset);
         if self.block.render_direction == RenderTextDirection::Vertical {
@@ -465,8 +465,8 @@ impl<'a> BlockPainter<'a> {
         fit_width: f64,
     ) -> (Vec<TextItem>, PixelRect) {
         // Lines following the text shape share its axis; others sit by the text position.
-        let shaped = shaped_lines(self.ctx, self.fonts, self.block, self.text, self.layout);
-        let lines = match &shaped {
+        let shaped = &self.layout.shaped;
+        let lines = match shaped {
             // Laid out at the layout's size, drawn at the painter's.
             Some(shaped) => {
                 let scale = self.font_size / self.layout.font_size_px.max(f64::EPSILON);
@@ -487,7 +487,7 @@ impl<'a> BlockPainter<'a> {
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy + ((line_height - self.font_size) / 2.0).max(0.0);
         let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
-        let text_left = match &shaped {
+        let text_left = match shaped {
             Some(shaped) => shaped.center_x - widest / 2.0,
             None => left + (inner_width - widest) * fx,
         };

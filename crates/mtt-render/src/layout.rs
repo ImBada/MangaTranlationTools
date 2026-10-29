@@ -72,7 +72,7 @@ pub struct PixelRect {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BlockTextLayout {
     pub rect: PixelRect,
     pub padding_px: f64,
@@ -86,8 +86,8 @@ pub struct BlockTextLayout {
     /// v2 a word too long for a line even at this size may break between its characters.
     pub min_font_size_px: f64,
     pub overflow: bool,
-    /// The lines follow the block's text shape ([`shaped_lines`]).
-    pub shaped: bool,
+    /// The lines when they follow the block's text shape, laid out at `font_size_px`.
+    pub shaped: Option<ShapedLines>,
 }
 
 /// Typesetting v2 treats text as the characters a reader sees: the display text in NFC,
@@ -380,7 +380,7 @@ pub fn resolve_block_text_layout(
     let follow = line_shape(block).filter(|_| !text.trim().is_empty());
     if follow.is_some() {
         let layout = layout_in(ctx, fonts, block, text, (page, stage), (rect, padding_px, inner), follow);
-        if layout.shaped {
+        if layout.shaped.is_some() {
             return layout;
         }
     }
@@ -450,12 +450,14 @@ fn layout_in(
     let fit = FitArea { width: fit_inner_width, height: fit_inner_height };
     let font_size_px = resolve_text_font_size(block, text, &paragraphs, (min_font_size, max_font_size), fit);
     // Following the shape is harder than fitting its box, so count down from the box's fit.
-    let shaped_size = follow.and_then(|shape| {
+    // (Pixel by pixel: whether a size fits isn't monotonic, so skipping sizes could change
+    // the result.)
+    let shaped = follow.and_then(|shape| {
         let floor = min_font_size.ceil().min(font_size_px);
         let mut size = font_size_px;
         loop {
-            if fit_shape(&paragraphs, block, size, shape, rect, inner).is_some() {
-                return Some(size);
+            if let Some(lines) = fit_shape(&paragraphs, block, size, shape, rect, inner) {
+                return Some((size, lines));
             }
             if !auto_fit || size - 1.0 < floor {
                 return None;
@@ -464,17 +466,17 @@ fn layout_in(
         }
     });
     let overflow =
-        shaped_size.is_none() && !text.trim().is_empty() && !does_text_fit(block, text, &paragraphs, font_size_px, fit);
+        shaped.is_none() && !text.trim().is_empty() && !does_text_fit(block, text, &paragraphs, font_size_px, fit);
     BlockTextLayout {
         rect,
         padding_px,
         inner,
         fit_inner_width,
         fit_inner_height,
-        font_size_px: shaped_size.unwrap_or(font_size_px),
+        font_size_px: shaped.as_ref().map_or(font_size_px, |(size, _)| *size),
         min_font_size_px: smallest_font_size,
         overflow,
-        shaped: shaped_size.is_some(),
+        shaped: shaped.map(|(_, lines)| lines),
     }
 }
 
@@ -483,25 +485,6 @@ fn layout_in(
 pub struct ShapedLines {
     pub lines: Vec<WrappedLine>,
     pub center_x: f64,
-}
-
-/// The lines of a layout that follows its block's text shape (`layout.shaped`).
-pub fn shaped_lines(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
-    block: &TranslationBlock,
-    text: &str,
-    layout: &BlockTextLayout,
-) -> Option<ShapedLines> {
-    let shape = line_shape(block).filter(|_| layout.shaped)?;
-    fit_shape(
-        &wrap_paragraphs(ctx, fonts, block, text, layout.fit_inner_width, layout.min_font_size_px),
-        block,
-        layout.font_size_px,
-        shape,
-        layout.rect,
-        layout.inner,
-    )
 }
 
 /// Lines of `paragraphs` at `font_size` following `shape` (spans of `rect`) in the fit
@@ -524,6 +507,8 @@ fn fit_shape(
     let (rect_width, rect_height) = (rect.width.max(1.0), rect.height.max(1.0));
     let segments: usize = paragraphs.iter().map(|paragraph| paragraph.segments.len().max(1)).sum();
     let most = ((fit_height / line_height.max(1.0)).floor() as usize).min(segments);
+    // The lines together are at least this wide, so a line count with less room can't fit.
+    let least_width: f64 = paragraphs.iter().map(|paragraph| paragraph.least_width(font_size, spacing)).sum();
     for count in paragraphs.len().max(1)..=most {
         let total = count as f64 * line_height;
         let start_y = inner.top + (inner.height - total) * fy + ((line_height - font_size) / 2.0).max(0.0);
@@ -545,6 +530,9 @@ fn fit_shape(
         let center =
             (spans.iter().map(|(l, r)| (l + r) / 2.0).sum::<f64>() / count as f64).clamp(common_left, common_right);
         let widths: Vec<f64> = spans.iter().map(|(l, r)| 2.0 * (center - l).min(r - center)).collect();
+        if widths.iter().sum::<f64>() < least_width * (1.0 - 1e-9) {
+            continue;
+        }
         if let Some(lines) = break_paragraphs(paragraphs, &widths, font_size, spacing) {
             return Some(ShapedLines { lines, center_x: center });
         }
@@ -564,18 +552,30 @@ fn break_paragraphs(
     spacing: f64,
 ) -> Option<Vec<WrappedLine>> {
     let count = widths.len();
+    let mut room = vec![0.0; count + 1];
+    for (line, width) in widths.iter().enumerate() {
+        room[line + 1] = room[line] + width;
+    }
     // cost[p][l]: best cost of paragraphs ..p in lines ..l; how[p][l]: the last paragraph's
     // line count and line ends there.
     let mut cost = vec![vec![f64::INFINITY; count + 1]; paragraphs.len() + 1];
     let mut how: Vec<Vec<Option<ParagraphSplit>>> = vec![vec![None; count + 1]; paragraphs.len() + 1];
     cost[0][0] = 0.0;
     for (index, paragraph) in paragraphs.iter().enumerate() {
+        // Every later paragraph needs a line of its own, and the last one ends at `count`.
+        let later = paragraphs.len() - index - 1;
+        let least_width = paragraph.least_width(font_size, spacing);
         for first in 0..count {
             if !cost[index][first].is_finite() {
                 continue;
             }
-            let most = paragraph.segments.len().max(1).min(count - first);
-            for lines in 1..=most {
+            let most = paragraph.segments.len().max(1).min((count - first).saturating_sub(later));
+            let least = if later == 0 { count - first } else { 1 };
+            for lines in least..=most {
+                // Lines with less room than the paragraph needs can't hold it.
+                if room[first + lines] - room[first] < least_width * (1.0 - 1e-9) {
+                    continue;
+                }
                 let split = if paragraph.segments.is_empty() {
                     Some((Vec::new(), 0.0))
                 } else {
@@ -876,6 +876,22 @@ impl Paragraph {
         let count = (self.units_before[end] - self.units_before[start]) as f64;
         (self.prefix_em[end] - self.prefix_em[start]) * font_size
             + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
+    }
+
+    /// The least the paragraph's lines can add up to at `font_size`: its segments, and the
+    /// gaps between them that are narrower than nothing (negative letter spacing).
+    fn least_width(&self, font_size: f64, spacing: f64) -> f64 {
+        let segments: f64 = self.segments.iter().map(|&(start, end)| self.width(start, end, font_size, spacing)).sum();
+        let gaps: f64 = self
+            .segments
+            .windows(2)
+            .map(|pair| {
+                let (a, b) = (pair[0], pair[1]);
+                let joined = self.width(a.0, b.1, font_size, spacing);
+                (joined - self.width(a.0, a.1, font_size, spacing) - self.width(b.0, b.1, font_size, spacing)).min(0.0)
+            })
+            .sum();
+        segments + gaps
     }
 
     /// Splits segments wider than `max_width` at `font_size` between their characters,
@@ -1426,8 +1442,16 @@ mod tests {
             return;
         }
         let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, text, page, page);
-        assert!(layout.shaped && !layout.overflow, "{layout:?}");
-        let shaped = shaped_lines(&mut ctx, &fonts, &block, text, &layout).unwrap();
+        assert!(!layout.overflow, "{layout:?}");
+        let shaped = layout.shaped.clone().unwrap();
+        // The render draws the lines the layout found.
+        let drawn = crate::block::block_text(
+            &mut ctx,
+            page,
+            &TranslationBlock { translated_text: text.into(), ..block.clone() },
+        )
+        .unwrap();
+        assert_eq!(drawn.lines, shaped.lines.iter().map(|line| line.text.clone()).collect::<Vec<_>>());
         let widths: Vec<f64> = shaped.lines.iter().map(|line| line.width).collect();
         assert!(widths.len() >= 3, "{:?}", shaped.lines);
         let middle = widths[widths.len() / 2];
@@ -1437,7 +1461,7 @@ mod tests {
         // Left-aligned text keeps to the ellipse's largest rectangle, so it must be smaller.
         let left = balloon_block(TextAlign::Left, RenderTextDirection::Horizontal);
         let boxed = resolve_block_text_layout(&mut ctx, &fonts, &left, text, page, page);
-        assert!(!boxed.shaped && boxed.inner.width < 300.0, "{boxed:?}");
+        assert!(boxed.shaped.is_none() && boxed.inner.width < 300.0, "{boxed:?}");
         assert!(layout.font_size_px > boxed.font_size_px, "{} vs {}", layout.font_size_px, boxed.font_size_px);
     }
 
@@ -1449,7 +1473,7 @@ mod tests {
         let fonts = BlockFonts::resolve(&ctx, &block);
         let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다라", page, page);
         let inner = layout.inner;
-        assert!(!layout.shaped);
+        assert!(layout.shaped.is_none());
         assert!(inner.left > 340.0 && inner.left + inner.width < 660.0, "{inner:?}");
         assert!(inner.top > 280.0 && inner.top + inner.height < 520.0, "{inner:?}");
         // Without a shape: the whole box inside the padding.
@@ -1570,6 +1594,21 @@ mod tests {
             let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다", page, page);
             assert!(layout.font_size_px.is_finite() && layout.font_size_px <= MAX_FONT_SIZE_PX, "{layout:?}");
         }
+    }
+
+    #[test]
+    fn least_width_bounds_any_line_split() {
+        let paragraph = Paragraph {
+            chars: "ab cd".chars().collect(),
+            prefix_em: (0..=5).map(f64::from).collect(),
+            units_before: (0..=5).collect(),
+            segments: vec![(0, 2), (3, 5)],
+        };
+        assert_eq!(paragraph.least_width(1.0, 0.0), 4.0);
+        assert_eq!(paragraph.least_width(1.0, 2.0), 8.0, "spacing inside the words only");
+        // With letter spacing tighter than the space, the line "ab cd" is narrower than its words.
+        assert_eq!(paragraph.width(0, 5, 1.0, -1.0), 1.0);
+        assert_eq!(paragraph.least_width(1.0, -1.0), 1.0);
     }
 
     #[test]
