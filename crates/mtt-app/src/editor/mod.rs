@@ -1063,7 +1063,7 @@ impl Editor {
         let Some((entry, context)) = self.history.pop_undo() else {
             return;
         };
-        if !self.prepare_history_entry(&entry) {
+        if !self.prepare_history_entry(&entry, true) {
             self.history.push_undone((entry, context));
             return;
         }
@@ -1079,7 +1079,7 @@ impl Editor {
         let Some((entry, context)) = self.history.pop_redo() else {
             return;
         };
-        if !self.prepare_history_entry(&entry) {
+        if !self.prepare_history_entry(&entry, false) {
             self.history.push_redo((entry, context));
             return;
         }
@@ -1127,8 +1127,19 @@ impl Editor {
     }
 
     /// Navigates to the entry's page. Returns `false` (entry kept) while layer pixels the
-    /// entry needs are still loading.
-    fn prepare_history_entry(&mut self, entry: &Entry) -> bool {
+    /// entry needs are still loading, or while an inpaint or PSD import runs: it installs
+    /// layers diffed against the ones it started from, so a layer step applied meanwhile
+    /// would come back when the job lands.
+    fn prepare_history_entry(&mut self, entry: &Entry, undo: bool) -> bool {
+        if self.inpaint_busy() && entry_touches_layers(entry) {
+            self.status = if undo {
+                "인페인트 작업이 끝난 뒤에 레이어 변경을 실행 취소하세요."
+            } else {
+                "인페인트 작업이 끝난 뒤에 레이어 변경을 다시 실행하세요."
+            }
+            .into();
+            return false;
+        }
         let Some(index) = self.chapter.pages.iter().position(|page| page.id == entry.page_id()) else {
             // Chapter-wide preset steps still apply after the page they were made on is gone.
             return matches!(entry, Entry::Presets { .. });
@@ -3021,6 +3032,45 @@ mod tests {
         let Some(PageAssets::Ready(loaded)) = editor.assets.get(&page_id) else { panic!() };
         assert_eq!(loaded.mask.as_ref().unwrap().get_pixel(3, 3)[0], 0);
         assert_eq!(loaded.result.as_ref().unwrap().get_pixel(3, 3)[3], 0);
+    }
+
+    #[test]
+    fn layer_undo_waits_for_a_running_inpaint() {
+        let ctx = egui::Context::default();
+        let worker: Worker<AppEvent> = Worker::new(&ctx, 1);
+        let mut editor = Editor::new(chapter_with_pages(1));
+        let source = RgbaImage::from_pixel(64, 64, image::Rgba([255, 255, 255, 255]));
+        editor.assets.insert("p0".into(), PageAssets::Ready(Box::new(LoadedPage::new(&ctx, "p0", source, None, None))));
+        editor.brush_size = 10.0;
+        editor.paint_stroke(&ctx, (20.0, 20.0), (40.0, 20.0), false);
+        editor.start_inpaint(InpaintScope::WholeMask, &worker);
+        assert!(editor.inpaint_busy());
+        // Block steps still undo; the stroke waits, or the result would bring it back.
+        editor.selection = vec!["b0".into()];
+        editor.edit_selected(|block| block.translated_text = "x".into());
+        editor.commit_checkpoint();
+        editor.undo(&ctx);
+        assert_eq!(editor.page().unwrap().blocks[0].translated_text, "");
+        editor.undo(&ctx);
+        assert!(editor.current_mask_has_pixels(), "the stroke stays while the job runs");
+        assert!(editor.status.starts_with("인페인트 작업이 끝난 뒤에"));
+        editor.redo(&ctx);
+        assert_eq!(editor.page().unwrap().blocks[0].translated_text, "x", "redo isn't stuck behind it");
+        let deadline = Instant::now() + Duration::from_secs(30);
+        while editor.inpaint_busy() && Instant::now() < deadline {
+            for event in worker.drain() {
+                if let AppEvent::InpaintFinished { chapter_id, page_id, outcome } = event {
+                    editor.on_inpaint_finished(&chapter_id, &page_id, outcome);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(!editor.inpaint_busy());
+        editor.undo(&ctx);
+        editor.undo(&ctx);
+        editor.undo(&ctx);
+        assert!(!editor.current_mask_has_pixels(), "the inpaint, the text edit, then the stroke");
+        assert_eq!(editor.page().unwrap().blocks[0].translated_text, "");
     }
 
     #[test]
