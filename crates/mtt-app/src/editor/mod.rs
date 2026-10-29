@@ -33,7 +33,7 @@ use mtt_core::library::resolve_chapter_status;
 use mtt_core::model::{
     BBox, Chapter, InpaintEngine, InpaintSettings, InpaintStatus, PageRecord, StyleKey, TranslationBlock,
 };
-use mtt_inpaint::lama::LamaCommand;
+use mtt_inpaint::lama::Lama;
 use mtt_render::page::{LayerOpacity, LayerVisibility, PageImages, PageRenderOptions};
 
 use crate::app::AppEvent;
@@ -345,7 +345,7 @@ pub struct Editor {
     pub result_tool: result_tools::ResultTool,
     pub result_brush: result_tools::BrushSettings,
     pub inpaint_engine: InpaintEngine,
-    pub lama: Option<LamaCommand>,
+    pub lama: Option<Lama>,
     inpaint_running: Option<String>,
     pub translation: Option<translation::TranslationJob>,
     pub find: panels::FindState,
@@ -1333,9 +1333,9 @@ impl Editor {
         self.layer_dirty.insert((page_id, LayerKind::Mask), Instant::now());
     }
 
-    /// Detects the LaMa sidecar and prefers it when available.
+    /// Detects LaMa (the downloaded model or a configured command) and prefers it when available.
     pub fn configure_inpaint(&mut self, services: &Services) {
-        self.lama = LamaCommand::detect(&services.paths);
+        self.lama = Lama::detect(&services.paths);
         self.inpaint_engine = if self.lama.is_some() { InpaintEngine::Lama } else { InpaintEngine::LocalFillFallback };
     }
 
@@ -2367,7 +2367,7 @@ fn compute_inpaint(
     blocks: &[TranslationBlock],
     engine: InpaintEngine,
     settings: &InpaintSettings,
-    lama: Option<&LamaCommand>,
+    lama: Option<&Lama>,
 ) -> Result<ComputedInpaint, String> {
     let started = Instant::now();
     let (width, height) = source.dimensions();

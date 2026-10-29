@@ -53,7 +53,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 - 데이터 폴더: `~/Documents/MangaTranslationTools/` (`MANGA_TRANSLATOR_DATA_DIR`로 변경)
   - 보관함 `library/`, 설정 `settings.json`, 로그 `logs/native-app.log`(`MANGA_TRANSLATOR_LOG_PATH`로 변경)
   - 위젯 배치·카드 순서·최근 글꼴 같은 화면 상태 `native-ui-state.json`
-  - LaMa 런타임 `tools/`, 모델 `models/`
+  - LaMa 모델 `models/`, LaMa용 LibTorch `tools/libtorch/`
 - 웹 버전이 쓰던 `chapter.json`을 처음 덮어쓸 때 `chapter.json.native-backup`을 한 번 만들어 둡니다.
 - 같은 데이터 폴더로 두 번 실행하면 이미 열린 창을 앞으로 가져오고 새 프로세스는 끝납니다.
 
@@ -69,13 +69,16 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 ## LaMa 인페인트
 
-기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `환경 준비`(파이썬 가상환경 + 패키지 + Er0mangaInpaint 코드, 데이터 폴더의 `tools/`)와 `모델 다운로드`를 합니다.
-모델은 직접 받아 둬도 됩니다.
+기본 인페인트는 앱 안의 로컬 채우기입니다. LaMa를 쓰려면 설정의 **인페인트** 탭에서 `LaMa 받기`를 합니다. 모델(약 200MB)과 모델을 돌릴 LibTorch(PyTorch의 C++ 엔진, 압축 약 70~120MB)를 받습니다. 파이썬은 필요 없습니다.
+모델은 앱 안에서 LibTorch로 돌아갑니다(Apple Silicon Mac은 GPU(MPS), Windows·Linux x64는 CPU). Intel Mac에는 LibTorch 빌드가 없어 LaMa를 쓸 수 없습니다.
+둘레가 한 가지 색인 글자(흰 말풍선 안 등)는 모델 없이 그 색으로 채우고, 나머지만 한 변 1024px 이하 영역으로 나눠 모델에 넘깁니다.
 
-- 다운로드: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`
-- 저장 경로: `~/Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`
+- 모델: `https://huggingface.co/mayocream/lama-manga/resolve/main/lama-manga.safetensors`를 `~/Documents/MangaTranslationTools/models/lama-manga/lama-manga.safetensors`에 (직접 받아 둬도 됩니다)
+- LibTorch: [koharu](https://github.com/mayocream/koharu)가 C 연결 코드와 함께 빌드해 올린 [koharu-rs/torch](https://github.com/koharu-rs/torch/releases) `v2.13.0.7`. 받은 파일은 SHA-256을 확인한 뒤 데이터 폴더의 `tools/libtorch/`에 풉니다(풀면 Mac 약 340MB).
 
-다른 LaMa 실행 방식을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다.
+다른 LaMa 실행 방식(예: CUDA로 도는 파이썬 스크립트)을 쓰려면 `MANGA_TRANSLATOR_LAMA_COMMAND`와 `MANGA_TRANSLATOR_LAMA_ARGS`(JSON 배열, `{source}` `{mask}` `{output}`은 임시 PNG 경로로 치환)를 지정합니다. 지정하면 모델 대신 이 명령이 인페인트할 영역 전체를 받습니다.
+
+예전 버전이 만든 파이썬 환경(데이터 폴더의 `tools/lama-manga-venv`, `tools/Er0mangaInpaint`, `tools/native`, 약 1GB)은 더 이상 쓰지 않으니 지워도 됩니다. 예전 웹/Electron 버전을 계속 쓴다면 남겨 두세요.
 
 ## 환경 변수
 
@@ -103,7 +106,8 @@ cargo fmt --all
 |---|---|
 | `crates/mtt-core` | 데이터 모델(모르는 JSON 필드 보존), 보관함, 설정, 가져오기, 글꼴 프리셋, 블록 그룹 |
 | `crates/mtt-render` | 텍스트 레이아웃/렌더링(cosmic-text + tiny-skia), 페이지 합성 |
-| `crates/mtt-inpaint` | 로컬 채우기 인페인트, LaMa 사이드카, 블록 글자 마스크, PSD 읽기/쓰기 |
+| `crates/mtt-inpaint` | 로컬 채우기 인페인트, LaMa(LibTorch, 영역 나누기·단색 채우기), 블록 글자 마스크, PSD 읽기/쓰기 |
+| `crates/mtt-torch` | 실행 중에 불러오는 LibTorch와 LaMa에 필요한 연산 (작업 공간에서 유일하게 unsafe를 쓰는 FFI) |
 | `crates/mtt-translate` | OpenAI 호환 / Responses API 번역, 응답 파서 |
 | `crates/mtt-app` | egui 편집기 (앱 아이콘·글꼴은 `assets/`) |
 

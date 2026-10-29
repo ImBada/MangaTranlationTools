@@ -1,5 +1,5 @@
 //! Settings window (`SettingsModal.tsx`): model provider, endpoints, translation mode,
-//! parallelism, one-hand mode, a model connectivity test, LaMa runtime preparation
+//! parallelism, one-hand mode, a model connectivity test, the LaMa download
 //! (`LamaRuntimeSettingsSection.tsx`) and the version/update bar (`SettingsVersionBar.tsx`).
 
 use std::path::PathBuf;
@@ -18,20 +18,19 @@ use crate::worker::Worker;
 /// `LamaRuntimeStatus` without the job flags (those live in [`SettingsView`]).
 #[derive(Debug, Clone)]
 pub struct LamaRuntimeStatus {
-    python_available: bool,
-    runtime_ready: bool,
-    model_exists: bool,
-    model_path: PathBuf,
+    lama: mtt_inpaint::lama::LamaStatus,
+    /// Where the model runs.
+    device: &'static str,
+    /// What the Python runtime of earlier versions left behind.
+    legacy_python: Vec<PathBuf>,
 }
 
 impl LamaRuntimeStatus {
     fn detect(paths: &mtt_core::paths::AppPaths) -> Self {
-        let status = mtt_inpaint::lama::status(paths);
         Self {
-            python_available: mtt_inpaint::lama_runtime::resolve_python().is_some(),
-            runtime_ready: status.python_ready && status.code_ready,
-            model_exists: status.model_exists,
-            model_path: status.model_path,
+            lama: mtt_inpaint::lama::status(paths),
+            device: mtt_inpaint::lama::device_label(),
+            legacy_python: mtt_inpaint::lama::legacy_python_runtime(paths),
         }
     }
 }
@@ -39,7 +38,6 @@ impl LamaRuntimeStatus {
 pub enum LamaEvent {
     Status(LamaRuntimeStatus),
     Progress(String),
-    PrepareFinished(Result<(), String>),
     DownloadFinished(Result<(), String>),
 }
 
@@ -68,7 +66,6 @@ pub struct SettingsView {
     save_error: Option<String>,
     show_key: bool,
     lama_status: Option<LamaRuntimeStatus>,
-    lama_preparing: bool,
     lama_downloading: bool,
     lama_progress: Option<String>,
     lama_last_error: Option<String>,
@@ -114,7 +111,7 @@ impl SettingsView {
         self.update = Some(status);
     }
 
-    /// Returns true when a LaMa job finished, so the editor should re-detect the runtime.
+    /// Returns true when a LaMa job finished, so the editor should re-detect LaMa.
     pub fn on_lama_event(&mut self, event: LamaEvent, services: &Services, worker: &Worker<AppEvent>) -> bool {
         match event {
             LamaEvent::Status(status) => {
@@ -125,14 +122,9 @@ impl SettingsView {
                 self.lama_progress = Some(line);
                 false
             }
-            LamaEvent::PrepareFinished(result) => {
-                self.lama_preparing = false;
-                self.finish_lama_job(result, "LaMa 환경 준비가 끝났습니다.", services, worker);
-                true
-            }
             LamaEvent::DownloadFinished(result) => {
                 self.lama_downloading = false;
-                self.finish_lama_job(result, "LaMa 모델 다운로드가 끝났습니다.", services, worker);
+                self.finish_lama_job(result, "LaMa 준비가 끝났습니다.", services, worker);
                 true
             }
         }
@@ -145,7 +137,7 @@ impl SettingsView {
         services: &Services,
         worker: &Worker<AppEvent>,
     ) {
-        if !self.lama_preparing && !self.lama_downloading {
+        if !self.lama_downloading {
             self.lama_progress = None;
         }
         match result {
@@ -162,52 +154,40 @@ impl SettingsView {
         self.refresh_lama_status(services, worker);
     }
 
-    /// `prepareLamaRuntime`: venv + packages + Er0mangaInpaint on a dedicated thread.
-    fn prepare_lama(&mut self, services: &Services, worker: &Worker<AppEvent>) {
-        if self.lama_status.as_ref().is_some_and(|status| !status.python_available) {
-            let command = mtt_inpaint::lama_runtime::python_install_command();
-            self.lama_last_error = Some(format!("Python 3을 찾을 수 없습니다. 설치 명령: {command}"));
-            self.lama_action = Some((ActionState::Error, format!("Python 설치가 필요합니다: {command}")));
-            return;
-        }
-        self.lama_preparing = true;
-        self.lama_action = Some((ActionState::Success, "LaMa 환경 준비를 시작했습니다.".into()));
-        let paths = services.paths.clone();
-        let emitter = worker.emitter();
-        std::thread::spawn(move || {
-            let log_path = mtt_inpaint::lama_runtime::log_path(&paths);
-            let result = mtt_inpaint::lama_runtime::prepare(&paths, |line| {
-                emitter.emit(AppEvent::Lama(LamaEvent::Progress(line.to_owned())))
-            })
-            .map_err(|error| format!("LaMa 환경 준비가 실패했습니다: {error} (로그: {})", log_path.display()));
-            emitter.emit(AppEvent::Lama(LamaEvent::PrepareFinished(result)));
-        });
-    }
-
-    /// `downloadLamaModel`.
-    fn download_lama_model(&mut self, services: &Services, worker: &Worker<AppEvent>) {
-        if self.lama_status.as_ref().is_some_and(|status| status.model_exists) {
-            self.lama_action = Some((ActionState::Success, "LaMa 모델이 이미 준비되어 있습니다.".into()));
-            return;
+    /// `downloadLamaModel`: the model and the LibTorch runtime, whichever are missing.
+    fn download_lama(&mut self, services: &Services, worker: &Worker<AppEvent>) {
+        if let Some(status) = self.lama_status.as_ref().map(|status| &status.lama) {
+            if status.model_exists && status.runtime_exists {
+                self.lama_action = Some((ActionState::Success, "LaMa가 이미 준비되어 있습니다.".into()));
+                return;
+            }
+            if status.runtime_path.is_none() {
+                self.lama_action = Some((ActionState::Error, "이 플랫폼용 LibTorch가 없습니다.".into()));
+                return;
+            }
         }
         self.lama_downloading = true;
-        self.lama_action = Some((ActionState::Success, "LaMa 모델 다운로드를 시작했습니다.".into()));
+        self.lama_action = Some((ActionState::Success, "LaMa 다운로드를 시작했습니다.".into()));
         let paths = services.paths.clone();
         let emitter = worker.emitter();
         std::thread::spawn(move || {
-            let mut last_percent = None;
-            let result = mtt_inpaint::lama_runtime::download_model(&paths, |written, total| {
+            let mut last = None;
+            let result = mtt_inpaint::lama::download_lama(&paths, |part, written, total| {
                 let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
+                let label = match part {
+                    mtt_inpaint::lama::Download::Model => "모델",
+                    mtt_inpaint::lama::Download::Runtime => "LibTorch",
+                };
                 let line = match total {
                     Some(total) if total > 0 => {
                         let percent = written * 100 / total;
-                        if last_percent == Some(percent) {
+                        if last == Some((part, percent)) {
                             return;
                         }
-                        last_percent = Some(percent);
-                        format!("모델 다운로드 {percent}% ({:.0}/{:.0}MB)", mb(written), mb(total))
+                        last = Some((part, percent));
+                        format!("{label} 다운로드 {percent}% ({:.0}/{:.0}MB)", mb(written), mb(total))
                     }
-                    _ => format!("모델 다운로드 {:.0}MB", mb(written)),
+                    _ => format!("{label} 다운로드 {:.0}MB", mb(written)),
                 };
                 emitter.emit(AppEvent::Lama(LamaEvent::Progress(line)));
             });
@@ -224,10 +204,10 @@ impl SettingsView {
             self.refresh_lama_status(services, worker);
         }
         let Some(status) = self.lama_status.clone() else { return false };
-        if self.lama_banner_dismissed || (status.python_available && status.runtime_ready && status.model_exists) {
+        if self.lama_banner_dismissed || status.lama.ready() {
             return false;
         }
-        let busy = self.lama_preparing || self.lama_downloading;
+        let busy = self.lama_downloading;
         let mut open_settings = false;
         egui::Frame::new()
             .fill(theme::CARD_BG)
@@ -245,7 +225,7 @@ impl SettingsView {
                     } else {
                         ui.add(
                             egui::Label::new(
-                                RichText::new("LaMa 인페인트가 아직 준비되지 않아 로컬 채우기로 지웁니다.").small(),
+                                RichText::new("LaMa가 아직 준비되지 않아 로컬 채우기로 지웁니다.").small(),
                             )
                             .truncate(),
                         );
@@ -257,10 +237,10 @@ impl SettingsView {
                         }
                         if ui
                             .add(
-                                egui::Button::new(RichText::new("준비하기…").color(theme::ACCENT))
+                                egui::Button::new(RichText::new("LaMa 받기…").color(theme::ACCENT))
                                     .frame_when_inactive(false),
                             )
-                            .on_hover_text("설정 › 인페인트에서 환경 준비와 모델 다운로드")
+                            .on_hover_text("설정 › 인페인트에서 모델과 LibTorch 다운로드")
                             .clicked()
                         {
                             open_settings = true;
@@ -270,37 +250,50 @@ impl SettingsView {
             });
         if open_settings {
             self.open(services, worker);
-            self.tab = SettingsTab::Inpaint;
+            self.show_inpaint_tab();
         }
         true
     }
 
+    pub fn show_inpaint_tab(&mut self) {
+        self.tab = SettingsTab::Inpaint;
+    }
+
     fn lama_section(&mut self, ui: &mut egui::Ui, services: &Services, worker: &Worker<AppEvent>) {
         ui.label(theme::semibold("LaMa 인페인트"));
-        theme::hint(ui, "원문 글자를 더 자연스럽게 지우는 인페인트 모델입니다. 준비 전에는 로컬 채우기를 씁니다.");
+        theme::hint(
+            ui,
+            "원문 글자를 더 자연스럽게 지우는 인페인트 모델입니다. 모델과 실행용 LibTorch를 받기 전에는 로컬 채우기를 씁니다.",
+        );
         ui.add_space(8.0);
         let status = self.lama_status.clone();
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 18.0;
-            runtime_state(ui, "Python", status.as_ref().is_some_and(|s| s.python_available), false);
-            runtime_state(ui, "런타임", status.as_ref().is_some_and(|s| s.runtime_ready), self.lama_preparing);
-            runtime_state(ui, "모델", status.as_ref().is_some_and(|s| s.model_exists), self.lama_downloading);
+            runtime_state(ui, "모델", status.as_ref().is_some_and(|s| s.lama.model_exists), self.lama_downloading);
+            runtime_state(
+                ui,
+                "LibTorch",
+                status.as_ref().is_some_and(|s| s.lama.runtime_exists),
+                self.lama_downloading,
+            );
+            if let Some(status) = &status {
+                ui.label(RichText::new(format!("실행: {}", status.device)).small().color(theme::TEXT_WEAK));
+            }
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            let prepare_label = if self.lama_preparing { "준비 중…" } else { "환경 준비" };
-            if ui.add_enabled(!self.lama_preparing, egui::Button::new(prepare_label)).clicked() {
-                self.prepare_lama(services, worker);
-            }
-            let download_label = if self.lama_downloading { "다운로드 중…" } else { "모델 다운로드" };
-            if ui.add_enabled(!self.lama_downloading, egui::Button::new(download_label)).clicked() {
-                self.download_lama_model(services, worker);
+            let download_label = if self.lama_downloading { "다운로드 중…" } else { "LaMa 받기" };
+            let button = ui
+                .add_enabled(!self.lama_downloading, egui::Button::new(download_label))
+                .on_hover_text("모델 약 200MB, LibTorch 약 70~120MB (압축)");
+            if button.clicked() {
+                self.download_lama(services, worker);
             }
             if ui.add(egui::Button::new("상태 새로고침").frame_when_inactive(false)).clicked() {
                 self.refresh_lama_status(services, worker);
             }
         });
-        if let Some(progress) = self.lama_progress.as_ref().filter(|_| self.lama_preparing || self.lama_downloading) {
+        if let Some(progress) = self.lama_progress.as_ref().filter(|_| self.lama_downloading) {
             ui.horizontal(|ui| {
                 ui.add(egui::Spinner::new().size(12.0));
                 ui.label(RichText::new(progress).small());
@@ -314,12 +307,28 @@ impl SettingsView {
             ui.label(RichText::new(message).small().color(color));
         }
         if let Some(status) = &status {
-            if !status.python_available {
-                ui.add_space(6.0);
-                python_help(ui);
-            }
             ui.add_space(6.0);
-            theme::hint(ui, &format!("모델 경로: {}", status.model_path.display()));
+            if let Some(command) = &status.lama.command {
+                theme::hint(
+                    ui,
+                    &format!("MANGA_TRANSLATOR_LAMA_COMMAND로 지정한 명령을 씁니다: {}", command.display()),
+                );
+            }
+            theme::hint(ui, &format!("모델 경로: {}", status.lama.model_path.display()));
+            match &status.lama.runtime_path {
+                Some(path) => theme::hint(ui, &format!("LibTorch 경로: {}", path.display())),
+                None => theme::hint(ui, "이 플랫폼용 LibTorch가 없어 LaMa 모델을 앱 안에서 돌릴 수 없습니다."),
+            }
+            if !status.legacy_python.is_empty() {
+                let folders: Vec<String> = status.legacy_python.iter().map(|path| path.display().to_string()).collect();
+                theme::hint(
+                    ui,
+                    &format!(
+                        "예전 버전이 쓰던 파이썬 환경이 남아 있습니다. 이제 쓰지 않으니 지워도 됩니다(예전 웹/Electron 버전을 계속 쓴다면 남겨 두세요): {}",
+                        folders.join(", ")
+                    ),
+                );
+            }
         }
         if let Some(error) = &self.lama_last_error {
             theme::hint(ui, &format!("최근 오류: {error}"));
@@ -581,7 +590,7 @@ impl SettingsView {
                     self.tab,
                     &[
                         (SettingsTab::Translation, "번역", "번역 엔진과 모델"),
-                        (SettingsTab::Inpaint, "인페인트", "LaMa 준비"),
+                        (SettingsTab::Inpaint, "인페인트", "LaMa 모델"),
                         (SettingsTab::Editing, "편집", "단축키 옵션"),
                         (SettingsTab::About, "정보", "버전과 데이터 폴더"),
                     ],
@@ -755,24 +764,6 @@ fn effort_description(effort: ReasoningEffort) -> &'static str {
         ReasoningEffort::High => "더 오래 생각해서 까다로운 페이지를 처리합니다.",
         ReasoningEffort::Xhigh => "가장 넉넉한 생각 예산을 사용합니다.",
     }
-}
-
-/// `PythonInstallHelp`.
-fn python_help(ui: &mut egui::Ui) {
-    egui::Frame::new().fill(theme::INPUT_BG).corner_radius(6).inner_margin(10).show(ui, |ui| {
-        ui.set_width(ui.available_width());
-        ui.label(theme::semibold("Python 설치가 필요합니다"));
-        let command = mtt_inpaint::lama_runtime::python_install_command();
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(command).monospace());
-            if ui.small_button("복사").clicked() {
-                ui.ctx().copy_text(command.to_owned());
-            }
-        });
-        for line in mtt_inpaint::lama_runtime::python_install_help() {
-            theme::hint(ui, line);
-        }
-    });
 }
 
 fn runtime_state(ui: &mut egui::Ui, label: &str, ready: bool, busy: bool) {

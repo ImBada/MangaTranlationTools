@@ -6,9 +6,11 @@
 
 pub mod engine;
 pub mod lama;
-pub mod lama_runtime;
+pub mod lama_torch;
 pub mod psd;
 pub mod text_mask;
+pub mod torch_runtime;
+pub mod windows;
 
 use image::{GrayImage, RgbaImage};
 

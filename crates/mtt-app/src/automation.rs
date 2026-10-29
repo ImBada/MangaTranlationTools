@@ -33,7 +33,8 @@ pub enum Step {
     Group,
     GroupShadow,
     WaitInpaint,
-    Settings,
+    /// `settings:inpaint` opens it on the 인페인트 tab.
+    Settings(bool),
     Report,
     WaitReport,
     PresetEdit(String),
@@ -66,7 +67,7 @@ pub struct Automation {
 pub enum Request {
     OpenFirstChapter,
     ImportFolder(PathBuf),
-    OpenSettings,
+    OpenSettings { inpaint: bool },
 }
 
 impl Automation {
@@ -115,7 +116,7 @@ impl Automation {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 4).then(|| Step::Paint([v[0], v[1], v[2], v[3]], name == "erase"))?
                     }
-                    "settings" => Step::Settings,
+                    "settings" => Step::Settings(arg == "inpaint"),
                     "report" => Step::Report,
                     "report-wait" => Step::WaitReport,
                     "preset-edit" => Step::PresetEdit(arg.to_owned()),
@@ -185,9 +186,10 @@ impl Automation {
                 return Some(Request::ImportFolder(path));
             }
             (Step::ImportFolder(_), Some(_)) => log::warn!("automation: import only runs on the library screen"),
-            (Step::Settings, _) => {
+            (Step::Settings(inpaint), _) => {
+                let inpaint = *inpaint;
                 self.steps.pop_front();
-                return Some(Request::OpenSettings);
+                return Some(Request::OpenSettings { inpaint });
             }
             (Step::WaitEditor, None) => return None,
             (Step::WaitEditor, Some(_)) => {}

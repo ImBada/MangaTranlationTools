@@ -1,10 +1,10 @@
 //! Inpaint engines (`inpaintEngine.ts`): mask preparation, the local fill fallback,
-//! JPEG artifact cleanup and the external LaMa command.
+//! JPEG artifact cleanup and LaMa (window by window, `windows.rs`).
 
 use image::{GrayImage, RgbaImage};
 use mtt_core::model::{InpaintEngine, InpaintSettings};
 
-use crate::lama::LamaCommand;
+use crate::lama::Lama;
 use crate::{Rect, box_blur, dilate};
 
 const MASK_ACTIVE_THRESHOLD: f32 = 0.03;
@@ -107,7 +107,7 @@ pub fn run_inpaint(
     mask: &GrayImage,
     engine: InpaintEngine,
     settings: &InpaintSettings,
-    lama: Option<&LamaCommand>,
+    lama: Option<&Lama>,
 ) -> Result<RgbaImage, String> {
     run_inpaint_in(source, mask, engine, settings, lama).map(|(result, _)| result)
 }
@@ -119,7 +119,7 @@ pub fn run_inpaint_in(
     mask: &GrayImage,
     engine: InpaintEngine,
     settings: &InpaintSettings,
-    lama: Option<&LamaCommand>,
+    lama: Option<&Lama>,
 ) -> Result<(RgbaImage, Option<Rect>), String> {
     let settings = normalize_settings(engine, settings);
     let (width, height) = source.dimensions();
@@ -153,7 +153,7 @@ pub fn run_inpaint_in(
         }
     }
     let inpainted = match (engine, lama) {
-        (InpaintEngine::Lama, Some(lama)) => lama.run(&source_crop, &mask_crop)?,
+        (InpaintEngine::Lama, Some(lama)) => lama.inpaint(&source_crop, &mask_crop)?,
         (InpaintEngine::Lama, None) => return Err("LaMa 인페인트 명령이 설정되지 않았습니다.".into()),
         _ => local_fill(&source_crop, &mask_crop),
     };

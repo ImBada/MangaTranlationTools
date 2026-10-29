@@ -1,0 +1,17 @@
+[package]
+name = "mtt-torch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+libc = "0.2"
+libloading = "0.8"
+
+# The workspace forbids unsafe code; this crate is its one FFI boundary, so it only denies
+# it and `ffi` opts in.
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+all = { level = "warn", priority = -1 }

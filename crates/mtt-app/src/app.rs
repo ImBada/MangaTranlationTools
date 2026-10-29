@@ -216,7 +216,12 @@ impl MttApp {
                 None => log::error!("automation: library is empty"),
             },
             Some(Request::ImportFolder(path)) => self.library.auto_import(&path, &self.services, &self.worker),
-            Some(Request::OpenSettings) => self.settings.open(&self.services, &self.worker),
+            Some(Request::OpenSettings { inpaint }) => {
+                self.settings.open(&self.services, &self.worker);
+                if inpaint {
+                    self.settings.show_inpaint_tab();
+                }
+            }
             None => {}
         }
     }

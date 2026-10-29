@@ -3,7 +3,7 @@
 
 use mtt_core::model::{InpaintEngine, InpaintSettings};
 use mtt_core::paths::AppPaths;
-use mtt_inpaint::lama::LamaCommand;
+use mtt_inpaint::lama::Lama;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -18,7 +18,7 @@ fn main() {
     });
     let mut engines = vec![(InpaintEngine::LocalFillFallback, None)];
     if args.get(3).map(String::as_str) == Some("lama") {
-        engines.push((InpaintEngine::Lama, LamaCommand::detect(&AppPaths::resolve())));
+        engines.push((InpaintEngine::Lama, Lama::detect(&AppPaths::resolve())));
     }
     for (engine, lama) in engines {
         let started = std::time::Instant::now();

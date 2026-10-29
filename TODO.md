@@ -20,7 +20,7 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 |---|---|---|
 | `mtt-core` | 데이터 모델, 경로, 설정, 보관함 저장소, 가져오기 | `src/shared`, `src/server/library*`, `appSettings`, `settingsStore` |
 | `mtt-render` | 텍스트 레이아웃, 블록/페이지 렌더링 | `overlayLayout.ts`, `pageRender.ts`, `hardTextRendering.ts`, `fontFilterEffects.ts` |
-| `mtt-inpaint` | 마스크 처리, 로컬 채우기 인페인트, LaMa(파이썬 사이드카), 블록 글자 마스크 | `inpaintEngine.ts`, `libraryImageData.ts`, `inpaintMaskImages.ts` |
+| `mtt-inpaint` | 마스크 처리, 로컬 채우기 인페인트, LaMa(LibTorch로 앱 안에서), 블록 글자 마스크 | `inpaintEngine.ts`, `libraryImageData.ts`, `inpaintMaskImages.ts` |
 | `mtt-translate` | LLM 번역 파이프라인 | `wholePagePipeline.ts`, `runtime/*.cjs` |
 | `mtt-app` | egui 앱 | `src/client` 전체 |
 
@@ -74,7 +74,7 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 
 - [x] 마스크 브러시/지우개, 범위 채우기/비우기, 자동 지우개
 - [x] 결과 레이어 브러시/스마트 브러시/지우개/흐림/선명/뭉개기/색상 추출 (경도·강도, 칠한 곳은 마스크도 덮음, undo 한 단계)
-- [x] 로컬 채우기 인페인트 + JPEG 아티팩트 정리, LaMa(기존 파이썬 런타임 재사용, 스크립트 내장)
+- [x] 로컬 채우기 인페인트 + JPEG 아티팩트 정리, LaMa(처음엔 기존 파이썬 런타임 재사용, 이후 앱 안의 LibTorch로 교체)
 - [x] 전체/범위 재인페인트, 선택 블록 인페인트(글자 픽셀 자동 감지), 결과는 undo 한 단계
 - [x] 레이어 PNG 저장 (마스크는 흑백 불투명, 기존 형식과 동일)
 
@@ -94,7 +94,8 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 
 - [x] PSD 내보내기/가져오기 직접 구현 (RLE·그룹·한글 레이어 이름 지원, 실제 포토샵 파일과 psd-tools로 교차 검증)
 - [x] Codex(ChatGPT 계정): `openai-oauth`는 비공식 도구라 재구현하지 않고, 사용자가 실행한 로컬 프록시(`npx openai-oauth`)에 Responses API로 접속
-- [ ] LaMa ONNX 추론 (`ort`) — 현재는 기존 파이썬 런타임 사용
+- [x] LaMa 네이티브 추론 (LibTorch를 실행 중에 불러옴: macOS MPS, Windows·Linux CPU). 파이썬 사이드카와 환경 준비는 없앰. 결과와 속도는 PyTorch MPS와 같고(실제 영역 8개 3.3~3.6초), 앞서 쓰던 candle 이식(5.9초)보다 약 1.7배 빠름
+- [ ] Windows·Linux NVIDIA GPU: koharu-rs/torch CUDA 빌드(약 800MB~1GB)와 CUDA 런타임 라이브러리를 받아 쓰기
 - [x] 폰트 프리셋 백업/복원
 - [x] 결과 리포트 (HTML은 TS와 바이트 단위 동일, "이동" 버튼은 로컬 HTTP 포커스 엔드포인트로 연결)
 - [x] 작품 일괄 번역 (가져오기 + 번역 한 번에)
@@ -110,7 +111,7 @@ TS/Electron 앱을 Rust 네이티브 앱으로 옮긴 작업 목록입니다. �
 TS 컴포넌트/훅/서버 라우트를 전수 비교한 결과입니다. 문구·범위·기본값까지 TS와 같게 맞춥니다.
 
 ### 설정 / 런타임
-- [x] LaMa 인페인트 섹션 (Python/런타임/모델 상태, 환경 준비, 모델 다운로드, 새로고침, OS별 Python 설치 안내, 모델 경로, 최근 오류). 준비가 끝나면 편집기가 LaMa를 다시 감지
+- [x] LaMa 인페인트 섹션 (모델 상태와 실행 장치, 모델 다운로드, 새로고침, 모델 경로, 예전 파이썬 환경 안내, 최근 오류). 다운로드가 끝나면 편집기가 LaMa를 다시 감지
 - [x] 버전 표시 + GitHub 최신 릴리스 확인(30분 캐시, 업데이트 열기, 다시 확인). 워크스페이스 버전 0.9.31
 - [x] 문구/설명 (OpenAI API/커스텀, 모드·생각 수준 설명, 켜짐/꺼짐, "잘 작동되나 확인", 엔드포인트 표시)
 - [x] 입력 검증 (포트 0~65535, Base URL http(s)·끝 / 제거, 모델 필수, 번역 중 테스트 불가), 창 닫기 = 저장

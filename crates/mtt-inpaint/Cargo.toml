@@ -10,8 +10,12 @@ image.workspace = true
 log.workspace = true
 tempfile.workspace = true
 serde_json.workspace = true
+mtt-torch.workspace = true
 ureq = "3"
-zip = { version = "9.1.2", default-features = false, features = ["deflate"] }
+safetensors = "0.8"
+flate2 = "1"
+sha2 = "0.10"
+tar = "0.4"
 
 [lints]
 workspace = true
