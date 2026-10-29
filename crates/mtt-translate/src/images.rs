@@ -29,12 +29,15 @@ pub struct ImageVariant {
 pub const ENHANCED_MAX_LONG_SIDE: u32 = 1900;
 pub const ENHANCED_CONTRAST: f32 = 1.35;
 
-fn mime_for(path: &Path) -> &'static str {
-    match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-        Some("png") => "image/png",
-        Some("webp") => "image/webp",
-        Some("gif") => "image/gif",
-        _ => "image/jpeg",
+/// The MIME type to send image `bytes` under as they are, by their header (the extension
+/// of `path` when it isn't a known format); `None` for formats that go re-encoded.
+fn mime_of(bytes: &[u8], path: &Path) -> Option<&'static str> {
+    let format = image::guess_format(bytes).ok().or_else(|| image::ImageFormat::from_path(path).ok());
+    match format? {
+        image::ImageFormat::Png => Some("image/png"),
+        image::ImageFormat::Jpeg => Some("image/jpeg"),
+        image::ImageFormat::Gif => Some("image/gif"),
+        _ => None,
     }
 }
 
@@ -48,16 +51,18 @@ fn png_bytes(image: &image::DynamicImage) -> Result<Vec<u8>, String> {
     Ok(bytes)
 }
 
-/// Original file as a data URL. WebP is re-encoded as PNG because several OpenAI-compatible
-/// servers reject it.
+/// Original file as a data URL, typed by what the file holds (downloaded pages are often
+/// WebP or PNG named `.jpg`). WebP and other formats go re-encoded as PNG, because several
+/// OpenAI-compatible servers reject WebP.
 pub fn original_variant(path: &Path) -> Result<ImageVariant, String> {
-    let mime = mime_for(path);
-    let data_url = if mime == "image/webp" {
-        let image = open_image(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self::data_url("image/png", &png_bytes(&image)?)
-    } else {
-        let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
-        self::data_url(mime, &bytes)
+    let unreadable = |e: &dyn std::fmt::Display| format!("{}: {e}", path.display());
+    let bytes = std::fs::read(path).map_err(|e| unreadable(&e))?;
+    let data_url = match mime_of(&bytes, path) {
+        Some(mime) => self::data_url(mime, &bytes),
+        None => {
+            let image = image::load_from_memory(&bytes).map_err(|e| unreadable(&e))?;
+            self::data_url("image/png", &png_bytes(&image)?)
+        }
     };
     Ok(ImageVariant { role: VariantRole::Original, data_url })
 }
@@ -152,6 +157,30 @@ mod tests {
         let decoded = image::load_from_memory(&bytes).unwrap();
         assert_eq!((decoded.width(), decoded.height()), (1900, 50));
         assert!(matches!(decoded, image::DynamicImage::ImageLuma8(_)));
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn originals_are_typed_by_their_content() {
+        let dir = tempfile_dir();
+        let path = dir.join("mislabeled.jpg");
+        let page = image::RgbaImage::from_pixel(4, 3, image::Rgba([10, 20, 30, 255]));
+        for (format, mime) in [
+            (image::ImageFormat::Png, "image/png"),
+            (image::ImageFormat::WebP, "image/png"),
+            (image::ImageFormat::Bmp, "image/png"),
+            (image::ImageFormat::Jpeg, "image/jpeg"),
+        ] {
+            image::DynamicImage::ImageRgba8(page.clone()).to_rgb8().save_with_format(&path, format).unwrap();
+            let url = original_variant(&path).unwrap().data_url;
+            assert!(url.starts_with(&format!("data:{mime};base64,")), "{format:?}: {}", &url[..30]);
+            let bytes = base64::engine::general_purpose::STANDARD.decode(url.split_once(',').unwrap().1).unwrap();
+            assert_eq!(
+                image::load_from_memory(&bytes).map(|image| (image.width(), image.height())).unwrap(),
+                (4, 3),
+                "{format:?}"
+            );
+        }
         std::fs::remove_dir_all(dir).ok();
     }
 
