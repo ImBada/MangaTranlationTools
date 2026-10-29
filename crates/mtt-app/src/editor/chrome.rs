@@ -218,7 +218,7 @@ fn chapter_menu(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services,
                 for (mode, label) in [
                     (ImportMode::Images, "이미지 파일…"),
                     (ImportMode::Folder, "폴더…"),
-                    (ImportMode::Zip, "압축파일…"),
+                    (ImportMode::Zip, "압축파일 · PDF…"),
                     (ImportMode::ZipFolder, "여러 화 일괄 번역…"),
                 ] {
                     if ui.button(label).clicked() {

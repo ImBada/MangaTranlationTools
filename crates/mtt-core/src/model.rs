@@ -177,6 +177,7 @@ string_enum! {
         Folder => "folder",
         Zip => "zip",
         ZipFolder => "zip-folder",
+        Pdf => "pdf",
     }
     default = Images
 }

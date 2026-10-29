@@ -7,7 +7,7 @@ use std::path::PathBuf;
 
 use eframe::egui::{self, Color32, Rect, RichText, Sense, Stroke};
 use mtt_core::import::{
-    ImportPreview, ImportResult, ImportTarget, create_import, preview_folder, preview_images, preview_zip,
+    ImportPreview, ImportResult, ImportTarget, create_import, preview_archive, preview_folder, preview_images,
     preview_zip_folder,
 };
 use mtt_core::library::{ChapterSummary, WorkSummary};
@@ -199,10 +199,14 @@ impl LibraryView {
             ImportMode::Folder => rfd::FileDialog::new()
                 .pick_folder()
                 .map(|folder| Box::new(move || preview_folder(&folder).map_err(|e| e.to_string())) as PreviewJob),
-            ImportMode::Zip => rfd::FileDialog::new()
-                .add_filter("ZIP", &["zip", "ZIP"])
-                .pick_file()
-                .map(|path| Box::new(move || preview_zip(&path).map_err(|e| e.to_string())) as PreviewJob),
+            ImportMode::Zip => {
+                let mut extensions: Vec<String> = mtt_core::import::ARCHIVE_EXTENSIONS.map(str::to_owned).to_vec();
+                extensions.extend(mtt_core::import::ARCHIVE_EXTENSIONS.map(str::to_ascii_uppercase));
+                rfd::FileDialog::new()
+                    .add_filter("압축파일 · PDF", &extensions)
+                    .pick_file()
+                    .map(|path| Box::new(move || preview_archive(&path).map_err(|e| e.to_string())) as PreviewJob)
+            }
             ImportMode::ZipFolder => rfd::FileDialog::new()
                 .pick_folder()
                 .map(|folder| Box::new(move || preview_zip_folder(&folder).map_err(|e| e.to_string())) as PreviewJob),
@@ -757,8 +761,12 @@ impl LibraryView {
 pub const IMPORT_MODES: [(ImportMode, &str, &str); 4] = [
     (ImportMode::Images, "이미지 파일…", "고른 이미지들을 한 화로 가져옵니다"),
     (ImportMode::Folder, "폴더…", "이미지가 든 폴더 하나를 한 화로 가져옵니다"),
-    (ImportMode::Zip, "압축파일…", "ZIP 하나를 한 화로 가져옵니다"),
-    (ImportMode::ZipFolder, "여러 화 일괄 번역…", "폴더 안의 ZIP과 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다"),
+    (ImportMode::Zip, "압축파일 · PDF…", "ZIP·CBZ·RAR·CBR·PDF 하나를 한 화로 가져옵니다"),
+    (
+        ImportMode::ZipFolder,
+        "여러 화 일괄 번역…",
+        "폴더 안의 압축파일·PDF와 하위 폴더를 각각 한 화로 가져와 차례로 번역합니다",
+    ),
 ];
 
 /// A menu button listing the import modes; returns the picked one.
@@ -784,10 +792,8 @@ pub fn import_menu(ui: &mut egui::Ui, button: egui::Button<'static>) -> Option<I
 pub fn preview_dropped(paths: &[PathBuf]) -> Result<ImportPreview, String> {
     let images: Vec<PathBuf> =
         paths.iter().filter(|path| path.is_file() && mtt_core::paths::is_supported_image_path(path)).cloned().collect();
-    let containers: Vec<&PathBuf> = paths
-        .iter()
-        .filter(|path| path.is_dir() || path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip")))
-        .collect();
+    let containers: Vec<&PathBuf> =
+        paths.iter().filter(|path| path.is_dir() || mtt_core::import::ArchiveKind::of(path).is_some()).collect();
     match (images.is_empty(), containers.as_slice()) {
         (false, []) => Ok(preview_images(&images)),
         (true, [folder]) if folder.is_dir() => {
@@ -798,11 +804,11 @@ pub fn preview_dropped(paths: &[PathBuf]) -> Result<ImportPreview, String> {
                 preview_zip_folder(folder).map_err(|e| e.to_string())
             }
         }
-        (true, [archive]) => preview_zip(archive).map_err(|e| e.to_string()),
+        (true, [archive]) => preview_archive(archive).map_err(|e| e.to_string()),
         (true, many) if !many.is_empty() => {
             let mut chapters = Vec::new();
             for path in many {
-                let preview = if path.is_dir() { preview_folder(path) } else { preview_zip(path) };
+                let preview = if path.is_dir() { preview_folder(path) } else { preview_archive(path) };
                 chapters.extend(preview.map_err(|e| e.to_string())?.chapters);
             }
             chapters.retain(|chapter| !chapter.pages.is_empty());
@@ -845,7 +851,12 @@ fn welcome(ui: &mut egui::Ui, view: &mut LibraryView) {
             ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
             for (mode, glyph, label, hint) in [
                 (ImportMode::Images, theme::icon::IMAGE, "이미지 파일", "고른 이미지들을 한 화로 가져옵니다"),
-                (ImportMode::Zip, theme::icon::FILE_ZIP, "압축파일", "ZIP 하나를 한 화로 가져옵니다"),
+                (
+                    ImportMode::Zip,
+                    theme::icon::FILE_ZIP,
+                    "압축파일 · PDF",
+                    "ZIP·CBZ·RAR·CBR·PDF 하나를 한 화로 가져옵니다",
+                ),
                 (
                     ImportMode::ZipFolder,
                     theme::icon::STACK,

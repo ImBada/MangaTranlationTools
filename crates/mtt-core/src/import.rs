@@ -1,4 +1,5 @@
-//! Importing images, folders and ZIP archives into the library (`libraryImport.ts`).
+//! Importing images, folders, archives (ZIP/CBZ, RAR/CBR) and PDFs into the library
+//! (`libraryImport.ts`).
 //!
 //! A preview lists chapter drafts; creating the import copies every page into
 //! `works/<work>/chapters/<chapter>/pages/NNN-<pageId>.<ext>` and writes `chapter.json`.
@@ -25,7 +26,44 @@ pub enum PageSource {
         index: usize,
         name: String,
     },
+    /// Member `index` of the RAR archive at `archive`.
+    RarEntry {
+        archive: PathBuf,
+        index: usize,
+        name: String,
+    },
+    /// Page `index` of the PDF at `document`, rendered at [`PDF_DPI`].
+    PdfPage {
+        document: PathBuf,
+        index: usize,
+    },
 }
+
+/// PDF pages become PNGs at this resolution, enough for fine lettering and line art.
+pub const PDF_DPI: f32 = 300.0;
+
+/// What a file imports as when it isn't an image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArchiveKind {
+    Zip,
+    Rar,
+    Pdf,
+}
+
+impl ArchiveKind {
+    /// By extension: `.zip`/`.cbz`, `.rar`/`.cbr`, `.pdf`.
+    pub fn of(path: &Path) -> Option<Self> {
+        match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
+            "zip" | "cbz" => Some(Self::Zip),
+            "rar" | "cbr" => Some(Self::Rar),
+            "pdf" => Some(Self::Pdf),
+            _ => None,
+        }
+    }
+}
+
+/// Extensions the archive pickers offer.
+pub const ARCHIVE_EXTENSIONS: [&str; 5] = ["zip", "cbz", "rar", "cbr", "pdf"];
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct PageDraft {
@@ -132,7 +170,63 @@ pub fn decode_zip_name(raw: &[u8]) -> String {
 }
 
 fn is_ignored_zip_entry(name: &str) -> bool {
-    name.starts_with("__MACOSX/") || name.split('/').any(|part| part.starts_with("._"))
+    name.starts_with("__MACOSX/")
+        || name.split('/').any(|part| part.starts_with("._") || part.eq_ignore_ascii_case("__MACOSX"))
+}
+
+/// Image members of a RAR archive in natural order.
+pub fn list_rar_images(archive: &Path) -> CoreResult<Vec<PageDraft>> {
+    let rar = rars::ArchiveReader::read_path(archive)
+        .map_err(|error| CoreError::Invalid(format!("{}: RAR을 열지 못했습니다: {error}", archive.display())))?;
+    let mut entries: Vec<PageDraft> = rar
+        .member_refs()
+        .enumerate()
+        .filter(|(_, member)| !member.is_directory() && !member.is_redirection())
+        .map(|(index, member)| {
+            // Old archives store names in the creator's code page (Shift_JIS for Japanese ones).
+            let name = if member.name_is_unicode() {
+                member.to_owned().meta.name_lossy().replace('\\', "/")
+            } else {
+                decode_zip_name(member.name_bytes())
+            };
+            (index, name)
+        })
+        .filter(|(_, name)| !is_ignored_zip_entry(name) && is_supported_image_path(Path::new(name)))
+        .map(|(index, name)| PageDraft {
+            name: name.clone(),
+            source: PageSource::RarEntry { archive: archive.to_path_buf(), index, name },
+        })
+        .collect();
+    entries.sort_by(|a, b| natural_cmp(&a.name, &b.name));
+    Ok(entries)
+}
+
+fn open_pdf(document: &Path) -> CoreResult<hayro::hayro_syntax::Pdf> {
+    let data = fs::read(document).map_err(|source| CoreError::io(document, source))?;
+    hayro::hayro_syntax::Pdf::new(data)
+        .map_err(|error| CoreError::Invalid(format!("{}: PDF를 열지 못했습니다: {error:?}", document.display())))
+}
+
+/// One page per PDF page, named `{stem}-001.png` and so on.
+pub fn list_pdf_pages(document: &Path) -> CoreResult<Vec<PageDraft>> {
+    let count = open_pdf(document)?.pages().len();
+    let stem = file_stem(document);
+    let width = count.to_string().len().max(3);
+    Ok((0..count)
+        .map(|index| PageDraft {
+            name: format!("{stem}-{:0width$}.png", index + 1),
+            source: PageSource::PdfPage { document: document.to_path_buf(), index },
+        })
+        .collect())
+}
+
+/// Pages of an archive or PDF by [`ArchiveKind::of`].
+pub fn list_archive_pages(path: &Path) -> CoreResult<Vec<PageDraft>> {
+    match ArchiveKind::of(path) {
+        Some(ArchiveKind::Rar) => list_rar_images(path),
+        Some(ArchiveKind::Pdf) => list_pdf_pages(path),
+        _ => list_zip_images(path),
+    }
 }
 
 /// Image entries of an archive in natural order.
@@ -181,20 +275,23 @@ pub fn preview_folder(folder: &Path) -> CoreResult<ImportPreview> {
     Ok(single(ImportSourceKind::Folder, file_name(folder), pages))
 }
 
-pub fn preview_zip(archive: &Path) -> CoreResult<ImportPreview> {
-    Ok(single(ImportSourceKind::Zip, file_stem(archive), list_zip_images(archive)?))
+/// One chapter from an archive or PDF.
+pub fn preview_archive(archive: &Path) -> CoreResult<ImportPreview> {
+    Ok(single(archive_source_kind(archive), file_stem(archive), list_archive_pages(archive)?))
 }
 
-/// Every `.zip` directly inside `folder` plus every nested folder containing images
-/// becomes one chapter (`previewZipFolder`).
+fn archive_source_kind(path: &Path) -> ImportSourceKind {
+    if ArchiveKind::of(path) == Some(ArchiveKind::Pdf) { ImportSourceKind::Pdf } else { ImportSourceKind::Zip }
+}
+
+/// Every archive or PDF directly inside `folder` plus every nested folder containing
+/// images becomes one chapter (`previewZipFolder`).
 pub fn preview_zip_folder(folder: &Path) -> CoreResult<ImportPreview> {
     let mut sources: Vec<(String, ChapterDraft)> = Vec::new();
     for entry in fs::read_dir(folder).map_err(|source| CoreError::io(folder, source))?.filter_map(Result::ok) {
         let path = entry.path();
-        if entry.file_type().is_ok_and(|kind| kind.is_file())
-            && path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("zip"))
-        {
-            let pages = list_zip_images(&path)?;
+        if entry.file_type().is_ok_and(|kind| kind.is_file()) && ArchiveKind::of(&path).is_some() {
+            let pages = list_archive_pages(&path)?;
             sources.push((
                 file_name(&path),
                 ChapterDraft {
@@ -275,7 +372,7 @@ pub fn create_import(
             created.push((chapter_id.clone(), chapter_dir.clone()));
             let pages_dir = chapter_dir.join("pages");
             fs::create_dir_all(&pages_dir).map_err(|source| CoreError::io(&pages_dir, source))?;
-            let mut archive: Option<(PathBuf, zip::ZipArchive<fs::File>)> = None;
+            let mut archive: Option<OpenSource> = None;
             let mut pages = Vec::with_capacity(draft.pages.len());
             for (index, page) in draft.pages.iter().enumerate() {
                 if cancelled() {
@@ -320,16 +417,74 @@ pub fn create_import(
     }
 }
 
+/// The archive or PDF the last page came from, kept open for the next.
+enum OpenSource {
+    Zip(PathBuf, zip::ZipArchive<fs::File>),
+    Rar(PathBuf, rars::Archive),
+    Pdf(PathBuf, hayro::hayro_syntax::Pdf),
+}
+
+impl OpenSource {
+    fn path(&self) -> &Path {
+        match self {
+            Self::Zip(path, _) | Self::Rar(path, _) | Self::Pdf(path, _) => path,
+        }
+    }
+}
+
+/// `source` opened (or the one already open when it is the same file).
+fn open_source<'a>(open: &'a mut Option<OpenSource>, path: &Path, kind: ArchiveKind) -> CoreResult<&'a mut OpenSource> {
+    if open.as_ref().is_none_or(|current| current.path() != path) {
+        *open = Some(match kind {
+            ArchiveKind::Zip => {
+                let file = fs::File::open(path).map_err(|source| CoreError::io(path, source))?;
+                let zip = zip::ZipArchive::new(file)
+                    .map_err(|error| CoreError::Invalid(format!("ZIP을 열지 못했습니다: {error}")))?;
+                OpenSource::Zip(path.to_path_buf(), zip)
+            }
+            ArchiveKind::Rar => {
+                let rar = rars::ArchiveReader::read_path(path)
+                    .map_err(|error| CoreError::Invalid(format!("RAR을 열지 못했습니다: {error}")))?;
+                OpenSource::Rar(path.to_path_buf(), rar)
+            }
+            ArchiveKind::Pdf => OpenSource::Pdf(path.to_path_buf(), open_pdf(path)?),
+        });
+    }
+    Ok(open.as_mut().expect("source opened"))
+}
+
+fn render_pdf_page(pdf: &hayro::hayro_syntax::Pdf, index: usize) -> CoreResult<Vec<u8>> {
+    let cache = hayro::RenderCache::new();
+    let pages = pdf.pages();
+    let page = pages.get(index).ok_or_else(|| CoreError::Invalid(format!("PDF {}쪽을 찾지 못했습니다.", index + 1)))?;
+    let scale = PDF_DPI / 72.0;
+    let settings = hayro::PixmapSettings {
+        x_scale: scale,
+        y_scale: scale,
+        bg_color: hayro::vello_cpu::color::palette::css::WHITE,
+    };
+    hayro::render(
+        page,
+        &cache,
+        &hayro::hayro_interpret::InterpreterSettings::default(),
+        &hayro::RenderSettings::default(),
+        &settings,
+    )
+    .into_png()
+    .map_err(|error| CoreError::Invalid(format!("PDF {}쪽을 PNG로 만들지 못했습니다: {error:?}", index + 1)))
+}
+
 fn materialize_page(
     draft: &PageDraft,
     pages_dir: &Path,
     index: usize,
-    archive: &mut Option<(PathBuf, zip::ZipArchive<fs::File>)>,
+    archive: &mut Option<OpenSource>,
 ) -> CoreResult<PageRecord> {
     let page_id = uuid::Uuid::new_v4().to_string();
     let source_name = match &draft.source {
         PageSource::File(path) => path.to_string_lossy().into_owned(),
-        PageSource::ZipEntry { name, .. } => name.clone(),
+        PageSource::ZipEntry { name, .. } | PageSource::RarEntry { name, .. } => name.clone(),
+        PageSource::PdfPage { .. } => draft.name.clone(),
     };
     let extension = Path::new(&source_name)
         .extension()
@@ -341,18 +496,30 @@ fn materialize_page(
             fs::copy(path, &output).map_err(|source| CoreError::io(path, source))?;
         }
         PageSource::ZipEntry { archive: archive_path, index: entry_index, name } => {
-            if archive.as_ref().is_none_or(|(path, _)| path != archive_path) {
-                let file = fs::File::open(archive_path).map_err(|source| CoreError::io(archive_path, source))?;
-                let zip = zip::ZipArchive::new(file)
-                    .map_err(|error| CoreError::Invalid(format!("ZIP을 열지 못했습니다: {error}")))?;
-                *archive = Some((archive_path.clone(), zip));
-            }
-            let (_, zip) = archive.as_mut().expect("archive opened");
+            let OpenSource::Zip(_, zip) = open_source(archive, archive_path, ArchiveKind::Zip)? else {
+                unreachable!("opened as ZIP")
+            };
             let mut entry = zip
                 .by_index(*entry_index)
                 .map_err(|error| CoreError::Invalid(format!("ZIP 항목을 찾지 못했습니다: {name}: {error}")))?;
             let mut target = fs::File::create(&output).map_err(|source| CoreError::io(&output, source))?;
             std::io::copy(&mut entry, &mut target).map_err(|source| CoreError::io(&output, source))?;
+        }
+        PageSource::RarEntry { archive: archive_path, index: member, name } => {
+            let OpenSource::Rar(_, rar) = open_source(archive, archive_path, ArchiveKind::Rar)? else {
+                unreachable!("opened as RAR")
+            };
+            let bytes = rar
+                .read_member_at(*member, None)
+                .map_err(|error| CoreError::Invalid(format!("RAR 항목을 풀지 못했습니다: {name}: {error}")))?
+                .ok_or_else(|| CoreError::Invalid(format!("RAR 항목을 찾지 못했습니다: {name}")))?;
+            fs::write(&output, bytes).map_err(|source| CoreError::io(&output, source))?;
+        }
+        PageSource::PdfPage { document, index: page } => {
+            let OpenSource::Pdf(_, pdf) = open_source(archive, document, ArchiveKind::Pdf)? else {
+                unreachable!("opened as PDF")
+            };
+            fs::write(&output, render_pdf_page(pdf, *page)?).map_err(|source| CoreError::io(&output, source))?;
         }
     }
     let (width, height) = image::image_dimensions(&output).unwrap_or((1000, 1400));
@@ -475,5 +642,99 @@ mod tests {
         let result = create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false);
         assert!(result.is_err());
         assert!(library.list().unwrap().is_empty(), "work removed again");
+    }
+
+    fn png(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        image::RgbaImage::new(width, height)
+            .write_to(&mut std::io::Cursor::new(&mut bytes), image::ImageFormat::Png)
+            .unwrap();
+        bytes
+    }
+
+    /// A one-page PDF, 72×72pt, with a black bar on its left half.
+    fn single_page_pdf() -> Vec<u8> {
+        use std::fmt::Write as _;
+        let content = "0 0 0 rg\n0 0 36 72 re f\n";
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>".to_owned(),
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>".to_owned(),
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 72 72] /Resources << >> /Contents 4 0 R >>".to_owned(),
+            format!("<< /Length {} >>\nstream\n{content}endstream", content.len()),
+        ];
+        let mut pdf = String::from("%PDF-1.4\n");
+        let mut offsets = Vec::new();
+        for (index, object) in objects.iter().enumerate() {
+            offsets.push(pdf.len());
+            write!(pdf, "{} 0 obj\n{object}\nendobj\n", index + 1).unwrap();
+        }
+        let xref = pdf.len();
+        write!(pdf, "xref\n0 {}\n0000000000 65535 f \n", objects.len() + 1).unwrap();
+        for offset in offsets {
+            writeln!(pdf, "{offset:010} 00000 n ").unwrap();
+        }
+        write!(pdf, "trailer\n<< /Size {} /Root 1 0 R >>\nstartxref\n{xref}\n%%EOF\n", objects.len() + 1).unwrap();
+        pdf.into_bytes()
+    }
+
+    #[test]
+    fn pdf_pages_import_at_300_dpi() {
+        let dir = tempfile::tempdir().unwrap();
+        let document = dir.path().join("1화.pdf");
+        fs::write(&document, single_page_pdf()).unwrap();
+        let preview = preview_archive(&document).unwrap();
+        assert_eq!(preview.chapters[0].title, "1화");
+        assert_eq!(preview.chapters[0].source_kind, ImportSourceKind::Pdf);
+        assert_eq!(preview.chapters[0].pages[0].name, "1화-001.png");
+        let library = Library::new(dir.path().join("library"));
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let page = &chapter.pages[0];
+        assert_eq!((page.width, page.height), (300, 300));
+        let image = image::open(&page.image_path).unwrap().to_rgba8();
+        assert_eq!(image.get_pixel(10, 10).0, [0, 0, 0, 255]);
+        assert_eq!(image.get_pixel(290, 10).0, [255, 255, 255, 255]);
+    }
+
+    #[test]
+    fn rar_images_import_in_natural_order() {
+        use rars::rar50::{ArchiveEntry, ArchiveExtras, WriterOptions, write_streaming_archive_to};
+        use rars::{EntrySource, WriterResources};
+        let dir = tempfile::tempdir().unwrap();
+        let entries = [
+            ArchiveEntry::new("ComicInfo.xml", EntrySource::from_bytes(&b"<ComicInfo />"[..])),
+            ArchiveEntry::new("pages/page10.png", EntrySource::from_bytes(png(3, 4))),
+            ArchiveEntry::new("pages/page2.png", EntrySource::from_bytes(png(5, 6))),
+            ArchiveEntry::new("__MACOSX/pages/._page3.png", EntrySource::from_bytes(&b"junk"[..])),
+        ];
+        let mut bytes = Vec::new();
+        write_streaming_archive_to(
+            &entries,
+            WriterOptions::default(),
+            ArchiveExtras::default(),
+            &WriterResources::default(),
+            &mut bytes,
+        )
+        .unwrap();
+        let archive = dir.path().join("2화.cbr");
+        fs::write(&archive, bytes).unwrap();
+        let preview = preview_archive(&archive).unwrap();
+        let names: Vec<&str> = preview.chapters[0].pages.iter().map(|page| page.name.as_str()).collect();
+        assert_eq!(names, ["pages/page2.png", "pages/page10.png"]);
+        let library = Library::new(dir.path().join("library"));
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let sizes: Vec<(u32, u32)> = chapter.pages.iter().map(|page| (page.width, page.height)).collect();
+        assert_eq!(sizes, [(5, 6), (3, 4)]);
+    }
+
+    #[test]
+    fn archive_kinds_by_extension() {
+        assert_eq!(ArchiveKind::of(Path::new("a.CBZ")), Some(ArchiveKind::Zip));
+        assert_eq!(ArchiveKind::of(Path::new("a.cbr")), Some(ArchiveKind::Rar));
+        assert_eq!(ArchiveKind::of(Path::new("a.pdf")), Some(ArchiveKind::Pdf));
+        assert_eq!(ArchiveKind::of(Path::new("a.png")), None);
     }
 }
