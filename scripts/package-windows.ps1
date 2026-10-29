@@ -9,7 +9,8 @@ if (-not $OutDir) { $OutDir = Join-Path $RootDir "target\bundle" }
 $Version = (Select-String -Path (Join-Path $RootDir "Cargo.toml") -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 $Name = "MangaTranslationTools"
 
-cargo build --release -p mtt-app --manifest-path (Join-Path $RootDir "Cargo.toml")
+# No default features: the packaged app leaves out the UI automation (`MTT_AUTOMATION`).
+cargo build --release -p mtt-app --no-default-features --manifest-path (Join-Path $RootDir "Cargo.toml")
 
 $Stage = Join-Path $OutDir $Name
 if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }

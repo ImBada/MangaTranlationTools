@@ -191,12 +191,25 @@ impl OptionIndex {
 #[derive(Default)]
 pub struct FontPreviews {
     textures: HashMap<String, Option<TextureHandle>>,
+    /// Screen scale the textures were rendered at; they are drawn at their pixel size
+    /// divided by the current one.
+    pixels_per_point: f32,
     rendered_this_frame: usize,
     options: OptionIndex,
 }
 
 impl FontPreviews {
+    /// Drops the previews when the window moved to a screen with another scale (a Retina
+    /// sample would show twice as large on a 1x screen).
+    fn match_scale(&mut self, pixels_per_point: f32) {
+        if self.pixels_per_point != pixels_per_point {
+            self.textures.clear();
+            self.pixels_per_point = pixels_per_point;
+        }
+    }
+
     fn get(&mut self, ctx: &egui::Context, services: &mut Services, value: &str) -> Option<TextureHandle> {
+        self.match_scale(ctx.pixels_per_point());
         if let Some(texture) = self.textures.get(value) {
             return texture.clone();
         }
@@ -219,6 +232,7 @@ impl FontPreviews {
         services: &mut Services,
         preset: &mtt_core::model::FontPreset,
     ) -> Option<TextureHandle> {
+        self.match_scale(ctx.pixels_per_point());
         let key = format!("preset:{:x}", super::overlay::content_hash(preset));
         if let Some(texture) = self.textures.get(&key) {
             return texture.clone();
@@ -474,6 +488,17 @@ mod tests {
         assert_eq!(keys, sorted);
         assert_eq!(options.iter().filter(|option| option.label == "Zapfino").count(), 1, "deduplicated");
         assert!(options.iter().any(|option| option.value == "\"Missing\""));
+    }
+
+    #[test]
+    fn previews_are_dropped_when_the_screen_scale_changes() {
+        let mut previews = FontPreviews::default();
+        previews.match_scale(2.0);
+        previews.textures.insert("\"Retina\"".into(), None);
+        previews.match_scale(2.0);
+        assert_eq!(previews.textures.len(), 1, "same screen keeps them");
+        previews.match_scale(1.0);
+        assert!(previews.textures.is_empty(), "rendered for the other screen");
     }
 
     #[test]

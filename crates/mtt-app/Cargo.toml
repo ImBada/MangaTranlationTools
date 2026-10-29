@@ -9,6 +9,13 @@ description = "MangaTranslationTools native editor"
 name = "manga-translation-tools"
 path = "src/main.rs"
 
+[features]
+# Scripted UI automation (`MTT_AUTOMATION`, see src/automation.rs) for screenshots and
+# self-tests. The packaging scripts build with `--no-default-features`, so the app users
+# install ignores the variable; keep anything else out of `default`.
+default = ["automation"]
+automation = []
+
 [dependencies]
 mtt-core.workspace = true
 mtt-render.workspace = true

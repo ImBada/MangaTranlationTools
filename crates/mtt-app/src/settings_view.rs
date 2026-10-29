@@ -107,6 +107,8 @@ pub struct SettingsView {
     testing: bool,
     test_result: Option<Result<String, String>>,
     save_error: Option<String>,
+    /// The window's close button was pressed while the model or address is invalid.
+    close_blocked: bool,
     show_key: bool,
     lama_status: Option<LamaRuntimeStatus>,
     lama: DownloadState,
@@ -140,6 +142,7 @@ impl SettingsView {
         self.draft = Some(services.settings.clone());
         self.test_result = None;
         self.save_error = None;
+        self.close_blocked = false;
         self.lama.action = None;
         self.segmentation.action = None;
         self.runtime_error = None;
@@ -897,6 +900,12 @@ impl SettingsView {
             ModelProvider::OpenAiCompatible => base_url_valid && !draft.openai_compatible.model.trim().is_empty(),
         };
         let max_height = (ctx.content_rect().height() - 220.0).clamp(240.0, 470.0);
+        // Esc is 취소, unless it is closing an open list first.
+        if !egui::Popup::is_any_open(ctx)
+            && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+        {
+            cancel = true;
+        }
         theme::modal(
             ctx,
             egui::Window::new("설정")
@@ -975,6 +984,12 @@ impl SettingsView {
                 if let Some(error) = &self.save_error {
                     ui.colored_label(theme::DANGER, format!("저장 실패: {error}"));
                 }
+                if self.close_blocked && !can_submit {
+                    ui.colored_label(
+                        theme::DANGER,
+                        "모델 이름과 Base URL을 고쳐야 저장하고 닫을 수 있습니다. 바꾼 내용을 버리려면 취소를 누르세요.",
+                    );
+                }
                 if let Some(message) = &self.reset_message {
                     theme::hint(ui, message);
                 }
@@ -1029,8 +1044,13 @@ impl SettingsView {
                 }
             }
         }
-        // The window's close button acts like the TS header "닫기" (submit).
-        if (save || !open) && can_submit {
+        // The window's close button acts like the TS header "닫기" (submit); with an
+        // invalid model or address it says why it stays open.
+        if !open && !can_submit && !cancel {
+            self.close_blocked = true;
+            self.tab = SettingsTab::Translation;
+        }
+        if (save || !open) && can_submit && !cancel {
             draft.openai_compatible.base_url = base_url;
             draft.codex.model = draft.codex.model.trim().to_owned();
             draft.openai_compatible.model = draft.openai_compatible.model.trim().to_owned();
@@ -1295,5 +1315,107 @@ fn effort_label(effort: ReasoningEffort) -> &'static str {
         ReasoningEffort::Medium => "보통",
         ReasoningEffort::High => "높음",
         ReasoningEffort::Xhigh => "최고",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct Fixture {
+        ctx: egui::Context,
+        services: Services,
+        worker: Worker<AppEvent>,
+        _dir: tempfile::TempDir,
+    }
+
+    impl Fixture {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let services = Services::new(&ctx, mtt_core::paths::AppPaths::from_data_root(dir.path()));
+            let worker = Worker::new(&ctx, 1);
+            Self { ctx, services, worker, _dir: dir }
+        }
+
+        /// The dialog on its 편집 tab (no model list to load) with `model` for the ChatGPT
+        /// engine, which has no account here.
+        fn view(&self, model: &str) -> SettingsView {
+            let mut draft = self.services.settings.clone();
+            draft.model_provider = ModelProvider::OpenAiCodex;
+            draft.codex.model = model.into();
+            SettingsView { open: true, tab: SettingsTab::Editing, draft: Some(draft), ..SettingsView::default() }
+        }
+
+        fn frame(&mut self, view: &mut SettingsView, events: Vec<egui::Event>) {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1440.0, 900.0))),
+                events,
+                ..Default::default()
+            };
+            let Self { ctx, services, worker, .. } = self;
+            let mut output = ctx.run_ui(input, |ui| view.ui(ui.ctx(), services, worker, false));
+            output.textures_delta.clear();
+        }
+
+        fn click(&mut self, view: &mut SettingsView, pos: egui::Pos2) {
+            let button = |pressed| egui::Event::PointerButton {
+                pos,
+                button: egui::PointerButton::Primary,
+                pressed,
+                modifiers: egui::Modifiers::NONE,
+            };
+            self.frame(view, vec![egui::Event::PointerMoved(pos)]);
+            self.frame(view, vec![button(true)]);
+            self.frame(view, vec![button(false)]);
+        }
+
+        /// The ✕ in the window's title bar (16pt margin, 17pt heading).
+        fn close_button(&self) -> egui::Pos2 {
+            let id = egui::Id::unique(Some(std::borrow::Cow::Borrowed("설정")));
+            let rect = self.ctx.memory(|memory| memory.area_rect(id)).expect("settings window");
+            egui::pos2(rect.right() - 26.0, rect.top() + 26.0)
+        }
+    }
+
+    fn escape() -> egui::Event {
+        let key = egui::Key::Escape;
+        egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    #[test]
+    fn escape_cancels_and_the_close_button_says_why_it_stays_open() {
+        let mut fixture = Fixture::new();
+        let mut view = fixture.view("gpt-test");
+        fixture.frame(&mut view, Vec::new());
+        fixture.frame(&mut view, vec![escape()]);
+        assert!(!view.is_open(), "Esc closes");
+        assert_ne!(fixture.services.settings.codex.model, "gpt-test", "without saving");
+
+        // The ✕ saves a valid draft and closes…
+        let mut view = fixture.view("gpt-test");
+        fixture.frame(&mut view, Vec::new());
+        fixture.frame(&mut view, Vec::new());
+        let close = fixture.close_button();
+        fixture.click(&mut view, close);
+        assert!(!view.is_open());
+        assert_eq!(fixture.services.settings.codex.model, "gpt-test");
+
+        // …and with no model stays open, saying why, on the tab to fix it.
+        let mut view = fixture.view("");
+        fixture.frame(&mut view, Vec::new());
+        fixture.frame(&mut view, Vec::new());
+        fixture.click(&mut view, close);
+        assert!(view.is_open());
+        assert!(view.close_blocked);
+        assert!(view.tab == SettingsTab::Translation);
+        assert_eq!(fixture.services.settings.codex.model, "gpt-test", "nothing saved");
     }
 }

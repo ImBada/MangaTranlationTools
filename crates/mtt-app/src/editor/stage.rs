@@ -385,39 +385,42 @@ pub fn inline_editor(editor: &mut Editor, ui: &mut egui::Ui) {
     let mut commit = false;
     let mut cancel = false;
     let mut split = None;
-    egui::Area::new(egui::Id::unique("inline-block-editor")).fixed_pos(rect.min).order(egui::Order::Foreground).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                let output = egui::TextEdit::multiline(&mut edit.draft)
-                    .desired_width(width)
-                    .desired_rows(((rect.height() / 20.0) as usize).clamp(2, 12))
-                    .hint_text("번역문 (⌘Enter 확정, Esc 취소)")
-                    .show(ui);
-                let response = output.response;
-                // ⌘+click splits off the selection; remember it before the click moves the cursor.
-                let split_click =
-                    ui.input(|i| i.pointer.primary_pressed() && i.modifiers.command) && response.contains_pointer();
-                if split_click {
-                    split = edit.selection;
-                } else if let Some(range) = output.cursor_range {
-                    let (a, b): (usize, usize) = (range.primary.index.into(), range.secondary.index.into());
-                    edit.selection = (a != b).then_some((a.min(b), a.max(b)));
-                }
-                if edit.focus_requested {
-                    response.request_focus();
-                    edit.focus_requested = false;
-                }
-                let (escape, command_enter) =
-                    ui.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::Enter) && i.modifiers.command));
-                if escape {
-                    cancel = true;
-                } else if command_enter || (response.lost_focus() && !edit.focus_requested && split.is_none()) {
-                    commit = true;
-                }
-            });
-        },
-    );
+    // One per block, like the inspector's fields: its ⌘Z history is the block's own.
+    let area = egui::Id::unique(("inline-block-editor", edit.block_id.as_str()));
+    egui::Area::new(area).fixed_pos(rect.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let output = egui::TextEdit::multiline(&mut edit.draft)
+                .desired_width(width)
+                .desired_rows(((rect.height() / 20.0) as usize).clamp(2, 12))
+                .hint_text("번역문 (⌘Enter 확정, Esc 취소)")
+                .show(ui);
+            let response = output.response;
+            // ⌘+click splits off the selection; remember it before the click moves the cursor.
+            let split_click =
+                ui.input(|i| i.pointer.primary_pressed() && i.modifiers.command) && response.contains_pointer();
+            if split_click {
+                split = edit.selection;
+            } else if let Some(range) = output.cursor_range {
+                let (a, b): (usize, usize) = (range.primary.index.into(), range.secondary.index.into());
+                edit.selection = (a != b).then_some((a.min(b), a.max(b)));
+            }
+            if edit.focus_requested {
+                response.request_focus();
+                edit.focus_requested = false;
+            }
+            let (escape, command_enter) =
+                ui.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::Enter) && i.modifiers.command));
+            if escape {
+                cancel = true;
+            } else if command_enter || (response.lost_focus() && !edit.focus_requested && split.is_none()) {
+                commit = true;
+            }
+            // The closed editor would hold the focus (and the shortcuts) a frame longer.
+            if cancel || commit {
+                response.surrender_focus();
+            }
+        });
+    });
     if let Some((start, end)) = split {
         let (block_id, draft) = (edit.block_id.clone(), edit.draft.clone());
         editor.inline_edit = None;
@@ -498,11 +501,7 @@ fn canvas_notice(editor: &Editor, painter: &egui::Painter, stage: Rect) {
 /// and hold repeats), and copying the font settings.
 fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecord) {
     // Areas draw above windows, so stay out of the way while a dialog is open.
-    let dialog_open = editor.shortcut_sheet
-        || editor.find.open
-        || editor.app_modal_open
-        || editor.preset_backup_dialog.is_some()
-        || editor.character_dialog.is_some();
+    let dialog_open = editor.dialog_open();
     if editor.layer != Layer::Overlay
         || editor.final_output_preview()
         || editor.selection.len() != 1
@@ -1740,6 +1739,52 @@ fn click(editor: &mut Editor, page: &PageRecord, point: Pos2, modifiers: Modifie
 
 type ShortcutAction = Box<dyn FnOnce(&mut Editor, &mut Services)>;
 
+impl Editor {
+    /// Tab / Shift+Tab step through text blocks; `MttApp::raw_input_hook` hands the keys
+    /// over before egui sees them, since egui would otherwise move keyboard focus to the
+    /// first button (which Space, the pan key, then presses). In the 번역 field they move
+    /// on to the next block's 번역 field; other focused widgets keep the key.
+    pub fn take_tab_keys(&mut self, ctx: &egui::Context, events: &mut Vec<egui::Event>) {
+        let focused = ctx.memory(|memory| memory.focused());
+        let in_translation = match (focused, self.selection.as_slice()) {
+            (Some(focused), [id]) => focused == super::inspector::translated_field_id(id),
+            _ => false,
+        };
+        if focused.is_some() && !in_translation {
+            return;
+        }
+        events.retain(|event| match event {
+            egui::Event::Key { key: Key::Tab, pressed, modifiers, .. }
+                if !modifiers.command && !modifiers.alt && !modifiers.ctrl =>
+            {
+                if *pressed {
+                    let step = if modifiers.shift { -1 } else { 1 };
+                    if in_translation {
+                        self.pending_text_step += step;
+                    } else {
+                        self.pending_block_step += step;
+                    }
+                    ctx.request_repaint();
+                }
+                false
+            }
+            _ => true,
+        });
+    }
+}
+
+/// Keys while the shortcut sheet is open: Esc and `?` close it, nothing reaches the page
+/// behind it.
+pub fn shortcut_sheet_keys(editor: &mut Editor, ctx: &egui::Context) {
+    let close = ctx.input_mut(|input| {
+        input.consume_key(Modifiers::NONE, Key::Escape)
+            || input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "?"))
+    });
+    if close {
+        editor.shortcut_sheet = false;
+    }
+}
+
 /// Editor keyboard shortcuts (only while no text field has focus).
 pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Services) {
     let one_hand = services.settings.one_hand_mode;
@@ -1749,17 +1794,13 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
         let command = Modifiers::COMMAND;
         let command_shift = Modifiers::COMMAND | Modifiers::SHIFT;
         if input.consume_key(Modifiers::NONE, Key::Escape) {
-            // Esc closes the shortcut sheet, else leaves the zoom tool, then the range tool.
+            // Esc leaves the zoom tool, then the range tool.
             actions.push(Box::new(|editor, _| {
-                if editor.shortcut_sheet {
-                    editor.shortcut_sheet = false;
-                } else {
-                    editor.escape_tool();
-                }
+                editor.escape_tool();
             }));
         }
         if input.events.iter().any(|event| matches!(event, egui::Event::Text(text) if text == "?")) {
-            actions.push(Box::new(|editor, _| editor.shortcut_sheet = !editor.shortcut_sheet));
+            actions.push(Box::new(|editor, _| editor.shortcut_sheet = true));
         }
         if input.consume_key(command_shift, Key::Z) || input.consume_key(command, Key::Y) {
             let ctx = ctx.clone();

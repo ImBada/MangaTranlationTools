@@ -15,7 +15,8 @@ OUT_DIR="${1:-$ROOT_DIR/target/bundle}"
 APP="$OUT_DIR/MangaTranslationTools.app"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT_DIR/Cargo.toml" | head -1)"
 
-cargo build --release -p mtt-app --manifest-path "$ROOT_DIR/Cargo.toml"
+# No default features: the packaged app leaves out the UI automation (`MTT_AUTOMATION`).
+cargo build --release -p mtt-app --no-default-features --manifest-path "$ROOT_DIR/Cargo.toml"
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"

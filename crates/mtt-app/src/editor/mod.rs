@@ -21,6 +21,9 @@ pub mod thumbnails;
 pub mod translation;
 pub mod widgets;
 
+#[cfg(test)]
+mod ui_tests;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, PoisonError};
@@ -451,6 +454,9 @@ pub struct Editor {
     pub thumbnails: thumbnails::Thumbnails,
     /// Tab / Shift+Tab presses taken before egui's focus handling (see `MttApp::raw_input_hook`).
     pub pending_block_step: i32,
+    /// Tab / Shift+Tab pressed in the 번역 field: applied after the frame's typing, then the
+    /// next block's 번역 field takes focus.
+    pub pending_text_step: i32,
     /// "다시 번역" on the selected blocks, started next frame (where the services are).
     pub block_translation_requested: bool,
     /// The work's translation notes being edited (`작품 › 화 › 번역 메모`).
@@ -570,6 +576,7 @@ impl Editor {
             work_title: String::new(),
             thumbnails: Default::default(),
             pending_block_step: 0,
+            pending_text_step: 0,
             block_translation_requested: false,
             work_notes_draft: None,
             shortcut_sheet: false,
@@ -2521,6 +2528,17 @@ impl Editor {
         Ok(())
     }
 
+    /// A dialog is up (`modalOpen`): the editor behind it takes no keys and the canvas
+    /// quick controls stay hidden.
+    fn dialog_open(&self) -> bool {
+        self.app_modal_open
+            || self.shortcut_sheet
+            || self.work_notes_draft.is_some()
+            || self.find.open
+            || self.preset_backup_dialog.is_some()
+            || self.character_dialog.is_some()
+    }
+
     pub fn ui(
         &mut self,
         ui: &mut egui::Ui,
@@ -2548,11 +2566,7 @@ impl Editor {
         // Tab / Shift+Tab taken by `MttApp::raw_input_hook`, applied before drawing so the
         // new selection shows this frame.
         let step = std::mem::take(&mut self.pending_block_step);
-        let dialog_open = self.app_modal_open
-            || self.work_notes_draft.is_some()
-            || self.find.open
-            || self.preset_backup_dialog.is_some()
-            || self.character_dialog.is_some();
+        let dialog_open = self.dialog_open();
         if step != 0 && !dialog_open && self.mode() == Mode::Translate {
             self.select_adjacent_block(step);
         }
@@ -2604,13 +2618,24 @@ impl Editor {
         panels::find_replace_window(self, ui);
         panels::preset_backup_window(self, ui, services);
         panels::character_override_window(self, ui, services);
-        // `modalOpen`: no editor shortcuts while a dialog is up.
-        let modal_open = self.app_modal_open
-            || self.find.open
-            || self.preset_backup_dialog.is_some()
-            || self.character_dialog.is_some();
-        if !self.text_editing && !modal_open {
-            stage::shortcuts(self, &ui.ctx().clone(), services);
+        // Tab in the 번역 field, after this frame's typing (an IME commit that came with the
+        // key) has gone into the block it was typed for.
+        let text_step = std::mem::take(&mut self.pending_text_step);
+        if text_step != 0 && !dialog_open && self.mode() == Mode::Translate {
+            self.select_adjacent_block(text_step);
+            self.focus_text_requested = true;
+            ui.ctx().request_repaint();
+        }
+        // `modalOpen`: no editor shortcuts while a dialog is up (or was when the frame
+        // began: the Esc that closed it is not the editor's); the shortcut sheet only takes
+        // the keys that close it. A focused text field keeps its keys, number and colour
+        // fields too.
+        let ctx = ui.ctx().clone();
+        let text_focused = self.text_editing || ctx.text_edit_focused();
+        if self.shortcut_sheet && !self.app_modal_open {
+            stage::shortcut_sheet_keys(self, &ctx);
+        } else if !text_focused && !dialog_open && !self.dialog_open() {
+            stage::shortcuts(self, &ctx, services);
         }
         let ui_state = &mut services.ui_state;
         if self.widgets.store(&mut ui_state.widgets, &mut ui_state.inspector_order, &mut ui_state.widget_canvas) {
