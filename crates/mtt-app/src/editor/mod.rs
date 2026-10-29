@@ -2238,6 +2238,9 @@ impl Editor {
         if field.as_deref() != Some(path_text.as_str()) {
             *field = Some(path_text);
             self.mark_chapter_dirty();
+            // Save the chapter right behind this PNG on the writer, not after the autosave
+            // delay: a crash in between would leave the file with no page pointing at it.
+            self.last_change = Some(Instant::now() - AUTOSAVE_DELAY);
         }
         self.layer_saves_in_flight += 1;
         self.layers_queued.insert((page_id.to_owned(), layer));
@@ -3330,6 +3333,33 @@ mod tests {
         assert!(path.is_file());
         assert!(!editor.layer_dirty.contains_key(&key));
         assert!(!editor.notifications.has_save_failure());
+    }
+
+    #[test]
+    fn a_new_layer_file_is_recorded_in_the_chapter_right_behind_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut services, worker) = services_in(dir.path());
+        let mut editor = Editor::new(chapter_with_pages(1));
+        editor.assets.insert("p0".into(), page_with_mask(&ctx, "p0"));
+        editor.layer_dirty.insert(("p0".into(), LayerKind::Mask), Instant::now() - LAYER_SAVE_DELAY);
+        // One frame queues the PNG and then the chapter that points at it.
+        editor.tick(&mut services, &worker, false);
+        let deadline = Instant::now() + Duration::from_secs(20);
+        let mut writes = Vec::new();
+        while writes.len() < 2 && Instant::now() < deadline {
+            for event in worker.drain() {
+                match event {
+                    AppEvent::LayerSaved { error: None, .. } => writes.push("layer"),
+                    AppEvent::ChapterSaved { error: None, .. } => writes.push("chapter"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert_eq!(writes, ["layer", "chapter"]);
+        let saved = services.library.read_chapter("w", "c").unwrap().unwrap();
+        let path = saved.pages[0].inpaint_mask_path.as_deref().expect("the chapter points at the mask");
+        assert!(std::path::Path::new(path).is_file());
     }
 
     #[test]
