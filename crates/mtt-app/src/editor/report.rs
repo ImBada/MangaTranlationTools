@@ -951,7 +951,9 @@ const HTML_SCRIPT_END: &str = r##"
           }
           if (focusUrl) {
             fetch(focusUrl + "?page=" + encodeURIComponent(pageId) + "&block=" + encodeURIComponent(blockId), { mode: "no-cors" })
-              .catch(() => {});
+              .catch(() => {
+                window.alert("편집기에 연결할 수 없습니다. 이 보고서를 만든 앱이 닫혔다면, 앱에서 보고서를 다시 만들어 주세요.");
+              });
           }
         });
       });
@@ -1147,11 +1149,84 @@ pub fn generate(
     let html = build_html(&chapter.title, &ko_kr_timestamp(&chrono::Local::now()), &rows, focus_url);
     let safe_id: String =
         chapter.id.chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
-    let dir = std::env::temp_dir().join("MangaTranslationTools-reports");
-    std::fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
-    let path = dir.join(format!("result-report-{safe_id}-{}.html", chrono::Local::now().format("%Y%m%d-%H%M%S")));
-    std::fs::write(&path, html).map_err(|error| format!("보고서 저장 실패: {error}"))?;
+    let path = write_report(&reports_dir(), &safe_id, &html).map_err(|error| format!("보고서 저장 실패: {error}"))?;
     Ok((path, rows.len()))
+}
+
+/// Reports older than this are removed when the next one is written; their "이동" buttons
+/// stopped working when the app that made them closed.
+const REPORT_MAX_AGE: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+/// Folder for the report files: the user's own runtime folder on Linux (`/tmp` is shared
+/// there), else the per-user temp folder.
+fn reports_dir() -> std::path::PathBuf {
+    let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+        .map(std::path::PathBuf::from)
+        .filter(|path| cfg!(all(unix, not(target_os = "macos"))) && path.is_absolute() && path.is_dir());
+    runtime.unwrap_or_else(std::env::temp_dir).join("MangaTranslationTools-reports")
+}
+
+/// Writes `html` under an unguessable name only this user can read (the report holds the
+/// translations and the editor's focus URL), after removing old reports.
+fn write_report(dir: &std::path::Path, safe_id: &str, html: &str) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write as _;
+    create_private_dir(dir)?;
+    remove_old_reports(dir, REPORT_MAX_AGE);
+    // `tempfile` creates the file with owner-only permissions.
+    let mut file = tempfile::Builder::new()
+        .prefix(&format!("result-report-{safe_id}-"))
+        .suffix(".html")
+        .rand_bytes(16)
+        .tempfile_in(dir)?;
+    file.write_all(html.as_bytes())?;
+    let (_, path) = file.keep().map_err(|error| error.error)?;
+    Ok(path)
+}
+
+/// Creates the reports folder for this user only. An existing folder must be a real
+/// folder; one left readable by others (by an older version) is closed up.
+#[cfg(unix)]
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+    match std::fs::DirBuilder::new().mode(0o700).create(dir) {
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+        result => return result,
+    }
+    let metadata = std::fs::symlink_metadata(dir)?;
+    if !metadata.is_dir() {
+        return Err(std::io::Error::other(format!("{}는 폴더가 아닙니다", dir.display())));
+    }
+    if metadata.permissions().mode() & 0o077 != 0 {
+        std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn create_private_dir(dir: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)
+}
+
+/// Removes report files not written to for `max_age` (another running instance's fresh
+/// report stays).
+fn remove_old_reports(dir: &std::path::Path, max_age: std::time::Duration) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if !name.starts_with("result-report-") || !name.ends_with(".html") {
+            continue;
+        }
+        let old = entry
+            .metadata()
+            .and_then(|metadata| metadata.modified())
+            .ok()
+            .and_then(|modified| modified.elapsed().ok())
+            .is_some_and(|age| age >= max_age);
+        if old && let Err(error) = std::fs::remove_file(entry.path()) {
+            log::warn!("old report not removed: {error}");
+        }
+    }
 }
 
 /// Local endpoint the report's "이동" buttons ping (`focus_url?page=…&block=…`); stands in
@@ -1543,6 +1618,38 @@ mod tests {
         let midnight = chrono::Local.with_ymd_and_hms(2026, 1, 2, 0, 0, 9).unwrap();
         assert_eq!(ko_kr_timestamp(&midnight), "2026. 1. 2. 오전 12:00:09");
         assert_eq!(percent_decode("a%20b+c%ED%95%9C%zz%"), "a b c한%zz%");
+    }
+
+    #[test]
+    fn reports_are_private_unguessable_and_cleaned_up() {
+        let root = tempfile::tempdir().unwrap();
+        let dir = root.path().join("reports");
+        let first = write_report(&dir, "chapter-1", "<html>1</html>").unwrap();
+        let second = write_report(&dir, "chapter-1", "<html>2</html>").unwrap();
+        assert_ne!(first, second, "same chapter, same second, two files");
+        assert_eq!(std::fs::read_to_string(&second).unwrap(), "<html>2</html>");
+        let name = second.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("result-report-chapter-1-") && name.ends_with(".html"), "{name}");
+        assert!(name.len() >= "result-report-chapter-1-.html".len() + 16, "random part: {name}");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&second), 0o600);
+            assert_eq!(mode(&dir), 0o700);
+            // A folder an older version left open is closed up.
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+            write_report(&dir, "chapter-1", "").unwrap();
+            assert_eq!(mode(&dir), 0o700);
+        }
+
+        let other = dir.join("notes.txt");
+        std::fs::write(&other, "").unwrap();
+        remove_old_reports(&dir, std::time::Duration::from_secs(3600));
+        assert!(first.exists(), "fresh reports stay");
+        remove_old_reports(&dir, std::time::Duration::ZERO);
+        assert!(!first.exists() && !second.exists(), "old reports are removed");
+        assert!(other.exists(), "other files stay");
     }
 
     #[test]

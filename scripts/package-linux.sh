@@ -11,7 +11,8 @@ VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$ROOT_DIR/Cargo.toml" | head -1)
 ARCH="$(uname -m)"
 NAME="MangaTranslationTools"
 
-cargo build --release -p mtt-app --manifest-path "$ROOT_DIR/Cargo.toml"
+# No default features: the packaged app leaves out the UI automation (`MTT_AUTOMATION`).
+cargo build --release -p mtt-app --no-default-features --manifest-path "$ROOT_DIR/Cargo.toml"
 
 APPDIR="$OUT_DIR/$NAME.AppDir"
 rm -rf "$APPDIR"

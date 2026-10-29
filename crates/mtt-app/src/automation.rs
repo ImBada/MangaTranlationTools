@@ -2,6 +2,8 @@
 //!
 //! `MTT_AUTOMATION="open:first;ready;layer:2;select:first;ready;shot:/tmp/a.png;quit"`
 //! Steps run in order; `ready` waits until the current page and its overlay are rendered.
+//! Only in builds with the `automation` feature (on by default for `cargo run`, off in the
+//! packaged app).
 
 use std::collections::VecDeque;
 use std::path::PathBuf;
@@ -83,6 +85,11 @@ pub enum Request {
 impl Automation {
     pub fn from_env() -> Option<Self> {
         let script = std::env::var("MTT_AUTOMATION").ok()?;
+        // It can write files anywhere, import and translate; packaged builds leave it out.
+        if !cfg!(feature = "automation") {
+            log::warn!("MTT_AUTOMATION ignored: built without the automation feature");
+            return None;
+        }
         let steps = script
             .split(';')
             .filter_map(|raw| {

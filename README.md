@@ -152,6 +152,8 @@ MANGA_TRANSLATOR_DATA_DIR=/tmp/x MTT_AUTOMATION="import:DIR;wait-editor;ready;sh
   cargo run --release -p mtt-app                             # UI 자동화 + 스크린샷 (단계 목록은 crates/mtt-app/src/automation.rs)
 ```
 
+UI 자동화(`MTT_AUTOMATION`)는 기본으로 켜진 `automation` 기능에 들어 있어 `cargo run`/`cargo build`에서는 동작하고, 패키징 스크립트는 `--no-default-features`로 빌드하므로 배포판에서는 이 변수를 무시합니다.
+
 이전 작업 기록과 남은 일은 [TODO.md](TODO.md)에 있습니다.
 
 ## 라이선스
