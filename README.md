@@ -22,7 +22,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
 
 ## 설치 / 실행
 
-- **배포판**: [Releases](https://github.com/ImBada/MangaTranlationTools/releases)에서 macOS(dmg, zip) 또는 Windows(설치 파일, zip)를 받습니다.
+- **배포판**: [Releases](https://github.com/ImBada/MangaTranlationTools/releases)에서 macOS(dmg, zip), Windows(설치 파일, zip), Linux(tar.gz, deb)를 받습니다.
 - **소스에서 바로 실행 (더블클릭)**: Rust가 없다면 먼저 <https://rustup.rs>에서 설치하세요.
   - macOS: Finder에서 `run-macos.command`를 더블클릭합니다. 터미널 창이 열리고 앱을 빌드한 뒤(처음엔 몇 분, 이후엔 바뀐 부분만) 실행합니다.
     앱이 이미 실행 중이면 종료하고 새로 빌드할지 묻습니다(변경 내용은 저장됨). 실행된 뒤에는 터미널 창을 닫아도 됩니다.
@@ -135,8 +135,10 @@ cargo fmt --all
 ./scripts/bundle-macos.sh --dist               # + dmg, zip
 ./scripts/package-linux.sh                     # Linux: tar.gz(AppDir), appimagetool/dpkg-deb가 있으면 AppImage/deb
 powershell -File scripts/package-windows.ps1   # Windows: zip, makensis가 있으면 설치 파일
-scripts/release-version.sh [patch|minor|major|x.y.z]   # 버전 커밋 + vX.Y.Z 태그를 push → Release 워크플로가 배포판을 올림
+scripts/release-version.sh [patch|minor|major|x.y.z]   # 로컬에서: 버전 커밋 + vX.Y.Z 태그를 push → Release 워크플로가 배포판을 올림
 ```
+
+릴리스는 GitHub의 **Actions › Release › Run workflow**로도 냅니다. 올릴 자리(patch/minor/major)나 버전을 고르면 Windows(설치 파일, zip)·macOS(dmg, zip)·Linux(tar.gz, deb) 패키지를 만들고, 모두 성공했을 때만 버전 커밋과 `vX.Y.Z` 태그를 master에 올린 뒤 릴리스를 게시합니다. `릴리스까지 올리기`를 끄면 패키지만 만들어 실행 결과의 Artifacts에 둡니다.
 
 Windows/Linux 패키지는 각 OS에서 빌드해야 합니다(`ring` 등 C 의존성 때문에 macOS에서 교차 빌드 불가).
 CI는 Linux · macOS · Windows에서 포맷 검사(Linux), clippy, 테스트를 돌립니다.

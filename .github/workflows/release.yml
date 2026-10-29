@@ -1,25 +1,106 @@
 name: Release
 
+# Actions › Release › Run workflow: raises the version, builds the Windows, macOS and Linux
+# packages, and only when every build passes commits the version, tags it and publishes the
+# release. Pushing a vX.Y.Z tag yourself (scripts/release-version.sh) releases that tag.
 on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "올릴 자리 (patch: 0.9.31 → 0.9.32, minor: → 0.10.0, major: → 1.0.0)"
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+      version:
+        description: "직접 정할 버전 (예: 1.0.0, 비우면 위 규칙)"
+        type: string
+        required: false
+      publish:
+        description: "릴리스까지 올리기 (끄면 패키지만 만들어 실행 결과의 Artifacts에 둠)"
+        type: boolean
+        default: true
   push:
     tags:
       - "v*"
-  workflow_dispatch:
-    inputs:
-      tag_name:
-        description: "Release tag to create or update (example: v0.1.6)"
-        required: true
-        type: string
 
 permissions:
   contents: write
+
+# One release at a time; a second run waits instead of racing for the same version.
+concurrency:
+  group: release
+  cancel-in-progress: false
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-and-release:
+  prepare:
+    name: Version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      # The version commit is still to be made (a run of this workflow, not a pushed tag).
+      bump: ${{ steps.version.outputs.bump }}
+      publish: ${{ steps.version.outputs.publish }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Resolve the version
+        id: version
+        shell: bash
+        env:
+          EVENT: ${{ github.event_name }}
+          INPUT_BUMP: ${{ inputs.bump }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_PUBLISH: ${{ inputs.publish }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          current="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          if [ "$EVENT" = push ]; then
+            version="${GITHUB_REF_NAME#v}"
+            bump=false
+            publish=true
+            [ "$version" = "$current" ] || { echo "::error::tag $GITHUB_REF_NAME doesn't match Cargo.toml ($current)"; exit 1; }
+          else
+            if [ -n "$INPUT_VERSION" ]; then
+              version="${INPUT_VERSION#v}"
+            else
+              IFS=. read -r major minor patch <<<"$current"
+              case "$INPUT_BUMP" in
+                major) version="$((major + 1)).0.0" ;;
+                minor) version="$major.$((minor + 1)).0" ;;
+                *) version="$major.$minor.$((patch + 1))" ;;
+              esac
+            fi
+            bump=true
+            publish="$INPUT_PUBLISH"
+          fi
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "::error::invalid version: $version"; exit 1; }
+          if [ "$bump" = true ]; then
+            newest="$(printf '%s\n%s\n' "$current" "$version" | sort -V | tail -1)"
+            [ "$version" != "$current" ] && [ "$newest" = "$version" ] \
+              || { echo "::error::$version is not newer than $current"; exit 1; }
+          fi
+          if [ "$bump" = true ] && [ "$publish" = true ]; then
+            [ "$GITHUB_REF" = "refs/heads/$DEFAULT_BRANCH" ] \
+              || { echo "::error::release from $DEFAULT_BRANCH, not $GITHUB_REF"; exit 1; }
+            if git ls-remote --exit-code --tags origin "refs/tags/v$version" >/dev/null; then
+              echo "::error::tag v$version already exists"
+              exit 1
+            fi
+          fi
+          echo "Version $current → $version (commit: $bump, publish: $publish)"
+          {
+            echo "version=$version"
+            echo "bump=$bump"
+            echo "publish=$publish"
+          } >> "$GITHUB_OUTPUT"
+
+  build:
     name: Build ${{ matrix.name }}
+    needs: prepare
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -35,10 +116,23 @@ jobs:
             files: |
               target/bundle/*.dmg
               target/bundle/*-mac.zip
+          - name: Linux
+            os: ubuntu-latest
+            files: |
+              target/bundle/*.tar.gz
+              target/bundle/*.deb
 
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+
+      - name: Set the version
+        if: needs.prepare.outputs.bump == 'true'
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        # Only the first match: the workspace version, not dependency versions.
+        run: perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
@@ -55,6 +149,12 @@ jobs:
           }
           "C:\Program Files (x86)\NSIS" | Out-File -FilePath $env:GITHUB_PATH -Append
 
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libwayland-dev libxkbcommon-dev
+
       - name: Build Windows package
         if: runner.os == 'Windows'
         shell: pwsh
@@ -64,22 +164,62 @@ jobs:
         if: runner.os == 'macOS'
         run: ./scripts/bundle-macos.sh --dist
 
-      - name: Resolve release metadata
-        id: release_meta
-        shell: bash
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "tag=${{ inputs.tag_name }}" >> "$GITHUB_OUTPUT"
-          else
-            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "target=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+      - name: Build Linux tar.gz and deb
+        if: runner.os == 'Linux'
+        run: ./scripts/package-linux.sh
 
-      - name: Publish GitHub release assets
+      - name: Keep the packages
+        uses: actions/upload-artifact@v7
+        with:
+          name: packages-${{ matrix.name }}
+          path: ${{ matrix.files }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish
+    needs: [prepare, build]
+    if: needs.prepare.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Commit and tag the version
+        id: commit
+        shell: bash
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUMP: ${{ needs.prepare.outputs.bump }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          if [ "$BUMP" = true ]; then
+            perl -0pi -e 's/^version = "[^"]*"/version = "$ENV{VERSION}"/m' Cargo.toml
+            # The workspace crates' entries in Cargo.lock, not their dependencies.
+            cargo update --workspace
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add Cargo.toml Cargo.lock
+            git commit -m "Bump version to $VERSION"
+            git tag -a "v$VERSION" -m "v$VERSION"
+            # Fails if the branch moved since the run started: release what was built.
+            git push origin "HEAD:refs/heads/$BRANCH"
+            git push origin "v$VERSION"
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Gather the packages
+        uses: actions/download-artifact@v8
+        with:
+          pattern: packages-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish the release
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: ${{ steps.release_meta.outputs.tag }}
-          target_commitish: ${{ steps.release_meta.outputs.target }}
+          tag_name: v${{ needs.prepare.outputs.version }}
+          target_commitish: ${{ steps.commit.outputs.sha }}
+          name: v${{ needs.prepare.outputs.version }}
           generate_release_notes: true
           fail_on_unmatched_files: true
-          files: ${{ matrix.files }}
+          files: dist/*
