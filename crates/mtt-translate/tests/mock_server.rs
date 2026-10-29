@@ -6,7 +6,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use mtt_translate::{Api, Endpoint, TranslationConfig, translate_page};
+use mtt_translate::{Api, Endpoint, Retry, TranslationConfig, translate_page};
 
 /// Serves `/models` and `/chat/completions`; the first completion is garbage so the retry
 /// path is exercised. Returns the base URL and the captured request bodies.
@@ -159,7 +159,7 @@ fn cancel_does_not_wait_for_a_slow_model() {
     });
     let started = Instant::now();
     let result = translate_page(&config, &page, |_, _| {}, || cancel.load(Ordering::SeqCst));
-    assert_eq!(result.unwrap_err(), "취소됨");
+    assert_eq!(result.unwrap_err().retry, Retry::Cancelled);
     assert!(started.elapsed() < Duration::from_secs(2), "returned after {:?}", started.elapsed());
 }
 
@@ -185,8 +185,26 @@ fn rejected_requests_are_not_retried() {
     let (page, config) = page_and_config(base_url, 5);
     let mut failures = 0;
     let error = translate_page(&config, &page, |_, _| failures += 1, || false).unwrap_err();
-    assert!(error.contains("401"), "{error}");
+    assert!(error.message.contains("401"), "{}", error.message);
+    assert_eq!(error.retry, Retry::Stop, "every page would fail the same way");
     assert_eq!((failures, *requests.lock().unwrap()), (1, 1), "one attempt only");
+}
+
+#[test]
+fn a_used_up_quota_stops_but_a_rejected_page_does_not() {
+    let quota = r#"{"error":{"message":"You exceeded your current quota.","type":"insufficient_quota","code":"insufficient_quota"}}"#;
+    let (base_url, bodies) = spawn_scripted(vec![(429, "application/json", quota.into())]);
+    let (page, config) = page_and_config(base_url, 5);
+    let error = translate_page(&config, &page, |_, _| {}, || false).unwrap_err();
+    assert_eq!(error.retry, Retry::Stop, "{}", error.message);
+    assert_eq!(bodies.lock().unwrap().len(), 1, "not asked again");
+
+    let invalid = r#"{"error":{"message":"Invalid image data","type":"invalid_request_error"}}"#;
+    let (base_url, bodies) = spawn_scripted(vec![(400, "application/json", invalid.into())]);
+    let (page, config) = page_and_config(base_url, 5);
+    let error = translate_page(&config, &page, |_, _| {}, || false).unwrap_err();
+    assert_eq!(error.retry, Retry::No, "only this page: {}", error.message);
+    assert_eq!(bodies.lock().unwrap().len(), 1);
 }
 
 #[test]

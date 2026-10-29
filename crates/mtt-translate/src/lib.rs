@@ -261,16 +261,19 @@ fn request_attempt<T>(
 }
 
 /// Translates a page with retries. `on_attempt(attempt, error)` reports failed attempts.
-/// `cancelled` stops waiting for a request in flight, a pause, or the next attempt.
-/// Errors that would repeat (a bad key, a rejected request) are not retried.
+/// `cancelled` stops waiting for a request in flight, a pause, or the next attempt (the
+/// error is then [`Retry::Cancelled`]). Errors that would repeat (a rejected request) are
+/// not retried; those every page would run into (a bad key, an unknown model, a used-up
+/// quota) come back as [`Retry::Stop`].
 pub fn translate_page(
     config: &TranslationConfig,
     image_path: &Path,
     on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
-) -> Result<Vec<OverlayItem>, String> {
+) -> Result<Vec<OverlayItem>, SendError> {
     // The images (and their base64) are the same for every attempt.
-    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)?;
+    let variants = images::prepare_variants(image_path, config.include_enhanced_variant)
+        .map_err(|error| SendError::new(error, Retry::No))?;
     with_retries(
         config,
         |attempt, tries, cancelled| {
@@ -336,11 +339,12 @@ pub fn translate_regions(
     regions: &[Region],
     on_attempt: impl FnMut(u32, &str),
     cancelled: impl Fn() -> bool,
-) -> Result<Vec<parser::RegionText>, String> {
-    let mut variants = vec![images::original_variant(image_path)?];
-    let page = image::open(image_path).map_err(|e| format!("{}: {e}", image_path.display()))?.to_rgba8();
+) -> Result<Vec<parser::RegionText>, SendError> {
+    let unreadable = |error: String| SendError::new(error, Retry::No);
+    let mut variants = vec![images::original_variant(image_path).map_err(unreadable)?];
+    let page = image::open(image_path).map_err(|e| unreadable(format!("{}: {e}", image_path.display())))?.to_rgba8();
     for region in regions {
-        variants.push(images::region_variant(&page, region.id, region.bbox)?);
+        variants.push(images::region_variant(&page, region.id, region.bbox).map_err(unreadable)?);
     }
     let prompt = region_prompt(regions);
     let ids: Vec<u32> = regions.iter().map(|region| region.id).collect();
@@ -362,42 +366,50 @@ pub fn translate_regions(
 }
 
 /// Runs `attempt(number, tries, cancelled)` up to `config.attempts` times, pausing after
-/// server errors and stopping early on errors that would repeat or on cancel.
+/// server errors and stopping early on errors that would repeat or on cancel. The error
+/// keeps the last attempt's [`Retry`], so callers can tell a job-stopping one.
 fn with_retries<T>(
     config: &TranslationConfig,
     mut attempt: impl FnMut(u32, Tries, &dyn Fn() -> bool) -> Result<T, SendError>,
     mut on_attempt: impl FnMut(u32, &str),
     cancelled: &dyn Fn() -> bool,
-) -> Result<T, String> {
+) -> Result<T, SendError> {
     let attempts = config.attempts.max(1);
-    let mut last_error = String::new();
+    let cancel = || SendError::new("취소됨", Retry::Cancelled);
+    let mut last_error = SendError::new("", Retry::Now);
     let mut tries = Tries::default();
     for number in 1..=attempts {
         if cancelled() {
-            return Err("취소됨".into());
+            return Err(cancel());
         }
         let error = match attempt(number, tries, cancelled) {
             Ok(value) => return Ok(value),
             Err(error) => error,
         };
         if error.retry == Retry::Cancelled {
-            return Err("취소됨".into());
+            return Err(cancel());
         }
         log::warn!("translation attempt {number} failed: {}", error.message);
         on_attempt(number, &error.message);
-        last_error = error.message;
         match error.retry {
-            Retry::No => return Err(format!("다시 시도해도 같은 오류라 멈췄습니다: {last_error}")),
+            Retry::No => {
+                return Err(SendError::new(
+                    format!("다시 시도해도 같은 오류라 멈췄습니다: {}", error.message),
+                    Retry::No,
+                ));
+            }
+            Retry::Stop => return Err(error),
             Retry::Longer => tries.cut_off += 1,
             Retry::Later(asked)
                 if number < attempts && !wait_unless_cancelled(retry_delay(number, asked), cancelled) =>
             {
-                return Err("취소됨".into());
+                return Err(cancel());
             }
             _ => {}
         }
+        last_error = error;
     }
-    Err(format!("{attempts}회 시도 후 실패: {last_error}"))
+    Err(SendError::new(format!("{attempts}회 시도 후 실패: {}", last_error.message), last_error.retry))
 }
 
 /// `mapOverlayType`.

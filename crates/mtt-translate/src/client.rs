@@ -48,8 +48,11 @@ pub fn job_agent(timeout: Duration) -> ureq::Agent {
 /// Whether a failed request is worth repeating, and when.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Retry {
-    /// It will fail the same way (bad key, wrong URL, rejected request).
+    /// It will fail the same way (a page the server rejects).
     No,
+    /// Every request will fail the same way (bad key, wrong URL or model, quota used up):
+    /// stop the whole job.
+    Stop,
     /// Right away (the model's answer could not be used; ask again).
     Now,
     /// Right away with more room: the answer was cut off at the output limit.
@@ -72,12 +75,36 @@ impl SendError {
     }
 }
 
-/// How an HTTP error status should be retried.
-pub fn retry_for_status(status: u16, retry_after: Option<Duration>) -> Retry {
+/// How an HTTP error should be retried, from its status and body: a bad key, a wrong
+/// address or model, an unsupported parameter or a used-up quota stop the job.
+pub fn retry_for_status(status: u16, body: &str, retry_after: Option<Duration>) -> Retry {
+    let body = body.to_ascii_lowercase();
     match status {
+        401 | 403 | 404 => Retry::Stop,
+        429 if is_quota_error(&body) => Retry::Stop,
+        400 | 422 if is_setup_error(&body) => Retry::Stop,
         408 | 409 | 425 | 429 | 500..=599 => Retry::Later(retry_after),
         _ => Retry::No,
     }
+}
+
+/// An OpenAI `insufficient_quota` or Codex `usage_limit_reached` error (lowercase `body`):
+/// waiting a few seconds won't help.
+fn is_quota_error(body: &str) -> bool {
+    ["insufficient_quota", "usage_limit_reached", "usage_not_included", "billing", "exceeded your current quota"]
+        .iter()
+        .any(|marker| body.contains(marker))
+}
+
+/// A request rejected for its model or parameters rather than its page (lowercase `body`).
+fn is_setup_error(body: &str) -> bool {
+    let codes =
+        ["model_not_found", "invalid_model", "unsupported_parameter", "unsupported_value", "\"param\":\"model\""];
+    let model_phrases =
+        ["not found", "does not exist", "not supported", "does not support", "unknown model", "invalid model"];
+    let compact = body.replace(' ', "");
+    codes.iter().any(|code| compact.contains(code))
+        || (body.contains("model") && model_phrases.iter().any(|phrase| body.contains(phrase)))
 }
 
 /// `Retry-After` in seconds (the HTTP-date form is rare for APIs and ignored).
@@ -292,7 +319,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
     };
     let url = format!("{}/{path}", endpoint.base_url.trim_end_matches('/'));
     let session = match &endpoint.auth {
-        Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::No))?),
+        Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::Stop))?),
         None => None,
     };
     let post = |session: Option<&crate::codex::Session>| {
@@ -310,7 +337,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
     if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
         && response.status().as_u16() == 401
     {
-        let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::No))?;
+        let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::Stop))?;
         response = post(Some(&fresh))?;
     }
     let status = response.status();
@@ -324,7 +351,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
     if !status.is_success() {
         return Err(SendError::new(
             format!("요청 실패 ({}): {}", status.as_u16(), preview(&text, 600)),
-            retry_for_status(status.as_u16(), wait),
+            retry_for_status(status.as_u16(), &text, wait),
         ));
     }
     let (output, cut_off) = match endpoint.api {
@@ -614,12 +641,16 @@ fn parse_responses_sse(raw: &str) -> Result<(String, bool), SendError> {
 }
 
 /// A failed stream's `{"code", "message"}` as an error: retried after a pause unless the
-/// code says this request can't succeed (a rejected prompt or image).
+/// code says this request can't succeed (a rejected prompt or image) or no request will
+/// (a used-up quota, an unknown model).
 fn stream_error(error: &Value) -> SendError {
     let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or("").trim().to_owned();
     let (code, message) = (text("code"), text("message"));
     let code = if code.is_empty() { text("type") } else { code };
-    let retry = if code == "invalid_prompt" || code.contains("image") || code.contains("context_length") {
+    let lower = code.to_ascii_lowercase();
+    let retry = if is_quota_error(&lower) || is_setup_error(&lower) {
+        Retry::Stop
+    } else if lower == "invalid_prompt" || lower.contains("image") || lower.contains("context_length") {
         Retry::No
     } else {
         Retry::Later(None)
@@ -752,10 +783,27 @@ mod tests {
 
     #[test]
     fn statuses_that_cannot_succeed_are_not_retried() {
-        assert_eq!(retry_for_status(401, None), Retry::No);
-        assert_eq!(retry_for_status(400, None), Retry::No);
-        assert_eq!(retry_for_status(429, Some(Duration::from_secs(3))), Retry::Later(Some(Duration::from_secs(3))));
-        assert_eq!(retry_for_status(503, None), Retry::Later(None));
+        assert_eq!(retry_for_status(401, "", None), Retry::Stop);
+        assert_eq!(retry_for_status(404, "", None), Retry::Stop);
+        assert_eq!(retry_for_status(400, r#"{"error":{"message":"Invalid image"}}"#, None), Retry::No);
+        assert_eq!(retry_for_status(413, "", None), Retry::No);
+        assert_eq!(retry_for_status(429, "", Some(Duration::from_secs(3))), Retry::Later(Some(Duration::from_secs(3))));
+        assert_eq!(retry_for_status(503, "", None), Retry::Later(None));
+    }
+
+    #[test]
+    fn errors_every_page_would_hit_stop_the_job() {
+        let quota = r#"{"error":{"message":"You exceeded your current quota","type":"insufficient_quota"}}"#;
+        assert_eq!(retry_for_status(429, quota, None), Retry::Stop);
+        let usage = r#"{"error":{"type":"usage_limit_reached","message":"The usage limit has been reached"}}"#;
+        assert_eq!(retry_for_status(429, usage, Some(Duration::from_secs(9))), Retry::Stop);
+        let model = r#"{"error":{"message":"The model `gpt-9` does not exist","code":"model_not_found"}}"#;
+        assert_eq!(retry_for_status(400, model, None), Retry::Stop);
+        let parameter = r#"{"error":{"message":"Unsupported parameter: 'max_tokens'","param":"max_tokens","code":"unsupported_parameter"}}"#;
+        assert_eq!(retry_for_status(400, parameter, None), Retry::Stop);
+        let ollama = r#"{"error":"model \"qwen\" not found, try pulling it first"}"#;
+        assert_eq!(retry_for_status(404, ollama, None), Retry::Stop);
+        assert_eq!(stream_error(&json!({ "code": "insufficient_quota", "message": "x" })).retry, Retry::Stop);
     }
 
     #[test]

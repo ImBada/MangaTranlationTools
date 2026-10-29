@@ -186,7 +186,16 @@ impl MttApp {
         }
         match batch_finished {
             Some(true) if !self.batch_queue.is_empty() => self.advance_batch(),
-            Some(false) => self.batch_queue.clear(),
+            Some(false) if !self.batch_queue.is_empty() => {
+                if let Screen::Editor(editor) = &mut self.screen {
+                    editor.status = format!(
+                        "{} · 작품 일괄 번역을 멈췄습니다 (남은 화 {}개)",
+                        editor.status,
+                        self.batch_queue.len()
+                    );
+                }
+                self.batch_queue.clear();
+            }
             _ => {}
         }
         if let Some(chapter_id) = pending_open {
