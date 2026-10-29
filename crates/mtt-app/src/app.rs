@@ -66,6 +66,8 @@ pub enum AppEvent {
         event: crate::editor::report::ReportEvent,
     },
     ReportFocus {
+        /// The report's chapter (`None` for a focus URL without one).
+        chapter_id: Option<String>,
         page_id: String,
         block_id: String,
     },
@@ -149,6 +151,7 @@ impl MttApp {
     fn handle_events(&mut self, ctx: &egui::Context) {
         let mut batch_finished: Option<bool> = None;
         let mut pending_open: Option<String> = None;
+        let mut pending_focus: Option<(Option<String>, String, String)> = None;
         let mut pending_batch: Option<Vec<String>> = None;
         for event in self.worker.drain() {
             match (event, &mut self.screen) {
@@ -188,9 +191,8 @@ impl MttApp {
                         notify_elsewhere(screen, &mut self.library, message, failed);
                     }
                 }
-                (AppEvent::ReportFocus { page_id, block_id }, Screen::Editor(editor)) => {
-                    editor.focus_report_block(&page_id, &block_id);
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                (AppEvent::ReportFocus { chapter_id, page_id, block_id }, _) => {
+                    pending_focus = Some((chapter_id, page_id, block_id));
                 }
                 (AppEvent::Lama(event), screen) => {
                     if self.settings.on_lama_event(event, &self.services, &self.worker)
@@ -252,6 +254,9 @@ impl MttApp {
         if let Some(chapter_id) = pending_open {
             self.switch_chapter(&chapter_id);
         }
+        if let Some((chapter_id, page_id, block_id)) = pending_focus {
+            self.focus_report_block(ctx, chapter_id.as_deref(), &page_id, &block_id);
+        }
         if let Some(ids) = pending_batch {
             self.batch_queue = ids.into();
             self.advance_batch();
@@ -259,6 +264,20 @@ impl MttApp {
     }
 
     /// Opens another chapter from the editor (the TS library popover) after saving.
+    /// A report's "이동": opens the report's chapter when the library or another chapter is
+    /// in front, then selects the block and brings the window forward.
+    fn focus_report_block(&mut self, ctx: &egui::Context, chapter_id: Option<&str>, page_id: &str, block_id: &str) {
+        if let Some(chapter_id) = chapter_id {
+            self.switch_chapter(chapter_id);
+        }
+        if let Screen::Editor(editor) = &mut self.screen
+            && chapter_id.is_none_or(|id| editor.chapter.id == id)
+        {
+            editor.focus_report_block(page_id, block_id);
+        }
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
     fn switch_chapter(&mut self, chapter_id: &str) {
         if let Screen::Editor(editor) = &mut self.screen {
             if editor.chapter.id == chapter_id {
@@ -540,6 +559,36 @@ mod tests {
         assert_eq!(app.library.status.as_deref(), Some("작품 1화: 전체 페이지 출력 완료: 3p"));
         deliver(&ctx, &mut app, export_finished("a", vec!["002: 렌더링 실패".into()]));
         assert_eq!(app.library.error.as_deref(), Some("작품 1화: 출력 3페이지, 실패 1건: 002: 렌더링 실패"));
+    }
+
+    #[test]
+    fn a_report_opens_its_chapter_from_the_library_or_another_chapter() {
+        let dir = tempfile::tempdir().unwrap();
+        let (ctx, mut app) = app_in(dir.path());
+        let work = app.services.library.create_work("작품").unwrap();
+        let block = mtt_core::model::TranslationBlock { id: "b".into(), ..Default::default() };
+        let page = mtt_core::model::PageRecord { id: "p".into(), blocks: vec![block], ..Default::default() };
+        let chapter = mtt_core::model::Chapter {
+            id: "c".into(),
+            work_id: work.id,
+            page_order: vec!["p".into()],
+            pages: vec![page],
+            ..Default::default()
+        };
+        app.services.library.write_chapter(&chapter).unwrap();
+        let focus =
+            || AppEvent::ReportFocus { chapter_id: Some("c".into()), page_id: "p".into(), block_id: "b".into() };
+
+        app.screen = Screen::Library;
+        deliver(&ctx, &mut app, focus());
+        assert_eq!(editor(&app).chapter.id, "c", "the report's chapter opens");
+        assert_eq!(editor(&app).selection, ["b"]);
+
+        let other = mtt_core::model::Chapter { id: "other".into(), ..Default::default() };
+        app.screen = Screen::Editor(Box::new(Editor::new(other)));
+        deliver(&ctx, &mut app, focus());
+        assert_eq!(editor(&app).chapter.id, "c", "it takes the place of another chapter");
+        assert_eq!(editor(&app).selection, ["b"]);
     }
 
     #[test]

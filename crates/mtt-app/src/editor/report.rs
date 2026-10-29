@@ -1034,7 +1034,8 @@ impl super::Editor {
         self.status = format!("결과 보고서 생성 시작: {total}p");
         let library = services.library.clone();
         let chapter = self.chapter.clone();
-        let focus_url = services.report_focus_url.clone();
+        // The report's chapter rides along so "이동" can open it from anywhere.
+        let focus_url = services.report_focus_url.as_ref().map(|url| format!("{url}/{}", percent_encode(&chapter.id)));
         let emitter = worker.emitter();
         std::thread::spawn(move || {
             let chapter_id = chapter.id.clone();
@@ -1229,8 +1230,8 @@ fn remove_old_reports(dir: &std::path::Path, max_age: std::time::Duration) {
     }
 }
 
-/// Local endpoint the report's "이동" buttons ping (`focus_url?page=…&block=…`); stands in
-/// for the TS app's `window.opener.postMessage`. Returns the focus URL.
+/// Local endpoint the report's "이동" buttons ping (`focus_url/<chapter>?page=…&block=…`);
+/// stands in for the TS app's `window.opener.postMessage`. Returns the focus URL.
 pub fn start_focus_server(emitter: crate::worker::Emitter<crate::app::AppEvent>) -> Option<String> {
     use std::io::{BufRead, BufReader, Write};
     let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).ok()?;
@@ -1247,14 +1248,20 @@ pub fn start_focus_server(emitter: crate::worker::Emitter<crate::app::AppEvent>)
                     continue;
                 }
                 let target = line.split_whitespace().nth(1).unwrap_or("");
-                let found = target.strip_prefix(prefix.as_str()).and_then(|rest| rest.strip_prefix('?')).and_then(|query| {
+                let found = target.strip_prefix(prefix.as_str()).and_then(|rest| {
+                    let (path, query) = rest.split_once('?')?;
+                    let chapter_id = match path.strip_prefix('/') {
+                        Some(id) if !id.is_empty() => Some(percent_decode(id)),
+                        None if path.is_empty() => None,
+                        _ => return None,
+                    };
                     let param = |name: &str| {
                         query.split('&').find_map(|pair| {
                             let (key, value) = pair.split_once('=')?;
                             (key == name).then(|| percent_decode(value))
                         })
                     };
-                    Some((param("page")?, param("block")?))
+                    Some((chapter_id, param("page")?, param("block")?))
                 });
                 let status = if found.is_some() { "204 No Content" } else { "404 Not Found" };
                 let mut stream = stream;
@@ -1262,13 +1269,24 @@ pub fn start_focus_server(emitter: crate::worker::Emitter<crate::app::AppEvent>)
                     stream,
                     "HTTP/1.1 {status}\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
                 );
-                if let Some((page_id, block_id)) = found {
-                    emitter.emit(crate::app::AppEvent::ReportFocus { page_id, block_id });
+                if let Some((chapter_id, page_id, block_id)) = found {
+                    emitter.emit(crate::app::AppEvent::ReportFocus { chapter_id, page_id, block_id });
                 }
             }
         })
         .ok()?;
     Some(format!("http://127.0.0.1:{port}/focus/{token}"))
+}
+
+/// `%XX`-escapes everything but ASCII letters, digits, `-` and `_` (a URL path segment).
+fn percent_encode(value: &str) -> String {
+    value
+        .bytes()
+        .map(|byte| match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' => char::from(byte).to_string(),
+            _ => format!("%{byte:02X}"),
+        })
+        .collect()
 }
 
 /// Decodes `%XX` escapes and `+` from a query value.
@@ -1660,21 +1678,28 @@ mod tests {
         let agent = ureq::Agent::new_with_config(ureq::Agent::config_builder().http_status_as_error(false).build());
         let wrong = agent.get(&format!("{}x?page=a&block=b", url)).call().unwrap();
         assert_eq!(wrong.status().as_u16(), 404);
+        let next_focus = || {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+            let event = loop {
+                if let Some(event) = worker.drain().into_iter().next() {
+                    break event;
+                }
+                assert!(std::time::Instant::now() < deadline, "no focus event");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            };
+            match event {
+                crate::app::AppEvent::ReportFocus { chapter_id, page_id, block_id } => (chapter_id, page_id, block_id),
+                _ => panic!("unexpected event"),
+            }
+        };
         let ok = agent.get(&format!("{url}?page=p%201&block=b-2")).call().unwrap();
         assert_eq!(ok.status().as_u16(), 204);
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
-        let event = loop {
-            if let Some(event) = worker.drain().into_iter().next() {
-                break event;
-            }
-            assert!(std::time::Instant::now() < deadline, "no focus event");
-            std::thread::sleep(std::time::Duration::from_millis(10));
-        };
-        match event {
-            crate::app::AppEvent::ReportFocus { page_id, block_id } => {
-                assert_eq!((page_id.as_str(), block_id.as_str()), ("p 1", "b-2"));
-            }
-            _ => panic!("unexpected event"),
-        }
+        assert_eq!(next_focus(), (None, "p 1".into(), "b-2".into()));
+        let chapter_url = format!("{url}/{}", percent_encode("화 1"));
+        let ok = agent.get(&format!("{chapter_url}?page=p&block=b")).call().unwrap();
+        assert_eq!(ok.status().as_u16(), 204);
+        assert_eq!(next_focus(), (Some("화 1".into()), "p".into(), "b".into()));
+        let empty = agent.get(&format!("{url}/?page=p&block=b")).call().unwrap();
+        assert_eq!(empty.status().as_u16(), 404);
     }
 }
