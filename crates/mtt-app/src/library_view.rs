@@ -462,18 +462,22 @@ impl LibraryView {
                         egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
                             .frame_when_inactive(false)
                             .min_size(egui::vec2(28.0, 28.0));
-                    egui::containers::menu::MenuButton::from_button(more).ui(ui, |ui| {
-                        if ui.button("새로고침").clicked() {
-                            self.refresh(services);
-                            ui.close();
-                        }
-                        if ui.button("보관함 폴더 열기").clicked() {
-                            if let Err(error) = crate::editor::report::open_with_system(&services.paths.library_dir) {
-                                self.error = Some(format!("폴더를 열 수 없습니다: {error}"));
+                    egui::containers::menu::MenuButton::from_button(more)
+                        .ui(ui, |ui| {
+                            if ui.button("새로고침").clicked() {
+                                self.refresh(services);
+                                ui.close();
                             }
-                            ui.close();
-                        }
-                    });
+                            if ui.button("보관함 폴더 열기").clicked() {
+                                if let Err(error) = crate::editor::report::open_with_system(&services.paths.library_dir)
+                                {
+                                    self.error = Some(format!("폴더를 열 수 없습니다: {error}"));
+                                }
+                                ui.close();
+                            }
+                        })
+                        .0
+                        .on_hover_text("새로고침 · 보관함 폴더 열기");
                     ui.add_space(4.0);
                     let import = egui::Button::new((
                         theme::icon(theme::icon::DOWNLOAD_SIMPLE).size(15.0).color(egui::Color32::WHITE),
@@ -567,20 +571,28 @@ impl LibraryView {
     fn chapter_list(&mut self, ui: &mut egui::Ui, work: &WorkSummary, search_active: bool) -> Option<LibraryAction> {
         let mut action = None;
         ui.horizontal(|ui| {
-            ui.label(theme::semibold(&work.work.title).size(20.0));
+            // A long title is cut short so the ⋯ menu stays on screen.
+            ui.scope(|ui| {
+                ui.set_max_width((ui.available_width() - 40.0).max(80.0));
+                ui.add(egui::Label::new(theme::semibold(&work.work.title).size(20.0)).truncate())
+                    .on_hover_text(&work.work.title);
+            });
             let more = egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
                 .frame_when_inactive(false);
-            egui::containers::menu::MenuButton::from_button(more).ui(ui, |ui| {
-                if ui.button("이름 변경 · 삭제…").clicked() {
-                    self.pending = Some(Pending {
-                        work: true,
-                        id: work.work.id.clone(),
-                        original: work.work.title.clone(),
-                        title: work.work.title.clone(),
-                    });
-                    ui.close();
-                }
-            });
+            egui::containers::menu::MenuButton::from_button(more)
+                .ui(ui, |ui| {
+                    if ui.button("이름 변경 · 삭제…").clicked() {
+                        self.pending = Some(Pending {
+                            work: true,
+                            id: work.work.id.clone(),
+                            original: work.work.title.clone(),
+                            title: work.work.title.clone(),
+                        });
+                        ui.close();
+                    }
+                })
+                .0
+                .on_hover_text("작품 이름 변경 · 삭제");
         });
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
@@ -987,10 +999,21 @@ fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
             theme::TEXT_WEAK,
         );
 
-        let date = chapter.updated_at.get(..10).unwrap_or(&chapter.updated_at).to_owned();
-        text(updated, date, theme::TEXT_WEAK);
+        text(updated, local_date(&chapter.updated_at, &chrono::Local), theme::TEXT_WEAK);
     }
     response.on_hover_text(format!("{} 열기 · 끌어서 순서 변경 · 우클릭으로 이름 변경과 삭제", chapter.title))
+}
+
+/// The day of a stored UTC timestamp (`toISOString`) in `zone`; work done just after
+/// midnight in Korea is still that day, not the one before.
+fn local_date<Tz: chrono::TimeZone>(updated_at: &str, zone: &Tz) -> String
+where
+    Tz::Offset: std::fmt::Display,
+{
+    match chrono::DateTime::parse_from_rfc3339(updated_at) {
+        Ok(time) => time.with_timezone(zone).format("%Y-%m-%d").to_string(),
+        Err(_) => updated_at.get(..10).unwrap_or(updated_at).to_owned(),
+    }
 }
 
 fn status_style(status: ChapterStatus) -> (Color32, &'static str) {
@@ -1050,5 +1073,40 @@ mod tests {
 
         // Images mixed with folders are refused.
         assert!(preview_dropped(&[root.join("a.png"), single]).is_err());
+    }
+
+    #[test]
+    fn modified_dates_are_local_days() {
+        let korea = chrono::FixedOffset::east_opt(9 * 3600).unwrap();
+        assert_eq!(local_date("2026-10-28T20:30:00.000Z", &korea), "2026-10-29", "05:30 in Korea");
+        assert_eq!(local_date("2026-10-28T20:30:00.000Z", &chrono::Utc), "2026-10-28");
+        assert_eq!(local_date("2026-10-28", &korea), "2026-10-28", "unparsable values as stored");
+    }
+
+    #[test]
+    fn a_long_work_title_keeps_its_menu_on_screen() {
+        let title = "아주 긴 작품 제목 ".repeat(12);
+        let work = WorkSummary {
+            work: mtt_core::model::Work { id: "w".into(), title: title.clone(), ..Default::default() },
+            chapters: Vec::new(),
+        };
+        let mut view = LibraryView::default();
+        let ctx = egui::Context::default();
+        let mut width = 0.0;
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 700.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                let max_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 700.0));
+                let response = ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect), |ui| {
+                    view.chapter_list(ui, &work, false);
+                });
+                width = response.response.rect.width();
+            });
+            output.textures_delta.clear();
+        }
+        assert!(width <= 500.0, "the header is {width} wide");
     }
 }
