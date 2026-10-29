@@ -763,6 +763,17 @@ fn run_card(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<AppEvent>) {
                     });
                 ui.end_row();
             });
+            let mut aliased = editor.chapter.inpaint_aliased;
+            let toggle = ui.add_enabled(!busy, egui::Checkbox::new(&mut aliased, "안티앨리어싱 없이 채우기"));
+            if theme::tip(
+                toggle,
+                "안티앨리어싱 없이 채우기\n흑백 1비트처럼 픽셀이 선명한 원고용입니다\n지운 자리를 주변 원고의 색으로만, 경계 흐림 없이 채웁니다\n이 화에 저장되며 다음 인페인트부터 적용됩니다",
+                "",
+            )
+            .changed()
+            {
+                editor.set_inpaint_aliased(aliased);
+            }
             if editor.lama.is_none() {
                 theme::hint(ui, "LaMa는 설정 › 인페인트에서 준비할 수 있습니다.");
             }

@@ -602,11 +602,12 @@ fn format_inpaint_settings(page: &PageRecord) -> String {
     let cleanup =
         settings.artifact_cleanup_px.map(|value| format!(", cleanup {}", js_number_string(value))).unwrap_or_default();
     format!(
-        "{}, padding {}, feather {}, tile {}{cleanup}",
+        "{}, padding {}, feather {}, tile {}{cleanup}{}",
         settings.engine.as_str(),
         js_number_string(settings.padding_px),
         js_number_string(settings.feather_px),
         js_number_string(settings.tile_size),
+        if settings.aliased { ", aliased" } else { "" },
     )
 }
 

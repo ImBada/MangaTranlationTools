@@ -1,6 +1,8 @@
 //! Inpaint engines (`inpaintEngine.ts`): mask preparation, the local fill fallback,
 //! JPEG artifact cleanup and LaMa (window by window, `windows.rs`).
 
+use std::collections::HashMap;
+
 use image::{GrayImage, RgbaImage};
 use mtt_core::model::{InpaintEngine, InpaintSettings};
 
@@ -14,6 +16,17 @@ const ARTIFACT_CLEANUP_SAMPLE_MIN_LUMA: f32 = 225.0;
 const ARTIFACT_CLEANUP_MAX_CHROMA: f32 = 24.0;
 const ARTIFACT_CLEANUP_MAX_BG_DISTANCE: f32 = 90.0;
 const ARTIFACT_CLEANUP_DARK_STROKE_LUMA: f32 = 150.0;
+/// Share of the pixels around the mask a color needs to count as one the page is drawn
+/// with (paper, ink, flat tones) rather than JPEG noise or anti-aliasing.
+const ALIASED_MIN_SHARE: f32 = 0.02;
+/// Most flat tones an aliased fill picks from.
+const ALIASED_MAX_TONES: usize = 32;
+/// A tone fills a pixel only when it makes up this share of the unmasked pixels within
+/// `ALIASED_TONE_REACH` cells of `ALIASED_TONE_CELL` px, so a gray from another panel
+/// doesn't creep into black-and-white art.
+const ALIASED_TONE_CELL: u32 = 8;
+const ALIASED_TONE_REACH: usize = 6;
+const ALIASED_TONE_MIN_LOCAL_SHARE: u32 = 20; // 1/20 = 5%
 const NEIGHBORS: [(i32, i32); 8] = [(-1, -1), (0, -1), (1, -1), (-1, 0), (1, 0), (-1, 1), (0, 1), (1, 1)];
 
 /// `normalizeInpaintSettings`.
@@ -24,6 +37,7 @@ pub fn normalize_settings(engine: InpaintEngine, settings: &InpaintSettings) -> 
         feather_px: settings.feather_px.round().max(0.0),
         tile_size: settings.tile_size.round().max(128.0),
         artifact_cleanup_px: Some(settings.artifact_cleanup_px.unwrap_or(8.0).round().max(0.0)),
+        aliased: settings.aliased,
         extra: settings.extra.clone(),
     }
 }
@@ -287,6 +301,21 @@ pub fn masked_result_layer(
     settings: &InpaintSettings,
 ) -> RgbaImage {
     let mut output = RgbaImage::new(source.width(), source.height());
+    if settings.aliased {
+        let palette = surrounding_palette(source, mask, rect);
+        let nearby = NearbyTones::new(source, mask, rect, &palette);
+        let mut colors = Vec::with_capacity(palette.len());
+        for (x, y, value) in mask.enumerate_pixels() {
+            if value[0] == 0 {
+                continue;
+            }
+            colors.clear();
+            colors.extend(palette.iter().enumerate().filter(|(i, _)| nearby.allows(x, y, *i)).map(|(_, c)| *c));
+            let [r, g, b] = nearest_color(&colors, inpainted.get_pixel(x, y).0);
+            output.put_pixel(rect.x + x, rect.y + y, image::Rgba([r, g, b, 255]));
+        }
+        return output;
+    }
     let cleanup_px = settings.artifact_cleanup_px.unwrap_or(0.0).round().max(0.0) as usize;
     let cleanup_mask = (cleanup_px > 0).then(|| {
         let binary: Vec<u8> = mask.as_raw().iter().map(|v| if *v > 0 { 255 } else { 0 }).collect();
@@ -317,6 +346,102 @@ pub fn masked_result_layer(
         }
     }
     output
+}
+
+/// Colors the fill may use on an aliased page: the most common dark and light colors of
+/// the unmasked pixels in `rect` (ink and paper), plus any other color common enough to be
+/// a flat tone. The most common rather than the mean color, so JPEG noise and gray tones
+/// don't turn white paper gray.
+fn surrounding_palette(source: &RgbaImage, mask: &GrayImage, rect: Rect) -> Vec<[u8; 3]> {
+    let mut counts: HashMap<[u8; 3], u32> = HashMap::new();
+    for (x, y, value) in mask.enumerate_pixels() {
+        if value[0] == 0 {
+            let p = source.get_pixel(rect.x + x, rect.y + y).0;
+            *counts.entry([p[0], p[1], p[2]]).or_default() += 1;
+        }
+    }
+    let total: u32 = counts.values().sum();
+    let mut by_count: Vec<([u8; 3], u32)> = counts.into_iter().collect();
+    // Most common first; ties by color so the palette doesn't depend on hash order.
+    by_count.sort_unstable_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+    let is_dark = |c: &[u8; 3]| luma(c[0], c[1], c[2]) < 128.0;
+    let ink = by_count.iter().find(|(color, _)| is_dark(color)).map_or([0; 3], |(color, _)| *color);
+    let paper = by_count.iter().find(|(color, _)| !is_dark(color)).map_or([255; 3], |(color, _)| *color);
+    let mut palette = vec![ink, paper];
+    let min_count = (total as f32 * ALIASED_MIN_SHARE).max(1.0) as u32;
+    for (color, count) in by_count {
+        if palette.len() < 2 + ALIASED_MAX_TONES && count >= min_count && !palette.contains(&color) {
+            palette.push(color);
+        }
+    }
+    palette
+}
+
+/// Which of a `surrounding_palette`'s tones (every entry past ink and paper) are drawn near
+/// each cell of the crop.
+struct NearbyTones {
+    columns: usize,
+    /// Per cell, a bit per tone.
+    allowed: Vec<u32>,
+}
+
+impl NearbyTones {
+    fn new(source: &RgbaImage, mask: &GrayImage, rect: Rect, palette: &[[u8; 3]]) -> Self {
+        let cell = ALIASED_TONE_CELL;
+        let (columns, rows) = (rect.width.div_ceil(cell) as usize, rect.height.div_ceil(cell) as usize);
+        let tones = &palette[2.min(palette.len())..];
+        // Unmasked pixels per cell, then each tone's pixels per cell.
+        let mut unmasked = vec![0u32; columns * rows];
+        let mut toned = vec![0u32; columns * rows * tones.len()];
+        for (x, y, value) in mask.enumerate_pixels() {
+            if value[0] > 0 {
+                continue;
+            }
+            let index = (y / cell) as usize * columns + (x / cell) as usize;
+            unmasked[index] += 1;
+            let p = source.get_pixel(rect.x + x, rect.y + y).0;
+            if let Some(tone) = tones.iter().position(|tone| *tone == [p[0], p[1], p[2]]) {
+                toned[index * tones.len() + tone] += 1;
+            }
+        }
+        let reach = ALIASED_TONE_REACH;
+        let mut allowed = vec![0u32; columns * rows];
+        let mut sums = vec![0u32; tones.len()];
+        for row in 0..rows {
+            for column in 0..columns {
+                sums.fill(0);
+                let mut total = 0;
+                for r in row.saturating_sub(reach)..(row + reach + 1).min(rows) {
+                    for c in column.saturating_sub(reach)..(column + reach + 1).min(columns) {
+                        let index = r * columns + c;
+                        total += unmasked[index];
+                        for (sum, count) in sums.iter_mut().zip(&toned[index * tones.len()..][..tones.len()]) {
+                            *sum += count;
+                        }
+                    }
+                }
+                for (tone, sum) in sums.iter().enumerate() {
+                    if *sum > 0 && sum * ALIASED_TONE_MIN_LOCAL_SHARE >= total {
+                        allowed[row * columns + column] |= 1 << tone;
+                    }
+                }
+            }
+        }
+        Self { columns, allowed }
+    }
+
+    /// Whether palette entry `index` may fill crop pixel (`x`, `y`); ink and paper always.
+    fn allows(&self, x: u32, y: u32, index: usize) -> bool {
+        let cell = (y / ALIASED_TONE_CELL) as usize * self.columns + (x / ALIASED_TONE_CELL) as usize;
+        index < 2 || self.allowed[cell] & (1 << (index - 2)) != 0
+    }
+}
+
+fn nearest_color(palette: &[[u8; 3]], p: [u8; 4]) -> [u8; 3] {
+    let distance = |color: &[u8; 3]| -> i32 {
+        (0..3).map(|channel| (i32::from(color[channel]) - i32::from(p[channel])).pow(2)).sum()
+    };
+    palette.iter().copied().min_by_key(distance).unwrap_or([p[0], p[1], p[2]])
 }
 
 fn estimate_background(source: &RgbaImage, mask: &GrayImage, rect: Rect) -> [f32; 3] {
@@ -458,6 +583,76 @@ mod tests {
         // max(0 + 0 + 8 + 32, round(1024 * 0.25)) = 256
         let rect = crop_rect_for_bounds(Rect { x: 300, y: 10, width: 10, height: 10 }, 1000, 1000, &settings);
         assert_eq!((rect.x, rect.y, rect.width, rect.height), (44, 0, 522, 276));
+    }
+
+    #[test]
+    fn aliased_fill_uses_page_colors_with_hard_edges() {
+        // 1-bit page: white paper with a black line through the masked area.
+        let source = RgbaImage::from_fn(40, 40, |x, _| {
+            if x == 20 { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let mut mask = GrayImage::new(40, 40);
+        for y in 15..25 {
+            for x in 15..25 {
+                mask.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        let settings =
+            InpaintSettings { feather_px: 3.0, artifact_cleanup_px: Some(8.0), aliased: true, ..Default::default() };
+        let result = run_inpaint(&source, &mask, InpaintEngine::LocalFillFallback, &settings, None).unwrap();
+        for pixel in result.pixels() {
+            assert!(pixel[3] == 0 || pixel[3] == 255, "hard alpha: {pixel:?}");
+            if pixel[3] == 255 {
+                assert!(pixel.0[..3] == [0, 0, 0] || pixel.0[..3] == [255, 255, 255], "page color: {pixel:?}");
+            }
+        }
+        assert_eq!(result.get_pixel(18, 20)[3], 255, "the mask is filled");
+    }
+
+    #[test]
+    fn aliased_palette_keeps_paper_white_on_noisy_pages() {
+        // JPEG-like page: mostly white paper and black ink, a flat gray tone, and noise.
+        let source = RgbaImage::from_fn(100, 100, |x, y| {
+            let v = match (x, y) {
+                (_, 0..10) => 0,
+                (_, 10..20) => 167,
+                (_, 20..22) => 200 + (x % 50) as u8,
+                (_, 22..24) => (x % 40) as u8,
+                _ => 255,
+            };
+            image::Rgba([v, v, v, 255])
+        });
+        let mask = GrayImage::new(100, 100);
+        let palette = surrounding_palette(&source, &mask, Rect { x: 0, y: 0, width: 100, height: 100 });
+        assert_eq!(palette, vec![[0; 3], [255; 3], [167; 3]]);
+        assert_eq!(nearest_color(&palette, [245, 245, 245, 255]), [255; 3]);
+        assert_eq!(nearest_color(&palette, [180, 180, 180, 255]), [167; 3]);
+    }
+
+    #[test]
+    fn aliased_fill_uses_only_tones_drawn_nearby() {
+        // A gray tone panel on the left; black-and-white art on the right.
+        let source = RgbaImage::from_fn(400, 100, |x, y| match x {
+            0..100 => image::Rgba([167, 167, 167, 255]),
+            _ if (x + y) % 2 == 0 => image::Rgba([0, 0, 0, 255]),
+            _ => image::Rgba([255, 255, 255, 255]),
+        });
+        let mut mask = GrayImage::new(400, 100);
+        for (x, y) in (300..340).flat_map(|x| (40..60).map(move |y| (x, y))).chain([(50, 50)]) {
+            mask.put_pixel(x, y, image::Luma([255]));
+        }
+        let rect = Rect { x: 0, y: 0, width: 400, height: 100 };
+        let palette = surrounding_palette(&source, &mask, rect);
+        assert!(palette.contains(&[167; 3]));
+        // A mid gray fill: gray in the tone panel, black or white in the art.
+        let inpainted = RgbaImage::from_pixel(400, 100, image::Rgba([150, 150, 150, 255]));
+        let settings = InpaintSettings { aliased: true, ..Default::default() };
+        let result = masked_result_layer(&source, &inpainted, &mask, rect, &settings);
+        assert_eq!(result.get_pixel(50, 50).0, [167, 167, 167, 255]);
+        assert!(
+            (300..340).flat_map(|x| (40..60).map(move |y| (x, y))).all(|(x, y)| result.get_pixel(x, y)[0] != 167),
+            "no gray in the black-and-white art"
+        );
     }
 
     #[test]

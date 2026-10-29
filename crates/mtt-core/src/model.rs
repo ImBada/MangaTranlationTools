@@ -605,6 +605,10 @@ pub struct InpaintSettings {
     pub tile_size: f64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub artifact_cleanup_px: Option<f64>,
+    /// Snap the fill to the page's own colors with hard edges, for pages drawn without
+    /// anti-aliasing (1-bit black and white).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub aliased: bool,
     #[serde(flatten)]
     pub extra: JsonMap,
 }
@@ -621,6 +625,7 @@ impl Default for InpaintSettings {
             feather_px: 0.0,
             tile_size: default_tile_size(),
             artifact_cleanup_px: Some(8.0),
+            aliased: false,
             extra: JsonMap::new(),
         }
     }
@@ -703,6 +708,9 @@ pub struct Chapter {
     pub font_size_presets: Option<Vec<FontSizePreset>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub favorite_font_preset_ids: Option<Vec<String>>,
+    /// Inpaint this chapter without anti-aliasing (`InpaintSettings::aliased`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub inpaint_aliased: bool,
     #[serde(default)]
     pub page_order: Vec<String>,
     #[serde(default)]

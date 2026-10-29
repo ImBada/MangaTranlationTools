@@ -1353,6 +1353,18 @@ impl Editor {
         self.inpaint_engine = if self.lama.is_some() { InpaintEngine::Lama } else { InpaintEngine::LocalFillFallback };
     }
 
+    /// Turns anti-aliasing off (or back on) for this chapter's next inpaint runs.
+    pub fn set_inpaint_aliased(&mut self, aliased: bool) {
+        self.chapter.inpaint_aliased = aliased;
+        self.mark_chapter_dirty();
+        self.status = if aliased {
+            "이 화는 안티앨리어싱 없이 인페인트합니다."
+        } else {
+            "이 화는 부드러운 경계로 인페인트합니다."
+        }
+        .into();
+    }
+
     /// Starts an inpaint run for the current page on a worker thread.
     pub fn start_inpaint(&mut self, scope: InpaintScope, worker: &Worker<AppEvent>) {
         let Some(page_id) = self.page().map(|page| page.id.clone()) else { return };
@@ -1409,6 +1421,7 @@ impl Editor {
             engine,
             // Artifact cleanup only helps JPEG compression noise (`resolvePageInpaintSettings`).
             artifact_cleanup_px: Some(if jpeg { 8.0 } else { 0.0 }),
+            aliased: self.chapter.inpaint_aliased,
             ..page.inpaint_settings.clone().unwrap_or_default()
         };
         let chapter_id = self.chapter.id.clone();
@@ -1419,6 +1432,7 @@ impl Editor {
         self.inpaint_running = Some(page_id.clone());
         if let Some(record) = self.chapter.pages.iter_mut().find(|record| record.id == page_id) {
             record.inpaint_status = Some(InpaintStatus::Running);
+            record.inpaint_settings.get_or_insert_default().aliased = settings.aliased;
         }
         self.status = format!("인페인트 실행 중… ({})", engine_label(engine));
         let ctx = worker.ctx().clone();
