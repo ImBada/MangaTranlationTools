@@ -1,11 +1,18 @@
 //! Undo/redo. Block edits are recorded as before/after snapshots of one page's blocks;
 //! layer edits as before/after pixel patches of the changed rectangle, run-length packed
 //! (masks are binary and results transparent outside the mask, so a page-sized inpaint
-//! patch shrinks from tens of MB to well under one).
+//! patch shrinks from tens of MB to well under one). The `Editor` methods below record edits
+//! as steps (against a checkpoint of the page's blocks) and apply them on undo and redo.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
-use mtt_core::model::{PageRecord, TranslationBlock, TranslationBlockGroup};
+use eframe::egui;
+use image::{GrayImage, RgbaImage};
+use mtt_core::model::{PageRecord, StyleKey, TranslationBlock, TranslationBlockGroup};
+
+use super::Editor;
+use super::assets::PageAssets;
 
 const HISTORY_LIMIT: usize = 200;
 /// Packed layer bytes kept across undo and redo; the oldest steps go first past it.
@@ -410,6 +417,269 @@ impl History {
         let keep = |(entry, _): &Recorded| matches!(entry, Entry::Presets { .. }) || entry.page_id() != page_id;
         self.undo.retain(keep);
         self.redo.retain(keep);
+    }
+}
+
+impl Editor {
+    pub(super) fn reset_checkpoint(&mut self) {
+        self.checkpoint = self.page().map(|page| (page.id.clone(), BlocksSnapshot::of(page)));
+        self.last_text_edit = None;
+    }
+
+    /// Records the change since the last checkpoint as one undo step.
+    pub fn commit_checkpoint(&mut self) {
+        if self.commit_preset_checkpoint() {
+            self.reset_checkpoint();
+            self.pending_context = None;
+            return;
+        }
+        let Some((page_id, before)) = self.checkpoint.take() else {
+            self.reset_checkpoint();
+            return;
+        };
+        if let Some(page) = self.chapter.pages.iter().find(|page| page.id == page_id) {
+            let after = BlocksSnapshot::of(page);
+            if after != before {
+                self.history.push(Entry::Blocks { page_id: page_id.clone(), before, after });
+                // The recorded selection belongs to this step only.
+                self.pending_context = None;
+            }
+        }
+        self.reset_checkpoint();
+    }
+
+    /// Called after every mutation of the current page.
+    pub(super) fn touch_page(&mut self) {
+        self.capture_history_context();
+        self.revision += 1;
+        if let Some(page) = self.chapter.pages.get_mut(self.current) {
+            page.updated_at = mtt_core::time::now_iso();
+            self.dirty_pages.insert(page.id.clone());
+        }
+        self.mark_chapter_dirty();
+    }
+
+    pub(super) fn mark_chapter_dirty(&mut self) {
+        self.chapter_dirty = true;
+        self.last_change = Some(Instant::now());
+    }
+
+    /// Applies `edit` to the current page and commits it as its own undo step.
+    pub fn edit_page(&mut self, edit: impl FnOnce(&mut PageRecord)) {
+        self.commit_checkpoint();
+        if let Some(page) = self.page_mut() {
+            edit(page);
+        }
+        self.touch_page();
+        self.commit_checkpoint();
+    }
+
+    /// Applies `edit` to every selected block. Continuous edits (sliders, typing) are
+    /// merged into one undo step by the checkpoint logic.
+    pub fn edit_selected(&mut self, mut edit: impl FnMut(&mut TranslationBlock)) {
+        let selection: HashSet<String> = self.selection.iter().cloned().collect();
+        if let Some(page) = self.page_mut() {
+            for block in page.blocks.iter_mut().filter(|block| selection.contains(&block.id)) {
+                edit(block);
+            }
+        }
+        self.last_text_edit = Some(Instant::now());
+        self.touch_page();
+    }
+
+    /// Edits a style field of the selected blocks; linked fields of assigned blocks edit
+    /// the font preset (see `presets.rs`).
+    pub fn edit_selected_style(&mut self, _key: StyleKey, edit: impl FnMut(&mut TranslationBlock)) {
+        self.edit_style(edit);
+    }
+
+    pub fn undo(&mut self, ctx: &egui::Context) {
+        self.commit_checkpoint();
+        let Some((entry, context)) = self.history.pop_undo() else {
+            return;
+        };
+        if !self.prepare_history_entry(&entry, true) {
+            self.history.push_undone((entry, context));
+            return;
+        }
+        self.apply_history_entry(ctx, &entry, true);
+        self.restore_history_context(&context);
+        self.reset_checkpoint();
+        self.pending_context = None;
+        self.history.push_redo((entry, context));
+    }
+
+    pub fn redo(&mut self, ctx: &egui::Context) {
+        self.commit_checkpoint();
+        let Some((entry, context)) = self.history.pop_redo() else {
+            return;
+        };
+        if !self.prepare_history_entry(&entry, false) {
+            self.history.push_redo((entry, context));
+            return;
+        }
+        self.apply_history_entry(ctx, &entry, false);
+        self.restore_history_context(&context);
+        self.reset_checkpoint();
+        self.pending_context = None;
+        self.history.push_undone((entry, context));
+    }
+
+    /// Selection and editing preset as they were when the step was recorded.
+    fn restore_history_context(&mut self, context: &HistoryContext) {
+        let live: HashSet<String> =
+            self.page().map(|page| page.blocks.iter().map(|block| block.id.clone()).collect()).unwrap_or_default();
+        if self.layer.edits_blocks() {
+            self.selection = context.selection.iter().filter(|id| live.contains(*id)).cloned().collect();
+        }
+        self.editing_preset_id = context.editing_preset_id.clone();
+    }
+
+    pub(super) fn current_history_context(&self) -> HistoryContext {
+        HistoryContext { selection: self.selection.clone(), editing_preset_id: self.editing_preset_id.clone() }
+    }
+
+    #[cfg(test)]
+    pub(super) fn history_can_redo_for_test(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    #[cfg(test)]
+    pub(super) fn tick_for_test(&mut self) {
+        if self.pending_context.is_none() {
+            self.history.context = self.current_history_context();
+        }
+    }
+
+    /// Remembers the selection before the first change of the next undo step
+    /// (`recordTranslationUndoSnapshot` is called before the change in the TS app).
+    pub(super) fn capture_history_context(&mut self) {
+        if self.pending_context.is_none() {
+            let context = self.current_history_context();
+            self.history.context = context.clone();
+            self.pending_context = Some(context);
+        }
+    }
+
+    /// Navigates to the entry's page. Returns `false` (entry kept) while layer pixels the
+    /// entry needs are still loading, or while an inpaint or PSD import runs: it installs
+    /// layers diffed against the ones it started from, so a layer step applied meanwhile
+    /// would come back when the job lands.
+    fn prepare_history_entry(&mut self, entry: &Entry, undo: bool) -> bool {
+        if self.inpaint_busy() && entry_touches_layers(entry) {
+            self.status = if undo {
+                "인페인트 작업이 끝난 뒤에 레이어 변경을 실행 취소하세요."
+            } else {
+                "인페인트 작업이 끝난 뒤에 레이어 변경을 다시 실행하세요."
+            }
+            .into();
+            return false;
+        }
+        let Some(index) = self.chapter.pages.iter().position(|page| page.id == entry.page_id()) else {
+            // Chapter-wide preset steps still apply after the page they were made on is gone.
+            return matches!(entry, Entry::Presets { .. });
+        };
+        if index != self.current {
+            self.go_to_page(index);
+        }
+        if entry_touches_layers(entry) && !matches!(self.assets.get(entry.page_id()), Some(PageAssets::Ready(_))) {
+            self.status = "페이지 이미지를 불러오는 중입니다. 잠시 후 다시 시도하세요.".into();
+            return false;
+        }
+        true
+    }
+
+    fn apply_history_entry(&mut self, ctx: &egui::Context, entry: &Entry, undo: bool) {
+        match entry {
+            Entry::Blocks { before, after, .. } => {
+                let snapshot = if undo { before } else { after };
+                if let Some(page) = self.page_mut() {
+                    snapshot.apply(page);
+                }
+                let live: HashSet<String> = snapshot.blocks.iter().map(|block| block.id.clone()).collect();
+                self.selection.retain(|id| live.contains(id));
+                self.touch_page();
+            }
+            Entry::Layer { page_id, layer, patch } => {
+                let bytes = if undo { patch.before.unpack() } else { patch.after.unpack() };
+                self.write_layer_patch(ctx, page_id, *layer, patch, &bytes);
+            }
+            Entry::Presets { before, after, .. } => {
+                self.apply_preset_snapshot(if undo { before } else { after });
+            }
+            Entry::Batch { entries, .. } => {
+                if undo {
+                    for entry in entries.iter().rev() {
+                        self.apply_history_entry(ctx, entry, true);
+                    }
+                } else {
+                    for entry in entries {
+                        self.apply_history_entry(ctx, entry, false);
+                    }
+                }
+            }
+        }
+    }
+
+    fn write_layer_patch(
+        &mut self,
+        ctx: &egui::Context,
+        page_id: &str,
+        layer: LayerKind,
+        patch: &LayerPatch,
+        bytes: &[u8],
+    ) {
+        let Some(PageAssets::Ready(loaded)) = self.assets.get_mut(page_id) else {
+            self.status = "레이어가 아직 로드되지 않아 되돌릴 수 없습니다.".into();
+            return;
+        };
+        match layer {
+            LayerKind::Mask => {
+                let mask = loaded.ensure_mask();
+                write_patch_gray(mask, patch, bytes);
+            }
+            LayerKind::Result => {
+                let result = loaded.ensure_result();
+                write_patch_rgba(result, patch, bytes);
+            }
+        }
+        loaded.refresh_layer_region(ctx, page_id, patch.x, patch.y, patch.width, patch.height);
+        self.layer_dirty.insert((page_id.to_owned(), layer), Instant::now());
+    }
+}
+
+fn entry_touches_layers(entry: &Entry) -> bool {
+    match entry {
+        Entry::Blocks { .. } | Entry::Presets { .. } => false,
+        Entry::Layer { .. } => true,
+        Entry::Batch { entries, .. } => entries.iter().any(entry_touches_layers),
+    }
+}
+
+fn write_patch_gray(image: &mut GrayImage, patch: &LayerPatch, bytes: &[u8]) {
+    for row in 0..patch.height {
+        for col in 0..patch.width {
+            let (x, y) = (patch.x + col, patch.y + row);
+            if x < image.width() && y < image.height() {
+                image.put_pixel(x, y, image::Luma([bytes[(row * patch.width + col) as usize]]));
+            }
+        }
+    }
+}
+
+fn write_patch_rgba(image: &mut RgbaImage, patch: &LayerPatch, bytes: &[u8]) {
+    for row in 0..patch.height {
+        for col in 0..patch.width {
+            let (x, y) = (patch.x + col, patch.y + row);
+            if x < image.width() && y < image.height() {
+                let offset = ((row * patch.width + col) * 4) as usize;
+                image.put_pixel(
+                    x,
+                    y,
+                    image::Rgba([bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]]),
+                );
+            }
+        }
     }
 }
 
