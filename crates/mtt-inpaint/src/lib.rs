@@ -9,6 +9,7 @@ pub mod engine;
 pub mod lama;
 pub mod lama_torch;
 pub mod psd;
+pub mod psd_text;
 pub mod text_mask;
 pub mod torch_runtime;
 pub mod windows;

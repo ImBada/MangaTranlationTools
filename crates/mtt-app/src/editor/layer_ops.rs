@@ -5,7 +5,14 @@ use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use eframe::egui;
+use image::RgbaImage;
+use mtt_core::geometry::resolve_block_rotation_deg;
+use mtt_core::model::{PageRecord, RenderTextDirection, TextAlign, TranslationBlock};
 use mtt_core::paths::sanitize_file_basename;
+use mtt_inpaint::psd_text::{Justification, TextLayer};
+use mtt_render::canvas::hex_color;
+use mtt_render::layout::{BLOCK_BORDER_PX, synthetic_italic_skew_x};
+use mtt_render::{BlockRenderOptions, BlockText, FontContext};
 
 use super::Editor;
 use super::assets::{LoadedPage, PageAssets};
@@ -285,6 +292,98 @@ fn write_unique_file(dir: &Path, filename: &str, bytes: &[u8]) -> Result<PathBuf
     unreachable!("the loop only ends by returning")
 }
 
+/// One layer of the PSD's editable text group: a block's text laid out like the page
+/// render, over the block's own raster.
+pub(super) struct PsdText {
+    pub name: String,
+    pub raster: RgbaImage,
+    pub left: i32,
+    pub top: i32,
+    pub text: TextLayer,
+}
+
+/// Text layers of the page's visible blocks with text, bottom to top.
+pub(super) fn psd_text_layers(fonts: &mut FontContext, page: &PageRecord) -> Vec<PsdText> {
+    let size = mtt_render::page::page_size(page);
+    page.blocks
+        .iter()
+        .filter(|block| !block.display_text().trim().is_empty())
+        .filter_map(|block| {
+            let text = mtt_render::block_text(fonts, size, block)?;
+            let raster = mtt_render::render_block(fonts, size, block, BlockRenderOptions::default())?;
+            Some(PsdText {
+                name: text_layer_name(&text.lines),
+                raster: mtt_render::page::pixmap_to_image(&raster.pixmap),
+                left: raster.x,
+                top: raster.y,
+                text: psd_text_layer(block, &text),
+            })
+        })
+        .collect()
+}
+
+/// Photoshop names text layers after their text.
+fn text_layer_name(lines: &[String]) -> String {
+    const MAX_CHARS: usize = 30;
+    let text = lines.iter().flat_map(|line| line.split_whitespace()).collect::<Vec<_>>().join(" ");
+    if text.chars().count() <= MAX_CHARS {
+        text
+    } else {
+        format!("{}…", text.chars().take(MAX_CHARS).collect::<String>())
+    }
+}
+
+/// Photoshop paragraph text for `block`: the drawn lines, in a box that puts them where the
+/// render does. Box text is top-aligned and justified within the box, so the box starts at
+/// the first line and has the lines' column at its justified edge; it is as wide as the
+/// block's text area (wider when the lines are, so they never rewrap) and reaches its
+/// bottom. Outlines, shadows, screentone and filters are not text properties in PSD.
+fn psd_text_layer(block: &TranslationBlock, text: &BlockText) -> TextLayer {
+    let layout = &text.layout;
+    let inset = BLOCK_BORDER_PX + layout.padding_px;
+    let (inner_left, inner_bottom) = (layout.rect.left + inset, layout.rect.top + inset + layout.inner_height);
+    let (lines, font_size) = (text.text_rect, text.font_size_px);
+    let vertical = block.render_direction == RenderTextDirection::Vertical;
+    let (left, width, justification) = if vertical {
+        // Columns run leftward from the box's right edge.
+        let right = lines.left + lines.width;
+        let left = inner_left.min(right - text.line_height_px);
+        (left, right - left, Justification::Left)
+    } else {
+        let width = layout.inner_width.max(lines.width + font_size);
+        match block.text_align {
+            TextAlign::Left => (lines.left, width, Justification::Left),
+            TextAlign::Center => (lines.left + (lines.width - width) / 2.0, width, Justification::Center),
+            TextAlign::Right => (lines.left + lines.width - width, width, Justification::Right),
+        }
+    };
+    let top = lines.top;
+    // The render rotates about the render rect's center c, which moves the box's corner p
+    // to c + R(p - c) = p + (I - R)(c - p) (exactly p unrotated).
+    let (sin, cos) = resolve_block_rotation_deg(block).to_radians().sin_cos();
+    let (wx, wy) =
+        (layout.rect.left + layout.rect.width / 2.0 - left, layout.rect.top + layout.rect.height / 2.0 - top);
+    // Vertical characters are an em apart in Photoshop and a line height in the render.
+    let spacing =
+        if vertical { text.line_height_px - font_size + text.letter_spacing_px } else { text.letter_spacing_px };
+    let color = hex_color(block.text_color(), 1.0).to_color_u8();
+    TextLayer {
+        text: text.lines.join("\n"),
+        font: text.font_name.clone(),
+        font_size,
+        faux_bold: text.synthetic_bold,
+        faux_italic: synthetic_italic_skew_x(block) != 0.0,
+        leading: text.line_height_px,
+        tracking: (spacing / font_size * 1000.0).round() as i32,
+        color: [color.red(), color.green(), color.blue(), 255],
+        justification,
+        vertical,
+        box_width: width,
+        box_height: (inner_bottom - top).max(lines.height + font_size),
+        transform: [cos, sin, -sin, cos, left + (1.0 - cos) * wx + sin * wy, top + (1.0 - cos) * wy - sin * wx],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -299,5 +398,76 @@ mod tests {
         let second = write_unique_file(dir.path(), "x-inpaint.psd", b"2").unwrap();
         assert_eq!(first.file_name().unwrap(), "x-inpaint.psd");
         assert_eq!(second.file_name().unwrap(), "x-inpaint (1).psd");
+    }
+
+    #[test]
+    fn psd_text_layers_follow_the_render() {
+        use mtt_core::model::BBox;
+        let mut fonts = FontContext::new();
+        let block = TranslationBlock {
+            id: "b".into(),
+            bbox: BBox::new(100.0, 100.0, 300.0, 200.0),
+            translated_text: "첫 줄은 조금 길고\n둘째 줄".into(),
+            text_align: TextAlign::Left,
+            style: mtt_core::model::TextStyle { text_color: Some("#336699".into()), ..Default::default() },
+            ..TranslationBlock::default()
+        };
+        let hidden = TranslationBlock { render_direction: RenderTextDirection::Hidden, ..block.clone() };
+        let page =
+            PageRecord { width: 1000, height: 1000, blocks: vec![block.clone(), hidden], ..PageRecord::default() };
+        let size = mtt_render::page::page_size(&page);
+        let layers = psd_text_layers(&mut fonts, &page);
+        assert_eq!(layers.len(), 1, "hidden blocks have no text layer");
+        let raster = mtt_render::render_block(&mut fonts, size, &block, BlockRenderOptions::default()).unwrap();
+        assert_eq!(
+            (layers[0].left, layers[0].top, layers[0].raster.width()),
+            (raster.x, raster.y, raster.pixmap.width())
+        );
+
+        // Left-aligned: the box starts at the first line's em box.
+        let drawn = mtt_render::block_text(&mut fonts, size, &block).unwrap();
+        let layer = &layers[0].text;
+        assert_eq!(layer.text, drawn.lines.join("\n"));
+        assert_eq!(layer.font, drawn.font_name);
+        assert_eq!((layer.font_size, layer.leading), (drawn.font_size_px, drawn.line_height_px));
+        assert_eq!(layer.color, [0x33, 0x66, 0x99, 255]);
+        assert_eq!((layer.justification, layer.vertical), (Justification::Left, false));
+        assert_eq!(layer.transform, [1.0, 0.0, 0.0, 1.0, drawn.text_rect.left, drawn.text_rect.top]);
+        assert!(layer.box_width >= drawn.text_rect.width + drawn.font_size_px);
+        assert!(layer.box_height >= drawn.text_rect.height + drawn.font_size_px);
+
+        // Centered: the box is centered on the lines.
+        let centered = TranslationBlock { text_align: TextAlign::Center, ..block.clone() };
+        let drawn = mtt_render::block_text(&mut fonts, size, &centered).unwrap();
+        let layer = psd_text_layer(&centered, &drawn);
+        let lines_center = drawn.text_rect.left + drawn.text_rect.width / 2.0;
+        assert!((layer.transform[4] + layer.box_width / 2.0 - lines_center).abs() < 1e-9);
+
+        // Rotated: the render rect's center stays put.
+        let rotated = TranslationBlock { rotation_deg: Some(30.0), ..block.clone() };
+        let drawn = mtt_render::block_text(&mut fonts, size, &rotated).unwrap();
+        let [xx, xy, yx, yy, tx, ty] = psd_text_layer(&rotated, &drawn).transform;
+        let rect = drawn.layout.rect;
+        let (cx, cy) = (rect.left + rect.width / 2.0, rect.top + rect.height / 2.0);
+        let (u, v) = (cx - drawn.text_rect.left, cy - drawn.text_rect.top);
+        assert!((xx * u + yx * v + tx - cx).abs() < 1e-9 && (xy * u + yy * v + ty - cy).abs() < 1e-9);
+        assert!((xy - 30f64.to_radians().sin()).abs() < 1e-12);
+
+        // Vertical: one top-aligned column whose right edge is the box's.
+        let vertical = TranslationBlock { render_direction: RenderTextDirection::Vertical, ..block.clone() };
+        let drawn = mtt_render::block_text(&mut fonts, size, &vertical).unwrap();
+        let layer = psd_text_layer(&vertical, &drawn);
+        assert!(layer.vertical && layer.justification == Justification::Left);
+        assert_eq!(layer.text, "첫줄은조금길고둘째줄");
+        assert!((layer.transform[4] + layer.box_width - (drawn.text_rect.left + drawn.text_rect.width)).abs() < 1e-9);
+        let expected = (drawn.line_height_px - drawn.font_size_px) / drawn.font_size_px * 1000.0;
+        assert_eq!(layer.tracking, expected.round() as i32);
+    }
+
+    #[test]
+    fn text_layer_names_are_the_text() {
+        assert_eq!(text_layer_name(&["안녕  하세요".into(), "반가워요".into()]), "안녕 하세요 반가워요");
+        let long = text_layer_name(&["가".repeat(40)]);
+        assert_eq!(long, format!("{}…", "가".repeat(30)));
     }
 }

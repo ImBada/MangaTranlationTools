@@ -8,7 +8,7 @@ fn main() {
             for layer in &doc.layers {
                 let painted = layer.image.pixels().filter(|p| p[3] > 0).count();
                 println!(
-                    "  {:?} at ({}, {}) {}x{} opacity {:.2} hidden {} painted px {}",
+                    "  {:?} at ({}, {}) {}x{} opacity {:.2} hidden {} text {} groups {:?} painted px {}",
                     layer.name,
                     layer.left,
                     layer.top,
@@ -16,6 +16,8 @@ fn main() {
                     layer.image.height(),
                     layer.opacity,
                     layer.hidden,
+                    layer.text,
+                    layer.groups,
                     painted
                 );
             }

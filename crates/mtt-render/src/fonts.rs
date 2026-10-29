@@ -334,20 +334,47 @@ impl FontContext {
         (top.is_finite() && bottom.is_finite()).then_some(InkBounds { ascent_em: -top, descent_em: bottom })
     }
 
+    /// PostScript name of the face that draws most of `text` in `spec` (fallback faces
+    /// included), else of the face `spec` matches, else the family name.
+    pub fn post_script_name(&mut self, text: &str, spec: &FontSpec) -> String {
+        let run = self.shape(text, spec, &[]);
+        let mut uses: Vec<(fontdb::ID, usize)> = Vec::new();
+        for glyph in &run.glyphs {
+            match uses.iter_mut().find(|(id, _)| *id == glyph.font_id) {
+                Some((_, count)) => *count += 1,
+                None => uses.push((glyph.font_id, 1)),
+            }
+        }
+        // `max_by_key` keeps the last of equals: reversed, the first face used.
+        let used = uses.into_iter().rev().max_by_key(|(_, count)| *count).map(|(id, _)| id);
+        let db = self.font_system.db();
+        used.or_else(|| self.primary_font_id(spec))
+            .and_then(|id| db.face(id))
+            .map(|face| face.post_script_name.clone())
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| match &spec.family {
+                FamilyName::Named(name) => name.clone(),
+                generic => db.family_name(&db_family(generic)).to_owned(),
+            })
+    }
+
     fn primary_font_id(&self, spec: &FontSpec) -> Option<fontdb::ID> {
-        let family = match &spec.family {
-            FamilyName::Named(name) => fontdb::Family::Name(name),
-            FamilyName::SansSerif => fontdb::Family::SansSerif,
-            FamilyName::Serif => fontdb::Family::Serif,
-            FamilyName::Monospace => fontdb::Family::Monospace,
-            FamilyName::Cursive => fontdb::Family::Cursive,
-            FamilyName::Fantasy => fontdb::Family::Fantasy,
-        };
         self.font_system.db().query(&fontdb::Query {
-            families: &[family],
+            families: &[db_family(&spec.family)],
             weight: fontdb::Weight(spec.weight),
             ..fontdb::Query::default()
         })
+    }
+}
+
+fn db_family(family: &FamilyName) -> fontdb::Family<'_> {
+    match family {
+        FamilyName::Named(name) => fontdb::Family::Name(name),
+        FamilyName::SansSerif => fontdb::Family::SansSerif,
+        FamilyName::Serif => fontdb::Family::Serif,
+        FamilyName::Monospace => fontdb::Family::Monospace,
+        FamilyName::Cursive => fontdb::Family::Cursive,
+        FamilyName::Fantasy => fontdb::Family::Fantasy,
     }
 }
 

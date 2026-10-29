@@ -10,7 +10,7 @@ pub mod fonts;
 pub mod layout;
 pub mod page;
 
-pub use block::{BlockRaster, BlockRenderOptions, render_block};
+pub use block::{BlockRaster, BlockRenderOptions, BlockText, block_text, render_block};
 pub use fonts::FontContext;
 pub use layout::Size;
 pub use page::{PageImages, PageRenderOptions, render_page};

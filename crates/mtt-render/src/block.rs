@@ -160,6 +160,52 @@ fn secondary_outline_width_px(block: &TranslationBlock, font_size: f64) -> f64 {
     block.style.secondary_outline_width_px.unwrap_or(0.0).max(0.0).min(font_size * 0.35)
 }
 
+/// A block's text as [`render_block`] lays it out, for exporting it as editable text.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockText {
+    pub layout: BlockTextLayout,
+    /// The lines as drawn; vertical text is one column without whitespace.
+    pub lines: Vec<String>,
+    /// Size the glyphs are drawn at, in page pixels.
+    pub font_size_px: f64,
+    /// Baseline to baseline (the character pitch is this plus letter spacing when vertical).
+    pub line_height_px: f64,
+    pub letter_spacing_px: f64,
+    /// Em boxes of the drawn text: the lines' column, or the character column.
+    pub text_rect: PixelRect,
+    /// See [`FontContext::post_script_name`].
+    pub font_name: String,
+    pub synthetic_bold: bool,
+}
+
+/// Lays out `block` like [`render_block`] without drawing. `None` for hidden blocks.
+pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -> Option<BlockText> {
+    if block.render_direction == RenderTextDirection::Hidden {
+        return None;
+    }
+    let text = block.display_text();
+    let fonts = BlockFonts::resolve(ctx, block);
+    let layout = resolve_block_text_layout(ctx, &fonts, block, text, page, page);
+    let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, text);
+    let (items, text_rect) = painter.items();
+    let font_size_px = painter.font_size;
+    let lines: Vec<String> = if block.render_direction == RenderTextDirection::Vertical {
+        vec![items.into_iter().map(|item| item.text).collect()]
+    } else {
+        items.into_iter().map(|item| item.text).collect()
+    };
+    Some(BlockText {
+        layout,
+        font_name: ctx.post_script_name(&lines.concat(), &fonts.base),
+        lines,
+        font_size_px,
+        line_height_px: font_size_px * block.line_height(),
+        letter_spacing_px: letter_spacing_px(block, font_size_px),
+        text_rect,
+        synthetic_bold: fonts.synthetic_bold,
+    })
+}
+
 /// Renders `block` at page resolution. Returns `None` for hidden blocks or blocks fully
 /// outside the page.
 pub fn render_block(
@@ -290,16 +336,21 @@ impl<'a> BlockPainter<'a> {
         }
     }
 
-    fn draw(&mut self, canvas: &mut Canvas, include_background: bool, include_glyphs: bool) {
+    /// What to draw, and the em boxes it covers.
+    fn items(&mut self) -> (Vec<TextItem>, PixelRect) {
         let layout = *self.layout;
         let y_offset = self.font_size * RENDER_Y_OFFSET_RATIO;
         let left = layout.rect.left + BLOCK_BORDER_PX + layout.padding_px;
         let top = layout.rect.top + BLOCK_BORDER_PX + layout.padding_px + y_offset;
-        let (items, background) = if self.block.render_direction == RenderTextDirection::Vertical {
+        if self.block.render_direction == RenderTextDirection::Vertical {
             self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
         } else {
             self.horizontal_items(left, top, layout.inner_width, layout.inner_height, layout.fit_inner_width)
-        };
+        }
+    }
+
+    fn draw(&mut self, canvas: &mut Canvas, include_background: bool, include_glyphs: bool) {
+        let (items, background) = self.items();
         if include_background {
             self.draw_font_background(canvas, background);
         }
@@ -767,6 +818,32 @@ mod tests {
         assert_eq!(split_by_centered_ellipsis("아…니...야"), ["아", "…", "니", "...", "야"]);
         assert_eq!(split_by_centered_ellipsis("....."), ["...", ".."]);
         assert_eq!(split_by_centered_ellipsis("…"), ["…"]);
+    }
+
+    #[test]
+    fn block_text_reports_the_drawn_lines() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 300.0, 200.0),
+            translated_text: "아주 긴 번역 문장이 여러 줄로 나뉘어 그려집니다".into(),
+            ..TranslationBlock::default()
+        };
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        assert_eq!(text.font_size_px, text.layout.font_size_px * RENDER_FONT_SIZE_RATIO);
+        assert_eq!(text.lines.join(" "), block.translated_text);
+        assert!(!text.font_name.is_empty());
+        let (rect, area) = (text.text_rect, text.layout.rect);
+        assert!(rect.left >= area.left && rect.left + rect.width <= area.left + area.width, "{rect:?} in {area:?}");
+        assert_eq!(rect.height, text.lines.len() as f64 * text.line_height_px);
+
+        block.render_direction = RenderTextDirection::Vertical;
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        assert_eq!(text.lines, [block.translated_text.replace(' ', "")]);
+        assert_eq!(text.text_rect.width, text.font_size_px, "one column");
+        block.render_direction = RenderTextDirection::Hidden;
+        assert!(block_text(&mut ctx, page, &block).is_none());
     }
 
     #[test]

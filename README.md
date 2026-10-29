@@ -16,7 +16,7 @@ Rust + [egui](https://github.com/emilk/egui)로 만든 네이티브 앱이며 ma
   새로 만든 블록은 줄 길이를 고르게 나누고 문장부호 뒤에서 줄을 바꾸며, 자동 맞춤은 원문 글자 크기의 1.2배까지만 키우고 9px 아래로는 줄이지 않습니다.
   예전 블록은 모양이 그대로이고, 블록의 `배치 › 조판 › 새 규칙`으로 바꿀 수 있습니다.
 - 글꼴: 시스템 글꼴, 굵기/기울임/밑줄, 크기 프리셋, 블록 종류별 글꼴 프리셋, 즐겨찾기, 글자별 글꼴, 프리셋 백업/복원.
-- 인페인트: 로컬 채우기 또는 LaMa로 원문 글자(어두운 상자의 밝은 글자 포함)를 지우고, 마스크·결과 레이어를 브러시/지우개/스마트 브러시/흐림·선명·뭉개기로 다듬습니다. PSD 내보내기/가져오기.
+- 인페인트: 로컬 채우기 또는 LaMa로 원문 글자(어두운 상자의 밝은 글자 포함)를 지우고, 마스크·결과 레이어를 브러시/지우개/스마트 브러시/흐림·선명·뭉개기로 다듬습니다. PSD 내보내기/가져오기(내보낸 PSD에는 블록마다 편집 가능한 텍스트 레이어가 숨긴 그룹 `번역 텍스트 (편집용)`으로 들어감).
 - 출력: 현재 페이지 또는 전체 페이지를 최종 PNG로 저장하고(전체는 다운로드 폴더에 CBZ로도 묶을 수 있음), 블록별 원문·결과를 비교하는 HTML 보고서를 만듭니다.
 
 ## 설치 / 실행
@@ -145,6 +145,7 @@ MANGA_TRANSLATOR_DATA_DIR=/tmp/x MTT_AUTOMATION="import:DIR;wait-editor;ready;sh
 ## 라이선스
 
 이 프로젝트는 **GNU General Public License v3.0 (or later)** 하에 배포됩니다. 자세한 내용은 [LICENSE](LICENSE) 파일을 참고하세요.
+PSD 텍스트 레이어 코드(`crates/mtt-inpaint/src/psd_text.rs`)는 [koharu](https://github.com/koharu-rs/koharu)의 koharu-psd(MIT OR Apache-2.0, Copyright 2025-2026 Mayo Takanashi and Koharu contributors)에서 옮겨 왔습니다.
 
 ## 참고 프로젝트
 

@@ -1,41 +1,54 @@
 //! Minimal PSD support for the inpaint round trip (`inpaintPsd.ts`).
 //!
 //! Export writes an 8-bit RGB document with the source as a locked-name background layer,
-//! the masked inpaint result, and an optional hidden translation layer. Import flattens
-//! every visible non-background layer (groups, opacity, RLE or raw channels) into a new
-//! result layer and a mask covering its painted pixels.
+//! the masked inpaint result, an optional hidden translation layer and a hidden group of
+//! editable text layers (see [`crate::psd_text`]). Import flattens every visible
+//! non-background layer (groups, opacity, RLE or raw channels) into a new result layer and
+//! a mask covering its painted pixels; text layers and the text group are left out.
 
 use image::{GrayImage, RgbaImage};
+
+use crate::psd_text::{TextLayer, type_tool_info};
 
 pub const BACKGROUND_LAYER_NAME: &str = "배경 (이름변경금지)";
 pub const RESULT_LAYER_NAME: &str = "Inpaint Result";
 pub const TRANSLATION_LAYER_NAME: &str = "번역 블록";
+/// Group of the editable text layers; never imported, even when rasterized.
+pub const TEXT_GROUP_NAME: &str = "번역 텍스트 (편집용)";
+/// Name Photoshop gives the record closing a group.
+pub const GROUP_END_NAME: &str = "</Layer group>";
 
 pub struct ExportLayer<'a> {
     pub name: &'a str,
     pub image: &'a RgbaImage,
+    /// Page position of the image's top-left pixel.
+    pub left: i32,
+    pub top: i32,
     pub hidden: bool,
-    /// `lsct` section type for group markers (tests); `None` for normal layers.
+    /// `lsct` section type of group records: 3 below the children, 1 (open) or 2 (closed)
+    /// above them, with the group's name and visibility. `None` for normal layers.
     pub section: Option<u32>,
+    /// Editable text (`TySh`); `image` is how it renders.
+    pub text: Option<&'a TextLayer>,
 }
 
 impl<'a> ExportLayer<'a> {
     pub fn new(name: &'a str, image: &'a RgbaImage, hidden: bool) -> Self {
-        Self { name, image, hidden, section: None }
+        Self { name, image, left: 0, top: 0, hidden, section: None, text: None }
     }
 }
 
 // ---------------------------------------------------------------------------------- write
 
-fn push_u16(out: &mut Vec<u8>, value: u16) {
+pub(crate) fn push_u16(out: &mut Vec<u8>, value: u16) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
-fn push_u32(out: &mut Vec<u8>, value: u32) {
+pub(crate) fn push_u32(out: &mut Vec<u8>, value: u32) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
-fn push_i32(out: &mut Vec<u8>, value: i32) {
+pub(crate) fn push_i32(out: &mut Vec<u8>, value: i32) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
@@ -52,6 +65,18 @@ fn pascal_name(name: &str) -> Vec<u8> {
     out
 }
 
+/// Additional layer info `key` with `data` padded to a multiple of 4 bytes.
+fn layer_info_block(key: &[u8; 4], mut data: Vec<u8>) -> Vec<u8> {
+    while !data.len().is_multiple_of(4) {
+        data.push(0);
+    }
+    let mut out = b"8BIM".to_vec();
+    out.extend_from_slice(key);
+    push_u32(&mut out, data.len() as u32);
+    out.extend(data);
+    out
+}
+
 /// `luni` additional layer info with the UTF-16 name.
 fn unicode_name_block(name: &str) -> Vec<u8> {
     let units: Vec<u16> = name.encode_utf16().collect();
@@ -60,13 +85,7 @@ fn unicode_name_block(name: &str) -> Vec<u8> {
     for unit in units {
         push_u16(&mut data, unit);
     }
-    while data.len() % 4 != 0 {
-        data.push(0);
-    }
-    let mut out = b"8BIMluni".to_vec();
-    push_u32(&mut out, data.len() as u32);
-    out.extend(data);
-    out
+    layer_info_block(b"luni", data)
 }
 
 /// PackBits (Apple RLE, what PSD calls compression 1): runs of 3+ equal bytes as
@@ -106,7 +125,7 @@ fn packed_channels(image: &RgbaImage, channels: &[usize]) -> Vec<(Vec<u16>, Vec<
         .map(|channel| {
             let mut counts = Vec::with_capacity(height);
             let mut data = Vec::new();
-            for pixels in image.as_raw().chunks_exact(width * 4) {
+            for pixels in (0..height).map(|y| &image.as_raw()[y * width * 4..][..width * 4]) {
                 row.clear();
                 row.extend(pixels.iter().skip(*channel).step_by(4));
                 let start = data.len();
@@ -120,6 +139,7 @@ fn packed_channels(image: &RgbaImage, channels: &[usize]) -> Vec<(Vec<u16>, Vec<
 
 /// Writes a PSD; `layers` are bottom to top. The composite is `composite` (opaque RGB).
 /// Channels are RLE compressed: result and translation layers are mostly transparent.
+/// Group records can have an empty (0×0) image.
 pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[ExportLayer<'_>]) -> Vec<u8> {
     let layer_channels: Vec<Vec<(Vec<u16>, Vec<u8>)>> =
         layers.iter().map(|layer| packed_channels(layer.image, &[3, 0, 1, 2])).collect();
@@ -137,11 +157,12 @@ pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[Expor
 
     let mut layer_info = Vec::new();
     push_u16(&mut layer_info, layers.len() as u16);
+    let mut text_index = 0;
     for (index, layer) in layers.iter().enumerate() {
-        push_i32(&mut layer_info, 0);
-        push_i32(&mut layer_info, 0);
-        push_i32(&mut layer_info, height as i32);
-        push_i32(&mut layer_info, width as i32);
+        push_i32(&mut layer_info, layer.top);
+        push_i32(&mut layer_info, layer.left);
+        push_i32(&mut layer_info, layer.top + layer.image.height() as i32);
+        push_i32(&mut layer_info, layer.left + layer.image.width() as i32);
         push_u16(&mut layer_info, 4);
         // Transparency first, like Photoshop.
         for (id, (counts, data)) in [-1i16, 0, 1, 2].into_iter().zip(&layer_channels[index]) {
@@ -159,6 +180,10 @@ pub fn write_psd(width: u32, height: u32, composite: &RgbaImage, layers: &[Expor
             extra.extend_from_slice(b"8BIMlsct");
             push_u32(&mut extra, 4);
             push_u32(&mut extra, section);
+        }
+        if let Some(text) = layer.text {
+            extra.extend(layer_info_block(b"TySh", type_tool_info(text, text_index)));
+            text_index += 1;
         }
         push_u32(&mut layer_info, extra.len() as u32);
         layer_info.extend(extra);
@@ -240,6 +265,8 @@ struct LayerRecord {
     name: String,
     /// `lsct` section type: 1/2 folder, 3 group end marker.
     section: u32,
+    /// Carries type tool data (`TySh`).
+    text: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -250,6 +277,10 @@ pub struct PsdLayer {
     pub image: RgbaImage,
     pub opacity: f32,
     pub hidden: bool,
+    /// An editable text layer (it has `TySh` type tool data).
+    pub text: bool,
+    /// Names of the groups the layer is in, innermost first.
+    pub groups: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -340,6 +371,7 @@ fn parse_extra(reader: &mut Reader<'_>, record: &mut LayerRecord, length: usize)
             b"lsct" | b"lsdk" if block.len() >= 4 => {
                 record.section = u32::from_be_bytes([block[0], block[1], block[2], block[3]]);
             }
+            b"TySh" => record.text = true,
             _ => {}
         }
     }
@@ -439,6 +471,7 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
                 parent.extend(children.into_iter().map(|mut child| {
                     child.hidden |= record.hidden;
                     child.opacity *= opacity;
+                    child.groups.push(record.name.clone());
                     child
                 }));
             }
@@ -449,6 +482,8 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
                 image,
                 opacity: f32::from(record.opacity) / 255.0,
                 hidden: record.hidden,
+                text: record.text,
+                groups: Vec::new(),
             }),
         }
     }
@@ -456,7 +491,15 @@ pub fn read_psd(data: &[u8]) -> Result<PsdDocument, String> {
     Ok(PsdDocument { width, height, layers })
 }
 
-/// `importInpaintPsd`: merges visible non-background layers into (result, mask).
+/// Layers that make up the inpaint result: visible, not the background, not text.
+fn is_paint_layer(layer: &PsdLayer) -> bool {
+    !layer.hidden
+        && !layer.text
+        && layer.name.trim() != BACKGROUND_LAYER_NAME
+        && !layer.groups.iter().any(|group| group.trim() == TEXT_GROUP_NAME)
+}
+
+/// `importInpaintPsd`: merges visible non-background, non-text layers into (result, mask).
 pub fn import_inpaint_layers(
     document: &PsdDocument,
     width: u32,
@@ -468,8 +511,7 @@ pub fn import_inpaint_layers(
             document.width, document.height
         ));
     }
-    let paint: Vec<&PsdLayer> =
-        document.layers.iter().filter(|layer| !layer.hidden && layer.name.trim() != BACKGROUND_LAYER_NAME).collect();
+    let paint: Vec<&PsdLayer> = document.layers.iter().filter(|layer| is_paint_layer(layer)).collect();
     if paint.is_empty() {
         return Err("배경 레이어를 제외하고 가져올 PSD 레이어가 없습니다.".into());
     }
@@ -574,6 +616,73 @@ mod tests {
         let document = read_psd(&bytes).unwrap();
         let names: Vec<(&str, bool)> = document.layers.iter().map(|l| (l.name.as_str(), l.hidden)).collect();
         assert_eq!(names, [("숨은 그룹 안", true), ("보이는 레이어", false)]);
+    }
+
+    fn text_layer(text: &str) -> TextLayer {
+        TextLayer {
+            text: text.into(),
+            font: "AppleSDGothicNeo-Regular".into(),
+            font_size: 2.0,
+            faux_bold: false,
+            faux_italic: false,
+            leading: 2.4,
+            tracking: 0,
+            color: [0, 0, 0, 255],
+            justification: crate::psd_text::Justification::Center,
+            vertical: false,
+            box_width: 3.0,
+            box_height: 2.0,
+            transform: [1.0, 0.0, 0.0, 1.0, 1.0, 1.0],
+        }
+    }
+
+    #[test]
+    fn text_layers_are_written_and_left_out_of_the_import() {
+        let source = RgbaImage::from_pixel(4, 3, image::Rgba([10, 20, 30, 255]));
+        let mut result = RgbaImage::new(4, 3);
+        result.put_pixel(1, 1, image::Rgba([200, 100, 50, 255]));
+        let base = [
+            ExportLayer::new(BACKGROUND_LAYER_NAME, &source, false),
+            ExportLayer::new(RESULT_LAYER_NAME, &result, false),
+        ];
+        let plain = read_psd(&write_psd(4, 3, &source, &base)).unwrap();
+
+        let (empty, glyphs) = (RgbaImage::new(0, 0), RgbaImage::from_pixel(2, 1, image::Rgba([0, 0, 0, 255])));
+        let (first, second) = (text_layer("첫 줄\n둘째 줄"), text_layer("밖"));
+        let text =
+            |name, layer| ExportLayer { left: 2, top: 2, text: Some(layer), ..ExportLayer::new(name, &glyphs, false) };
+        let mut layers = Vec::from(base);
+        layers.extend([
+            // A visible text group, a visible text layer and a rasterized one inside it.
+            ExportLayer { section: Some(3), ..ExportLayer::new(GROUP_END_NAME, &empty, false) },
+            text("첫 줄", &first),
+            ExportLayer { left: 2, top: 2, ..ExportLayer::new("래스터화된 텍스트", &glyphs, false) },
+            ExportLayer { section: Some(2), ..ExportLayer::new(TEXT_GROUP_NAME, &empty, false) },
+            // A text layer outside the group.
+            text("밖", &second),
+        ]);
+        let bytes = write_psd(4, 3, &source, &layers);
+        let contains = |needle: &[u8]| bytes.windows(needle.len()).any(|window| window == needle);
+        assert!(contains(b"8BIMTySh") && contains(b"EngineData"));
+        let utf16: Vec<u8> = "둘째 줄".encode_utf16().flat_map(u16::to_be_bytes).collect();
+        assert!(contains(&utf16));
+
+        let document = read_psd(&bytes).unwrap();
+        let summary: Vec<(&str, i32, u32, bool, Vec<String>)> = document
+            .layers
+            .iter()
+            .map(|layer| (layer.name.as_str(), layer.left, layer.image.width(), layer.text, layer.groups.clone()))
+            .collect();
+        let in_group = vec![TEXT_GROUP_NAME.to_owned()];
+        assert_eq!(
+            summary[2..],
+            [
+                ("첫 줄", 2, 2, true, in_group.clone()),
+                ("래스터화된 텍스트", 2, 2, false, in_group),
+                ("밖", 2, 2, true, Vec::new()),
+            ]
+        );
+        assert_eq!(import_inpaint_layers(&document, 4, 3).unwrap(), import_inpaint_layers(&plain, 4, 3).unwrap());
     }
 
     #[test]

@@ -1562,8 +1562,8 @@ impl Editor {
         self.inpaint_running.is_some() || self.inpaint_queue.is_some() || self.psd_import_running.is_some()
     }
 
-    /// Exports source, masked result and the rendered translation as a layered PSD.
-    /// PSD bytes of the current page (`exportInpaintPsd`).
+    /// Exports source, masked result, the rendered translation and its editable text as a
+    /// layered PSD. PSD bytes of the current page (`exportInpaintPsd`).
     #[cfg(test)]
     pub fn render_psd(&mut self, services: &mut Services) -> Result<Vec<u8>, String> {
         self.psd_export_job(services)?()
@@ -1576,7 +1576,8 @@ impl Editor {
         services: &mut Services,
     ) -> Result<impl FnOnce() -> Result<Vec<u8>, String> + Send + 'static, String> {
         use mtt_inpaint::psd::{
-            BACKGROUND_LAYER_NAME, ExportLayer, RESULT_LAYER_NAME, TRANSLATION_LAYER_NAME, write_psd,
+            BACKGROUND_LAYER_NAME, ExportLayer, GROUP_END_NAME, RESULT_LAYER_NAME, TEXT_GROUP_NAME,
+            TRANSLATION_LAYER_NAME, write_psd,
         };
         let page = self.page().cloned().ok_or("페이지가 없습니다.")?;
         let fonts = services.fonts().ok_or("폰트를 불러오는 중입니다.")?;
@@ -1596,7 +1597,7 @@ impl Editor {
             }
             let mut composite = source.clone();
             image::imageops::overlay(&mut composite, &result, 0, 0);
-            let translation = {
+            let (translation, texts) = {
                 let mut fonts = fonts.lock().map_err(|_| "폰트 잠금 실패")?;
                 let options = PageRenderOptions {
                     visibility: mtt_render::page::LayerVisibility {
@@ -1608,12 +1609,13 @@ impl Editor {
                     },
                     ..PageRenderOptions::OUTPUT
                 };
-                mtt_render::page::render_page(
+                let translation = mtt_render::page::render_page(
                     &mut fonts,
                     &page,
                     &PageImages { source: None, inpaint_mask: None, inpaint_result: None },
                     &options,
-                )
+                );
+                (translation, layer_ops::psd_text_layers(&mut fonts, &page))
             };
             let mut layers = vec![
                 ExportLayer::new(BACKGROUND_LAYER_NAME, &source, false),
@@ -1621,6 +1623,18 @@ impl Editor {
             ];
             if let Some(translation) = &translation {
                 layers.push(ExportLayer::new(TRANSLATION_LAYER_NAME, translation, true));
+            }
+            // Editable text in a hidden, closed group on top.
+            let empty = RgbaImage::new(0, 0);
+            if !texts.is_empty() {
+                layers.push(ExportLayer { section: Some(3), ..ExportLayer::new(GROUP_END_NAME, &empty, false) });
+                layers.extend(texts.iter().map(|text| ExportLayer {
+                    left: text.left,
+                    top: text.top,
+                    text: Some(&text.text),
+                    ..ExportLayer::new(&text.name, &text.raster, false)
+                }));
+                layers.push(ExportLayer { section: Some(2), ..ExportLayer::new(TEXT_GROUP_NAME, &empty, true) });
             }
             Ok(write_psd(width, height, &composite, &layers))
         })
@@ -2799,6 +2813,50 @@ mod tests {
         editor.undo(&ctx);
         let Some(PageAssets::Ready(loaded)) = editor.assets.get(&page_id) else { panic!() };
         assert_eq!(loaded.result.as_ref().unwrap().get_pixel(2, 2)[3], 0, "undo restores the cleared state");
+    }
+
+    #[test]
+    fn psd_export_adds_hidden_editable_text_that_import_skips() {
+        use mtt_inpaint::psd::{TEXT_GROUP_NAME, import_inpaint_layers, read_psd};
+        let ctx = egui::Context::default();
+        let dir = tempfile::tempdir().unwrap();
+        let mut services = Services::new(&ctx, mtt_core::paths::AppPaths::from_data_root(dir.path()));
+        let started = Instant::now();
+        while services.fonts().is_none() && started.elapsed() < Duration::from_secs(20) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let mut editor = Editor::new(chapter_with_pages(1));
+        let page_id = editor.page().unwrap().id.clone();
+        let page = editor.page_mut().unwrap();
+        (page.width, page.height) = (400, 300);
+        page.blocks[0].translated_text = "안녕하세요".into();
+        page.blocks.push(TranslationBlock {
+            id: "hidden".into(),
+            translated_text: "숨김".into(),
+            render_direction: mtt_core::model::RenderTextDirection::Hidden,
+            ..page.blocks[0].clone()
+        });
+        let source = RgbaImage::from_pixel(400, 300, image::Rgba([250, 250, 250, 255]));
+        let mut mask = GrayImage::new(400, 300);
+        mask.put_pixel(50, 40, image::Luma([255]));
+        let mut result = RgbaImage::new(400, 300);
+        result.put_pixel(50, 40, image::Rgba([200, 150, 100, 255]));
+        editor.assets.insert(
+            page_id.clone(),
+            PageAssets::Ready(Box::new(LoadedPage::new(&ctx, &page_id, source, Some(mask), Some(result)))),
+        );
+
+        let with_text = read_psd(&editor.render_psd(&mut services).unwrap()).unwrap();
+        let texts: Vec<_> = with_text.layers.iter().filter(|layer| layer.text).collect();
+        assert_eq!(texts.len(), 1, "one visible block");
+        assert_eq!(texts[0].name, "안녕하세요");
+        assert!(texts[0].hidden, "the group is hidden");
+        assert_eq!(texts[0].groups, [TEXT_GROUP_NAME]);
+        assert!(texts[0].image.pixels().any(|pixel| pixel[3] > 0), "the block's raster");
+        editor.page_mut().unwrap().blocks.clear();
+        let without = read_psd(&editor.render_psd(&mut services).unwrap()).unwrap();
+        assert!(without.layers.iter().all(|layer| !layer.text && layer.groups.is_empty()), "no empty group");
+        assert_eq!(import_inpaint_layers(&with_text, 400, 300), import_inpaint_layers(&without, 400, 300));
     }
 
     #[test]
