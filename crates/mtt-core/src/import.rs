@@ -52,13 +52,36 @@ pub enum ArchiveKind {
 }
 
 impl ArchiveKind {
-    /// By extension: `.zip`/`.cbz`, `.rar`/`.cbr`, `.pdf`.
+    /// By extension: `.zip`/`.cbz`, `.rar`/`.cbr`, `.pdf`. Picks the files to offer; how a
+    /// file is read is [`ArchiveKind::detect`].
     pub fn of(path: &Path) -> Option<Self> {
         match path.extension()?.to_str()?.to_ascii_lowercase().as_str() {
             "zip" | "cbz" => Some(Self::Zip),
             "rar" | "cbr" => Some(Self::Rar),
             "pdf" => Some(Self::Pdf),
             _ => None,
+        }
+    }
+
+    /// By the file's first bytes, which often disagree with the extension (a `.cbz` that is
+    /// really a RAR, or the other way round); by extension when they match no known header.
+    pub fn detect(path: &Path) -> Option<Self> {
+        Self::sniff(path).or_else(|| Self::of(path))
+    }
+
+    fn sniff(path: &Path) -> Option<Self> {
+        use std::io::Read;
+        let mut head = Vec::with_capacity(1024);
+        fs::File::open(path).ok()?.take(1024).read_to_end(&mut head).ok()?;
+        if [&b"PK\x03\x04"[..], b"PK\x05\x06", b"PK\x07\x08"].iter().any(|magic| head.starts_with(magic)) {
+            Some(Self::Zip)
+        } else if head.starts_with(b"Rar!\x1a\x07") || head.starts_with(b"RE\x7e\x5e") {
+            Some(Self::Rar)
+        } else if head.windows(5).any(|window| window == b"%PDF-") {
+            // Readers accept the header anywhere in the first 1024 bytes.
+            Some(Self::Pdf)
+        } else {
+            None
         }
     }
 }
@@ -78,6 +101,22 @@ pub struct ChapterDraft {
     pub source_kind: ImportSourceKind,
     pub pages: Vec<PageDraft>,
     pub enabled: bool,
+    /// Why the source couldn't be listed; such a draft has no pages and stays disabled.
+    pub error: Option<String>,
+}
+
+impl ChapterDraft {
+    /// A draft of `pages`, or a disabled one carrying the error when listing failed, so one
+    /// bad source in a batch doesn't fail the whole preview.
+    fn listed(title: String, source_kind: ImportSourceKind, pages: CoreResult<Vec<PageDraft>>) -> Self {
+        match pages {
+            Ok(pages) => Self { title, source_kind, pages, enabled: true, error: None },
+            Err(error) => {
+                log::warn!("import preview: {title}: {error}");
+                Self { title, source_kind, pages: Vec::new(), enabled: false, error: Some(error.to_string()) }
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -221,9 +260,9 @@ pub fn list_pdf_pages(document: &Path) -> CoreResult<Vec<PageDraft>> {
         .collect())
 }
 
-/// Pages of an archive or PDF by [`ArchiveKind::of`].
+/// Pages of an archive or PDF by [`ArchiveKind::detect`].
 pub fn list_archive_pages(path: &Path) -> CoreResult<Vec<PageDraft>> {
-    match ArchiveKind::of(path) {
+    match ArchiveKind::detect(path) {
         Some(ArchiveKind::Rar) => list_rar_images(path),
         Some(ArchiveKind::Pdf) => list_pdf_pages(path),
         _ => list_zip_images(path),
@@ -256,7 +295,7 @@ fn single(source_kind: ImportSourceKind, title: String, pages: Vec<PageDraft>) -
         batch: false,
         source_kind,
         suggested_work_title: DEFAULT_WORK_TITLE.into(),
-        chapters: vec![ChapterDraft { title, source_kind, pages, enabled: true }],
+        chapters: vec![ChapterDraft { title, source_kind, pages, enabled: true, error: None }],
     }
 }
 
@@ -282,7 +321,13 @@ pub fn preview_archive(archive: &Path) -> CoreResult<ImportPreview> {
 }
 
 fn archive_source_kind(path: &Path) -> ImportSourceKind {
-    if ArchiveKind::of(path) == Some(ArchiveKind::Pdf) { ImportSourceKind::Pdf } else { ImportSourceKind::Zip }
+    if ArchiveKind::detect(path) == Some(ArchiveKind::Pdf) { ImportSourceKind::Pdf } else { ImportSourceKind::Zip }
+}
+
+/// One archive or PDF of a multi-file import as a chapter draft; one that can't be read
+/// becomes a disabled draft carrying the error.
+pub fn archive_chapter_draft(path: &Path) -> ChapterDraft {
+    ChapterDraft::listed(file_stem(path), archive_source_kind(path), list_archive_pages(path))
 }
 
 /// Every archive or PDF directly inside `folder` plus every nested folder containing
@@ -292,44 +337,39 @@ pub fn preview_zip_folder(folder: &Path) -> CoreResult<ImportPreview> {
     for entry in fs::read_dir(folder).map_err(|source| CoreError::io(folder, source))?.filter_map(Result::ok) {
         let path = entry.path();
         if entry.file_type().is_ok_and(|kind| kind.is_file()) && ArchiveKind::of(&path).is_some() {
-            let pages = list_archive_pages(&path)?;
-            sources.push((
-                file_name(&path),
-                ChapterDraft {
-                    title: file_stem(&path),
-                    source_kind: ImportSourceKind::ZipFolder,
-                    pages,
-                    enabled: true,
-                },
-            ));
+            let draft = ChapterDraft { source_kind: ImportSourceKind::ZipFolder, ..archive_chapter_draft(&path) };
+            sources.push((file_name(&path), draft));
         }
     }
     let mut stack = vec![folder.to_path_buf()];
     while let Some(current) = stack.pop() {
-        let mut children: Vec<PathBuf> = fs::read_dir(&current)
-            .map_err(|source| CoreError::io(&current, source))?
-            .filter_map(Result::ok)
-            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-            .map(|entry| entry.path())
-            .collect();
+        let mut children: Vec<PathBuf> = match fs::read_dir(&current) {
+            Ok(entries) => entries
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+                .map(|entry| entry.path())
+                .collect(),
+            Err(source) if current == folder => return Err(CoreError::io(&current, source)),
+            // An unreadable subfolder is listed below as a disabled draft with the error.
+            Err(_) => Vec::new(),
+        };
         sort_naturally(&mut children);
         stack.extend(children.into_iter().rev());
         if current == folder {
             continue;
         }
-        let images = list_image_files(&current)?;
-        if images.is_empty() {
+        let images = list_image_files(&current);
+        if images.as_ref().is_ok_and(Vec::is_empty) {
             continue;
         }
         let relative = current.strip_prefix(folder).unwrap_or(&current).to_string_lossy().replace('\\', "/");
-        let pages = images
-            .into_iter()
-            .map(|path| PageDraft { name: file_name(&path), source: PageSource::File(path) })
-            .collect();
-        sources.push((
-            relative.clone(),
-            ChapterDraft { title: relative, source_kind: ImportSourceKind::Folder, pages, enabled: true },
-        ));
+        let pages = images.map(|images| {
+            images
+                .into_iter()
+                .map(|path| PageDraft { name: file_name(&path), source: PageSource::File(path) })
+                .collect()
+        });
+        sources.push((relative.clone(), ChapterDraft::listed(relative, ImportSourceKind::Folder, pages)));
     }
     sources.sort_by(|a, b| natural_cmp(&a.0, &b.0));
     Ok(ImportPreview {
@@ -795,6 +835,81 @@ mod tests {
         let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
         let sizes: Vec<(u32, u32)> = chapter.pages.iter().map(|page| (page.width, page.height)).collect();
         assert_eq!(sizes, [(5, 6), (3, 4)]);
+    }
+
+    fn zip_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        for (name, bytes) in entries {
+            writer.start_file(*name, zip::write::SimpleFileOptions::default()).unwrap();
+            writer.write_all(bytes).unwrap();
+        }
+        writer.finish().unwrap().into_inner()
+    }
+
+    fn rar_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        use rars::rar50::{ArchiveEntry, ArchiveExtras, WriterOptions, write_streaming_archive_to};
+        use rars::{EntrySource, WriterResources};
+        let entries: Vec<ArchiveEntry> = entries
+            .iter()
+            .map(|(name, bytes)| ArchiveEntry::new(*name, EntrySource::from_bytes(bytes.clone())))
+            .collect();
+        let mut bytes = Vec::new();
+        write_streaming_archive_to(
+            &entries,
+            WriterOptions::default(),
+            ArchiveExtras::default(),
+            &WriterResources::default(),
+            &mut bytes,
+        )
+        .unwrap();
+        bytes
+    }
+
+    #[test]
+    fn archive_type_comes_from_the_file_header() {
+        let dir = tempfile::tempdir().unwrap();
+        let rar_named_cbz = dir.path().join("1화.cbz");
+        fs::write(&rar_named_cbz, rar_bytes(&[("01.png", png(3, 4))])).unwrap();
+        let zip_named_cbr = dir.path().join("2화.cbr");
+        fs::write(&zip_named_cbr, zip_bytes(&[("01.png", png(5, 6))])).unwrap();
+        let pdf_named_zip = dir.path().join("3화.zip");
+        fs::write(&pdf_named_zip, single_page_pdf()).unwrap();
+        assert_eq!(ArchiveKind::detect(&rar_named_cbz), Some(ArchiveKind::Rar));
+        assert_eq!(ArchiveKind::detect(&zip_named_cbr), Some(ArchiveKind::Zip));
+        assert_eq!(ArchiveKind::detect(&pdf_named_zip), Some(ArchiveKind::Pdf));
+        let unknown = dir.path().join("x.cbr");
+        fs::write(&unknown, b"????").unwrap();
+        assert_eq!(ArchiveKind::detect(&unknown), Some(ArchiveKind::Rar), "falls back to the extension");
+
+        let library = Library::new(dir.path().join("library"));
+        let mut sizes = Vec::new();
+        for archive in [&rar_named_cbz, &zip_named_cbr, &pdf_named_zip] {
+            let preview = preview_archive(archive).unwrap();
+            let result =
+                create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+            let page = &library.open_chapter(&result.chapter_ids[0]).unwrap().pages[0];
+            sizes.push((page.width, page.height));
+        }
+        assert_eq!(sizes, [(3, 4), (5, 6), (300, 300)]);
+        assert_eq!(preview_archive(&pdf_named_zip).unwrap().source_kind, ImportSourceKind::Pdf);
+    }
+
+    #[test]
+    fn one_unreadable_archive_does_not_fail_the_folder_preview() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join("1화.cbz"), zip_bytes(&[("01.png", png(2, 2))])).unwrap();
+        fs::write(dir.path().join("2화.cbz"), b"PK\x03\x04 cut off").unwrap();
+        let preview = preview_zip_folder(dir.path()).unwrap();
+        let drafts: Vec<(&str, usize, bool, bool)> = preview
+            .chapters
+            .iter()
+            .map(|draft| (draft.title.as_str(), draft.pages.len(), draft.enabled, draft.error.is_some()))
+            .collect();
+        assert_eq!(drafts, [("1화", 1, true, false), ("2화", 0, false, true)]);
+        let library = Library::new(dir.path().join("library"));
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        assert_eq!(result.chapter_ids.len(), 1);
     }
 
     #[test]
