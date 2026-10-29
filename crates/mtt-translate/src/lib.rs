@@ -485,16 +485,23 @@ pub fn overlay_item_to_block(
 pub fn test_model(config: &TranslationConfig) -> Result<String, String> {
     verify_endpoint(config)?;
     let body = match &config.endpoint.api {
-        Api::ChatCompletions { temperature, top_p, .. } => serde_json::json!({
-            "model": config.endpoint.model,
-            "temperature": temperature,
-            "top_p": top_p,
-            "max_tokens": 32,
-            "messages": [
-                { "role": "system", "content": [{ "type": "text", "text": "Reply in one short sentence." }] },
-                { "role": "user", "content": [{ "type": "text", "text": "Say 'model test ok'." }] }
-            ]
-        }),
+        Api::ChatCompletions { temperature, top_p, .. } => {
+            let mut body = serde_json::json!({
+                "model": config.endpoint.model,
+                "messages": [
+                    { "role": "system", "content": [{ "type": "text", "text": "Reply in one short sentence." }] },
+                    { "role": "user", "content": [{ "type": "text", "text": "Say 'model test ok'." }] }
+                ]
+            });
+            // A reasoning model thinks before answering, so it gets room for that.
+            let limits = client::chat_limits(&config.endpoint.model, *temperature, *top_p, 32);
+            if let (Some(fields), Ok(serde_json::Value::Object(limits))) =
+                (body.as_object_mut(), serde_json::to_value(limits))
+            {
+                fields.extend(limits);
+            }
+            body
+        }
         Api::Responses { reasoning_effort } => serde_json::json!({
             "model": config.endpoint.model,
             "instructions": "Reply in one short sentence.",

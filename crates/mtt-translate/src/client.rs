@@ -147,14 +147,86 @@ struct OllamaFlags {
     reasoning_effort: &'static str,
 }
 
+/// The output limit and sampling fields of a Chat Completions request.
+#[derive(Debug, Default, PartialEq, Serialize)]
+pub(crate) struct ChatLimits {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    presence_penalty: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    frequency_penalty: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+}
+
+/// Room for an OpenAI reasoning model's thinking on top of the answer: its limit counts
+/// both, and OpenAI suggests reserving at least 25,000 tokens.
+const REASONING_ROOM: u32 = 25_000;
+
+/// Whether `model` is an OpenAI reasoning model (o-series, GPT-5), also behind a provider
+/// prefix (`openai/o3`).
+pub fn is_reasoning_model(model: &str) -> bool {
+    let id = model.trim().to_ascii_lowercase();
+    let id = id.rsplit('/').next().unwrap_or_default();
+    let o_series = id.strip_prefix('o').is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()));
+    o_series || id.starts_with("gpt-5")
+}
+
+/// The limit and sampling fields for `model`: reasoning models reject `max_tokens` and
+/// sampling values other than the default, so they get `max_completion_tokens` (with
+/// room to think) and nothing else.
+pub(crate) fn chat_limits(model: &str, temperature: f64, top_p: f64, max_tokens: u32) -> ChatLimits {
+    if is_reasoning_model(model) {
+        return ChatLimits {
+            max_completion_tokens: Some(max_tokens.saturating_add(REASONING_ROOM)),
+            ..ChatLimits::default()
+        };
+    }
+    ChatLimits {
+        temperature: Some(temperature),
+        top_p: Some(top_p),
+        presence_penalty: Some(0),
+        frequency_penalty: Some(0),
+        max_tokens: Some(max_tokens),
+        max_completion_tokens: None,
+    }
+}
+
+/// `body` without the parameter a 400 `error` names as unsupported (`max_tokens` becomes
+/// `max_completion_tokens` with room to think); `None` when it names none of the limit or
+/// sampling parameters, or one already gone.
+fn without_rejected_parameter(body: &[u8], error: &str) -> Option<Vec<u8>> {
+    const DROPPABLE: [&str; 5] = ["max_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty"];
+    let error: Value = serde_json::from_str(error).ok()?;
+    let error = error.get("error")?;
+    let text = |key: &str| error.get(key).and_then(Value::as_str).unwrap_or("");
+    let message = text("message");
+    let unsupported = matches!(text("code"), "unsupported_parameter" | "unsupported_value")
+        || message.to_ascii_lowercase().starts_with("unsupported");
+    // "Unsupported parameter: 'max_tokens' is not supported with this model."
+    let named = Some(text("param")).filter(|param| !param.is_empty()).or_else(|| message.split('\'').nth(1))?;
+    let param = DROPPABLE.into_iter().find(|known| *known == named).filter(|_| unsupported)?;
+    let mut request: Value = serde_json::from_slice(body).ok()?;
+    let fields = request.as_object_mut()?;
+    let value = fields.remove(param)?;
+    log::info!("the model rejected {param}; sending the request again without it");
+    if param == "max_tokens" && !fields.contains_key("max_completion_tokens") {
+        let limit = value.as_u64().unwrap_or(0).saturating_add(u64::from(REASONING_ROOM));
+        fields.insert("max_completion_tokens".into(), limit.into());
+    }
+    serde_json::to_vec(&request).ok()
+}
+
 #[derive(Serialize)]
 struct ChatBody<'a> {
     model: &'a str,
-    temperature: f64,
-    top_p: f64,
-    presence_penalty: u8,
-    frequency_penalty: u8,
-    max_tokens: u32,
+    #[serde(flatten)]
+    limits: ChatLimits,
     messages: [ChatMessage<'a>; 2],
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     ollama: Option<OllamaFlags>,
@@ -207,11 +279,7 @@ pub fn chat_request_body(endpoint: &Endpoint, system: &str, prompt: &str, images
             user.push(ChatPart::Text { text: prompt });
             serde_json::to_vec(&ChatBody {
                 model: &endpoint.model,
-                temperature: *temperature,
-                top_p: *top_p,
-                presence_penalty: 0,
-                frequency_penalty: 0,
-                max_tokens: *max_tokens,
+                limits: chat_limits(&endpoint.model, *temperature, *top_p, *max_tokens),
                 messages: [
                     ChatMessage { role: "system", content: vec![ChatPart::Text { text: system }] },
                     ChatMessage { role: "user", content: user },
@@ -322,7 +390,7 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
         Some(auth) => Some(auth.session().map_err(|error| SendError::new(error, Retry::Stop))?),
         None => None,
     };
-    let post = |session: Option<&crate::codex::Session>| {
+    let post = |session: Option<&crate::codex::Session>, body: &[u8]| {
         let mut request = agent.post(&url).header("Content-Type", "application/json");
         if let Some(session) = session {
             for (name, value) in crate::codex::request_headers(session) {
@@ -333,21 +401,36 @@ fn request(agent: &ureq::Agent, endpoint: &Endpoint, body: &[u8]) -> Result<Answ
         }
         request.send(body).map_err(|e| SendError::new(format!("요청 전송 실패 ({url}): {e}"), Retry::Later(None)))
     };
-    let mut response = post(session.as_ref())?;
-    if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
-        && response.status().as_u16() == 401
-    {
-        let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::Stop))?;
-        response = post(Some(&fresh))?;
-    }
-    let status = response.status();
-    let wait = retry_after(&response);
-    let text = response
-        .body_mut()
-        .with_config()
-        .limit(64 * 1024 * 1024)
-        .read_to_string()
-        .map_err(|e| SendError::new(format!("응답을 읽지 못했습니다: {e}"), Retry::Later(None)))?;
+    let mut session = session;
+    let mut body = std::borrow::Cow::Borrowed(body);
+    let (status, wait, text) = loop {
+        let mut response = post(session.as_ref(), &body)?;
+        if let (Some(auth), Some(stale)) = (&endpoint.auth, &session)
+            && response.status().as_u16() == 401
+        {
+            let fresh = auth.force_refresh(stale).map_err(|error| SendError::new(error, Retry::Stop))?;
+            response = post(Some(&fresh), &body)?;
+            session = Some(fresh);
+        }
+        let status = response.status();
+        let wait = retry_after(&response);
+        let text = response
+            .body_mut()
+            .with_config()
+            .limit(64 * 1024 * 1024)
+            .read_to_string()
+            .map_err(|e| SendError::new(format!("응답을 읽지 못했습니다: {e}"), Retry::Later(None)))?;
+        // A model that rejects one of the limit or sampling parameters is asked again
+        // without it (each at most once).
+        if status.as_u16() == 400
+            && matches!(endpoint.api, Api::ChatCompletions { .. })
+            && let Some(adjusted) = without_rejected_parameter(&body, &text)
+        {
+            body = std::borrow::Cow::Owned(adjusted);
+            continue;
+        }
+        break (status, wait, text);
+    };
     if !status.is_success() {
         return Err(SendError::new(
             format!("요청 실패 ({}): {}", status.as_u16(), preview(&text, 600)),
@@ -756,6 +839,49 @@ mod tests {
         assert_eq!(body["messages"][1]["content"][2]["text"], "prompt");
         assert_eq!(body["think"], false);
         assert_eq!(body["max_tokens"], 900);
+    }
+
+    #[test]
+    fn reasoning_models_get_a_completion_limit_and_no_sampling() {
+        assert!(is_reasoning_model("gpt-5-mini"));
+        assert!(is_reasoning_model("o3"));
+        assert!(is_reasoning_model("openai/o4-mini"));
+        assert!(!is_reasoning_model("gpt-4o-mini"));
+        assert!(!is_reasoning_model("ollama-model"));
+        assert!(!is_reasoning_model("qwen3-vl:8b"));
+        let endpoint = Endpoint {
+            base_url: "https://api.openai.com/v1".into(),
+            api_key: None,
+            model: "gpt-5.5".into(),
+            api: Api::ChatCompletions { temperature: 0.0, top_p: 0.85, max_tokens: 900 },
+            auth: None,
+        };
+        let body: Value = serde_json::from_slice(&chat_request_body(&endpoint, "sys", "p", &[])).unwrap();
+        assert_eq!(body["max_completion_tokens"], 900 + REASONING_ROOM);
+        for absent in ["max_tokens", "temperature", "top_p", "presence_penalty", "frequency_penalty"] {
+            assert!(body.get(absent).is_none(), "{absent}");
+        }
+    }
+
+    #[test]
+    fn a_rejected_parameter_is_dropped_once() {
+        let body = br#"{"model":"m","temperature":0.0,"max_tokens":900,"messages":[]}"#;
+        let rejected = |param: &str| {
+            json!({ "error": { "message": format!("Unsupported parameter: '{param}' is not supported with this model."),
+                "type": "invalid_request_error", "param": param, "code": "unsupported_parameter" } })
+            .to_string()
+        };
+        let adjusted: Value =
+            serde_json::from_slice(&without_rejected_parameter(body, &rejected("max_tokens")).unwrap()).unwrap();
+        assert_eq!(adjusted["max_completion_tokens"], 900 + REASONING_ROOM);
+        assert!(adjusted.get("max_tokens").is_none());
+        let without_temperature = without_rejected_parameter(body, &rejected("temperature")).unwrap();
+        assert!(without_rejected_parameter(&without_temperature, &rejected("temperature")).is_none(), "only once");
+        assert!(without_rejected_parameter(body, &rejected("messages")).is_none());
+        let message_only =
+            r#"{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model."}}"#;
+        assert!(without_rejected_parameter(body, message_only).is_some());
+        assert!(without_rejected_parameter(body, r#"{"error":{"message":"Invalid image"}}"#).is_none());
     }
 
     #[test]

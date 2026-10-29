@@ -391,3 +391,30 @@ fn failed_and_unfinished_streams_are_retried() {
     assert!(failures[1].contains("끊겼습니다"), "{}", failures[1]);
     assert_eq!(bodies.lock().unwrap().len(), 3);
 }
+
+#[test]
+fn a_parameter_the_model_rejects_is_left_out_on_the_next_request() {
+    let rejected = r#"{"error":{"message":"Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported.","type":"invalid_request_error","param":"temperature","code":"unsupported_value"}}"#;
+    let (base_url, bodies) =
+        spawn_scripted(vec![(400, "application/json", rejected.into()), chat_reply(RECORD, "stop")]);
+    let (page, mut config) = page_and_config(base_url, 1);
+    config.endpoint.model = "house-reasoner".into();
+    let items = translate_page(&config, &page, |_, _| {}, || false).unwrap();
+    assert_eq!(items[0].ko, "안녕하세요", "succeeds within one attempt");
+    let bodies = bodies.lock().unwrap();
+    let body = |index: usize| serde_json::from_str::<serde_json::Value>(&bodies[index]).unwrap();
+    assert_eq!(body(0)["temperature"], 0.0);
+    assert!(body(1).get("temperature").is_none());
+    assert_eq!(body(1)["max_tokens"], 900, "the rest stays");
+}
+
+#[test]
+fn the_model_test_gives_a_reasoning_model_room_to_think() {
+    let (base_url, bodies) = spawn_scripted(vec![chat_reply("model test ok", "stop")]);
+    let (_, mut config) = page_and_config(base_url, 1);
+    config.endpoint.model = "gpt-5-mini".into();
+    assert_eq!(mtt_translate::test_model(&config).unwrap(), "model test ok");
+    let body: serde_json::Value = serde_json::from_str(&bodies.lock().unwrap()[0]).unwrap();
+    assert!(body["max_completion_tokens"].as_u64().unwrap() > 1000, "{body}");
+    assert!(body.get("max_tokens").is_none() && body.get("temperature").is_none(), "{body}");
+}
