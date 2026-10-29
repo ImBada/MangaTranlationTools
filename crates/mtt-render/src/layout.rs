@@ -1,5 +1,6 @@
 //! Block text layout (`overlayLayout.ts`): padding, wrapping and auto-fit font size.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use mtt_core::font_presets::{
@@ -12,6 +13,8 @@ use mtt_core::geometry::{
     bbox_to_pixels, clamp, clamp_text_padding_px, resolve_block_render_bbox, text_shape_inner_rect, text_shape_span,
 };
 use mtt_core::model::{RenderTextDirection, TextAlign, TextFontStyle, TextPosition, TranslationBlock};
+use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fonts::{BOLD_WEIGHT_THRESHOLD, FontContext, FontSpec};
 
@@ -82,13 +85,43 @@ pub struct BlockTextLayout {
     pub shaped: bool,
 }
 
+/// Typesetting v2 treats text as the characters a reader sees: the display text in NFC,
+/// letter spacing, vertical cells and per-character fonts by grapheme cluster. The original
+/// rules work by code point, which pulls decomposed Hangul and emoji sequences apart.
+pub fn by_grapheme(block: &TranslationBlock) -> bool {
+    block.layout_version() >= 2
+}
+
+/// The text drawn for `block`: [`TranslationBlock::display_text`], composed (NFC) under v2.
+pub fn display_text(block: &TranslationBlock) -> Cow<'_, str> {
+    let text = block.display_text();
+    if by_grapheme(block) && is_nfc_quick(text.chars()) != IsNormalized::Yes {
+        Cow::Owned(text.nfc().collect())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// `text` split into the characters spacing and fonts apply to, with their byte offsets:
+/// grapheme clusters, or code points under the original rules ([`by_grapheme`]).
+pub fn text_units(text: &str, graphemes: bool) -> Vec<(usize, &str)> {
+    if graphemes {
+        text.grapheme_indices(true).collect()
+    } else {
+        text.char_indices().map(|(index, ch)| (index, &text[index..index + ch.len_utf8()])).collect()
+    }
+}
+
 /// Fonts used to draw one block: the block family (weight adjusted for synthetic bold)
 /// and per-character overrides.
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockFonts {
     pub base: FontSpec,
-    pub overrides: HashMap<char, FontSpec>,
+    /// Fonts by character ([`text_units`]).
+    pub overrides: HashMap<String, FontSpec>,
     pub synthetic_bold: bool,
+    /// Characters are grapheme clusters ([`by_grapheme`]).
+    pub graphemes: bool,
 }
 
 impl BlockFonts {
@@ -102,18 +135,22 @@ impl BlockFonts {
         };
         let base_weights = weights_of(family);
         let base = ctx.resolve_spec(family, canvas_font_weight(base_weights.as_ref(), weight));
+        let graphemes = by_grapheme(block);
         let mut overrides = HashMap::new();
         for entry in block.style.character_font_overrides.iter().flatten() {
-            let (Some(ch), override_family) = (entry.character.chars().next(), entry.font_family.trim()) else {
+            let character: String = if graphemes { entry.character.nfc().collect() } else { entry.character.clone() };
+            let (Some((_, unit)), override_family) =
+                (text_units(&character, graphemes).first().copied(), entry.font_family.trim())
+            else {
                 continue;
             };
             if !override_family.is_empty() {
                 let override_weight = canvas_font_weight(weights_of(override_family).as_ref(), weight);
-                overrides.insert(ch, ctx.resolve_spec(override_family, override_weight));
+                overrides.insert(unit.to_owned(), ctx.resolve_spec(override_family, override_weight));
             }
         }
         let synthetic_bold = weight >= BOLD_WEIGHT_THRESHOLD && !has_native_bold(base_weights.as_ref());
-        Self { base, overrides, synthetic_bold }
+        Self { base, overrides, synthetic_bold, graphemes }
     }
 
     /// Byte-range font spans for `text` (`resolveCharacterFontRuns`).
@@ -122,20 +159,21 @@ impl BlockFonts {
             return Vec::new();
         }
         let mut spans: Vec<(usize, usize, FontSpec)> = Vec::new();
-        for (index, ch) in text.char_indices() {
-            let Some(spec) = self.overrides.get(&ch) else {
+        for (index, unit) in text_units(text, self.graphemes) {
+            let Some(spec) = self.overrides.get(unit) else {
                 continue;
             };
             match spans.last_mut() {
-                Some(last) if last.1 == index && last.2 == *spec => last.1 = index + ch.len_utf8(),
-                _ => spans.push((index, index + ch.len_utf8(), spec.clone())),
+                Some(last) if last.1 == index && last.2 == *spec => last.1 = index + unit.len(),
+                _ => spans.push((index, index + unit.len(), spec.clone())),
             }
         }
         spans
     }
 
-    pub fn spec_for_char(&self, ch: char) -> &FontSpec {
-        self.overrides.get(&ch).unwrap_or(&self.base)
+    /// The font of one character ([`text_units`]).
+    pub fn spec_for(&self, unit: &str) -> &FontSpec {
+        self.overrides.get(unit).unwrap_or(&self.base)
     }
 }
 
@@ -655,7 +693,7 @@ fn measure_vertical_text(
     max_height: f64,
     line_height: f64,
 ) -> bool {
-    let count = text.chars().filter(|ch| !is_js_whitespace(*ch)).count();
+    let count = vertical_units(text, by_grapheme(block)).len();
     if count == 0 {
         return true;
     }
@@ -735,10 +773,12 @@ fn wrap_lines(
 }
 
 /// A paragraph measured for wrapping: its chars, advance sums up to each char (em), so a
-/// line's width is one subtraction, and its wrap segments (none when it is empty).
+/// line's width is one subtraction, the number of characters ([`text_units`]) before each
+/// char, which letter spacing goes between, and its wrap segments (none when it is empty).
 struct Paragraph {
     chars: Vec<char>,
     prefix_em: Vec<f64>,
+    units_before: Vec<usize>,
     segments: Vec<(usize, usize)>,
 }
 
@@ -749,7 +789,7 @@ impl Paragraph {
             .map(|paragraph| {
                 let normalized = collapse_whitespace(paragraph);
                 if normalized.is_empty() {
-                    return Self { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() };
+                    return Self::empty();
                 }
                 let run = ctx.shape(&normalized, &fonts.base, &fonts.spans_for(&normalized));
                 let chars: Vec<char> = normalized.chars().collect();
@@ -758,15 +798,30 @@ impl Paragraph {
                 for advance in &run.char_advances_em[..chars.len()] {
                     prefix_em.push(prefix_em.last().copied().unwrap_or_default() + f64::from(*advance));
                 }
+                let mut unit_starts = text_units(&normalized, fonts.graphemes).into_iter().map(|(index, _)| index);
+                let mut next_unit = unit_starts.next();
+                let mut units_before = Vec::with_capacity(chars.len() + 1);
+                units_before.push(0);
+                for (index, _) in normalized.char_indices() {
+                    let starts_unit = next_unit == Some(index);
+                    if starts_unit {
+                        next_unit = unit_starts.next();
+                    }
+                    units_before.push(units_before.last().copied().unwrap_or_default() + usize::from(starts_unit));
+                }
                 let segments = split_text_wrap_segments(&chars);
-                Self { chars, prefix_em, segments }
+                Self { chars, prefix_em, units_before, segments }
             })
             .collect()
     }
 
+    fn empty() -> Self {
+        Self { chars: Vec::new(), prefix_em: vec![0.0], units_before: vec![0], segments: Vec::new() }
+    }
+
     /// Width of chars `start..end` at `font_size`, `spacing` between letters.
     fn width(&self, start: usize, end: usize, font_size: f64, spacing: f64) -> f64 {
-        let count = (end - start) as f64;
+        let count = (self.units_before[end] - self.units_before[start]) as f64;
         (self.prefix_em[end] - self.prefix_em[start]) * font_size
             + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
     }
@@ -853,10 +908,19 @@ pub fn measure_text_width(
     text: &str,
     font_size: f64,
 ) -> f64 {
-    let count = text.chars().count();
+    let count = text_units(text, fonts.graphemes).len();
     let run = ctx.shape(text, &fonts.base, &fonts.spans_for(text));
     let spacing = if count > 1 { letter_spacing_px(block, font_size) * (count as f64 - 1.0) } else { 0.0 };
     f64::from(run.advance_em) * font_size + spacing
+}
+
+/// The characters of vertical text, one per cell: whitespace dropped.
+pub(crate) fn vertical_units(text: &str, graphemes: bool) -> Vec<&str> {
+    text_units(text, graphemes)
+        .into_iter()
+        .map(|(_, unit)| unit)
+        .filter(|unit| !unit.chars().all(is_js_whitespace))
+        .collect()
 }
 
 /// JavaScript `\s` (Unicode White_Space plus U+FEFF).
@@ -1144,10 +1208,16 @@ mod tests {
             Paragraph {
                 chars: "ab cd".chars().collect(),
                 prefix_em: (0..=5).map(f64::from).collect(),
+                units_before: (0..=5).collect(),
                 segments: vec![(0, 2), (3, 5)],
             },
-            Paragraph { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() },
-            Paragraph { chars: "ef".chars().collect(), prefix_em: vec![0.0, 1.0, 2.0], segments: vec![(0, 2)] },
+            Paragraph::empty(),
+            Paragraph {
+                chars: "ef".chars().collect(),
+                prefix_em: vec![0.0, 1.0, 2.0],
+                units_before: vec![0, 1, 2],
+                segments: vec![(0, 2)],
+            },
         ];
         let text = |lines: Vec<WrappedLine>| lines.into_iter().map(|line| line.text).collect::<Vec<_>>();
         // "ab cd" is 5em: it needs two lines of 4em, then the blank line and "ef".
@@ -1179,6 +1249,35 @@ mod tests {
         assert!(!v2.synthetic_bold, "{} has a bold face", family.family);
         assert!(v2.base.weight >= BOLD_WEIGHT_THRESHOLD, "{:?}", v2.base);
         assert_eq!(v2.base.family, original.base.family);
+    }
+
+    #[test]
+    fn v2_counts_characters_by_grapheme_cluster() {
+        use mtt_core::model::FontCharacterOverride;
+        // Thumbs up with a skin tone, a ZWJ family and a red heart: one character each.
+        let text = "👍🏽👨\u{200D}👩\u{200D}👧 ❤\u{FE0F}";
+        assert_eq!(vertical_units(text, true), ["👍🏽", "👨\u{200D}👩\u{200D}👧", "❤\u{FE0F}"]);
+        assert_eq!(vertical_units(text, false).len(), 9);
+
+        let mut ctx = FontContext::new();
+        let mut block = TranslationBlock::default();
+        block.style.font_size_px = Some(20.0);
+        block.style.letter_spacing_px = Some(3.0);
+        block.style.character_font_overrides =
+            Some(vec![FontCharacterOverride { character: "❤\u{FE0F}".into(), font_family: "serif".into() }]);
+        let original = BlockFonts::resolve(&ctx, &block);
+        let original_width = measure_text_width(&mut ctx, &original, &block, "👍🏽", 20.0);
+        assert_eq!(original.spans_for("a❤\u{FE0F}b").first().map(|span| (span.0, span.1)), Some((1, 4)));
+        block.layout_version = Some(2);
+        let v2 = BlockFonts::resolve(&ctx, &block);
+        let v2_width = measure_text_width(&mut ctx, &v2, &block, "👍🏽", 20.0);
+        assert!((original_width - v2_width - 3.0).abs() < 1e-9, "one gap less: {original_width} vs {v2_width}");
+        assert_eq!(v2.spans_for("a❤\u{FE0F}b").first().map(|span| (span.0, span.1)), Some((1, 7)));
+
+        // Decomposed Hangul is drawn composed.
+        let nfd = TranslationBlock { translated_text: "\u{1112}\u{1161}\u{11AB}".into(), ..block.clone() };
+        assert_eq!(display_text(&nfd), "한");
+        assert_eq!(display_text(&TranslationBlock { layout_version: None, ..nfd }).chars().count(), 3);
     }
 
     #[test]

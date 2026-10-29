@@ -13,11 +13,11 @@ use crate::effects::{
 };
 use crate::fonts::FontContext;
 use crate::layout::{
-    BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, font_background_enabled, font_background_opacity,
-    font_background_radius_px, font_background_scale, is_js_whitespace, letter_spacing_px, measure_text_width,
+    BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, display_text, font_background_enabled,
+    font_background_opacity, font_background_radius_px, font_background_scale, letter_spacing_px, measure_text_width,
     resolve_block_text_layout, scaled_rect, screentone_dot_radius_px, screentone_tile_size_px,
     secondary_outline_enabled, shaped_lines, style_line_height, synthetic_bold_stroke_width_px,
-    synthetic_italic_skew_x, text_position_factors, text_shape_strips, wrap_text_to_width,
+    synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units, vertical_units, wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -183,10 +183,10 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
     if block.render_direction == RenderTextDirection::Hidden {
         return None;
     }
-    let text = block.display_text();
+    let text = display_text(block);
     let fonts = BlockFonts::resolve(ctx, block);
-    let layout = resolve_block_text_layout(ctx, &fonts, block, text, page, page);
-    let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, text);
+    let layout = resolve_block_text_layout(ctx, &fonts, block, &text, page, page);
+    let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, &text);
     let (items, text_rect) = painter.items();
     let font_size_px = painter.font_size;
     let lines: Vec<String> = if block.render_direction == RenderTextDirection::Vertical {
@@ -217,7 +217,7 @@ pub fn render_block(
     if block.render_direction == RenderTextDirection::Hidden {
         return None;
     }
-    let text = block.display_text().to_owned();
+    let text = display_text(block);
     let fonts = BlockFonts::resolve(ctx, block);
     let layout = resolve_block_text_layout(ctx, &fonts, block, &text, page, page);
     let area = block_dirty_rect(block, page, &layout)?;
@@ -449,7 +449,7 @@ impl<'a> BlockPainter<'a> {
         inner_width: f64,
         inner_height: f64,
     ) -> (Vec<TextItem>, PixelRect) {
-        let chars: Vec<char> = self.text.chars().filter(|ch| !is_js_whitespace(*ch)).collect();
+        let chars = vertical_units(self.text, self.fonts.graphemes);
         let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
@@ -462,7 +462,7 @@ impl<'a> BlockPainter<'a> {
             .iter()
             .enumerate()
             .map(|(index, ch)| TextItem {
-                text: ch.to_string(),
+                text: (*ch).to_owned(),
                 x,
                 y: start_y + index as f64 * advance,
                 align: TextAlign::Center,
@@ -508,7 +508,9 @@ impl<'a> BlockPainter<'a> {
             for piece in split_by_centered_ellipsis(&run) {
                 let ellipsis = piece == CENTERED_ELLIPSIS || piece == CENTERED_PERIOD_ELLIPSIS;
                 if spacing != 0.0 && !ellipsis {
-                    pieces.extend(piece.chars().map(|ch| (ch.to_string(), false)));
+                    pieces.extend(
+                        text_units(&piece, self.fonts.graphemes).into_iter().map(|(_, unit)| (unit.to_owned(), false)),
+                    );
                 } else {
                     pieces.push((piece, ellipsis));
                 }
@@ -517,7 +519,7 @@ impl<'a> BlockPainter<'a> {
         let advances: Vec<f64> = pieces
             .iter()
             .map(|(text, _)| {
-                let count = text.chars().count() as f64;
+                let count = text_units(text, self.fonts.graphemes).len() as f64;
                 let run = self.ctx.shape(text, &self.fonts.base, &self.fonts.spans_for(text));
                 f64::from(run.advance_em) * self.font_size + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
             })
@@ -543,11 +545,11 @@ impl<'a> BlockPainter<'a> {
     /// Consecutive characters sharing the same override font (`resolveCharacterFontRuns`).
     fn font_runs(&self, text: &str) -> Vec<String> {
         let mut runs: Vec<(String, Option<&crate::fonts::FontSpec>)> = Vec::new();
-        for ch in text.chars() {
-            let spec = self.fonts.overrides.get(&ch);
+        for (_, unit) in text_units(text, self.fonts.graphemes) {
+            let spec = self.fonts.overrides.get(unit);
             match runs.last_mut() {
-                Some((run, last)) if *last == spec => run.push(ch),
-                _ => runs.push((ch.to_string(), spec)),
+                Some((run, last)) if *last == spec => run.push_str(unit),
+                _ => runs.push((unit.to_owned(), spec)),
             }
         }
         runs.into_iter().map(|(run, _)| run).collect()
@@ -592,11 +594,9 @@ impl<'a> BlockPainter<'a> {
     fn ellipsis_dots(&mut self, segment: &PlacedSegment, y: f64) -> EllipsisDots {
         let fs = self.font_size;
         let advance = (fs * 0.45).max(segment.advance);
-        let spec = segment
-            .text
-            .chars()
-            .next()
-            .map(|c| self.fonts.spec_for_char(c).clone())
+        let spec = text_units(&segment.text, self.fonts.graphemes)
+            .first()
+            .map(|(_, unit)| self.fonts.spec_for(unit).clone())
             .unwrap_or_else(|| self.fonts.base.clone());
         let measured = self
             .ctx
@@ -869,6 +869,24 @@ mod tests {
         assert_eq!(text.text_rect.width, text.font_size_px, "one column");
         block.render_direction = RenderTextDirection::Hidden;
         assert!(block_text(&mut ctx, page, &block).is_none());
+    }
+
+    #[test]
+    fn v2_draws_decomposed_hangul_like_composed() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(400.0, 400.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 200.0, 100.0),
+            translated_text: "한글".into(),
+            layout_version: Some(2),
+            ..TranslationBlock::default()
+        };
+        block.style.letter_spacing_px = Some(2.0);
+        let composed = render_block(&mut ctx, page, &block, BlockRenderOptions::default()).unwrap();
+        block.translated_text = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}".into();
+        let decomposed = render_block(&mut ctx, page, &block, BlockRenderOptions::default()).unwrap();
+        assert!(composed.pixmap.data() == decomposed.pixmap.data(), "jamo are drawn apart");
     }
 
     #[test]
