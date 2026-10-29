@@ -247,14 +247,14 @@ fn glyph_sized(strokes: &[u8], width: usize, height: usize) -> Vec<u8> {
 /// Text pixels in `rect`: the candidates of the text's polarity and the ones kept as
 /// glyph strokes (`width * height` each), whether the text is light on a dark box, and
 /// the box edge's median color with whether the edge is plain.
-struct RectStrokes {
-    candidates: Vec<u8>,
-    strokes: Vec<u8>,
-    light: bool,
-    edge: Option<([u8; 3], bool)>,
+pub(crate) struct RectStrokes {
+    pub(crate) candidates: Vec<u8>,
+    pub(crate) strokes: Vec<u8>,
+    pub(crate) light: bool,
+    pub(crate) edge: Option<([u8; 3], bool)>,
 }
 
-fn rect_strokes(source: &RgbaImage, rect: Rect) -> RectStrokes {
+pub(crate) fn rect_strokes(source: &RgbaImage, rect: Rect) -> RectStrokes {
     let (rw, rh) = (rect.width as usize, rect.height as usize);
     let candidates = |keep: &dyn Fn(f32) -> bool| -> Vec<u8> {
         let mut out = vec![0u8; rw * rh];
@@ -331,7 +331,7 @@ fn share_near(colors: &[[u8; 3]], target: [u8; 3]) -> f32 {
 }
 
 /// Detection box plus a small padding (`textMaskScanRect`).
-fn scan_rect(block: &TranslationBlock, width: u32, height: u32) -> Option<Rect> {
+pub(crate) fn scan_rect(block: &TranslationBlock, width: u32, height: u32) -> Option<Rect> {
     let px = bbox_to_pixels(block.bbox, f64::from(width), f64::from(height));
     let block_short = px.w.min(px.h).max(1.0);
     let page_short = f64::from(width.min(height));

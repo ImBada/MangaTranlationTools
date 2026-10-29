@@ -250,6 +250,14 @@ pub fn resolve_block_rect_px(block: &TranslationBlock, page: Size, stage: Size) 
     PixelRect { left: pixel.x * scale_x, top: pixel.y * scale_y, width: pixel.w * scale_x, height: pixel.h * scale_y }
 }
 
+/// The block's detection box (where the source text is) in stage pixels.
+fn detection_rect_px(block: &TranslationBlock, page: Size, stage: Size) -> PixelRect {
+    let pixel = bbox_to_pixels(block.bbox, page.width, page.height);
+    let scale_x = stage.width / page.width.max(1.0);
+    let scale_y = stage.height / page.height.max(1.0);
+    PixelRect { left: pixel.x * scale_x, top: pixel.y * scale_y, width: pixel.w * scale_x, height: pixel.h * scale_y }
+}
+
 fn auto_block_padding_px(rect: PixelRect) -> f64 {
     let shortest = rect.width.min(rect.height);
     if shortest <= 48.0 {
@@ -296,7 +304,8 @@ pub fn resolve_block_text_layout(
     let v2 = block.layout_version() >= 2;
     let max_font_size = if auto_fit {
         let box_cap = fit_inner_width.max(fit_inner_height);
-        let cap = match source_glyph_size_px(block, rect).filter(|_| v2) {
+        // The detection box holds the source text; the render box may be the whole balloon.
+        let cap = match source_glyph_size_px(block, detection_rect_px(block, page, stage)).filter(|_| v2) {
             Some(glyph) => box_cap.min(glyph * SOURCE_GLYPH_GROWTH),
             None => box_cap,
         };

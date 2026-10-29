@@ -8,7 +8,8 @@ use std::time::Instant;
 use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block_type_font_presets};
 use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
-use mtt_core::model::{BBox, PageAnalysisStatus, PageRecord, TranslationBlock};
+use mtt_core::model::{BBox, BlockType, PageAnalysisStatus, PageRecord, TranslationBlock};
+use mtt_inpaint::bubble::find_balloon;
 use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
 use mtt_translate::parser::RegionText;
 use mtt_translate::{Region, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
@@ -217,9 +218,17 @@ impl Editor {
                                         .iter()
                                         .enumerate()
                                         .map(|(i, item)| {
-                                            let block = overlay_item_to_block(item, page_id, *width, *height, i);
+                                            let mut block = overlay_item_to_block(item, page_id, *width, *height, i);
                                             let lettering =
                                                 source.as_ref().and_then(|source| detect_lettering(source, &block));
+                                            // Dialogue in a balloon gets the balloon's room.
+                                            if block.block_type != BlockType::Sfx
+                                                && let Some(balloon) =
+                                                    source.as_ref().and_then(|source| find_balloon(source, &block))
+                                            {
+                                                block.render_bbox = Some(balloon.text_area);
+                                                block.render_bbox_space = block.bbox_space.clone();
+                                            }
                                             (block, lettering)
                                         })
                                         .collect()

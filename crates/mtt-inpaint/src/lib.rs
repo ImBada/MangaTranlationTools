@@ -4,6 +4,7 @@
 //! Masks are single-channel coverage images (0 = keep, 255 = inpaint); results are RGBA
 //! layers that are transparent where the source shows through.
 
+pub mod bubble;
 pub mod engine;
 pub mod lama;
 pub mod lama_torch;
