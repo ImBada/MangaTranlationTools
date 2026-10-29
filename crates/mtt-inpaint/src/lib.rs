@@ -89,6 +89,18 @@ pub fn dilate(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8
     output
 }
 
+/// Square erosion by `radius`; pixels past the edges count as covered.
+pub fn erode(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+    let inverted: Vec<u8> = mask.iter().map(|value| if *value > 0 { 0 } else { 255 }).collect();
+    dilate(&inverted, width, height, radius).into_iter().map(|value| if value > 0 { 0 } else { 255 }).collect()
+}
+
+/// Closing (dilation then erosion) by `radius`: fills gaps and holes up to `2 * radius`
+/// wide without growing the outer shape.
+pub fn close(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
+    erode(&dilate(mask, width, height, radius), width, height, radius)
+}
+
 /// Edge-normalized box blur (`boxBlurMask`).
 pub fn box_blur(mask: &[u8], width: usize, height: usize, radius: usize) -> Vec<u8> {
     let mut horizontal = vec![0f32; mask.len()];
