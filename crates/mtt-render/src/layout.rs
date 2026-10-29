@@ -1,26 +1,36 @@
 //! Block text layout (`overlayLayout.ts`): padding, wrapping and auto-fit font size.
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 use mtt_core::font_presets::{
     DEFAULT_FONT_BACKGROUND_OPACITY, DEFAULT_FONT_BACKGROUND_RADIUS_PX, DEFAULT_FONT_BACKGROUND_SCALE,
-    DEFAULT_OVERLAY_FONT_FAMILY, DEFAULT_OVERLAY_FONT_WEIGHT, DEFAULT_SCREENTONE_FILL_DENSITY,
-    DEFAULT_SCREENTONE_FILL_INTENSITY, MAX_FONT_BACKGROUND_RADIUS_PX, MAX_FONT_BACKGROUND_SCALE,
-    MIN_FONT_BACKGROUND_RADIUS_PX, MIN_FONT_BACKGROUND_SCALE,
+    DEFAULT_FONT_SIZE_PX, DEFAULT_LINE_HEIGHT, DEFAULT_OVERLAY_FONT_FAMILY, DEFAULT_OVERLAY_FONT_WEIGHT,
+    DEFAULT_SCREENTONE_FILL_DENSITY, DEFAULT_SCREENTONE_FILL_INTENSITY, MAX_FONT_BACKGROUND_RADIUS_PX,
+    MAX_FONT_BACKGROUND_SCALE, MIN_FONT_BACKGROUND_RADIUS_PX, MIN_FONT_BACKGROUND_SCALE,
 };
 use mtt_core::geometry::{
     bbox_to_pixels, clamp, clamp_text_padding_px, resolve_block_render_bbox, text_shape_inner_rect, text_shape_span,
 };
 use mtt_core::model::{RenderTextDirection, TextAlign, TextFontStyle, TextPosition, TranslationBlock};
+use unicode_normalization::{IsNormalized, UnicodeNormalization, is_nfc_quick};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::fonts::{BOLD_WEIGHT_THRESHOLD, FontContext, FontSpec};
 
 const MIN_FONT_SIZE_PX: f64 = 2.0;
+/// Style numbers past these (only reachable by editing the data by hand) are clamped, so
+/// size arithmetic stays finite. The editor allows 8..=999px and 0.8..=2.0.
+const MAX_FONT_SIZE_PX: f64 = 10_000.0;
+const MIN_LINE_HEIGHT: f64 = 0.1;
+const MAX_LINE_HEIGHT: f64 = 10.0;
 const MAX_BLOCK_PADDING_PX: f64 = 14.0;
 const MIN_INNER_SIZE_PX: f64 = 1.0;
 const BLOCK_BORDER_PX: f64 = 1.0;
 const TEXT_FIT_SAFETY_PX: f64 = 6.0;
 const TEXT_MEASURE_GUARD_PX: f64 = TEXT_FIT_SAFETY_PX + 4.0;
+/// Distance between vertical text columns, in font sizes.
+pub(crate) const VERTICAL_COLUMN_ADVANCE: f64 = 1.15;
 const SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT: u16 = 400;
 const SYNTHETIC_BOLD_MIN_STROKE_WIDTH_PX: f64 = 0.35;
 const SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX: f64 = 8.0;
@@ -62,7 +72,7 @@ pub struct PixelRect {
     pub height: f64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct BlockTextLayout {
     pub rect: PixelRect,
     pub padding_px: f64,
@@ -72,9 +82,39 @@ pub struct BlockTextLayout {
     pub fit_inner_width: f64,
     pub fit_inner_height: f64,
     pub font_size_px: f64,
+    /// The smallest size the fit could pick (the font size itself without auto-fit). Under
+    /// v2 a word too long for a line even at this size may break between its characters.
+    pub min_font_size_px: f64,
     pub overflow: bool,
-    /// The lines follow the block's text shape ([`shaped_lines`]).
-    pub shaped: bool,
+    /// The lines when they follow the block's text shape, laid out at `font_size_px`.
+    pub shaped: Option<ShapedLines>,
+}
+
+/// Typesetting v2 treats text as the characters a reader sees: the display text in NFC,
+/// letter spacing, vertical cells and per-character fonts by grapheme cluster. The original
+/// rules work by code point, which pulls decomposed Hangul and emoji sequences apart.
+pub fn by_grapheme(block: &TranslationBlock) -> bool {
+    block.layout_version() >= 2
+}
+
+/// The text drawn for `block`: [`TranslationBlock::display_text`], composed (NFC) under v2.
+pub fn display_text(block: &TranslationBlock) -> Cow<'_, str> {
+    let text = block.display_text();
+    if by_grapheme(block) && is_nfc_quick(text.chars()) != IsNormalized::Yes {
+        Cow::Owned(text.nfc().collect())
+    } else {
+        Cow::Borrowed(text)
+    }
+}
+
+/// `text` split into the characters spacing and fonts apply to, with their byte offsets:
+/// grapheme clusters, or code points under the original rules ([`by_grapheme`]).
+pub fn text_units(text: &str, graphemes: bool) -> Vec<(usize, &str)> {
+    if graphemes {
+        text.grapheme_indices(true).collect()
+    } else {
+        text.char_indices().map(|(index, ch)| (index, &text[index..index + ch.len_utf8()])).collect()
+    }
 }
 
 /// Fonts used to draw one block: the block family (weight adjusted for synthetic bold)
@@ -82,26 +122,40 @@ pub struct BlockTextLayout {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockFonts {
     pub base: FontSpec,
-    pub overrides: HashMap<char, FontSpec>,
+    /// Fonts by character ([`text_units`]).
+    pub overrides: HashMap<String, FontSpec>,
     pub synthetic_bold: bool,
+    /// Characters are grapheme clusters ([`by_grapheme`]).
+    pub graphemes: bool,
 }
 
 impl BlockFonts {
     pub fn resolve(ctx: &FontContext, block: &TranslationBlock) -> Self {
         let family = block.style.font_family.as_deref().unwrap_or(DEFAULT_OVERLAY_FONT_FAMILY);
         let weight = requested_weight(block);
-        let base = ctx.resolve_spec(family, canvas_font_weight(ctx, family, weight));
+        // The original rules judge bold by the first listed family even when another one
+        // draws; v2 by the family that draws.
+        let weights_of = |family: &str| {
+            if block.layout_version() >= 2 { ctx.resolved_family_weights(family) } else { ctx.family_weights(family) }
+        };
+        let base_weights = weights_of(family);
+        let base = ctx.resolve_spec(family, canvas_font_weight(base_weights.as_ref(), weight));
+        let graphemes = by_grapheme(block);
         let mut overrides = HashMap::new();
         for entry in block.style.character_font_overrides.iter().flatten() {
-            let (Some(ch), override_family) = (entry.character.chars().next(), entry.font_family.trim()) else {
+            let character: String = if graphemes { entry.character.nfc().collect() } else { entry.character.clone() };
+            let (Some((_, unit)), override_family) =
+                (text_units(&character, graphemes).first().copied(), entry.font_family.trim())
+            else {
                 continue;
             };
             if !override_family.is_empty() {
-                overrides
-                    .insert(ch, ctx.resolve_spec(override_family, canvas_font_weight(ctx, override_family, weight)));
+                let override_weight = canvas_font_weight(weights_of(override_family).as_ref(), weight);
+                overrides.insert(unit.to_owned(), ctx.resolve_spec(override_family, override_weight));
             }
         }
-        Self { base, overrides, synthetic_bold: weight >= BOLD_WEIGHT_THRESHOLD && !has_native_bold(ctx, family) }
+        let synthetic_bold = weight >= BOLD_WEIGHT_THRESHOLD && !has_native_bold(base_weights.as_ref());
+        Self { base, overrides, synthetic_bold, graphemes }
     }
 
     /// Byte-range font spans for `text` (`resolveCharacterFontRuns`).
@@ -110,20 +164,21 @@ impl BlockFonts {
             return Vec::new();
         }
         let mut spans: Vec<(usize, usize, FontSpec)> = Vec::new();
-        for (index, ch) in text.char_indices() {
-            let Some(spec) = self.overrides.get(&ch) else {
+        for (index, unit) in text_units(text, self.graphemes) {
+            let Some(spec) = self.overrides.get(unit) else {
                 continue;
             };
             match spans.last_mut() {
-                Some(last) if last.1 == index && last.2 == *spec => last.1 = index + ch.len_utf8(),
-                _ => spans.push((index, index + ch.len_utf8(), spec.clone())),
+                Some(last) if last.1 == index && last.2 == *spec => last.1 = index + unit.len(),
+                _ => spans.push((index, index + unit.len(), spec.clone())),
             }
         }
         spans
     }
 
-    pub fn spec_for_char(&self, ch: char) -> &FontSpec {
-        self.overrides.get(&ch).unwrap_or(&self.base)
+    /// The font of one character ([`text_units`]).
+    pub fn spec_for(&self, unit: &str) -> &FontSpec {
+        self.overrides.get(unit).unwrap_or(&self.base)
     }
 }
 
@@ -132,20 +187,21 @@ fn requested_weight(block: &TranslationBlock) -> u16 {
     if weight.is_finite() { weight.round().clamp(1.0, 1000.0) as u16 } else { DEFAULT_OVERLAY_FONT_WEIGHT as u16 }
 }
 
-fn has_native_bold(ctx: &FontContext, family: &str) -> bool {
-    ctx.family_weights(family)
-        .map(|(weights, variable_bold)| variable_bold || weights.iter().any(|weight| *weight >= BOLD_WEIGHT_THRESHOLD))
-        .unwrap_or(false)
+/// Whether a family with these installed weights (and variable bold) has a bold face.
+fn has_native_bold(weights: Option<&(Vec<u16>, bool)>) -> bool {
+    weights.is_some_and(|(weights, variable_bold)| {
+        *variable_bold || weights.iter().any(|weight| *weight >= BOLD_WEIGHT_THRESHOLD)
+    })
 }
 
 /// `resolveOverlayCanvasFontWeight`: without a native bold face, draw the regular face and
 /// embolden it with a stroke instead.
-fn canvas_font_weight(ctx: &FontContext, family: &str, weight: u16) -> u16 {
-    if weight < BOLD_WEIGHT_THRESHOLD || has_native_bold(ctx, family) {
+fn canvas_font_weight(weights: Option<&(Vec<u16>, bool)>, weight: u16) -> u16 {
+    if weight < BOLD_WEIGHT_THRESHOLD || has_native_bold(weights) {
         return weight;
     }
-    ctx.family_weights(family)
-        .and_then(|(weights, _)| weights.into_iter().filter(|w| *w > 0 && *w < BOLD_WEIGHT_THRESHOLD).max())
+    weights
+        .and_then(|(weights, _)| weights.iter().copied().filter(|w| *w > 0 && *w < BOLD_WEIGHT_THRESHOLD).max())
         .unwrap_or(SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT)
 }
 
@@ -182,10 +238,24 @@ pub fn text_position_factors(position: Option<TextPosition>) -> (f64, f64) {
     }
 }
 
+/// The block's font size, kept within what the renderer can lay out.
+pub fn style_font_size_px(block: &TranslationBlock) -> f64 {
+    let size = block.font_size_px();
+    if size.is_finite() { size.clamp(1.0, MAX_FONT_SIZE_PX) } else { DEFAULT_FONT_SIZE_PX }
+}
+
+/// The block's line height (a multiple of the font size), kept within what the renderer
+/// can lay out.
+pub fn style_line_height(block: &TranslationBlock) -> f64 {
+    let height = block.line_height();
+    if height.is_finite() { height.clamp(MIN_LINE_HEIGHT, MAX_LINE_HEIGHT) } else { DEFAULT_LINE_HEIGHT }
+}
+
 /// `resolveTextLetterSpacingPx`: letter spacing scales with the rendered font size.
 pub fn letter_spacing_px(block: &TranslationBlock, font_size: f64) -> f64 {
-    let source = block.style.font_size_px.unwrap_or(font_size).max(1.0);
-    block.style.letter_spacing_px.unwrap_or(0.0) * (font_size / source)
+    let source = block.style.font_size_px.map_or(font_size, |_| style_font_size_px(block)).max(1.0);
+    let spacing = block.style.letter_spacing_px.filter(|value| value.is_finite()).unwrap_or(0.0);
+    spacing.clamp(-MAX_FONT_SIZE_PX, MAX_FONT_SIZE_PX) * (font_size / source)
 }
 
 pub fn secondary_outline_enabled(block: &TranslationBlock) -> bool {
@@ -310,7 +380,7 @@ pub fn resolve_block_text_layout(
     let follow = line_shape(block).filter(|_| !text.trim().is_empty());
     if follow.is_some() {
         let layout = layout_in(ctx, fonts, block, text, (page, stage), (rect, padding_px, inner), follow);
-        if layout.shaped {
+        if layout.shaped.is_some() {
             return layout;
         }
     }
@@ -356,7 +426,7 @@ fn layout_in(
     let fit_inner_width = (inner.width - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let fit_inner_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let scale = render_scale(page, stage);
-    let preferred = (block.font_size_px() * scale).floor().max(MIN_FONT_SIZE_PX);
+    let preferred = (style_font_size_px(block) * scale).floor().max(MIN_FONT_SIZE_PX);
     let auto_fit = block.style.auto_fit_text.unwrap_or(true);
     let v2 = block.layout_version() >= 2;
     let max_font_size = if auto_fit {
@@ -366,28 +436,28 @@ fn layout_in(
             Some(glyph) => box_cap.min(glyph * SOURCE_GLYPH_GROWTH),
             None => box_cap,
         };
-        MIN_FONT_SIZE_PX.max(preferred).max(cap)
+        MIN_FONT_SIZE_PX.max(preferred).max(cap).min(MAX_FONT_SIZE_PX)
     } else {
         preferred
     };
     let min_font_size = if v2 { (READABLE_FONT_SIZE_PX * scale).max(MIN_FONT_SIZE_PX) } else { MIN_FONT_SIZE_PX };
-    let font_size_px = resolve_text_font_size(
-        ctx,
-        fonts,
-        block,
-        text,
-        (min_font_size, max_font_size),
-        fit_inner_width,
-        fit_inner_height,
-    );
+    let smallest_font_size = if auto_fit { min_font_size } else { max_font_size };
+    let paragraphs = if block.render_direction == RenderTextDirection::Vertical {
+        Vec::new()
+    } else {
+        wrap_paragraphs(ctx, fonts, block, text, fit_inner_width, smallest_font_size)
+    };
+    let fit = FitArea { width: fit_inner_width, height: fit_inner_height };
+    let font_size_px = resolve_text_font_size(block, text, &paragraphs, (min_font_size, max_font_size), fit);
     // Following the shape is harder than fitting its box, so count down from the box's fit.
-    let shaped_size = follow.and_then(|shape| {
-        let paragraphs = Paragraph::measure_all(ctx, fonts, text);
+    // (Pixel by pixel: whether a size fits isn't monotonic, so skipping sizes could change
+    // the result.)
+    let shaped = follow.and_then(|shape| {
         let floor = min_font_size.ceil().min(font_size_px);
         let mut size = font_size_px;
         loop {
-            if fit_shape(&paragraphs, block, size, shape, rect, inner).is_some() {
-                return Some(size);
+            if let Some(lines) = fit_shape(&paragraphs, block, size, shape, rect, inner) {
+                return Some((size, lines));
             }
             if !auto_fit || size - 1.0 < floor {
                 return None;
@@ -395,18 +465,18 @@ fn layout_in(
             size -= 1.0;
         }
     });
-    let overflow = shaped_size.is_none()
-        && !text.trim().is_empty()
-        && !does_text_fit(ctx, fonts, block, text, font_size_px, fit_inner_width, fit_inner_height);
+    let overflow =
+        shaped.is_none() && !text.trim().is_empty() && !does_text_fit(block, text, &paragraphs, font_size_px, fit);
     BlockTextLayout {
         rect,
         padding_px,
         inner,
         fit_inner_width,
         fit_inner_height,
-        font_size_px: shaped_size.unwrap_or(font_size_px),
+        font_size_px: shaped.as_ref().map_or(font_size_px, |(size, _)| *size),
+        min_font_size_px: smallest_font_size,
         overflow,
-        shaped: shaped_size.is_some(),
+        shaped: shaped.map(|(_, lines)| lines),
     }
 }
 
@@ -415,18 +485,6 @@ fn layout_in(
 pub struct ShapedLines {
     pub lines: Vec<WrappedLine>,
     pub center_x: f64,
-}
-
-/// The lines of a layout that follows its block's text shape (`layout.shaped`).
-pub fn shaped_lines(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
-    block: &TranslationBlock,
-    text: &str,
-    layout: &BlockTextLayout,
-) -> Option<ShapedLines> {
-    let shape = line_shape(block).filter(|_| layout.shaped)?;
-    fit_shape(&Paragraph::measure_all(ctx, fonts, text), block, layout.font_size_px, shape, layout.rect, layout.inner)
 }
 
 /// Lines of `paragraphs` at `font_size` following `shape` (spans of `rect`) in the fit
@@ -441,7 +499,7 @@ fn fit_shape(
     rect: PixelRect,
     inner: PixelRect,
 ) -> Option<ShapedLines> {
-    let line_height = font_size * block.line_height();
+    let line_height = font_size * style_line_height(block);
     let spacing = letter_spacing_px(block, font_size);
     let (left, right) = (inner.left + TEXT_MEASURE_GUARD_PX, inner.left + inner.width - TEXT_MEASURE_GUARD_PX);
     let fit_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
@@ -449,6 +507,8 @@ fn fit_shape(
     let (rect_width, rect_height) = (rect.width.max(1.0), rect.height.max(1.0));
     let segments: usize = paragraphs.iter().map(|paragraph| paragraph.segments.len().max(1)).sum();
     let most = ((fit_height / line_height.max(1.0)).floor() as usize).min(segments);
+    // The lines together are at least this wide, so a line count with less room can't fit.
+    let least_width: f64 = paragraphs.iter().map(|paragraph| paragraph.least_width(font_size, spacing)).sum();
     for count in paragraphs.len().max(1)..=most {
         let total = count as f64 * line_height;
         let start_y = inner.top + (inner.height - total) * fy + ((line_height - font_size) / 2.0).max(0.0);
@@ -470,6 +530,9 @@ fn fit_shape(
         let center =
             (spans.iter().map(|(l, r)| (l + r) / 2.0).sum::<f64>() / count as f64).clamp(common_left, common_right);
         let widths: Vec<f64> = spans.iter().map(|(l, r)| 2.0 * (center - l).min(r - center)).collect();
+        if widths.iter().sum::<f64>() < least_width * (1.0 - 1e-9) {
+            continue;
+        }
         if let Some(lines) = break_paragraphs(paragraphs, &widths, font_size, spacing) {
             return Some(ShapedLines { lines, center_x: center });
         }
@@ -489,18 +552,30 @@ fn break_paragraphs(
     spacing: f64,
 ) -> Option<Vec<WrappedLine>> {
     let count = widths.len();
+    let mut room = vec![0.0; count + 1];
+    for (line, width) in widths.iter().enumerate() {
+        room[line + 1] = room[line] + width;
+    }
     // cost[p][l]: best cost of paragraphs ..p in lines ..l; how[p][l]: the last paragraph's
     // line count and line ends there.
     let mut cost = vec![vec![f64::INFINITY; count + 1]; paragraphs.len() + 1];
     let mut how: Vec<Vec<Option<ParagraphSplit>>> = vec![vec![None; count + 1]; paragraphs.len() + 1];
     cost[0][0] = 0.0;
     for (index, paragraph) in paragraphs.iter().enumerate() {
+        // Every later paragraph needs a line of its own, and the last one ends at `count`.
+        let later = paragraphs.len() - index - 1;
+        let least_width = paragraph.least_width(font_size, spacing);
         for first in 0..count {
             if !cost[index][first].is_finite() {
                 continue;
             }
-            let most = paragraph.segments.len().max(1).min(count - first);
-            for lines in 1..=most {
+            let most = paragraph.segments.len().max(1).min((count - first).saturating_sub(later));
+            let least = if later == 0 { count - first } else { 1 };
+            for lines in least..=most {
+                // Lines with less room than the paragraph needs can't hold it.
+                if room[first + lines] - room[first] < least_width * (1.0 - 1e-9) {
+                    continue;
+                }
                 let split = if paragraph.segments.is_empty() {
                     Some((Vec::new(), 0.0))
                 } else {
@@ -574,23 +649,21 @@ fn source_glyph_size_px(block: &TranslationBlock, rect: PixelRect) -> Option<f64
 
 /// The largest whole size in `min..=max` that fits (`min` when none does).
 fn resolve_text_font_size(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
     block: &TranslationBlock,
     text: &str,
+    paragraphs: &[Paragraph],
     (min_font_size, max_font_size): (f64, f64),
-    inner_width: f64,
-    inner_height: f64,
+    fit: FitArea,
 ) -> f64 {
-    let capped = max_font_size.floor().max(MIN_FONT_SIZE_PX);
+    let capped = max_font_size.floor().clamp(MIN_FONT_SIZE_PX, MAX_FONT_SIZE_PX);
     if !block.style.auto_fit_text.unwrap_or(true) || text.trim().is_empty() {
         return capped;
     }
     let floor = min_font_size.ceil().min(capped) as i64;
     let (mut low, mut high, mut best) = (floor, capped as i64, floor);
     while low <= high {
-        let mid = (low + high).div_euclid(2);
-        if does_text_fit(ctx, fonts, block, text, mid as f64, inner_width, inner_height) {
+        let mid = low + (high - low) / 2;
+        if does_text_fit(block, text, paragraphs, mid as f64, fit) {
             best = mid;
             low = mid + 1;
         } else {
@@ -600,21 +673,23 @@ fn resolve_text_font_size(
     (best as f64).min(capped)
 }
 
-fn does_text_fit(
-    ctx: &mut FontContext,
-    fonts: &BlockFonts,
-    block: &TranslationBlock,
-    text: &str,
-    font_size: f64,
-    inner_width: f64,
-    inner_height: f64,
-) -> bool {
-    let line_height = font_size * block.line_height();
+/// The area text is fitted to: the inner box less the measuring margin.
+#[derive(Debug, Clone, Copy)]
+struct FitArea {
+    width: f64,
+    height: f64,
+}
+
+/// Whether `text` (horizontal: its `paragraphs` from [`wrap_paragraphs`]) fits `fit` at
+/// `font_size`.
+fn does_text_fit(block: &TranslationBlock, text: &str, paragraphs: &[Paragraph], font_size: f64, fit: FitArea) -> bool {
+    let (inner_width, inner_height) = (fit.width, fit.height);
     if block.render_direction == RenderTextDirection::Vertical {
-        return measure_vertical_text(block, text, font_size, inner_width, inner_height, line_height);
+        return measure_vertical_text(block, text, font_size, inner_width, inner_height);
     }
+    let line_height = font_size * style_line_height(block);
     // Balancing keeps the line count and widths within the limit, so the plain wrap decides.
-    let lines = wrap_lines(ctx, fonts, block, text, font_size, inner_width, false);
+    let lines = wrap_lines(paragraphs, block, font_size, inner_width, false);
     let total_height = lines.len() as f64 * line_height;
     let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
     total_height <= inner_height && widest <= inner_width
@@ -626,17 +701,38 @@ fn measure_vertical_text(
     font_size: f64,
     max_width: f64,
     max_height: f64,
-    line_height: f64,
 ) -> bool {
-    let count = text.chars().filter(|ch| !is_js_whitespace(*ch)).count();
-    if count == 0 {
+    let columns = vertical_columns(block, text, font_size, max_height);
+    if columns.iter().all(Vec::is_empty) {
         return true;
     }
+    columns.len() as f64 * font_size * VERTICAL_COLUMN_ADVANCE <= max_width
+}
+
+/// Vertical text in columns, right to left, as the fit counts them: as many characters per
+/// column as fit `max_height` at `font_size`, whitespace dropped. Under v2 each paragraph
+/// starts a column (an empty one when the paragraph is empty); the original rules run the
+/// text on across line breaks.
+pub(crate) fn vertical_columns<'a>(
+    block: &TranslationBlock,
+    text: &'a str,
+    font_size: f64,
+    max_height: f64,
+) -> Vec<Vec<&'a str>> {
+    let line_height = font_size * style_line_height(block);
     let spacing = letter_spacing_px(block, font_size);
     let advance = (font_size.max(line_height) + spacing).max(1.0);
-    let chars_per_column = ((max_height + spacing) / advance.max(1.0)).floor().max(1.0);
-    let columns = (count as f64 / chars_per_column).ceil().max(1.0);
-    columns * font_size * 1.15 <= max_width
+    let per_column = ((max_height + spacing) / advance).floor().max(1.0) as usize;
+    let paragraphs: Vec<&str> = if by_grapheme(block) { text.split('\n').collect() } else { vec![text] };
+    let mut columns = Vec::new();
+    for paragraph in paragraphs {
+        let units = vertical_units(paragraph, by_grapheme(block));
+        if units.is_empty() {
+            columns.push(Vec::new());
+        }
+        columns.extend(units.chunks(per_column).map(<[&str]>::to_vec));
+    }
+    columns
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -656,22 +752,43 @@ pub fn wrap_text_to_width(
     text: &str,
     font_size: f64,
     max_width: f64,
+    min_font_size: f64,
 ) -> Vec<WrappedLine> {
-    wrap_lines(ctx, fonts, block, text, font_size, max_width, block.layout_version() >= 2)
+    let paragraphs = wrap_paragraphs(ctx, fonts, block, text, max_width, min_font_size);
+    wrap_lines(&paragraphs, block, font_size, max_width, block.layout_version() >= 2)
 }
 
-fn wrap_lines(
+/// The paragraphs of `text` measured for lines of `max_width`. Under v2 a word too long for
+/// a line even at `min_font_size` may break between its characters, at a mid-phrase cost
+/// (CSS `word-break: keep-all` with `overflow-wrap: anywhere`).
+fn wrap_paragraphs(
     ctx: &mut FontContext,
     fonts: &BlockFonts,
     block: &TranslationBlock,
     text: &str,
+    max_width: f64,
+    min_font_size: f64,
+) -> Vec<Paragraph> {
+    let mut paragraphs = Paragraph::measure_all(ctx, fonts, block, text);
+    if block.layout_version() >= 2 {
+        let spacing = letter_spacing_px(block, min_font_size);
+        for paragraph in &mut paragraphs {
+            paragraph.break_long_words(max_width, min_font_size, spacing);
+        }
+    }
+    paragraphs
+}
+
+fn wrap_lines(
+    paragraphs: &[Paragraph],
+    block: &TranslationBlock,
     font_size: f64,
     max_width: f64,
     balance: bool,
 ) -> Vec<WrappedLine> {
     let spacing = letter_spacing_px(block, font_size);
     let mut lines = Vec::new();
-    for paragraph in Paragraph::measure_all(ctx, fonts, text) {
+    for paragraph in paragraphs {
         let segments = &paragraph.segments;
         if segments.is_empty() {
             lines.push(WrappedLine { text: String::new(), width: 0.0 });
@@ -702,27 +819,29 @@ fn wrap_lines(
         }
     }
     if lines.is_empty() {
-        lines.push(WrappedLine { text: text.to_owned(), width: 0.0 });
+        lines.push(WrappedLine { text: String::new(), width: 0.0 });
     }
     lines
 }
 
 /// A paragraph measured for wrapping: its chars, advance sums up to each char (em), so a
-/// line's width is one subtraction, and its wrap segments (none when it is empty).
+/// line's width is one subtraction, the number of characters ([`text_units`]) before each
+/// char, which letter spacing goes between, and its wrap segments (none when it is empty).
 struct Paragraph {
     chars: Vec<char>,
     prefix_em: Vec<f64>,
+    units_before: Vec<usize>,
     segments: Vec<(usize, usize)>,
 }
 
 impl Paragraph {
-    fn measure_all(ctx: &mut FontContext, fonts: &BlockFonts, text: &str) -> Vec<Self> {
+    fn measure_all(ctx: &mut FontContext, fonts: &BlockFonts, block: &TranslationBlock, text: &str) -> Vec<Self> {
         text.replace('\r', "")
             .split('\n')
             .map(|paragraph| {
                 let normalized = collapse_whitespace(paragraph);
                 if normalized.is_empty() {
-                    return Self { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() };
+                    return Self::empty();
                 }
                 let run = ctx.shape(&normalized, &fonts.base, &fonts.spans_for(&normalized));
                 let chars: Vec<char> = normalized.chars().collect();
@@ -731,17 +850,76 @@ impl Paragraph {
                 for advance in &run.char_advances_em[..chars.len()] {
                     prefix_em.push(prefix_em.last().copied().unwrap_or_default() + f64::from(*advance));
                 }
-                let segments = split_text_wrap_segments(&chars);
-                Self { chars, prefix_em, segments }
+                let mut unit_starts = text_units(&normalized, fonts.graphemes).into_iter().map(|(index, _)| index);
+                let mut next_unit = unit_starts.next();
+                let mut units_before = Vec::with_capacity(chars.len() + 1);
+                units_before.push(0);
+                for (index, _) in normalized.char_indices() {
+                    let starts_unit = next_unit == Some(index);
+                    if starts_unit {
+                        next_unit = unit_starts.next();
+                    }
+                    units_before.push(units_before.last().copied().unwrap_or_default() + usize::from(starts_unit));
+                }
+                let segments = split_text_wrap_segments(&chars, block.layout_version() >= 2);
+                Self { chars, prefix_em, units_before, segments }
             })
             .collect()
     }
 
+    fn empty() -> Self {
+        Self { chars: Vec::new(), prefix_em: vec![0.0], units_before: vec![0], segments: Vec::new() }
+    }
+
     /// Width of chars `start..end` at `font_size`, `spacing` between letters.
     fn width(&self, start: usize, end: usize, font_size: f64, spacing: f64) -> f64 {
-        let count = (end - start) as f64;
+        let count = (self.units_before[end] - self.units_before[start]) as f64;
         (self.prefix_em[end] - self.prefix_em[start]) * font_size
             + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
+    }
+
+    /// The least the paragraph's lines can add up to at `font_size`: its segments, and the
+    /// gaps between them that are narrower than nothing (negative letter spacing).
+    fn least_width(&self, font_size: f64, spacing: f64) -> f64 {
+        let segments: f64 = self.segments.iter().map(|&(start, end)| self.width(start, end, font_size, spacing)).sum();
+        let gaps: f64 = self
+            .segments
+            .windows(2)
+            .map(|pair| {
+                let (a, b) = (pair[0], pair[1]);
+                let joined = self.width(a.0, b.1, font_size, spacing);
+                (joined - self.width(a.0, a.1, font_size, spacing) - self.width(b.0, b.1, font_size, spacing)).min(0.0)
+            })
+            .sum();
+        segments + gaps
+    }
+
+    /// Splits segments wider than `max_width` at `font_size` between their characters,
+    /// keeping punctuation with its word ([`join_kinsoku`]) and spaces inside.
+    fn break_long_words(&mut self, max_width: f64, font_size: f64, spacing: f64) {
+        let too_wide = |&(start, end): &(usize, usize)| self.width(start, end, font_size, spacing) > max_width;
+        if !self.segments.iter().any(too_wide) {
+            return;
+        }
+        let mut segments = Vec::with_capacity(self.segments.len());
+        for &(start, end) in &self.segments {
+            if !too_wide(&(start, end)) {
+                segments.push((start, end));
+                continue;
+            }
+            let mut pieces = Vec::new();
+            let mut piece_start = start;
+            for index in start + 1..end {
+                let starts_unit = self.units_before[index + 1] > self.units_before[index];
+                if starts_unit && self.chars[index - 1] != ' ' && self.chars[index] != ' ' {
+                    pieces.push((piece_start, index));
+                    piece_start = index;
+                }
+            }
+            pieces.push((piece_start, end));
+            segments.extend(join_kinsoku(&self.chars, pieces));
+        }
+        self.segments = segments;
     }
 
     /// The line of segments `first..end`.
@@ -773,7 +951,10 @@ fn balanced_breaks(
         if matches!(next, '…' | '⋯' | '~' | '～' | '〜' | 'ー' | '—' | '―' | '.') {
             return BREAK_BEFORE_MARK_COST;
         }
-        match chars[segments[end - 1].1 - 1] {
+        // `뭐야?”` and `그래.」` end sentences too.
+        let (start, end) = segments[end - 1];
+        let last = chars[start..end].iter().rev().find(|ch| !is_closing_bracket(**ch)).unwrap_or(&chars[end - 1]);
+        match *last {
             '.' | '!' | '?' | '…' | '⋯' | '！' | '？' | '。' | '‼' | '~' | '～' | '〜' => 0.0,
             ',' | '、' | '，' | ';' | ':' | '—' | '―' => BREAK_AFTER_COMMA_COST,
             _ => BREAK_MID_PHRASE_COST,
@@ -826,10 +1007,63 @@ pub fn measure_text_width(
     text: &str,
     font_size: f64,
 ) -> f64 {
-    let count = text.chars().count();
+    let count = text_units(text, fonts.graphemes).len();
     let run = ctx.shape(text, &fonts.base, &fonts.spans_for(text));
     let spacing = if count > 1 { letter_spacing_px(block, font_size) * (count as f64 - 1.0) } else { 0.0 };
     f64::from(run.advance_em) * font_size + spacing
+}
+
+/// The characters of vertical text, one per cell, whitespace dropped. Under v2 ([`by_grapheme`]
+/// is `graphemes`) a cell also holds a run of up to two digits or Latin letters set across
+/// the column (tate-chu-yoko), `!`/`?` in pairs, or a `...` ellipsis.
+pub(crate) fn vertical_units(text: &str, graphemes: bool) -> Vec<&str> {
+    let units: Vec<(usize, &str)> =
+        text_units(text, graphemes).into_iter().filter(|(_, unit)| !unit.chars().all(is_js_whitespace)).collect();
+    if !graphemes {
+        return units.into_iter().map(|(_, unit)| unit).collect();
+    }
+    #[derive(PartialEq, Clone, Copy)]
+    enum Run {
+        Alphanumeric,
+        Mark,
+        Period,
+    }
+    let run_of = |unit: &str| match unit {
+        "!" | "?" | "！" | "？" => Some(Run::Mark),
+        "." => Some(Run::Period),
+        _ if unit.len() == 1 && unit.as_bytes()[0].is_ascii_alphanumeric() => Some(Run::Alphanumeric),
+        _ => None,
+    };
+    let mut cells = Vec::with_capacity(units.len());
+    let mut index = 0;
+    while index < units.len() {
+        let Some(run) = run_of(units[index].1) else {
+            cells.push(units[index].1);
+            index += 1;
+            continue;
+        };
+        // The run: same kind, nothing (not even a space) in between.
+        let mut end = index + 1;
+        while end < units.len()
+            && run_of(units[end].1) == Some(run)
+            && units[end].0 == units[end - 1].0 + units[end - 1].1.len()
+        {
+            end += 1;
+        }
+        let group = match run {
+            Run::Alphanumeric if end - index <= 2 => end - index,
+            Run::Alphanumeric => 1,
+            Run::Mark => 2,
+            Run::Period => 3,
+        };
+        while index < end {
+            let size = if run == Run::Period && end - index < 3 { 1 } else { group.min(end - index) };
+            let (start, (last_start, last)) = (units[index].0, units[index + size - 1]);
+            cells.push(&text[start..last_start + last.len()]);
+            index += size;
+        }
+    }
+    cells
 }
 
 /// JavaScript `\s` (Unicode White_Space plus U+FEFF).
@@ -856,7 +1090,9 @@ pub fn collapse_whitespace(text: &str) -> String {
 }
 
 /// Char ranges of wrap segments; a segment that starts a new word is preceded by a space.
-fn split_text_wrap_segments(chars: &[char]) -> Vec<(usize, usize)> {
+/// With `kinsoku` (typesetting v2) no line starts with closing punctuation or ends with an
+/// opening bracket ([`join_kinsoku`]).
+fn split_text_wrap_segments(chars: &[char], kinsoku: bool) -> Vec<(usize, usize)> {
     let mut segments = Vec::new();
     let mut word_start = 0;
     for index in 0..=chars.len() {
@@ -870,7 +1106,51 @@ fn split_text_wrap_segments(chars: &[char]) -> Vec<(usize, usize)> {
     if segments.is_empty() {
         segments.push((0, chars.len()));
     }
-    segments
+    if kinsoku { join_kinsoku(chars, segments) } else { segments }
+}
+
+/// Closing brackets and quotes. Straight quotes count when they touch the text before.
+fn is_closing_bracket(ch: char) -> bool {
+    matches!(
+        ch,
+        '」' | '』' | '）' | ')' | ']' | '］' | '}' | '｝' | '〉' | '》' | '】' | '〕' | '”' | '’' | '"' | '\''
+    )
+}
+
+/// Opening brackets and quotes. Straight quotes count when they touch the text after.
+fn is_opening_bracket(ch: char) -> bool {
+    matches!(
+        ch,
+        '「' | '『' | '（' | '(' | '[' | '［' | '{' | '｛' | '〈' | '《' | '【' | '〔' | '“' | '‘' | '"' | '\''
+    )
+}
+
+/// What may not start a line: closing brackets and quotes, and punctuation that ends a
+/// phrase.
+fn is_line_start_prohibited(ch: char) -> bool {
+    is_closing_bracket(ch) || matches!(ch, '!' | '?' | '！' | '？' | ',' | '，' | '、' | '。' | '．')
+}
+
+/// Joins segments across breaks that would start a line with closing punctuation (`…」`,
+/// `)어떻게`, and `?!` even after a space, as in `소리야 ?!`) or end one with an opening
+/// bracket (`(…`).
+fn join_kinsoku(chars: &[char], segments: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut joined: Vec<(usize, usize)> = Vec::with_capacity(segments.len());
+    for (start, end) in segments {
+        if let Some(last) = joined.last_mut() {
+            let touching = last.1 == start;
+            let closing_only =
+                chars[start..end].iter().all(|ch| is_line_start_prohibited(*ch) && !matches!(ch, '"' | '\''));
+            if (touching && (is_line_start_prohibited(chars[start]) || is_opening_bracket(chars[last.1 - 1])))
+                || closing_only
+            {
+                last.1 = end;
+                continue;
+            }
+        }
+        joined.push((start, end));
+    }
+    joined
 }
 
 /// Splits a word around matches of `[—―]*(?:[…⋯]+|\.{3,}|[~～〜ー]+)[.!?！？。．…⋯]*`, keeping
@@ -959,13 +1239,13 @@ mod tests {
     #[test]
     fn wrap_segments_track_word_boundaries() {
         let chars: Vec<char> = "ab cd…ef".chars().collect();
-        assert_eq!(split_text_wrap_segments(&chars), vec![(0, 2), (3, 5), (5, 6), (6, 8)]);
+        assert_eq!(split_text_wrap_segments(&chars, false), vec![(0, 2), (3, 5), (5, 6), (6, 8)]);
     }
 
     /// Lines `balanced_breaks` picks for `text` (1em per char, segments at spaces).
     fn balance(text: &str, line_count: usize, max_width: f64) -> Option<Vec<String>> {
         let chars: Vec<char> = text.chars().collect();
-        let segments = split_text_wrap_segments(&chars);
+        let segments = split_text_wrap_segments(&chars, true);
         let (ends, _) =
             balanced_breaks(&chars, &segments, &vec![max_width; line_count], false, 1.0, |a, b| (b - a) as f64)?;
         let mut first = 0;
@@ -998,6 +1278,89 @@ mod tests {
         assert_eq!(balance("뭐야? 너 누구야!", 2, 7.0).unwrap(), ["뭐야?", "너 누구야!"]);
         // A line doesn't start with the ellipsis when it can be avoided.
         assert_eq!(balance("그래서…정말 그랬어", 2, 6.0).unwrap(), ["그래서…", "정말 그랬어"]);
+    }
+
+    #[test]
+    fn v2_lines_keep_brackets_and_closing_marks_with_their_words() {
+        let segments = |text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            split_text_wrap_segments(&chars, true)
+                .into_iter()
+                .map(|(start, end)| chars[start..end].iter().collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(segments("그건 말이야…」 정말"), ["그건", "말이야", "…」", "정말"]);
+        assert_eq!(segments("“그게 정말…” 하고"), ["“그게", "정말", "…”", "하고"]);
+        assert_eq!(segments("그래서 (…) 어떻게"), ["그래서", "(…)", "어떻게"]);
+        assert_eq!(segments("그래(…)어떻게"), ["그래(…)어떻게"]);
+        assert_eq!(segments("무슨 소리야 ?!"), ["무슨", "소리야 ?!"]);
+        assert_eq!(segments("그가 \"응\" 했다"), ["그가", "\"응\"", "했다"]);
+
+        for (text, lines) in [
+            ("그건 말이야…」 정말 그랬어", 2..=4),
+            ("“그게 정말…” 하고 말했어", 2..=4),
+            ("그래서 (…) 어떻게 된 거야", 2..=4),
+            ("무슨 소리야 ?! 정말", 2..=3),
+        ] {
+            for count in lines {
+                for width in 3..=14 {
+                    let Some(broken) = balance(text, count, f64::from(width)) else { continue };
+                    for line in &broken {
+                        let first = line.chars().next().unwrap();
+                        assert!(!is_line_start_prohibited(first), "{text:?} at {width}: {broken:?}");
+                        assert!(!is_opening_bracket(line.chars().last().unwrap()), "{text:?} at {width}: {broken:?}");
+                    }
+                }
+            }
+        }
+        // A closing quote doesn't hide the question mark that ends the sentence.
+        assert_eq!(balance("뭐야?” 너 누구야!", 2, 7.0).unwrap(), ["뭐야?”", "너 누구야!"]);
+        assert_eq!(balance("그래.」 너 누구야!", 2, 7.0).unwrap(), ["그래.」", "너 누구야!"]);
+        // The original rules keep their segments.
+        let chars: Vec<char> = "말이야…」".chars().collect();
+        assert_eq!(split_text_wrap_segments(&chars, false).len(), 3);
+    }
+
+    /// `text` measured at 1em per char, its segments broken for lines of `max_width` em.
+    fn break_words(text: &str, max_width: f64) -> Vec<String> {
+        let chars: Vec<char> = text.chars().collect();
+        let mut paragraph = Paragraph {
+            prefix_em: (0..=chars.len()).map(|count| count as f64).collect(),
+            units_before: (0..=chars.len()).collect(),
+            segments: split_text_wrap_segments(&chars, true),
+            chars,
+        };
+        paragraph.break_long_words(max_width, 1.0, 0.0);
+        paragraph.segments.iter().map(|&(start, end)| paragraph.chars[start..end].iter().collect()).collect()
+    }
+
+    #[test]
+    fn v2_breaks_only_words_too_long_for_a_line() {
+        assert_eq!(break_words("가나 다라마바사", 4.0), ["가나", "다", "라", "마", "바", "사"]);
+        assert_eq!(break_words("가나 다라마바", 4.0), ["가나", "다라마바"]);
+        assert_eq!(break_words("으아아아악!」", 4.0), ["으", "아", "아", "아", "악!」"]);
+        assert_eq!(break_words("무슨 소리야 ?!", 3.0), ["무슨", "소", "리", "야 ?!"]);
+
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let text = "으아아아아아아아아아아아아아아아악";
+        let mut block = TranslationBlock {
+            bbox: mtt_core::model::BBox::new(100.0, 100.0, 120.0, 300.0),
+            translated_text: text.into(),
+            ..TranslationBlock::default()
+        };
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        // Only meaningful where some font measures the text.
+        if measure_text_width(&mut ctx, &fonts, &block, text, 9.0) <= 120.0 {
+            return;
+        }
+        let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
+        assert_eq!(drawn.lines, [text], "the original rules never break a word");
+        block.layout_version = Some(2);
+        let drawn = crate::block::block_text(&mut ctx, page, &block).unwrap();
+        assert!(!drawn.layout.overflow && drawn.lines.len() > 1, "{:?}", drawn.lines);
+        assert_eq!(drawn.lines.concat(), text);
+        assert!(drawn.font_size_px >= READABLE_FONT_SIZE_PX, "{}", drawn.font_size_px);
     }
 
     #[test]
@@ -1079,8 +1442,16 @@ mod tests {
             return;
         }
         let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, text, page, page);
-        assert!(layout.shaped && !layout.overflow, "{layout:?}");
-        let shaped = shaped_lines(&mut ctx, &fonts, &block, text, &layout).unwrap();
+        assert!(!layout.overflow, "{layout:?}");
+        let shaped = layout.shaped.clone().unwrap();
+        // The render draws the lines the layout found.
+        let drawn = crate::block::block_text(
+            &mut ctx,
+            page,
+            &TranslationBlock { translated_text: text.into(), ..block.clone() },
+        )
+        .unwrap();
+        assert_eq!(drawn.lines, shaped.lines.iter().map(|line| line.text.clone()).collect::<Vec<_>>());
         let widths: Vec<f64> = shaped.lines.iter().map(|line| line.width).collect();
         assert!(widths.len() >= 3, "{:?}", shaped.lines);
         let middle = widths[widths.len() / 2];
@@ -1090,7 +1461,7 @@ mod tests {
         // Left-aligned text keeps to the ellipse's largest rectangle, so it must be smaller.
         let left = balloon_block(TextAlign::Left, RenderTextDirection::Horizontal);
         let boxed = resolve_block_text_layout(&mut ctx, &fonts, &left, text, page, page);
-        assert!(!boxed.shaped && boxed.inner.width < 300.0, "{boxed:?}");
+        assert!(boxed.shaped.is_none() && boxed.inner.width < 300.0, "{boxed:?}");
         assert!(layout.font_size_px > boxed.font_size_px, "{} vs {}", layout.font_size_px, boxed.font_size_px);
     }
 
@@ -1102,7 +1473,7 @@ mod tests {
         let fonts = BlockFonts::resolve(&ctx, &block);
         let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다라", page, page);
         let inner = layout.inner;
-        assert!(!layout.shaped);
+        assert!(layout.shaped.is_none());
         assert!(inner.left > 340.0 && inner.left + inner.width < 660.0, "{inner:?}");
         assert!(inner.top > 280.0 && inner.top + inner.height < 520.0, "{inner:?}");
         // Without a shape: the whole box inside the padding.
@@ -1117,10 +1488,16 @@ mod tests {
             Paragraph {
                 chars: "ab cd".chars().collect(),
                 prefix_em: (0..=5).map(f64::from).collect(),
+                units_before: (0..=5).collect(),
                 segments: vec![(0, 2), (3, 5)],
             },
-            Paragraph { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() },
-            Paragraph { chars: "ef".chars().collect(), prefix_em: vec![0.0, 1.0, 2.0], segments: vec![(0, 2)] },
+            Paragraph::empty(),
+            Paragraph {
+                chars: "ef".chars().collect(),
+                prefix_em: vec![0.0, 1.0, 2.0],
+                units_before: vec![0, 1, 2],
+                segments: vec![(0, 2)],
+            },
         ];
         let text = |lines: Vec<WrappedLine>| lines.into_iter().map(|line| line.text).collect::<Vec<_>>();
         // "ab cd" is 5em: it needs two lines of 4em, then the blank line and "ef".
@@ -1128,6 +1505,110 @@ mod tests {
         assert_eq!(text(lines), ["ab", "cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[5.0, 5.0, 5.0], 1.0, 0.0).map(text).unwrap(), ["ab cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[4.0, 4.0, 1.0], 1.0, 0.0), None, "\"ef\" is too wide");
+    }
+
+    #[test]
+    fn v2_judges_bold_by_the_family_that_draws() {
+        let ctx = FontContext::new();
+        // Any installed family with a bold face (fonts differ between machines).
+        let Some(family) = ctx
+            .system_families()
+            .iter()
+            .find(|family| family.weights.contains(&400) && family.weights.iter().any(|w| *w >= 700))
+        else {
+            return;
+        };
+        let mut block = TranslationBlock::default();
+        block.style.font_family = Some(format!("\"No Such Font 75\", {}", family.css_family));
+        block.style.font_weight = Some(700.0);
+        let original = BlockFonts::resolve(&ctx, &block);
+        assert!(original.synthetic_bold, "the original rules look at the first family only");
+        assert!(original.base.weight < BOLD_WEIGHT_THRESHOLD, "{:?}", original.base);
+        block.layout_version = Some(2);
+        let v2 = BlockFonts::resolve(&ctx, &block);
+        assert!(!v2.synthetic_bold, "{} has a bold face", family.family);
+        assert!(v2.base.weight >= BOLD_WEIGHT_THRESHOLD, "{:?}", v2.base);
+        assert_eq!(v2.base.family, original.base.family);
+    }
+
+    #[test]
+    fn v2_counts_characters_by_grapheme_cluster() {
+        use mtt_core::model::FontCharacterOverride;
+        // Thumbs up with a skin tone, a ZWJ family and a red heart: one character each.
+        let text = "👍🏽👨\u{200D}👩\u{200D}👧 ❤\u{FE0F}";
+        assert_eq!(vertical_units(text, true), ["👍🏽", "👨\u{200D}👩\u{200D}👧", "❤\u{FE0F}"]);
+        assert_eq!(vertical_units(text, false).len(), 9);
+
+        let mut ctx = FontContext::new();
+        let mut block = TranslationBlock::default();
+        block.style.font_size_px = Some(20.0);
+        block.style.letter_spacing_px = Some(3.0);
+        block.style.character_font_overrides =
+            Some(vec![FontCharacterOverride { character: "❤\u{FE0F}".into(), font_family: "serif".into() }]);
+        let original = BlockFonts::resolve(&ctx, &block);
+        let original_width = measure_text_width(&mut ctx, &original, &block, "👍🏽", 20.0);
+        assert_eq!(original.spans_for("a❤\u{FE0F}b").first().map(|span| (span.0, span.1)), Some((1, 4)));
+        block.layout_version = Some(2);
+        let v2 = BlockFonts::resolve(&ctx, &block);
+        let v2_width = measure_text_width(&mut ctx, &v2, &block, "👍🏽", 20.0);
+        assert!((original_width - v2_width - 3.0).abs() < 1e-9, "one gap less: {original_width} vs {v2_width}");
+        assert_eq!(v2.spans_for("a❤\u{FE0F}b").first().map(|span| (span.0, span.1)), Some((1, 7)));
+
+        // Decomposed Hangul is drawn composed.
+        let nfd = TranslationBlock { translated_text: "\u{1112}\u{1161}\u{11AB}".into(), ..block.clone() };
+        assert_eq!(display_text(&nfd), "한");
+        assert_eq!(display_text(&TranslationBlock { layout_version: None, ..nfd }).chars().count(), 3);
+    }
+
+    #[test]
+    fn v2_vertical_cells_group_short_runs() {
+        let text = "「그래…」—2024년 OK!? 10.... A!!!";
+        assert_eq!(
+            vertical_units(text, true),
+            ["「", "그", "래", "…", "」", "—", "2", "0", "2", "4", "년", "OK", "!?", "10", "...", ".", "A", "!!", "!"]
+        );
+        assert_eq!(vertical_units(text, false).len(), text.chars().filter(|ch| *ch != ' ').count());
+    }
+
+    #[test]
+    fn huge_style_numbers_lay_out_without_overflowing() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        for auto_fit in [true, false] {
+            let mut block = TranslationBlock {
+                bbox: BBox::new(100.0, 100.0, 300.0, 200.0),
+                translated_text: "가나다".into(),
+                ..TranslationBlock::default()
+            };
+            block.style.auto_fit_text = Some(auto_fit);
+            block.style.font_size_px = Some(1e300);
+            block.style.line_height = Some(1e300);
+            block.style.letter_spacing_px = Some(-1e300);
+            let fonts = BlockFonts::resolve(&ctx, &block);
+            let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다", page, page);
+            assert!(layout.font_size_px.is_finite() && layout.font_size_px <= MAX_FONT_SIZE_PX, "{layout:?}");
+            crate::block::render_block(&mut ctx, page, &block, crate::block::BlockRenderOptions::default());
+            // A box far larger than any page.
+            block.bbox = BBox::new(0.0, 0.0, 1e300, 1e300);
+            let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다", page, page);
+            assert!(layout.font_size_px.is_finite() && layout.font_size_px <= MAX_FONT_SIZE_PX, "{layout:?}");
+        }
+    }
+
+    #[test]
+    fn least_width_bounds_any_line_split() {
+        let paragraph = Paragraph {
+            chars: "ab cd".chars().collect(),
+            prefix_em: (0..=5).map(f64::from).collect(),
+            units_before: (0..=5).collect(),
+            segments: vec![(0, 2), (3, 5)],
+        };
+        assert_eq!(paragraph.least_width(1.0, 0.0), 4.0);
+        assert_eq!(paragraph.least_width(1.0, 2.0), 8.0, "spacing inside the words only");
+        // With letter spacing tighter than the space, the line "ab cd" is narrower than its words.
+        assert_eq!(paragraph.width(0, 5, 1.0, -1.0), 1.0);
+        assert_eq!(paragraph.least_width(1.0, -1.0), 1.0);
     }
 
     #[test]
@@ -1142,9 +1623,18 @@ mod tests {
 
     #[test]
     fn vertical_fit_estimate() {
-        let block = TranslationBlock::default();
+        let mut block = TranslationBlock::default();
+        block.style.line_height = Some(1.2);
         // 10 chars, 20px font, 24px advance -> 4 per column in 100px -> 3 columns * 23px = 69px.
-        assert!(measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 70.0, 100.0, 24.0));
-        assert!(!measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 68.0, 100.0, 24.0));
+        assert!(measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 70.0, 100.0));
+        assert!(!measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 68.0, 100.0));
+        let columns = vertical_columns(&block, "가나다라 마바\n사아자차", 20.0, 100.0);
+        assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바", "사", "아"], vec!["자", "차"]]);
+        // v2: a line break starts a column, a blank line leaves one empty.
+        block.layout_version = Some(2);
+        let columns = vertical_columns(&block, "가나다라 마바\n\n사아자차", 20.0, 100.0);
+        assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바"], vec![], vec!["사", "아", "자", "차"]]);
+        assert!(!measure_vertical_text(&block, "가나다라 마바\n\n사아자차", 20.0, 90.0, 100.0));
+        assert!(measure_vertical_text(&block, "가나다라 마바\n\n사아자차", 20.0, 92.0, 100.0));
     }
 }

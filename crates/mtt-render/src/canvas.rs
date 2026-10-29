@@ -82,6 +82,12 @@ impl Canvas {
         }
     }
 
+    /// Draws `image` through `transform` (its pixels to canvas coordinates), smoothed.
+    pub fn draw_image(&mut self, image: &Pixmap, transform: Transform) {
+        let paint = PixmapPaint { quality: tiny_skia::FilterQuality::Bilinear, ..PixmapPaint::default() };
+        self.pixmap.draw_pixmap(0, 0, image.as_ref(), &paint, self.transform.pre_concat(transform), None);
+    }
+
     /// Draws `source` with its top-left at device pixel `(x, y)`, ignoring the transform.
     pub fn draw_pixmap_device(&mut self, source: &Pixmap, x: i32, y: i32, opacity: f32, mask: Option<&Mask>) {
         self.pixmap.draw_pixmap(

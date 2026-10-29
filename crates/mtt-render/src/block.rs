@@ -3,6 +3,8 @@
 //! Drawing happens in page pixel space through [`Canvas`]; the pixmap covers the block's
 //! dirty rect so blocks can be cached and moved independently in the editor.
 
+use std::sync::Arc;
+
 use mtt_core::geometry::{parse_hex_color, resolve_block_rotation_deg};
 use mtt_core::model::{FontRenderingMode, RenderTextDirection, TextAlign, TextDecoration, TranslationBlock};
 use tiny_skia::{FilterQuality, LineCap, Path, PathBuilder, Pattern, Pixmap, Shader, SpreadMode, Transform};
@@ -11,13 +13,14 @@ use crate::canvas::{Canvas, circles_path, hex_color, round_rect_path, solid};
 use crate::effects::{
     apply_font_filter_effects, filter_effect_margin_px, gaussian_blur, harden_text_pixels, has_active_filter_effects,
 };
-use crate::fonts::FontContext;
+use crate::fonts::{ColorGlyph, FontContext, MAX_COLOR_GLYPH_PPEM};
 use crate::layout::{
-    BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, font_background_enabled, font_background_opacity,
-    font_background_radius_px, font_background_scale, is_js_whitespace, letter_spacing_px, measure_text_width,
-    resolve_block_text_layout, scaled_rect, screentone_dot_radius_px, screentone_tile_size_px,
-    secondary_outline_enabled, shaped_lines, synthetic_bold_stroke_width_px, synthetic_italic_skew_x,
-    text_position_factors, text_shape_strips, wrap_text_to_width,
+    BlockFonts, BlockTextLayout, PixelRect, Size, VERTICAL_COLUMN_ADVANCE, WrappedLine, display_text,
+    font_background_enabled, font_background_opacity, font_background_radius_px, font_background_scale,
+    letter_spacing_px, measure_text_width, resolve_block_text_layout, scaled_rect, screentone_dot_radius_px,
+    screentone_tile_size_px, secondary_outline_enabled, style_line_height, synthetic_bold_stroke_width_px,
+    synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units, vertical_columns,
+    wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -164,14 +167,17 @@ fn secondary_outline_width_px(block: &TranslationBlock, font_size: f64) -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockText {
     pub layout: BlockTextLayout,
-    /// The lines as drawn; vertical text is one column without whitespace.
+    /// The lines as drawn; vertical text has a line per column (right to left) without
+    /// whitespace.
     pub lines: Vec<String>,
     /// Size the glyphs are drawn at, in page pixels.
     pub font_size_px: f64,
     /// Baseline to baseline (the character pitch is this plus letter spacing when vertical).
     pub line_height_px: f64,
+    /// Distance from one line to the next: the line height, or between vertical columns.
+    pub line_advance_px: f64,
     pub letter_spacing_px: f64,
-    /// Em boxes of the drawn text: the lines' column, or the character column.
+    /// Em boxes of the drawn text: the lines' column, or the character columns.
     pub text_rect: PixelRect,
     /// See [`FontContext::post_script_name`].
     pub font_name: String,
@@ -183,14 +189,19 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
     if block.render_direction == RenderTextDirection::Hidden {
         return None;
     }
-    let text = block.display_text();
+    let text = display_text(block);
     let fonts = BlockFonts::resolve(ctx, block);
-    let layout = resolve_block_text_layout(ctx, &fonts, block, text, page, page);
-    let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, text);
+    let layout = resolve_block_text_layout(ctx, &fonts, block, &text, page, page);
+    let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, &text);
     let (items, text_rect) = painter.items();
     let font_size_px = painter.font_size;
-    let lines: Vec<String> = if block.render_direction == RenderTextDirection::Vertical {
-        vec![items.into_iter().map(|item| item.text).collect()]
+    let line_height_px = font_size_px * style_line_height(block);
+    let vertical = block.render_direction == RenderTextDirection::Vertical;
+    let lines: Vec<String> = if vertical {
+        vertical_columns(block, &text, layout.font_size_px, layout.fit_inner_height)
+            .into_iter()
+            .map(|column| column.concat())
+            .collect()
     } else {
         items.into_iter().map(|item| item.text).collect()
     };
@@ -199,7 +210,8 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
         font_name: ctx.post_script_name(&lines.concat(), &fonts.base),
         lines,
         font_size_px,
-        line_height_px: font_size_px * block.line_height(),
+        line_height_px,
+        line_advance_px: if vertical { font_size_px * VERTICAL_COLUMN_ADVANCE } else { line_height_px },
         letter_spacing_px: letter_spacing_px(block, font_size_px),
         text_rect,
         synthetic_bold: fonts.synthetic_bold,
@@ -217,7 +229,7 @@ pub fn render_block(
     if block.render_direction == RenderTextDirection::Hidden {
         return None;
     }
-    let text = block.display_text().to_owned();
+    let text = display_text(block);
     let fonts = BlockFonts::resolve(ctx, block);
     let layout = resolve_block_text_layout(ctx, &fonts, block, &text, page, page);
     let area = block_dirty_rect(block, page, &layout)?;
@@ -280,6 +292,40 @@ struct TextItem {
     x: f64,
     y: f64,
     align: TextAlign,
+    form: CellForm,
+}
+
+/// How a vertical text cell is set (typesetting v2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum CellForm {
+    /// As in horizontal text.
+    Upright,
+    /// Turned a quarter clockwise about its em box: brackets, dashes, waves, ellipses.
+    Rotated,
+    /// A horizontal run in one cell (tate-chu-yoko), narrowed to the em when wider.
+    Across,
+}
+
+/// Characters set sideways in vertical text (what the `vert` forms of CJK fonts do).
+const ROTATED_IN_VERTICAL: &[char] = &[
+    '…', '‥', '⋯', '—', '―', '–', '-', '~', '～', '〜', 'ー', '(', ')', '（', '）', '[', ']', '［', '］', '{', '}',
+    '｛', '｝', '<', '>', '＜', '＞', '〈', '〉', '《', '》', '「', '」', '『', '』', '【', '】', '〔', '〕', '“', '”',
+    '‘', '’',
+];
+
+/// The form of the vertical cell `cell` ([`crate::layout::vertical_units`]) under v2.
+fn vertical_cell_form(cell: &str) -> CellForm {
+    let mut chars = cell.chars();
+    match (chars.next(), chars.next()) {
+        (Some(ch), None) if ROTATED_IN_VERTICAL.contains(&ch) => CellForm::Rotated,
+        _ if cell == CENTERED_PERIOD_ELLIPSIS => CellForm::Rotated,
+        (Some(_), Some(_))
+            if cell.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '!' | '?' | '！' | '？')) =>
+        {
+            CellForm::Across
+        }
+        _ => CellForm::Upright,
+    }
 }
 
 /// A run of the item placed at `x` (left edge).
@@ -291,13 +337,20 @@ struct PlacedSegment {
 }
 
 struct EllipsisDots {
-    centers: [f64; 3],
-    center_y: f64,
+    centers: [(f64, f64); 3],
     radius: f64,
+}
+
+/// A colour glyph and where it goes: its pixels to page pixels.
+struct PlacedColorGlyph {
+    glyph: Arc<ColorGlyph>,
+    transform: Transform,
 }
 
 struct ItemGeometry {
     glyphs: Option<Path>,
+    /// Glyphs drawn in their own colours (emoji).
+    colors: Vec<PlacedColorGlyph>,
     dots: Vec<EllipsisDots>,
     /// Pivot for the synthetic italic skew (`y + fontSize / 2`).
     pivot_y: f64,
@@ -352,11 +405,17 @@ impl<'a> BlockPainter<'a> {
 
     /// What to draw, and the em boxes it covers.
     fn items(&mut self) -> (Vec<TextItem>, PixelRect) {
-        let layout = *self.layout;
+        let layout = self.layout;
         let y_offset = self.font_size * RENDER_Y_OFFSET_RATIO;
         let (left, top) = (layout.inner.left, layout.inner.top + y_offset);
         if self.block.render_direction == RenderTextDirection::Vertical {
-            self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
+            // The original rules place vertical text in the fit area but from the inner
+            // box's corner, off centre by the measuring margin.
+            if self.block.layout_version() >= 2 {
+                self.vertical_items(left, top, layout.inner.width, layout.inner.height)
+            } else {
+                self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
+            }
         } else {
             self.horizontal_items(left, top, layout.inner.width, layout.inner.height, layout.fit_inner_width)
         }
@@ -406,21 +465,29 @@ impl<'a> BlockPainter<'a> {
         fit_width: f64,
     ) -> (Vec<TextItem>, PixelRect) {
         // Lines following the text shape share its axis; others sit by the text position.
-        let shaped = shaped_lines(self.ctx, self.fonts, self.block, self.text, self.layout);
-        let lines = match &shaped {
+        let shaped = &self.layout.shaped;
+        let lines = match shaped {
             // Laid out at the layout's size, drawn at the painter's.
             Some(shaped) => {
                 let scale = self.font_size / self.layout.font_size_px.max(f64::EPSILON);
                 shaped.lines.iter().map(|line| WrappedLine { width: line.width * scale, ..line.clone() }).collect()
             }
-            None => wrap_text_to_width(self.ctx, self.fonts, self.block, self.text, self.font_size, fit_width),
+            None => wrap_text_to_width(
+                self.ctx,
+                self.fonts,
+                self.block,
+                self.text,
+                self.font_size,
+                fit_width,
+                self.layout.min_font_size_px,
+            ),
         };
-        let line_height = self.font_size * self.block.line_height();
+        let line_height = self.font_size * style_line_height(self.block);
         let total_height = lines.len() as f64 * line_height;
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy + ((line_height - self.font_size) / 2.0).max(0.0);
         let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
-        let text_left = match &shaped {
+        let text_left = match shaped {
             Some(shaped) => shaped.center_x - widest / 2.0,
             None => left + (inner_width - widest) * fx,
         };
@@ -437,11 +504,14 @@ impl<'a> BlockPainter<'a> {
                 x,
                 y: start_y + index as f64 * line_height,
                 align: self.block.text_align,
+                form: CellForm::Upright,
             })
             .collect();
         (items, PixelRect { left: text_left, top: start_y, width: widest, height: total_height })
     }
 
+    /// Columns of characters from the right, as the fit split them, top-aligned; the
+    /// tallest column and the columns' width are placed by the text position.
     fn vertical_items(
         &mut self,
         left: f64,
@@ -449,26 +519,40 @@ impl<'a> BlockPainter<'a> {
         inner_width: f64,
         inner_height: f64,
     ) -> (Vec<TextItem>, PixelRect) {
-        let chars: Vec<char> = self.text.chars().filter(|ch| !is_js_whitespace(*ch)).collect();
-        let line_height = self.font_size * self.block.line_height();
+        let layout = self.layout;
+        let columns = vertical_columns(self.block, self.text, layout.font_size_px, layout.fit_inner_height);
+        let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
-        let count = chars.len() as f64;
-        let total_height = count * line_height + (count - 1.0).max(0.0) * (advance - line_height);
+        // v2 places the characters' em boxes; the original rules a line height per character.
+        let v2 = self.block.layout_version() >= 2;
+        let font_size = self.font_size;
+        let column_height = |count: usize| match count {
+            0 => 0.0,
+            _ if v2 => (count - 1) as f64 * advance + font_size,
+            _ => count as f64 * line_height + (count - 1) as f64 * (advance - line_height),
+        };
+        let total_height = columns.iter().map(|column| column_height(column.len())).fold(0.0, f64::max);
+        let pitch = self.font_size * VERTICAL_COLUMN_ADVANCE;
+        let total_width = self.font_size + columns.len().saturating_sub(1) as f64 * pitch;
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy;
-        let x = left + (inner_width - self.font_size) * fx + self.font_size / 2.0;
-        let items = chars
+        let text_left = left + (inner_width - total_width) * fx;
+        let first_x = text_left + total_width - self.font_size / 2.0;
+        let items = columns
             .iter()
             .enumerate()
-            .map(|(index, ch)| TextItem {
-                text: ch.to_string(),
-                x,
-                y: start_y + index as f64 * advance,
-                align: TextAlign::Center,
+            .flat_map(|(column, cells)| {
+                cells.iter().enumerate().map(move |(index, cell)| TextItem {
+                    text: (*cell).to_owned(),
+                    x: first_x - column as f64 * pitch,
+                    y: start_y + index as f64 * advance,
+                    align: TextAlign::Center,
+                    form: if v2 { vertical_cell_form(cell) } else { CellForm::Upright },
+                })
             })
             .collect();
-        (items, PixelRect { left: x - self.font_size / 2.0, top: start_y, width: self.font_size, height: total_height })
+        (items, PixelRect { left: text_left, top: start_y, width: total_width, height: total_height })
     }
 
     fn draw_font_background(&self, canvas: &mut Canvas, text_rect: PixelRect) {
@@ -508,7 +592,9 @@ impl<'a> BlockPainter<'a> {
             for piece in split_by_centered_ellipsis(&run) {
                 let ellipsis = piece == CENTERED_ELLIPSIS || piece == CENTERED_PERIOD_ELLIPSIS;
                 if spacing != 0.0 && !ellipsis {
-                    pieces.extend(piece.chars().map(|ch| (ch.to_string(), false)));
+                    pieces.extend(
+                        text_units(&piece, self.fonts.graphemes).into_iter().map(|(_, unit)| (unit.to_owned(), false)),
+                    );
                 } else {
                     pieces.push((piece, ellipsis));
                 }
@@ -517,7 +603,7 @@ impl<'a> BlockPainter<'a> {
         let advances: Vec<f64> = pieces
             .iter()
             .map(|(text, _)| {
-                let count = text.chars().count() as f64;
+                let count = text_units(text, self.fonts.graphemes).len() as f64;
                 let run = self.ctx.shape(text, &self.fonts.base, &self.fonts.spans_for(text));
                 f64::from(run.advance_em) * self.font_size + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
             })
@@ -543,11 +629,11 @@ impl<'a> BlockPainter<'a> {
     /// Consecutive characters sharing the same override font (`resolveCharacterFontRuns`).
     fn font_runs(&self, text: &str) -> Vec<String> {
         let mut runs: Vec<(String, Option<&crate::fonts::FontSpec>)> = Vec::new();
-        for ch in text.chars() {
-            let spec = self.fonts.overrides.get(&ch);
+        for (_, unit) in text_units(text, self.fonts.graphemes) {
+            let spec = self.fonts.overrides.get(unit);
             match runs.last_mut() {
-                Some((run, last)) if *last == spec => run.push(ch),
-                _ => runs.push((ch.to_string(), spec)),
+                Some((run, last)) if *last == spec => run.push_str(unit),
+                _ => runs.push((unit.to_owned(), spec)),
             }
         }
         runs.into_iter().map(|(run, _)| run).collect()
@@ -556,12 +642,40 @@ impl<'a> BlockPainter<'a> {
     fn item_geometry(&mut self, item: &TextItem) -> ItemGeometry {
         let segments = self.place_segments(item);
         let mut builder = PathBuilder::new();
+        let mut colors = Vec::new();
         let mut dots = Vec::new();
         for segment in &segments {
             if segment.centered_ellipsis {
                 dots.push(self.ellipsis_dots(segment, item.y));
             } else {
-                self.append_glyphs(&mut builder, &segment.text, segment.x, item.y);
+                self.append_glyphs(&mut builder, &mut colors, &segment.text, segment.x, item.y);
+            }
+        }
+        let mut glyphs = builder.finish();
+        let form = match item.form {
+            CellForm::Upright => None,
+            CellForm::Rotated => {
+                Some(Transform::from_rotate_at(90.0, item.x as f32, (item.y + self.font_size / 2.0) as f32))
+            }
+            CellForm::Across => {
+                let left = segments.first().map_or(item.x, |segment| segment.x);
+                let right = segments.last().map_or(item.x, |segment| segment.x + segment.advance);
+                let squeeze = (self.font_size / (right - left).max(f64::EPSILON)).min(1.0) as f32;
+                (squeeze < 1.0)
+                    .then(|| Transform::from_row(squeeze, 0.0, 0.0, 1.0, item.x as f32 * (1.0 - squeeze), 0.0))
+            }
+        };
+        if let Some(form) = form {
+            glyphs = glyphs.and_then(|path| path.transform(form));
+            for color in &mut colors {
+                color.transform = form.pre_concat(color.transform);
+            }
+            for dots in &mut dots {
+                for center in &mut dots.centers {
+                    let mut point = [tiny_skia::Point::from_xy(center.0 as f32, center.1 as f32)];
+                    form.map_points(&mut point);
+                    *center = (f64::from(point[0].x), f64::from(point[0].y));
+                }
             }
         }
         let underline =
@@ -569,20 +683,37 @@ impl<'a> BlockPainter<'a> {
                 let width = measure_text_width(self.ctx, self.fonts, self.block, &item.text, self.font_size);
                 (aligned_start(item.x, width, item.align), item.y + self.font_size * 1.05, width)
             });
-        ItemGeometry { glyphs: builder.finish(), dots, pivot_y: item.y + self.font_size / 2.0, underline }
+        ItemGeometry { glyphs, colors, dots, pivot_y: item.y + self.font_size / 2.0, underline }
     }
 
-    fn append_glyphs(&mut self, builder: &mut PathBuilder, text: &str, x: f64, top: f64) {
+    /// Adds the glyphs of `text` to `builder`, or to `colors` for glyphs with colour images.
+    fn append_glyphs(
+        &mut self,
+        builder: &mut PathBuilder,
+        colors: &mut Vec<PlacedColorGlyph>,
+        text: &str,
+        x: f64,
+        top: f64,
+    ) {
         let spans = self.fonts.spans_for(text);
         let run = self.ctx.shape(text, &self.fonts.base, &spans);
         let baseline = top + f64::from(self.ctx.vertical_metrics(&self.fonts.base).top_to_baseline_em) * self.font_size;
         let size = self.font_size as f32;
+        // Colour glyphs are rasterized for the device pixels they cover.
+        let ppem = (self.font_size * self.device_scale).round().max(1.0) as u32;
         for glyph in &run.glyphs {
+            let gx = x as f32 + (glyph.x_em + glyph.x_offset_em) * size;
+            let gy = baseline as f32 - glyph.y_offset_em * size;
+            if let Some(color) = self.ctx.color_glyph(glyph.font_id, glyph.weight, glyph.glyph_id, ppem) {
+                let scale = size / ppem.min(MAX_COLOR_GLYPH_PPEM) as f32;
+                let (left, top) = (color.left as f32 * scale, color.top as f32 * scale);
+                let transform = Transform::from_row(scale, 0.0, 0.0, scale, gx + left, gy + top);
+                colors.push(PlacedColorGlyph { glyph: color, transform });
+                continue;
+            }
             let Some(outline) = self.ctx.glyph_outline(glyph.font_id, glyph.weight, glyph.glyph_id) else {
                 continue;
             };
-            let gx = x as f32 + (glyph.x_em + glyph.x_offset_em) * size;
-            let gy = baseline as f32 - glyph.y_offset_em * size;
             if let Some(placed) = (*outline).clone().transform(Transform::from_row(size, 0.0, 0.0, size, gx, gy)) {
                 builder.push_path(&placed);
             }
@@ -592,11 +723,9 @@ impl<'a> BlockPainter<'a> {
     fn ellipsis_dots(&mut self, segment: &PlacedSegment, y: f64) -> EllipsisDots {
         let fs = self.font_size;
         let advance = (fs * 0.45).max(segment.advance);
-        let spec = segment
-            .text
-            .chars()
-            .next()
-            .map(|c| self.fonts.spec_for_char(c).clone())
+        let spec = text_units(&segment.text, self.fonts.graphemes)
+            .first()
+            .map(|(_, unit)| self.fonts.spec_for(unit).clone())
             .unwrap_or_else(|| self.fonts.base.clone());
         let measured = self
             .ctx
@@ -607,8 +736,11 @@ impl<'a> BlockPainter<'a> {
             .unwrap_or(fs * ELLIPSIS_DOT_RADIUS_RATIO);
         let radius = (fs * 0.045).max((fs * 0.09).min(measured));
         let spacing = (radius * 2.8).max((fs * ELLIPSIS_DOT_SPACING_RATIO).min(advance / 3.0));
-        let center_x = segment.x + advance / 2.0;
-        EllipsisDots { centers: [center_x - spacing, center_x, center_x + spacing], center_y: y + fs / 2.0, radius }
+        let (center_x, center_y) = (segment.x + advance / 2.0, y + fs / 2.0);
+        EllipsisDots {
+            centers: [(center_x - spacing, center_y), (center_x, center_y), (center_x + spacing, center_y)],
+            radius,
+        }
     }
 
     fn with_skew(&self, canvas: &mut Canvas, pivot_y: f64, draw: impl FnOnce(&mut Canvas)) {
@@ -625,8 +757,7 @@ impl<'a> BlockPainter<'a> {
     }
 
     fn draw_dots(canvas: &mut Canvas, dots: &EllipsisDots, radius: f64, shader: Shader<'_>) {
-        let centers: Vec<(f64, f64)> = dots.centers.iter().map(|x| (*x, dots.center_y)).collect();
-        if let Some(path) = circles_path(&centers, radius) {
+        if let Some(path) = circles_path(&dots.centers, radius) {
             canvas.fill_path(&path, shader);
         }
     }
@@ -672,6 +803,9 @@ impl<'a> BlockPainter<'a> {
                 let outline_radius = if secondary > 0.0 { outline / 2.0 + secondary } else { outline / 2.0 };
                 for dots in &geometry.dots {
                     Self::draw_dots(layer, dots, dots.radius + self.bold_px / 2.0 + outline_radius, solid(opaque));
+                }
+                for color in &geometry.colors {
+                    layer.draw_image(&silhouette(&color.glyph.pixmap, opaque), color.transform);
                 }
             });
         }
@@ -763,6 +897,9 @@ impl<'a> BlockPainter<'a> {
                 }
                 Self::draw_dots(canvas, dots, radius, fill_shader(&tile, text_color));
             }
+            for color in &geometry.colors {
+                canvas.draw_image(&color.glyph.pixmap, color.transform);
+            }
         });
     }
 }
@@ -802,6 +939,18 @@ fn split_by_centered_ellipsis(text: &str) -> Vec<String> {
         }
     }
     parts
+}
+
+/// `image`'s coverage in `color`, for a colour glyph's shadow.
+fn silhouette(image: &Pixmap, color: tiny_skia::Color) -> Pixmap {
+    let mut out = image.clone();
+    for pixel in out.pixels_mut() {
+        let alpha = pixel.alpha();
+        let mut shade = color;
+        shade.apply_opacity(f32::from(alpha) / 255.0);
+        *pixel = shade.premultiply().to_color_u8();
+    }
+    out
 }
 
 /// Screentone tile (`createScreentonePattern`): white tile with one dot.
@@ -865,10 +1014,169 @@ mod tests {
 
         block.render_direction = RenderTextDirection::Vertical;
         let text = block_text(&mut ctx, page, &block).unwrap();
-        assert_eq!(text.lines, [block.translated_text.replace(' ', "")]);
-        assert_eq!(text.text_rect.width, text.font_size_px, "one column");
+        assert_eq!(text.lines.concat(), block.translated_text.replace(' ', ""));
+        let pitch = text.font_size_px * VERTICAL_COLUMN_ADVANCE;
+        assert_eq!(text.line_advance_px, pitch);
+        let width = text.font_size_px + (text.lines.len() - 1) as f64 * pitch;
+        assert!((text.text_rect.width - width).abs() < 1e-9, "{} columns: {:?}", text.lines.len(), text.text_rect);
         block.render_direction = RenderTextDirection::Hidden;
         assert!(block_text(&mut ctx, page, &block).is_none());
+    }
+
+    #[test]
+    fn v2_draws_decomposed_hangul_like_composed() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(400.0, 400.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 200.0, 100.0),
+            translated_text: "한글".into(),
+            layout_version: Some(2),
+            ..TranslationBlock::default()
+        };
+        block.style.letter_spacing_px = Some(2.0);
+        let composed = render_block(&mut ctx, page, &block, BlockRenderOptions::default()).unwrap();
+        block.translated_text = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}".into();
+        let decomposed = render_block(&mut ctx, page, &block, BlockRenderOptions::default()).unwrap();
+        assert!(composed.pixmap.data() == decomposed.pixmap.data(), "jamo are drawn apart");
+    }
+
+    #[test]
+    fn vertical_text_is_drawn_in_the_columns_it_was_fitted_to() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 150.0, 200.0),
+            translated_text: "가나다라마바사아자차카타파하".repeat(2),
+            render_direction: RenderTextDirection::Vertical,
+            ..TranslationBlock::default()
+        };
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        let (rect, area) = (text.text_rect, text.layout.rect);
+        assert!(!text.layout.overflow);
+        assert!(text.lines.len() > 1, "{:?}", text.lines);
+        assert_eq!(text.lines.concat(), block.translated_text);
+        assert!(rect.top >= area.top && rect.top + rect.height <= area.top + area.height, "{rect:?} in {area:?}");
+        assert!(rect.left >= area.left && rect.left + rect.width <= area.left + area.width, "{rect:?} in {area:?}");
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        let mut painter = BlockPainter::new(&mut ctx, &block, &fonts, &text.layout, &block.translated_text);
+        let (items, _) = painter.items();
+        let first = &items[0];
+        let next_column = &items[text.lines[0].chars().count()];
+        assert!(next_column.x < first.x && next_column.y == first.y, "the next column starts left of the first");
+
+        // The original rules run the text on across line breaks; v2 starts a column.
+        block.translated_text = "가\n나다라".into();
+        let original = block_text(&mut ctx, page, &block).unwrap().lines;
+        assert_eq!(original.concat(), "가나다라");
+        block.layout_version = Some(2);
+        let v2 = block_text(&mut ctx, page, &block).unwrap().lines;
+        assert_eq!(v2, ["가", "나다라"]);
+        assert_ne!(original, v2);
+    }
+
+    #[test]
+    fn v2_centres_vertical_text_in_its_box() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 60.0, 300.0),
+            translated_text: "가나다".into(),
+            render_direction: RenderTextDirection::Vertical,
+            ..TranslationBlock::default()
+        };
+        let center = |text: &BlockText| {
+            let (rect, area) = (text.text_rect, text.layout.rect);
+            (
+                rect.left + rect.width / 2.0 - (area.left + area.width / 2.0),
+                rect.top + rect.height / 2.0 - (area.top + area.height / 2.0),
+            )
+        };
+        let (dx, dy) = center(&block_text(&mut ctx, page, &block).unwrap());
+        assert!(dx < -9.0 && dy < -8.0, "the original rules stay where they were: {dx}, {dy}");
+        block.layout_version = Some(2);
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        let (dx, dy) = center(&text);
+        // Down by the same baseline nudge as horizontal text.
+        let nudge = text.font_size_px * RENDER_Y_OFFSET_RATIO;
+        assert!(dx.abs() < 1e-9 && (dy - nudge).abs() < 1e-9, "{dx}, {dy}");
+    }
+
+    /// Width and height of the drawn pixels.
+    fn ink_size(raster: &BlockRaster) -> Option<(u32, u32)> {
+        let width = raster.pixmap.width();
+        let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
+        for (index, pixel) in raster.pixmap.pixels().iter().enumerate() {
+            if pixel.alpha() > 0 {
+                let (x, y) = (index as u32 % width, index as u32 / width);
+                (left, top, right, bottom) = (left.min(x), top.min(y), right.max(x), bottom.max(y));
+            }
+        }
+        (left <= right).then(|| (right - left + 1, bottom - top + 1))
+    }
+
+    #[test]
+    fn v2_sets_marks_sideways_and_short_runs_across_in_vertical_text() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let render = |ctx: &mut FontContext, text: &str, version: Option<u32>| {
+            let mut block = TranslationBlock {
+                bbox: BBox::new(100.0, 100.0, 100.0, 300.0),
+                translated_text: text.into(),
+                render_direction: RenderTextDirection::Vertical,
+                layout_version: version,
+                ..TranslationBlock::default()
+            };
+            block.style.auto_fit_text = Some(false);
+            block.style.font_size_px = Some(40.0);
+            ink_size(&render_block(ctx, page, &block, BlockRenderOptions::default()).unwrap())
+        };
+        // The ellipsis dots are drawn without a font.
+        let (width, height) = render(&mut ctx, "…", None).unwrap();
+        assert!(width > height, "{width}x{height}");
+        let (width, height) = render(&mut ctx, "…", Some(2)).unwrap();
+        assert!(height > width, "{width}x{height}");
+        // Glyphs only where some font draws them.
+        if let Some((width, height)) = render(&mut ctx, "—", None) {
+            assert!(width > height, "{width}x{height}");
+            let (width, height) = render(&mut ctx, "—", Some(2)).unwrap();
+            assert!(height > width, "{width}x{height}");
+        }
+        if let Some((_, stacked)) = render(&mut ctx, "!?", None) {
+            let (width, across) = render(&mut ctx, "!?", Some(2)).unwrap();
+            assert!(across + 20 < stacked && width <= 41, "one cell: {across} vs {stacked}");
+        }
+        if let Some((width, _)) = render(&mut ctx, "2024", Some(2)) {
+            assert!(width <= 41, "longer runs stay upright, one per cell");
+        }
+    }
+
+    #[test]
+    fn colour_emoji_are_drawn_in_colour() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 300.0, 100.0),
+            translated_text: "😂".into(),
+            ..TranslationBlock::default()
+        };
+        // Only where an installed font has a colour image for it.
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        let run = ctx.shape("😂", &fonts.base, &[]);
+        let Some(glyph) = run.glyphs.first() else { return };
+        if ctx.color_glyph(glyph.font_id, glyph.weight, glyph.glyph_id, 40).is_none() {
+            return;
+        }
+        let raster = render_block(&mut ctx, Size::new(1000.0, 1000.0), &block, BlockRenderOptions::default()).unwrap();
+        let colourful = raster.pixmap.pixels().iter().filter(|pixel| {
+            let pixel = pixel.demultiply();
+            let channels = [pixel.red(), pixel.green(), pixel.blue()];
+            pixel.alpha() > 128 && channels.iter().max().unwrap() - channels.iter().min().unwrap() > 60
+        });
+        assert!(colourful.count() > 50, "the emoji has colour");
     }
 
     #[test]

@@ -13,6 +13,7 @@ log.workspace = true
 thiserror.workspace = true
 swash = "0.2"
 unicode-normalization = "0.1"
+unicode-segmentation = "1"
 
 [dev-dependencies]
 serde_json.workspace = true

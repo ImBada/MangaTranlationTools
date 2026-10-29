@@ -9,14 +9,18 @@ use std::sync::Arc;
 
 use cosmic_text::fontdb;
 use cosmic_text::{Attrs, AttrsList, Family, FontSystem, ShapeLine, Shaping, Weight};
-use swash::scale::ScaleContext;
+use swash::scale::image::Content;
+use swash::scale::{Render, ScaleContext, Source, StrikeWith};
 use swash::zeno::{Command, PathData};
-use tiny_skia::{Path, PathBuilder};
+use tiny_skia::{ColorU8, Path, PathBuilder, Pixmap, PremultipliedColorU8};
 use unicode_normalization::UnicodeNormalization;
 
 /// Weight at which a face counts as bold (`SYNTHETIC_BOLD_MIN_WEIGHT`).
 pub const BOLD_WEIGHT_THRESHOLD: u16 = 600;
 const MEASURE_CACHE_LIMIT: usize = 4096;
+const COLOR_GLYPH_CACHE_LIMIT: usize = 512;
+/// Colour glyphs are rasterized at most this many pixels per em and scaled up beyond.
+pub const MAX_COLOR_GLYPH_PPEM: u32 = 1024;
 
 /// A system font family as listed in the font picker (`SystemFont`).
 #[derive(Debug, Clone, PartialEq)]
@@ -140,6 +144,15 @@ struct OutlineKey {
     glyph_id: u16,
 }
 
+/// A colour glyph (emoji) rasterized at some pixels per em: premultiplied pixels and the
+/// image's top-left corner relative to the glyph origin, in pixels with y down.
+#[derive(Debug)]
+pub struct ColorGlyph {
+    pub pixmap: Pixmap,
+    pub left: i32,
+    pub top: i32,
+}
+
 pub struct FontContext {
     font_system: FontSystem,
     scale_context: ScaleContext,
@@ -148,6 +161,9 @@ pub struct FontContext {
     measure_cache: HashMap<MeasureKey, Arc<ShapedRun>>,
     outline_cache: HashMap<OutlineKey, Option<Arc<Path>>>,
     metrics_cache: HashMap<FontSpec, VerticalMetrics>,
+    /// Whether a face has colour glyphs (`COLR`, `CBDT` or `sbix`).
+    color_faces: HashMap<fontdb::ID, bool>,
+    color_cache: HashMap<(OutlineKey, u32), Option<Arc<ColorGlyph>>>,
 }
 
 impl FontContext {
@@ -179,6 +195,8 @@ impl FontContext {
             measure_cache: HashMap::new(),
             outline_cache: HashMap::new(),
             metrics_cache: HashMap::new(),
+            color_faces: HashMap::new(),
+            color_cache: HashMap::new(),
         }
     }
 
@@ -204,34 +222,37 @@ impl FontContext {
     /// Picks the first installed family of a CSS list and the installed weight closest to
     /// `weight` by CSS rules (cosmic-text itself only accepts exact weight matches).
     pub fn resolve_spec(&self, css_family: &str, weight: u16) -> FontSpec {
+        let (family, info) = self.resolve_family(css_family);
+        let weight = info.map(|info| info.matched_weight(weight)).unwrap_or(weight);
+        match (family, info) {
+            (FamilyName::Named(_), Some(info)) => {
+                FontSpec { family: FamilyName::Named(info.match_name.clone()), weight }
+            }
+            (family, _) => FontSpec { family, weight },
+        }
+    }
+
+    /// The family [`FontContext::resolve_spec`] picks from a CSS list: the first installed
+    /// named family, else the first generic one (sans-serif when there is none), with the
+    /// installed family it stands for when known.
+    fn resolve_family(&self, css_family: &str) -> (FamilyName, Option<&FamilyInfo>) {
         for family in parse_css_font_family(css_family) {
             match &family {
                 FamilyName::Named(name) => {
                     if let Some(info) = self.families.get(&normalize_family_key(name)) {
-                        return FontSpec {
-                            family: FamilyName::Named(info.match_name.clone()),
-                            weight: info.matched_weight(weight),
-                        };
+                        return (family, Some(info));
                     }
                 }
-                generic => return self.generic_spec(generic.clone(), weight),
+                generic => return (generic.clone(), self.generic_family(generic)),
             }
         }
-        self.generic_spec(FamilyName::SansSerif, weight)
+        (FamilyName::SansSerif, self.generic_family(&FamilyName::SansSerif))
     }
 
-    fn generic_spec(&self, family: FamilyName, weight: u16) -> FontSpec {
-        let db_family = match family {
-            FamilyName::Serif => fontdb::Family::Serif,
-            FamilyName::Monospace => fontdb::Family::Monospace,
-            FamilyName::Cursive => fontdb::Family::Cursive,
-            FamilyName::Fantasy => fontdb::Family::Fantasy,
-            _ => fontdb::Family::SansSerif,
-        };
-        let name = self.font_system.db().family_name(&db_family).to_owned();
-        let weight =
-            self.families.get(&normalize_family_key(&name)).map(|info| info.matched_weight(weight)).unwrap_or(weight);
-        FontSpec { family, weight }
+    /// The installed family a generic family maps to.
+    fn generic_family(&self, family: &FamilyName) -> Option<&FamilyInfo> {
+        let family = db_family(family);
+        self.families.get(&normalize_family_key(self.font_system.db().family_name(&family)))
     }
 
     /// Installed weights of the primary family in a CSS list (`FontWeightAvailability`).
@@ -241,6 +262,12 @@ impl FontContext {
             return None;
         };
         self.families.get(&normalize_family_key(&name)).map(|info| (info.weights.clone(), info.variable_bold()))
+    }
+
+    /// Installed weights of the family [`FontContext::resolve_spec`] picks from a CSS list,
+    /// and whether it has a variable bold.
+    pub fn resolved_family_weights(&self, css_family: &str) -> Option<(Vec<u16>, bool)> {
+        self.resolve_family(css_family).1.map(|info| (info.weights.clone(), info.variable_bold()))
     }
 
     /// Shapes `text` with `base`, overriding the font for `spans` (byte ranges).
@@ -293,6 +320,66 @@ impl FontContext {
             }
         }
         path.finish()
+    }
+
+    /// The colour image of a glyph (layered `COLR` outlines or an embedded colour bitmap,
+    /// as emoji fonts draw them) at `ppem` pixels per em (at most 1024), `None` for glyphs
+    /// without one.
+    pub fn color_glyph(
+        &mut self,
+        font_id: fontdb::ID,
+        weight: u16,
+        glyph_id: u16,
+        ppem: u32,
+    ) -> Option<Arc<ColorGlyph>> {
+        if !self.has_color_glyphs(font_id, weight) {
+            return None;
+        }
+        let key = (OutlineKey { font_id, weight, glyph_id }, ppem.clamp(1, MAX_COLOR_GLYPH_PPEM));
+        if let Some(glyph) = self.color_cache.get(&key) {
+            return glyph.clone();
+        }
+        if self.color_cache.len() >= COLOR_GLYPH_CACHE_LIMIT {
+            self.color_cache.clear();
+        }
+        let glyph = self.render_color_glyph(key.0, key.1).map(Arc::new);
+        self.color_cache.insert(key, glyph.clone());
+        glyph
+    }
+
+    fn has_color_glyphs(&mut self, font_id: fontdb::ID, weight: u16) -> bool {
+        if let Some(color) = self.color_faces.get(&font_id) {
+            return *color;
+        }
+        let color = self.font_system.get_font(font_id, Weight(weight)).is_some_and(|font| {
+            let font = font.as_swash();
+            [*b"COLR", *b"CBDT", *b"sbix"].into_iter().any(|tag| font.table(swash::Tag::from_be_bytes(tag)).is_some())
+        });
+        self.color_faces.insert(font_id, color);
+        color
+    }
+
+    fn render_color_glyph(&mut self, key: OutlineKey, ppem: u32) -> Option<ColorGlyph> {
+        let font = self.font_system.get_font(key.font_id, Weight(key.weight))?;
+        let mut scaler = self.scale_context.builder(font.as_swash()).size(ppem as f32).hint(false).build();
+        let image = Render::new(&[Source::ColorOutline(0), Source::ColorBitmap(StrikeWith::BestFit)])
+            .render(&mut scaler, key.glyph_id)
+            .filter(|image| image.content == Content::Color)?;
+        let (width, height) = (image.placement.width, image.placement.height);
+        let mut pixmap = Pixmap::new(width, height)?;
+        // Layers are blended over transparent black, so they come out premultiplied;
+        // embedded bitmaps are decoded PNGs with straight alpha.
+        let premultiplied = matches!(image.source, Source::ColorOutline(_));
+        for (pixel, rgba) in pixmap.pixels_mut().iter_mut().zip(image.data.chunks_exact(4)) {
+            let [r, g, b, a] = [rgba[0], rgba[1], rgba[2], rgba[3]];
+            *pixel = if premultiplied {
+                PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
+                    .unwrap_or(PremultipliedColorU8::TRANSPARENT)
+            } else {
+                ColorU8::from_rgba(r, g, b, a).premultiply()
+            };
+        }
+        Some(ColorGlyph { pixmap, left: image.placement.left, top: -image.placement.top })
     }
 
     /// Em-box top → baseline distance for `spec`, following Chromium's normalized typo
