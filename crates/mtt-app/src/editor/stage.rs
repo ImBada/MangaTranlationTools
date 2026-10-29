@@ -415,6 +415,10 @@ pub fn inline_editor(editor: &mut Editor, ui: &mut egui::Ui) {
                 } else if command_enter || (response.lost_focus() && !edit.focus_requested && split.is_none()) {
                     commit = true;
                 }
+                // The closed editor would hold the focus (and the shortcuts) a frame longer.
+                if cancel || commit {
+                    response.surrender_focus();
+                }
             });
         },
     );

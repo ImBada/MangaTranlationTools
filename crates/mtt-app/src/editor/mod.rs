@@ -21,6 +21,9 @@ pub mod thumbnails;
 pub mod translation;
 pub mod widgets;
 
+#[cfg(test)]
+mod ui_tests;
+
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -2471,12 +2474,14 @@ impl Editor {
         panels::find_replace_window(self, ui);
         panels::preset_backup_window(self, ui, services);
         panels::character_override_window(self, ui, services);
-        // `modalOpen`: no editor shortcuts while a dialog is up.
+        // `modalOpen`: no editor shortcuts while a dialog is up. A focused text field keeps
+        // its keys, number and colour fields too.
         let modal_open = self.app_modal_open
             || self.find.open
             || self.preset_backup_dialog.is_some()
             || self.character_dialog.is_some();
-        if !self.text_editing && !modal_open {
+        let text_focused = self.text_editing || ui.ctx().text_edit_focused();
+        if !text_focused && !modal_open {
             stage::shortcuts(self, &ui.ctx().clone(), services);
         }
         let ui_state = &mut services.ui_state;
