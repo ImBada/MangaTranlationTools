@@ -114,9 +114,10 @@ impl Harness {
         self.idle(2);
     }
 
+    /// Presses and releases `key` with `modifiers` held, as eframe reports it.
     fn press(&mut self, key: egui::Key, modifiers: egui::Modifiers) {
-        self.frame(vec![key_event(key, true, modifiers)]);
-        self.frame(vec![key_event(key, false, modifiers)]);
+        self.frame(vec![egui::Event::ModifiersChanged(modifiers), key_event(key, true, modifiers)]);
+        self.frame(vec![key_event(key, false, modifiers), egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
     }
 
     /// Types `text` as the platform does: a key press and its text.
@@ -213,4 +214,51 @@ fn work_notes_and_the_shortcut_sheet_hold_the_editor_keys() {
     harness.idle(1);
     harness.press(egui::Key::Backspace, egui::Modifiers::NONE);
     assert_eq!(harness.block_count(), 1, "the editor has its keys back");
+}
+
+#[test]
+fn undo_in_the_translation_field_stays_with_its_block() {
+    let mut harness = Harness::new(2);
+    harness.editor.selection = vec!["b0".into()];
+    harness.idle(2);
+    let field = |harness: &Harness, block: &str| {
+        harness.ctx.read_response(super::inspector::translated_field_id(block)).expect("번역 field").rect.center()
+    };
+    harness.click(field(&harness, "b0"));
+    harness.frame(vec![egui::Event::Text("!".into())]);
+    harness.idle(6);
+    assert_eq!(harness.editor.page().unwrap().blocks[0].translated_text, "블록 0!");
+
+    // Click the empty canvas, then pick the other block and its 번역 field.
+    let stage = harness.editor.view.stage_rect();
+    harness.click(stage.left_bottom() + egui::vec2(12.0, -12.0));
+    assert!(!harness.ctx.text_edit_focused());
+    harness.editor.selection = vec!["b1".into()];
+    harness.idle(2);
+    harness.click(field(&harness, "b1"));
+    harness.idle(6);
+    harness.press(egui::Key::Z, egui::Modifiers::COMMAND);
+    harness.idle(1);
+    let blocks = &harness.editor.page().unwrap().blocks;
+    assert_eq!(blocks[1].translated_text, "블록 1", "⌘Z did not bring in the other block's text");
+    assert_eq!(blocks[0].translated_text, "블록 0!");
+
+    // The same on the canvas: the inline editor of one block, then of another.
+    harness.click(stage.left_bottom() + egui::vec2(12.0, -12.0));
+    for (block, typed) in [("b0", "?"), ("b1", "")] {
+        harness.editor.start_inline_edit(block);
+        harness.idle(2);
+        if typed.is_empty() {
+            harness.press(egui::Key::Z, egui::Modifiers::COMMAND);
+        } else {
+            harness.frame(vec![egui::Event::Text(typed.into())]);
+        }
+        harness.idle(6);
+        harness.press(egui::Key::Enter, egui::Modifiers::COMMAND);
+        harness.idle(1);
+        assert!(harness.editor.inline_edit.is_none(), "⌘Enter commits");
+    }
+    let blocks = &harness.editor.page().unwrap().blocks;
+    assert_eq!(blocks[0].translated_text, "블록 0!?");
+    assert_eq!(blocks[1].translated_text, "블록 1", "⌘Z in the inline editor stays with its block");
 }

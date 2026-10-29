@@ -419,10 +419,21 @@ fn sentence_card(
     toggle
 }
 
+/// The block's 번역 field. Each block has its own, so egui's ⌘Z in the field never brings
+/// back text typed for another block.
+pub(super) fn translated_field_id(block_id: &str) -> egui::Id {
+    egui::Id::unique(("block-translated-text", block_id))
+}
+
 fn sentence_fields(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlock, worker: &Worker<AppEvent>) {
     theme::caption(ui, "번역");
     let mut translated = block.translated_text.clone();
-    let response = ui.add(egui::TextEdit::multiline(&mut translated).desired_rows(3).desired_width(f32::INFINITY));
+    let response = ui.add(
+        egui::TextEdit::multiline(&mut translated)
+            .id(translated_field_id(&block.id))
+            .desired_rows(3)
+            .desired_width(f32::INFINITY),
+    );
     if editor.focus_text_requested {
         response.request_focus();
         editor.focus_text_requested = false;
@@ -438,6 +449,7 @@ fn sentence_fields(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBl
     let mut source = block.source_text.clone();
     let response = ui.add(
         egui::TextEdit::multiline(&mut source)
+            .id(egui::Id::unique(("block-source-text", block.id.as_str())))
             .desired_rows(2)
             .desired_width(f32::INFINITY)
             .text_color(theme::TEXT_WEAK),

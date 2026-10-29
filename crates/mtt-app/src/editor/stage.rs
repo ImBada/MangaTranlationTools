@@ -385,43 +385,42 @@ pub fn inline_editor(editor: &mut Editor, ui: &mut egui::Ui) {
     let mut commit = false;
     let mut cancel = false;
     let mut split = None;
-    egui::Area::new(egui::Id::unique("inline-block-editor")).fixed_pos(rect.min).order(egui::Order::Foreground).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::popup(ui.style()).show(ui, |ui| {
-                let output = egui::TextEdit::multiline(&mut edit.draft)
-                    .desired_width(width)
-                    .desired_rows(((rect.height() / 20.0) as usize).clamp(2, 12))
-                    .hint_text("번역문 (⌘Enter 확정, Esc 취소)")
-                    .show(ui);
-                let response = output.response;
-                // ⌘+click splits off the selection; remember it before the click moves the cursor.
-                let split_click =
-                    ui.input(|i| i.pointer.primary_pressed() && i.modifiers.command) && response.contains_pointer();
-                if split_click {
-                    split = edit.selection;
-                } else if let Some(range) = output.cursor_range {
-                    let (a, b): (usize, usize) = (range.primary.index.into(), range.secondary.index.into());
-                    edit.selection = (a != b).then_some((a.min(b), a.max(b)));
-                }
-                if edit.focus_requested {
-                    response.request_focus();
-                    edit.focus_requested = false;
-                }
-                let (escape, command_enter) =
-                    ui.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::Enter) && i.modifiers.command));
-                if escape {
-                    cancel = true;
-                } else if command_enter || (response.lost_focus() && !edit.focus_requested && split.is_none()) {
-                    commit = true;
-                }
-                // The closed editor would hold the focus (and the shortcuts) a frame longer.
-                if cancel || commit {
-                    response.surrender_focus();
-                }
-            });
-        },
-    );
+    // One per block, like the inspector's fields: its ⌘Z history is the block's own.
+    let area = egui::Id::unique(("inline-block-editor", edit.block_id.as_str()));
+    egui::Area::new(area).fixed_pos(rect.min).order(egui::Order::Foreground).show(ui.ctx(), |ui| {
+        egui::Frame::popup(ui.style()).show(ui, |ui| {
+            let output = egui::TextEdit::multiline(&mut edit.draft)
+                .desired_width(width)
+                .desired_rows(((rect.height() / 20.0) as usize).clamp(2, 12))
+                .hint_text("번역문 (⌘Enter 확정, Esc 취소)")
+                .show(ui);
+            let response = output.response;
+            // ⌘+click splits off the selection; remember it before the click moves the cursor.
+            let split_click =
+                ui.input(|i| i.pointer.primary_pressed() && i.modifiers.command) && response.contains_pointer();
+            if split_click {
+                split = edit.selection;
+            } else if let Some(range) = output.cursor_range {
+                let (a, b): (usize, usize) = (range.primary.index.into(), range.secondary.index.into());
+                edit.selection = (a != b).then_some((a.min(b), a.max(b)));
+            }
+            if edit.focus_requested {
+                response.request_focus();
+                edit.focus_requested = false;
+            }
+            let (escape, command_enter) =
+                ui.input(|i| (i.key_pressed(Key::Escape), i.key_pressed(Key::Enter) && i.modifiers.command));
+            if escape {
+                cancel = true;
+            } else if command_enter || (response.lost_focus() && !edit.focus_requested && split.is_none()) {
+                commit = true;
+            }
+            // The closed editor would hold the focus (and the shortcuts) a frame longer.
+            if cancel || commit {
+                response.surrender_focus();
+            }
+        });
+    });
     if let Some((start, end)) = split {
         let (block_id, draft) = (edit.block_id.clone(), edit.draft.clone());
         editor.inline_edit = None;
