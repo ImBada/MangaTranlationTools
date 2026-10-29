@@ -10,7 +10,7 @@ use crate::{Rect, dilate};
 /// Context kept around each group of components.
 const WINDOW_MARGIN: u32 = 128;
 /// Longest window side handed to the model. Groups only merge while they fit, and a
-/// single component that doesn't is scaled down to it.
+/// single component that doesn't is split into tiles that do.
 const WINDOW_LIMIT: u32 = 1024;
 /// A component sits on a plain background when the ring of pixels this far from it is
 /// one color: at least `PLAIN_SHARE` of them within `PLAIN_TOLERANCE` of the median.
@@ -76,33 +76,57 @@ pub fn inpaint_by_windows(
     Ok(output)
 }
 
-/// `forward` on `image`, scaled down first when a side exceeds `WINDOW_LIMIT`.
+/// `forward` on `image`, in tiles at full resolution when a side exceeds `WINDOW_LIMIT`
+/// (koharu tiles big regions the same way rather than scaling them): tile cores split the
+/// window evenly and each gets `WINDOW_MARGIN` of context. Tiles run in reading order, so a
+/// tile sees the fill of the tiles before it; masked pixels not filled yet stay masked.
 fn forward_within_limit(
     image: &RgbaImage,
     mask: &GrayImage,
     forward: &mut impl FnMut(&RgbaImage, &GrayImage) -> Result<RgbaImage, String>,
 ) -> Result<RgbaImage, String> {
-    use image::imageops::{FilterType, resize};
     let (width, height) = image.dimensions();
-    let long = width.max(height);
-    let filled = if long <= WINDOW_LIMIT {
-        forward(image, mask)?
-    } else {
-        let scale = WINDOW_LIMIT as f32 / long as f32;
-        let (w, h) = (((width as f32 * scale).round() as u32).max(1), ((height as f32 * scale).round() as u32).max(1));
-        // Any coverage left after scaling stays masked, so no text survives at the edges.
-        let mut small_mask = resize(mask, w, h, FilterType::Triangle);
-        small_mask.iter_mut().filter(|value| **value > 0).for_each(|value| *value = 255);
-        let small = forward(&resize(image, w, h, FilterType::Triangle), &small_mask)?;
-        if small.dimensions() != (w, h) {
+    if width.max(height) <= WINDOW_LIMIT {
+        let filled = forward(image, mask)?;
+        if filled.dimensions() != (width, height) {
             return Err("인페인트 결과 크기가 맞지 않습니다.".into());
         }
-        resize(&small, width, height, FilterType::Triangle)
-    };
-    if filled.dimensions() != (width, height) {
-        return Err("인페인트 결과 크기가 맞지 않습니다.".into());
+        return Ok(filled);
     }
-    Ok(filled)
+    let core_limit = WINDOW_LIMIT - WINDOW_MARGIN * 2;
+    let spans = |length: u32| {
+        let count = length.div_ceil(core_limit);
+        let size = length.div_ceil(count);
+        (0..count).map(move |index| (index * size, ((index + 1) * size).min(length)))
+    };
+    let mut work = image.clone();
+    let mut pending: Vec<bool> = mask.as_raw().iter().map(|value| *value > 0).collect();
+    for (top, bottom) in spans(height) {
+        for (left, right) in spans(width) {
+            let core = Rect { x: left, y: top, width: right - left, height: bottom - top };
+            if !pixels(core, width).any(|(_, _, index)| pending[index]) {
+                continue;
+            }
+            let tile = expand(core, WINDOW_MARGIN, width, height);
+            let tile_image = image::imageops::crop_imm(&work, tile.x, tile.y, tile.width, tile.height).to_image();
+            let tile_mask = GrayImage::from_fn(tile.width, tile.height, |x, y| {
+                let index = ((tile.y + y) * width + tile.x + x) as usize;
+                image::Luma([if pending[index] { mask.as_raw()[index] } else { 0 }])
+            });
+            let filled = forward(&tile_image, &tile_mask)?;
+            if filled.dimensions() != (tile.width, tile.height) {
+                return Err("인페인트 결과 크기가 맞지 않습니다.".into());
+            }
+            for (x, y, index) in pixels(core, width) {
+                if pending[index] {
+                    let color = filled.get_pixel(x - tile.x, y - tile.y).0;
+                    work.get_pixel_mut(x, y).0[..3].copy_from_slice(&color[..3]);
+                    pending[index] = false;
+                }
+            }
+        }
+    }
+    Ok(work)
 }
 
 /// 8-connected components of the nonzero mask pixels: a label per pixel (0 = unmasked,
@@ -308,21 +332,36 @@ mod tests {
     }
 
     #[test]
-    fn oversized_windows_are_scaled_to_the_limit() {
+    fn oversized_windows_are_tiled_at_full_resolution() {
         let source = RgbaImage::from_fn(1600, 400, |x, y| {
             let v = if (x / 2 + y / 2) % 2 == 0 { 30 } else { 230 };
             image::Rgba([v, v, v, 255])
         });
         let mut mask = GrayImage::new(1600, 400);
         fill(&mut mask, Rect { x: 50, y: 150, width: 1500, height: 60 });
+        // The window is 1600×316 at y 22: three tiles across, each with its context.
         let mut seen = Vec::new();
-        let result = inpaint_by_windows(&source, &mask, |image, _| {
+        let mut tile = 0u8;
+        let result = inpaint_by_windows(&source, &mask, |image, mask| {
             seen.push(image.dimensions());
-            Ok(RgbaImage::from_pixel(image.width(), image.height(), image::Rgba([9, 9, 9, 255])))
+            if tile == 1 {
+                // The first tile's fill (page x 500) is context now, not masked.
+                assert_eq!(image.get_pixel(500 - 406, 180 - 22).0[..3], [10, 10, 10]);
+                assert_eq!(mask.get_pixel(500 - 406, 180 - 22)[0], 0);
+                assert!(mask.get_pixel(700 - 406, 180 - 22)[0] > 0);
+            }
+            tile += 1;
+            Ok(RgbaImage::from_pixel(
+                image.width(),
+                image.height(),
+                image::Rgba([tile * 10, tile * 10, tile * 10, 255]),
+            ))
         })
         .unwrap();
-        assert_eq!(seen.len(), 1);
-        assert_eq!(seen[0].0, WINDOW_LIMIT);
-        assert_eq!(result.get_pixel(800, 180).0, [9, 9, 9, 255]);
+        assert_eq!(seen, vec![(662, 316), (790, 316), (660, 316)]);
+        assert_eq!(result.get_pixel(100, 180).0, [10, 10, 10, 255]);
+        assert_eq!(result.get_pixel(800, 180).0, [20, 20, 20, 255]);
+        assert_eq!(result.get_pixel(1500, 180).0, [30, 30, 30, 255]);
+        assert_eq!(result.get_pixel(100, 100), source.get_pixel(100, 100), "outside the mask untouched");
     }
 }
