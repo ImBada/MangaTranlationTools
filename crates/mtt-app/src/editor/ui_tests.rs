@@ -185,6 +185,29 @@ fn number_and_colour_fields_keep_their_keys() {
 }
 
 #[test]
+fn typing_a_number_makes_one_undo_step() {
+    let mut harness = Harness::new(2);
+    harness.editor.selection = vec!["b0".into()];
+    harness.field = Some(Field::Number(24.0));
+    harness.idle(2);
+    harness.click(harness.field_rect.center());
+    assert!(harness.ctx.text_edit_focused());
+    let steps = harness.editor.history.undo_len();
+    for (key, text) in [(egui::Key::Num1, "1"), (egui::Key::Num8, "8")] {
+        harness.type_key(key, text);
+        // What the inspector's size field does with each keystroke.
+        let Some(Field::Number(value)) = harness.field else { unreachable!() };
+        harness.editor.edit_selected(|block| block.style.font_size_px = Some(value));
+    }
+    harness.idle(2);
+    assert_eq!(harness.editor.history.undo_len(), steps, "no step while still typing");
+    harness.press(egui::Key::Enter, egui::Modifiers::NONE);
+    harness.idle(2);
+    assert_eq!(harness.editor.page().unwrap().blocks[0].style.font_size_px, Some(18.0));
+    assert_eq!(harness.editor.history.undo_len(), steps + 1, "\"18\" is one step");
+}
+
+#[test]
 fn work_notes_and_the_shortcut_sheet_hold_the_editor_keys() {
     let mut harness = Harness::new(2);
     harness.editor.selection = vec!["b0".into()];

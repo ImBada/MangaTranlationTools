@@ -2561,6 +2561,11 @@ impl Editor {
                 page.refresh_texture_filters(ui.ctx(), page_id);
             }
         }
+        // Number and colour fields don't set `text_editing`, but typing in one is typing too:
+        // its keystrokes make one undo step.
+        if ui.ctx().text_edit_focused() {
+            self.text_editing = true;
+        }
         self.tick(services, worker, pointer_down);
         if std::mem::take(&mut self.block_translation_requested) {
             self.start_block_translation(services, worker);
