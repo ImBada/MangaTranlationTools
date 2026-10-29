@@ -3,6 +3,9 @@
 //! (`LamaRuntimeSettingsSection.tsx`), the text segmentation model's download and the
 //! version/update bar (`SettingsVersionBar.tsx`).
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use eframe::egui::{self, RichText};
 use mtt_core::settings::{
     AppSettings, ModelProvider, ReasoningEffort, TRANSLATION_PARALLEL_MAX, TRANSLATION_PARALLEL_MIN, TranslationMode,
@@ -54,6 +57,23 @@ struct DownloadState {
     progress: Option<String>,
     last_error: Option<String>,
     action: Option<(ActionState, String)>,
+    /// Set to stop the running download (at its next bytes).
+    cancel: Arc<AtomicBool>,
+}
+
+impl DownloadState {
+    /// Marks the download running and returns its fresh cancel flag.
+    fn start(&mut self, message: &str) -> Arc<AtomicBool> {
+        self.running = true;
+        self.action = Some((ActionState::Success, message.into()));
+        self.cancel = Arc::new(AtomicBool::new(false));
+        Arc::clone(&self.cancel)
+    }
+
+    fn cancel(&mut self) {
+        self.cancel.store(true, Ordering::Relaxed);
+        self.progress = Some("다운로드를 멈추는 중…".into());
+    }
 }
 
 /// ChatGPT sign-in progress from its worker thread.
@@ -206,6 +226,10 @@ impl SettingsView {
                         state.last_error = None;
                         state.action = Some((ActionState::Success, done.into()));
                     }
+                    Err(error) if error == mtt_inpaint::lama::CANCELLED => {
+                        let message = format!("{error} 다시 받으면 받던 곳부터 이어서 받습니다.");
+                        state.action = Some((ActionState::Success, message));
+                    }
                     Err(error) => {
                         log::error!("{job:?} download failed: {error}");
                         state.action = Some((ActionState::Error, error.clone()));
@@ -237,10 +261,11 @@ impl SettingsView {
                 return;
             }
         }
-        self.lama.running = true;
-        self.lama.action = Some((ActionState::Success, "LaMa 다운로드를 시작했습니다.".into()));
+        let cancel = self.lama.start("LaMa 다운로드를 시작했습니다.");
         let paths = services.paths.clone();
-        spawn_download(worker, ModelJob::Lama, move |progress| mtt_inpaint::lama::download_lama(&paths, progress));
+        spawn_download(worker, ModelJob::Lama, cancel, move |progress| {
+            mtt_inpaint::lama::download_lama(&paths, progress)
+        });
     }
 
     /// The text segmentation model and the LibTorch runtime, whichever are missing.
@@ -256,10 +281,9 @@ impl SettingsView {
                 return;
             }
         }
-        self.segmentation.running = true;
-        self.segmentation.action = Some((ActionState::Success, "글자 분할 모델 다운로드를 시작했습니다.".into()));
+        let cancel = self.segmentation.start("글자 분할 모델 다운로드를 시작했습니다.");
         let paths = services.paths.clone();
-        spawn_download(worker, ModelJob::Segmentation, move |progress| {
+        spawn_download(worker, ModelJob::Segmentation, cancel, move |progress| {
             mtt_inpaint::text_segmentation::download_segmentation(&paths, progress)
         });
     }
@@ -360,7 +384,7 @@ impl SettingsView {
             ));
         }
         let sizes = format!("모델 약 200MB, {} (압축)", runtime_size("LibTorch 약 70~120MB"));
-        let (download, refresh) = model_section(
+        let (download, refresh, cancel) = model_section(
             ui,
             &self.lama,
             &ModelSection {
@@ -379,6 +403,9 @@ impl SettingsView {
         if download {
             self.download_lama(services, worker);
         }
+        if cancel {
+            self.lama.cancel();
+        }
         if refresh {
             self.refresh_lama_status(services, worker);
         }
@@ -396,7 +423,7 @@ impl SettingsView {
             })
             .unwrap_or_default();
         let sizes = format!("모델 약 210MB, {} (압축, LaMa와 함께 씀)", runtime_size("LibTorch 약 70~120MB"));
-        let (download, refresh) = model_section(
+        let (download, refresh, cancel) = model_section(
             ui,
             &self.segmentation,
             &ModelSection {
@@ -414,6 +441,9 @@ impl SettingsView {
         );
         if download {
             self.download_segmentation(services, worker);
+        }
+        if cancel {
+            self.segmentation.cancel();
         }
         if refresh {
             self.refresh_lama_status(services, worker);
@@ -1184,7 +1214,8 @@ struct ModelSection<'a> {
 
 /// A model's status, download button, progress and last error. Returns whether the
 /// download and the refresh were clicked.
-fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSection) -> (bool, bool) {
+/// Draws a model's section; returns whether download, refresh and cancel were clicked.
+fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSection) -> (bool, bool, bool) {
     ui.label(theme::semibold(section.title));
     theme::hint(ui, section.description);
     ui.add_space(8.0);
@@ -1198,13 +1229,18 @@ fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSectio
         }
     });
     ui.add_space(8.0);
-    let (download, refresh) = ui
+    let (download, refresh, cancel) = ui
         .horizontal(|ui| {
             let label = if state.running { "다운로드 중…" } else { section.button };
             let download =
                 ui.add_enabled(!state.running, egui::Button::new(label)).on_hover_text(section.sizes).clicked();
+            let cancel = state.running
+                && ui
+                    .add_enabled(!state.cancel.load(Ordering::Relaxed), egui::Button::new("취소"))
+                    .on_hover_text("받은 만큼은 남겨 두고 다음에 이어서 받습니다")
+                    .clicked();
             let refresh = ui.add(egui::Button::new("상태 새로고침").frame_when_inactive(false)).clicked();
-            (download, refresh)
+            (download, refresh, cancel)
         })
         .inner;
     if let Some(progress) = state.progress.as_ref().filter(|_| state.running) {
@@ -1229,15 +1265,16 @@ fn model_section(ui: &mut egui::Ui, state: &DownloadState, section: &ModelSectio
     if let Some(error) = &state.last_error {
         theme::hint(ui, &format!("최근 오류: {error}"));
     }
-    (download, refresh)
+    (download, refresh, cancel)
 }
 
 /// Runs `download` on its own thread, reporting progress lines and the outcome as `job`'s
-/// events.
+/// events, until `cancel` is set.
 fn spawn_download(
     worker: &Worker<AppEvent>,
     job: ModelJob,
-    download: impl FnOnce(&mut dyn FnMut(mtt_inpaint::lama::Download, u64, Option<u64>)) -> Result<(), String>
+    cancel: Arc<AtomicBool>,
+    download: impl FnOnce(&mut dyn FnMut(mtt_inpaint::lama::Download, u64, Option<u64>) -> bool) -> Result<(), String>
     + Send
     + 'static,
 ) {
@@ -1245,6 +1282,9 @@ fn spawn_download(
     std::thread::spawn(move || {
         let mut last = None;
         let result = download(&mut |part, written, total| {
+            if cancel.load(Ordering::Relaxed) {
+                return false;
+            }
             let mb = |bytes: u64| bytes as f64 / 1_048_576.0;
             let label = match part {
                 mtt_inpaint::lama::Download::Model => "모델",
@@ -1254,7 +1294,7 @@ fn spawn_download(
                 Some(total) if total > 0 => {
                     let percent = written * 100 / total;
                     if last == Some((part, percent)) {
-                        return;
+                        return true;
                     }
                     last = Some((part, percent));
                     format!("{label} 다운로드 {percent}% ({:.0}/{:.0}MB)", mb(written), mb(total))
@@ -1262,6 +1302,7 @@ fn spawn_download(
                 _ => format!("{label} 다운로드 {:.0}MB", mb(written)),
             };
             emitter.emit(AppEvent::Lama(LamaEvent::Progress(job, line)));
+            true
         });
         emitter.emit(AppEvent::Lama(LamaEvent::DownloadFinished(job, result)));
     });
@@ -1504,5 +1545,67 @@ mod tests {
         assert!(view.models.is_none(), "nothing is asked while a translation runs");
         draw(&mut view, &mut draft, false);
         assert!(view.models.is_some(), "a finished address loads its models");
+    }
+
+    /// One frame of a model section with `events`: its clicks and its texts with where they are.
+    fn section_frame(
+        ctx: &egui::Context,
+        state: &DownloadState,
+        events: Vec<egui::Event>,
+    ) -> ((bool, bool, bool), Vec<(String, egui::Rect)>) {
+        let section = ModelSection {
+            title: "LaMa 인페인트",
+            description: "",
+            button: "LaMa 받기",
+            sizes: "",
+            model_exists: false,
+            runtime_label: "LibTorch",
+            runtime_exists: false,
+            runtime_usable: false,
+            device: None,
+            notes: Vec::new(),
+        };
+        let input = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 300.0))),
+            events,
+            ..Default::default()
+        };
+        let mut clicks = (false, false, false);
+        let mut output = ctx.run_ui(input, |ui| clicks = model_section(ui, state, &section));
+        output.textures_delta.clear();
+        let texts = output
+            .shapes
+            .iter()
+            .filter_map(|clipped| match &clipped.shape {
+                egui::Shape::Text(text) => Some((text.galley.text().to_owned(), text.visual_bounding_rect())),
+                _ => None,
+            })
+            .collect();
+        (clicks, texts)
+    }
+
+    #[test]
+    fn a_running_download_can_be_cancelled() {
+        let ctx = egui::Context::default();
+        let mut state = DownloadState::default();
+        let has_cancel = |texts: &[(String, egui::Rect)]| texts.iter().find(|(text, _)| text == "취소").map(|t| t.1);
+        assert!(has_cancel(&section_frame(&ctx, &state, Vec::new()).1).is_none(), "nothing to cancel");
+
+        let flag = state.start("LaMa 다운로드를 시작했습니다.");
+        let button = has_cancel(&section_frame(&ctx, &state, Vec::new()).1).expect("a cancel button");
+        let at = button.center();
+        let press = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
+        section_frame(&ctx, &state, vec![egui::Event::PointerMoved(at), press(true)]);
+        let ((download, _, cancel), _) = section_frame(&ctx, &state, vec![press(false)]);
+        assert!(cancel && !download);
+        state.cancel();
+        assert!(flag.load(Ordering::Relaxed), "the download thread sees it");
+        // A new download gets a fresh flag.
+        assert!(!state.start("LaMa 다운로드를 시작했습니다.").load(Ordering::Relaxed));
     }
 }

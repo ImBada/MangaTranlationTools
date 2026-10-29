@@ -5,10 +5,13 @@ fn main() {
     match mtt_inpaint::psd::read_psd(&bytes) {
         Ok(doc) => {
             println!("{}x{}, {} leaf layers", doc.width, doc.height, doc.layers.len());
+            if let Some(warning) = mtt_inpaint::psd::import_warning(&doc) {
+                println!("{warning}");
+            }
             for layer in &doc.layers {
                 let painted = layer.image.pixels().filter(|p| p[3] > 0).count();
                 println!(
-                    "  {:?} at ({}, {}) {}x{} opacity {:.2} hidden {} text {} groups {:?} painted px {}",
+                    "  {:?} at ({}, {}) {}x{} opacity {:.2} hidden {} text {} groups {:?} painted px {} notes {:?}",
                     layer.name,
                     layer.left,
                     layer.top,
@@ -18,7 +21,8 @@ fn main() {
                     layer.hidden,
                     layer.text,
                     layer.groups,
-                    painted
+                    painted,
+                    layer.notes
                 );
             }
         }

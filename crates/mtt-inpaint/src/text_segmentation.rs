@@ -186,7 +186,7 @@ fn segment(
 }
 
 /// RGB with any transparency over white.
-fn over_white(image: &RgbaImage) -> RgbImage {
+pub(crate) fn over_white(image: &RgbaImage) -> RgbImage {
     RgbImage::from_fn(image.width(), image.height(), |x, y| {
         let [r, g, b, a] = image.get_pixel(x, y).0;
         let over = |value: u8| ((u32::from(value) * u32::from(a) + 255 * (255 - u32::from(a)) + 127) / 255) as u8;
@@ -370,10 +370,10 @@ fn expand(rect: Rect, by: u32, width: u32, height: u32) -> Rect {
 
 /// `startTextSegmentationDownload`: whatever is missing of the model (into
 /// `models/manga-text-segmentation/`, checked against the pinned size and SHA-256) and the
-/// LibTorch runtime.
+/// LibTorch runtime. `progress` returns false to stop (`lama::CANCELLED`).
 pub fn download_segmentation(
     paths: &AppPaths,
-    mut progress: impl FnMut(Download, u64, Option<u64>),
+    mut progress: impl FnMut(Download, u64, Option<u64>) -> bool,
 ) -> Result<(), String> {
     let model = model_path(paths);
     if !model.is_file() {

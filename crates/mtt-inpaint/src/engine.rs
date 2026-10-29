@@ -177,8 +177,11 @@ pub fn run_inpaint_in(
     Ok((masked_result_layer(source, &inpainted, &mask_crop, rect, &settings), Some(rect)))
 }
 
-/// Breadth-first fill from the mask border inward with the average of known neighbours
-/// (`localFillInpaint`).
+/// Fills the mask ring by ring from its border inward with the average of the neighbours
+/// that are unmasked or filled by an earlier ring (`localFillInpaint`, which counted the
+/// pixels it had just filled in the same pass and so filled everything in one raster scan
+/// from the top left). A ring reads only what was there before it, so the fill comes in
+/// evenly from every side.
 pub fn local_fill(source: &RgbaImage, mask: &GrayImage) -> RgbaImage {
     let (width, height) = source.dimensions();
     let (w, h) = (width as i32, height as i32);
@@ -186,71 +189,44 @@ pub fn local_fill(source: &RgbaImage, mask: &GrayImage) -> RgbaImage {
     let mut output = source.clone();
     let coverage: Vec<f32> = mask.as_raw().iter().map(|v| f32::from(*v) / 255.0).collect();
     let masked: Vec<bool> = coverage.iter().map(|c| *c > MASK_ACTIVE_THRESHOLD).collect();
-    let mut filled = vec![false; total];
-    let mut queue: Vec<usize> = Vec::with_capacity(total);
     let fallback = average_unmasked_color(source, &masked);
-
-    let fill_from_neighbors = |output: &mut RgbaImage, filled: &[bool], index: usize| {
+    let neighbors = |index: usize| {
         let (x, y) = ((index % width as usize) as i32, (index / width as usize) as i32);
-        let (mut r, mut g, mut b, mut count) = (0f32, 0f32, 0f32, 0f32);
-        for (dx, dy) in NEIGHBORS {
+        NEIGHBORS.iter().filter_map(move |(dx, dy)| {
             let (nx, ny) = (x + dx, y + dy);
-            if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                continue;
-            }
-            let neighbor = (ny * w + nx) as usize;
-            if masked[neighbor] && !filled[neighbor] {
-                continue;
-            }
-            let p = output.get_pixel(nx as u32, ny as u32).0;
-            r += f32::from(p[0]);
-            g += f32::from(p[1]);
-            b += f32::from(p[2]);
-            count += 1.0;
-        }
-        let color = if count > 0.0 { [r / count, g / count, b / count] } else { fallback };
-        write_color(output, x as u32, y as u32, color);
+            (nx >= 0 && ny >= 0 && nx < w && ny < h).then_some((ny * w + nx) as usize)
+        })
     };
-
-    for y in 0..h {
-        for x in 0..w {
-            let index = (y * w + x) as usize;
-            if !masked[index] {
-                continue;
+    // Unmasked or filled by an earlier ring; and in some ring already.
+    let mut filled: Vec<bool> = masked.iter().map(|masked| !masked).collect();
+    let mut queued = filled.clone();
+    let mut ring: Vec<usize> =
+        (0..total).filter(|index| masked[*index] && neighbors(*index).any(|n| filled[n])).collect();
+    ring.iter().for_each(|index| queued[*index] = true);
+    let mut colors = Vec::new();
+    while !ring.is_empty() {
+        colors.clear();
+        colors.extend(ring.iter().map(|index| {
+            let (mut sum, mut count) = ([0f32; 3], 0f32);
+            for neighbor in neighbors(*index).filter(|n| filled[*n]) {
+                let p = output.as_raw()[neighbor * 4..][..3].iter();
+                sum.iter_mut().zip(p).for_each(|(sum, value)| *sum += f32::from(*value));
+                count += 1.0;
             }
-            let has_neighbor = NEIGHBORS.iter().any(|(dx, dy)| {
-                let (nx, ny) = (x + dx, y + dy);
-                nx >= 0 && ny >= 0 && nx < w && ny < h && {
-                    let neighbor = (ny * w + nx) as usize;
-                    !masked[neighbor] || filled[neighbor]
-                }
-            });
-            if !has_neighbor {
-                continue;
-            }
-            fill_from_neighbors(&mut output, &filled, index);
-            filled[index] = true;
-            queue.push(index);
+            sum.map(|sum| sum / count)
+        }));
+        for (index, color) in ring.iter().zip(&colors) {
+            write_color(&mut output, (*index % width as usize) as u32, (*index / width as usize) as u32, *color);
+            filled[*index] = true;
         }
-    }
-    let mut head = 0;
-    while head < queue.len() {
-        let index = queue[head];
-        head += 1;
-        let (x, y) = ((index % width as usize) as i32, (index / width as usize) as i32);
-        for (dx, dy) in NEIGHBORS {
-            let (nx, ny) = (x + dx, y + dy);
-            if nx < 0 || ny < 0 || nx >= w || ny >= h {
-                continue;
+        let mut next = Vec::new();
+        for neighbor in ring.iter().flat_map(|index| neighbors(*index)) {
+            if !queued[neighbor] {
+                queued[neighbor] = true;
+                next.push(neighbor);
             }
-            let neighbor = (ny * w + nx) as usize;
-            if !masked[neighbor] || filled[neighbor] {
-                continue;
-            }
-            fill_from_neighbors(&mut output, &filled, neighbor);
-            filled[neighbor] = true;
-            queue.push(neighbor);
         }
+        ring = next;
     }
     for index in 0..total {
         if !masked[index] {
@@ -542,6 +518,36 @@ mod tests {
         let p = filled.get_pixel(10, 20).0;
         assert!(p[0] > 150 && p[2] < 50, "left area filled with red: {p:?}");
         assert_eq!(filled.get_pixel(30, 20), source.get_pixel(30, 20), "unmasked pixels untouched");
+    }
+
+    #[test]
+    fn local_fill_comes_in_evenly_from_every_side() {
+        // White above row 20, black below, and a 20×20 hole across the edge. Filled in one
+        // raster scan, the white ran down to row 25 (`[65, 224, 255, 254, 184]`) and left a
+        // seam on the last row.
+        let source = RgbaImage::from_fn(40, 40, |_, y| {
+            let v = if y < 20 { 255 } else { 0 };
+            image::Rgba([v, v, v, 255])
+        });
+        let mut mask = GrayImage::new(40, 40);
+        for y in 10..30 {
+            for x in 10..30 {
+                mask.put_pixel(x, y, image::Luma([255]));
+            }
+        }
+        let filled = local_fill(&source, &mask);
+        let value = |x: u32, y: u32| filled.get_pixel(x, y)[0];
+        for x in 10..30 {
+            for y in 10..18 {
+                assert!(value(x, y) > 200, "({x}, {y}) is white: {}", value(x, y));
+            }
+            for y in 22..30 {
+                assert!(value(x, y) < 55, "({x}, {y}) is black: {}", value(x, y));
+            }
+            for y in 10..30 {
+                assert!(value(x, y).abs_diff(value(39 - x, y)) <= 1, "({x}, {y}) mirrors its other side");
+            }
+        }
     }
 
     #[test]

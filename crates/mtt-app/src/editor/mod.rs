@@ -1826,7 +1826,8 @@ impl Editor {
                 mask,
                 result,
                 engine: InpaintEngine::LocalFillFallback,
-                message: String::new(),
+                // What the import left out (blend modes, vector masks …), for the status.
+                message: mtt_inpaint::psd::import_warning(&document).unwrap_or_default(),
             };
             Ok(computed.finish(ctx, &job_page))
         }))
@@ -2447,10 +2448,19 @@ impl Editor {
             }
             EditorJob::PsdImported { page_id, quick, result } => {
                 self.psd_import_running = None;
-                let applied = result.and_then(|outcome| self.apply_psd_layers(&page_id, outcome));
+                let applied = result.and_then(|outcome| {
+                    let warning = outcome.message.clone();
+                    self.apply_psd_layers(&page_id, outcome).map(|()| warning)
+                });
                 self.status = match applied {
-                    Ok(()) if quick => "마지막으로 내보낸 PSD를 퀵로드했습니다.".into(),
-                    Ok(()) => "PSD에서 인페인트 결과와 마스크를 가져왔습니다.".into(),
+                    Ok(warning) => {
+                        let done = if quick {
+                            "마지막으로 내보낸 PSD를 퀵로드했습니다."
+                        } else {
+                            "PSD에서 인페인트 결과와 마스크를 가져왔습니다."
+                        };
+                        if warning.is_empty() { done.into() } else { format!("{done} {warning}") }
+                    }
                     Err(error) => error,
                 };
                 self.refresh_psd_files(services, true);
