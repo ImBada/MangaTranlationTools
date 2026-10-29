@@ -95,18 +95,25 @@ impl BlockFonts {
     pub fn resolve(ctx: &FontContext, block: &TranslationBlock) -> Self {
         let family = block.style.font_family.as_deref().unwrap_or(DEFAULT_OVERLAY_FONT_FAMILY);
         let weight = requested_weight(block);
-        let base = ctx.resolve_spec(family, canvas_font_weight(ctx, family, weight));
+        // The original rules judge bold by the first listed family even when another one
+        // draws; v2 by the family that draws.
+        let weights_of = |family: &str| {
+            if block.layout_version() >= 2 { ctx.resolved_family_weights(family) } else { ctx.family_weights(family) }
+        };
+        let base_weights = weights_of(family);
+        let base = ctx.resolve_spec(family, canvas_font_weight(base_weights.as_ref(), weight));
         let mut overrides = HashMap::new();
         for entry in block.style.character_font_overrides.iter().flatten() {
             let (Some(ch), override_family) = (entry.character.chars().next(), entry.font_family.trim()) else {
                 continue;
             };
             if !override_family.is_empty() {
-                overrides
-                    .insert(ch, ctx.resolve_spec(override_family, canvas_font_weight(ctx, override_family, weight)));
+                let override_weight = canvas_font_weight(weights_of(override_family).as_ref(), weight);
+                overrides.insert(ch, ctx.resolve_spec(override_family, override_weight));
             }
         }
-        Self { base, overrides, synthetic_bold: weight >= BOLD_WEIGHT_THRESHOLD && !has_native_bold(ctx, family) }
+        let synthetic_bold = weight >= BOLD_WEIGHT_THRESHOLD && !has_native_bold(base_weights.as_ref());
+        Self { base, overrides, synthetic_bold }
     }
 
     /// Byte-range font spans for `text` (`resolveCharacterFontRuns`).
@@ -137,20 +144,21 @@ fn requested_weight(block: &TranslationBlock) -> u16 {
     if weight.is_finite() { weight.round().clamp(1.0, 1000.0) as u16 } else { DEFAULT_OVERLAY_FONT_WEIGHT as u16 }
 }
 
-fn has_native_bold(ctx: &FontContext, family: &str) -> bool {
-    ctx.family_weights(family)
-        .map(|(weights, variable_bold)| variable_bold || weights.iter().any(|weight| *weight >= BOLD_WEIGHT_THRESHOLD))
-        .unwrap_or(false)
+/// Whether a family with these installed weights (and variable bold) has a bold face.
+fn has_native_bold(weights: Option<&(Vec<u16>, bool)>) -> bool {
+    weights.is_some_and(|(weights, variable_bold)| {
+        *variable_bold || weights.iter().any(|weight| *weight >= BOLD_WEIGHT_THRESHOLD)
+    })
 }
 
 /// `resolveOverlayCanvasFontWeight`: without a native bold face, draw the regular face and
 /// embolden it with a stroke instead.
-fn canvas_font_weight(ctx: &FontContext, family: &str, weight: u16) -> u16 {
-    if weight < BOLD_WEIGHT_THRESHOLD || has_native_bold(ctx, family) {
+fn canvas_font_weight(weights: Option<&(Vec<u16>, bool)>, weight: u16) -> u16 {
+    if weight < BOLD_WEIGHT_THRESHOLD || has_native_bold(weights) {
         return weight;
     }
-    ctx.family_weights(family)
-        .and_then(|(weights, _)| weights.into_iter().filter(|w| *w > 0 && *w < BOLD_WEIGHT_THRESHOLD).max())
+    weights
+        .and_then(|(weights, _)| weights.iter().copied().filter(|w| *w > 0 && *w < BOLD_WEIGHT_THRESHOLD).max())
         .unwrap_or(SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT)
 }
 
@@ -1147,6 +1155,30 @@ mod tests {
         assert_eq!(text(lines), ["ab", "cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[5.0, 5.0, 5.0], 1.0, 0.0).map(text).unwrap(), ["ab cd", "", "ef"]);
         assert_eq!(break_paragraphs(&paragraphs, &[4.0, 4.0, 1.0], 1.0, 0.0), None, "\"ef\" is too wide");
+    }
+
+    #[test]
+    fn v2_judges_bold_by_the_family_that_draws() {
+        let ctx = FontContext::new();
+        // Any installed family with a bold face (fonts differ between machines).
+        let Some(family) = ctx
+            .system_families()
+            .iter()
+            .find(|family| family.weights.contains(&400) && family.weights.iter().any(|w| *w >= 700))
+        else {
+            return;
+        };
+        let mut block = TranslationBlock::default();
+        block.style.font_family = Some(format!("\"No Such Font 75\", {}", family.css_family));
+        block.style.font_weight = Some(700.0);
+        let original = BlockFonts::resolve(&ctx, &block);
+        assert!(original.synthetic_bold, "the original rules look at the first family only");
+        assert!(original.base.weight < BOLD_WEIGHT_THRESHOLD, "{:?}", original.base);
+        block.layout_version = Some(2);
+        let v2 = BlockFonts::resolve(&ctx, &block);
+        assert!(!v2.synthetic_bold, "{} has a bold face", family.family);
+        assert!(v2.base.weight >= BOLD_WEIGHT_THRESHOLD, "{:?}", v2.base);
+        assert_eq!(v2.base.family, original.base.family);
     }
 
     #[test]

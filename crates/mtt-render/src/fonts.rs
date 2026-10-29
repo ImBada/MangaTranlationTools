@@ -204,34 +204,37 @@ impl FontContext {
     /// Picks the first installed family of a CSS list and the installed weight closest to
     /// `weight` by CSS rules (cosmic-text itself only accepts exact weight matches).
     pub fn resolve_spec(&self, css_family: &str, weight: u16) -> FontSpec {
+        let (family, info) = self.resolve_family(css_family);
+        let weight = info.map(|info| info.matched_weight(weight)).unwrap_or(weight);
+        match (family, info) {
+            (FamilyName::Named(_), Some(info)) => {
+                FontSpec { family: FamilyName::Named(info.match_name.clone()), weight }
+            }
+            (family, _) => FontSpec { family, weight },
+        }
+    }
+
+    /// The family [`FontContext::resolve_spec`] picks from a CSS list: the first installed
+    /// named family, else the first generic one (sans-serif when there is none), with the
+    /// installed family it stands for when known.
+    fn resolve_family(&self, css_family: &str) -> (FamilyName, Option<&FamilyInfo>) {
         for family in parse_css_font_family(css_family) {
             match &family {
                 FamilyName::Named(name) => {
                     if let Some(info) = self.families.get(&normalize_family_key(name)) {
-                        return FontSpec {
-                            family: FamilyName::Named(info.match_name.clone()),
-                            weight: info.matched_weight(weight),
-                        };
+                        return (family, Some(info));
                     }
                 }
-                generic => return self.generic_spec(generic.clone(), weight),
+                generic => return (generic.clone(), self.generic_family(generic)),
             }
         }
-        self.generic_spec(FamilyName::SansSerif, weight)
+        (FamilyName::SansSerif, self.generic_family(&FamilyName::SansSerif))
     }
 
-    fn generic_spec(&self, family: FamilyName, weight: u16) -> FontSpec {
-        let db_family = match family {
-            FamilyName::Serif => fontdb::Family::Serif,
-            FamilyName::Monospace => fontdb::Family::Monospace,
-            FamilyName::Cursive => fontdb::Family::Cursive,
-            FamilyName::Fantasy => fontdb::Family::Fantasy,
-            _ => fontdb::Family::SansSerif,
-        };
-        let name = self.font_system.db().family_name(&db_family).to_owned();
-        let weight =
-            self.families.get(&normalize_family_key(&name)).map(|info| info.matched_weight(weight)).unwrap_or(weight);
-        FontSpec { family, weight }
+    /// The installed family a generic family maps to.
+    fn generic_family(&self, family: &FamilyName) -> Option<&FamilyInfo> {
+        let family = db_family(family);
+        self.families.get(&normalize_family_key(self.font_system.db().family_name(&family)))
     }
 
     /// Installed weights of the primary family in a CSS list (`FontWeightAvailability`).
@@ -241,6 +244,12 @@ impl FontContext {
             return None;
         };
         self.families.get(&normalize_family_key(&name)).map(|info| (info.weights.clone(), info.variable_bold()))
+    }
+
+    /// Installed weights of the family [`FontContext::resolve_spec`] picks from a CSS list,
+    /// and whether it has a variable bold.
+    pub fn resolved_family_weights(&self, css_family: &str) -> Option<(Vec<u16>, bool)> {
+        self.resolve_family(css_family).1.map(|info| (info.weights.clone(), info.variable_bold()))
     }
 
     /// Shapes `text` with `base`, overriding the font for `spans` (byte ranges).
