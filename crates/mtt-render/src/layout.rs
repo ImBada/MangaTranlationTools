@@ -449,7 +449,7 @@ fn layout_in(
     );
     // Following the shape is harder than fitting its box, so count down from the box's fit.
     let shaped_size = follow.and_then(|shape| {
-        let paragraphs = Paragraph::measure_all(ctx, fonts, text);
+        let paragraphs = Paragraph::measure_all(ctx, fonts, block, text);
         let floor = min_font_size.ceil().min(font_size_px);
         let mut size = font_size_px;
         loop {
@@ -493,7 +493,14 @@ pub fn shaped_lines(
     layout: &BlockTextLayout,
 ) -> Option<ShapedLines> {
     let shape = line_shape(block).filter(|_| layout.shaped)?;
-    fit_shape(&Paragraph::measure_all(ctx, fonts, text), block, layout.font_size_px, shape, layout.rect, layout.inner)
+    fit_shape(
+        &Paragraph::measure_all(ctx, fonts, block, text),
+        block,
+        layout.font_size_px,
+        shape,
+        layout.rect,
+        layout.inner,
+    )
 }
 
 /// Lines of `paragraphs` at `font_size` following `shape` (spans of `rect`) in the fit
@@ -759,7 +766,7 @@ fn wrap_lines(
 ) -> Vec<WrappedLine> {
     let spacing = letter_spacing_px(block, font_size);
     let mut lines = Vec::new();
-    for paragraph in Paragraph::measure_all(ctx, fonts, text) {
+    for paragraph in Paragraph::measure_all(ctx, fonts, block, text) {
         let segments = &paragraph.segments;
         if segments.is_empty() {
             lines.push(WrappedLine { text: String::new(), width: 0.0 });
@@ -806,7 +813,7 @@ struct Paragraph {
 }
 
 impl Paragraph {
-    fn measure_all(ctx: &mut FontContext, fonts: &BlockFonts, text: &str) -> Vec<Self> {
+    fn measure_all(ctx: &mut FontContext, fonts: &BlockFonts, block: &TranslationBlock, text: &str) -> Vec<Self> {
         text.replace('\r', "")
             .split('\n')
             .map(|paragraph| {
@@ -832,7 +839,7 @@ impl Paragraph {
                     }
                     units_before.push(units_before.last().copied().unwrap_or_default() + usize::from(starts_unit));
                 }
-                let segments = split_text_wrap_segments(&chars);
+                let segments = split_text_wrap_segments(&chars, block.layout_version() >= 2);
                 Self { chars, prefix_em, units_before, segments }
             })
             .collect()
@@ -878,7 +885,10 @@ fn balanced_breaks(
         if matches!(next, '…' | '⋯' | '~' | '～' | '〜' | 'ー' | '—' | '―' | '.') {
             return BREAK_BEFORE_MARK_COST;
         }
-        match chars[segments[end - 1].1 - 1] {
+        // `뭐야?”` and `그래.」` end sentences too.
+        let (start, end) = segments[end - 1];
+        let last = chars[start..end].iter().rev().find(|ch| !is_closing_bracket(**ch)).unwrap_or(&chars[end - 1]);
+        match *last {
             '.' | '!' | '?' | '…' | '⋯' | '！' | '？' | '。' | '‼' | '~' | '～' | '〜' => 0.0,
             ',' | '、' | '，' | ';' | ':' | '—' | '―' => BREAK_AFTER_COMMA_COST,
             _ => BREAK_MID_PHRASE_COST,
@@ -1014,7 +1024,9 @@ pub fn collapse_whitespace(text: &str) -> String {
 }
 
 /// Char ranges of wrap segments; a segment that starts a new word is preceded by a space.
-fn split_text_wrap_segments(chars: &[char]) -> Vec<(usize, usize)> {
+/// With `kinsoku` (typesetting v2) no line starts with closing punctuation or ends with an
+/// opening bracket ([`join_kinsoku`]).
+fn split_text_wrap_segments(chars: &[char], kinsoku: bool) -> Vec<(usize, usize)> {
     let mut segments = Vec::new();
     let mut word_start = 0;
     for index in 0..=chars.len() {
@@ -1028,7 +1040,51 @@ fn split_text_wrap_segments(chars: &[char]) -> Vec<(usize, usize)> {
     if segments.is_empty() {
         segments.push((0, chars.len()));
     }
-    segments
+    if kinsoku { join_kinsoku(chars, segments) } else { segments }
+}
+
+/// Closing brackets and quotes. Straight quotes count when they touch the text before.
+fn is_closing_bracket(ch: char) -> bool {
+    matches!(
+        ch,
+        '」' | '』' | '）' | ')' | ']' | '］' | '}' | '｝' | '〉' | '》' | '】' | '〕' | '”' | '’' | '"' | '\''
+    )
+}
+
+/// Opening brackets and quotes. Straight quotes count when they touch the text after.
+fn is_opening_bracket(ch: char) -> bool {
+    matches!(
+        ch,
+        '「' | '『' | '（' | '(' | '[' | '［' | '{' | '｛' | '〈' | '《' | '【' | '〔' | '“' | '‘' | '"' | '\''
+    )
+}
+
+/// What may not start a line: closing brackets and quotes, and punctuation that ends a
+/// phrase.
+fn is_line_start_prohibited(ch: char) -> bool {
+    is_closing_bracket(ch) || matches!(ch, '!' | '?' | '！' | '？' | ',' | '，' | '、' | '。' | '．')
+}
+
+/// Joins segments across breaks that would start a line with closing punctuation (`…」`,
+/// `)어떻게`, and `?!` even after a space, as in `소리야 ?!`) or end one with an opening
+/// bracket (`(…`).
+fn join_kinsoku(chars: &[char], segments: Vec<(usize, usize)>) -> Vec<(usize, usize)> {
+    let mut joined: Vec<(usize, usize)> = Vec::with_capacity(segments.len());
+    for (start, end) in segments {
+        if let Some(last) = joined.last_mut() {
+            let touching = last.1 == start;
+            let closing_only =
+                chars[start..end].iter().all(|ch| is_line_start_prohibited(*ch) && !matches!(ch, '"' | '\''));
+            if (touching && (is_line_start_prohibited(chars[start]) || is_opening_bracket(chars[last.1 - 1])))
+                || closing_only
+            {
+                last.1 = end;
+                continue;
+            }
+        }
+        joined.push((start, end));
+    }
+    joined
 }
 
 /// Splits a word around matches of `[—―]*(?:[…⋯]+|\.{3,}|[~～〜ー]+)[.!?！？。．…⋯]*`, keeping
@@ -1117,13 +1173,13 @@ mod tests {
     #[test]
     fn wrap_segments_track_word_boundaries() {
         let chars: Vec<char> = "ab cd…ef".chars().collect();
-        assert_eq!(split_text_wrap_segments(&chars), vec![(0, 2), (3, 5), (5, 6), (6, 8)]);
+        assert_eq!(split_text_wrap_segments(&chars, false), vec![(0, 2), (3, 5), (5, 6), (6, 8)]);
     }
 
     /// Lines `balanced_breaks` picks for `text` (1em per char, segments at spaces).
     fn balance(text: &str, line_count: usize, max_width: f64) -> Option<Vec<String>> {
         let chars: Vec<char> = text.chars().collect();
-        let segments = split_text_wrap_segments(&chars);
+        let segments = split_text_wrap_segments(&chars, true);
         let (ends, _) =
             balanced_breaks(&chars, &segments, &vec![max_width; line_count], false, 1.0, |a, b| (b - a) as f64)?;
         let mut first = 0;
@@ -1156,6 +1212,47 @@ mod tests {
         assert_eq!(balance("뭐야? 너 누구야!", 2, 7.0).unwrap(), ["뭐야?", "너 누구야!"]);
         // A line doesn't start with the ellipsis when it can be avoided.
         assert_eq!(balance("그래서…정말 그랬어", 2, 6.0).unwrap(), ["그래서…", "정말 그랬어"]);
+    }
+
+    #[test]
+    fn v2_lines_keep_brackets_and_closing_marks_with_their_words() {
+        let segments = |text: &str| {
+            let chars: Vec<char> = text.chars().collect();
+            split_text_wrap_segments(&chars, true)
+                .into_iter()
+                .map(|(start, end)| chars[start..end].iter().collect::<String>())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(segments("그건 말이야…」 정말"), ["그건", "말이야", "…」", "정말"]);
+        assert_eq!(segments("“그게 정말…” 하고"), ["“그게", "정말", "…”", "하고"]);
+        assert_eq!(segments("그래서 (…) 어떻게"), ["그래서", "(…)", "어떻게"]);
+        assert_eq!(segments("그래(…)어떻게"), ["그래(…)어떻게"]);
+        assert_eq!(segments("무슨 소리야 ?!"), ["무슨", "소리야 ?!"]);
+        assert_eq!(segments("그가 \"응\" 했다"), ["그가", "\"응\"", "했다"]);
+
+        for (text, lines) in [
+            ("그건 말이야…」 정말 그랬어", 2..=4),
+            ("“그게 정말…” 하고 말했어", 2..=4),
+            ("그래서 (…) 어떻게 된 거야", 2..=4),
+            ("무슨 소리야 ?! 정말", 2..=3),
+        ] {
+            for count in lines {
+                for width in 3..=14 {
+                    let Some(broken) = balance(text, count, f64::from(width)) else { continue };
+                    for line in &broken {
+                        let first = line.chars().next().unwrap();
+                        assert!(!is_line_start_prohibited(first), "{text:?} at {width}: {broken:?}");
+                        assert!(!is_opening_bracket(line.chars().last().unwrap()), "{text:?} at {width}: {broken:?}");
+                    }
+                }
+            }
+        }
+        // A closing quote doesn't hide the question mark that ends the sentence.
+        assert_eq!(balance("뭐야?” 너 누구야!", 2, 7.0).unwrap(), ["뭐야?”", "너 누구야!"]);
+        assert_eq!(balance("그래.」 너 누구야!", 2, 7.0).unwrap(), ["그래.」", "너 누구야!"]);
+        // The original rules keep their segments.
+        let chars: Vec<char> = "말이야…」".chars().collect();
+        assert_eq!(split_text_wrap_segments(&chars, false).len(), 3);
     }
 
     #[test]
