@@ -519,13 +519,7 @@ pub(super) fn pages_widget(
             }
         },
         |ui| {
-            ui.horizontal(|ui| {
-                let label = RichText::new(format!("검수 {completed}/{total}")).small().color(theme::TEXT_WEAK);
-                let width = (ui.available_width() - 64.0).max(40.0);
-                let color = if total > 0 && completed == total { theme::SUCCESS } else { theme::ACCENT };
-                theme::progress(ui, ratio(completed, total), width, color);
-                ui.label(label);
-            });
+            review_progress(ui, completed, total);
             ui.add_space(6.0);
             if total == 0 {
                 theme::hint(ui, "불러온 페이지가 없습니다.");
@@ -540,6 +534,19 @@ pub(super) fn pages_widget(
         _ => {}
     }
     widgets::toggled(editor, Widget::Pages, host, toggle);
+}
+
+/// "검수 n/total" on the right and the bar in what is left, so a long count (a chapter of
+/// hundreds of pages) never makes the row wider than the widget — in a window that would
+/// widen it a little more every frame.
+fn review_progress(ui: &mut egui::Ui, completed: usize, total: usize) {
+    ui.horizontal(|ui| {
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.label(RichText::new(format!("검수 {completed}/{total}")).small().color(theme::TEXT_WEAK));
+            let color = if total > 0 && completed == total { theme::SUCCESS } else { theme::ACCENT };
+            theme::progress(ui, ratio(completed, total), ui.available_width().max(0.0), color);
+        });
+    });
 }
 
 fn page_rows(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, worker: &Worker<AppEvent>) {
@@ -1085,4 +1092,39 @@ fn layer_row(ui: &mut egui::Ui, label: &str, visible: &mut bool, opacity: &mut f
     ui.add_enabled(*visible, egui::Slider::new(opacity, 0.0..=1.0).show_value(false));
     ui.label(RichText::new(format!("{}%", (*opacity * 100.0).round())).small().color(theme::TEXT_WEAK));
     ui.end_row();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Width the review row takes in a `width`-wide widget, after a few frames.
+    fn review_progress_width(width: f32, completed: usize, total: usize) -> f32 {
+        let ctx = egui::Context::default();
+        let mut measured = 0.0;
+        for _ in 0..3 {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                ..Default::default()
+            };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.scope_builder(
+                    egui::UiBuilder::new().max_rect(Rect::from_min_size(Pos2::ZERO, egui::vec2(width, 600.0))),
+                    |ui| {
+                        measured = ui.scope(|ui| review_progress(ui, completed, total)).response.rect.width();
+                    },
+                );
+            });
+            output.textures_delta.clear();
+        }
+        measured
+    }
+
+    #[test]
+    fn long_review_counts_do_not_widen_the_page_list() {
+        for (completed, total) in [(3, 27), (120, 215), (12345, 99999)] {
+            let width = review_progress_width(220.0, completed, total);
+            assert!(width <= 220.0, "{completed}/{total} row is {width} wide");
+        }
+    }
 }
