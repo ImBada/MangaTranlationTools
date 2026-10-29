@@ -397,10 +397,13 @@ pub fn create_import(
                 updated_at: now.clone(),
                 ..Chapter::default()
             };
-            let mut current_work = library.read_work(&work.id)?.unwrap_or_else(|| work.clone());
-            current_work.chapter_order.push(chapter_id.clone());
-            current_work.updated_at = now;
-            library.write_work(&current_work)?;
+            let added = library.update_work(&work.id, |current| {
+                current.chapter_order.push(chapter_id.clone());
+                current.updated_at = now;
+            })?;
+            if added.is_none() {
+                return Err(CoreError::NotFound("선택한 작품을 찾지 못했습니다.".into()));
+            }
             library.write_chapter_file(&chapter)?;
         }
         Ok(created.iter().map(|(id, _)| id.clone()).collect())
@@ -545,13 +548,15 @@ fn rollback(library: &Library, work_id: &str, created_work: bool, created: &[(St
         }
         return;
     }
-    if let Ok(Some(mut work)) = library.read_work(work_id) {
+    let removed = library.update_work(work_id, |work| {
         let before = work.chapter_order.len();
         work.chapter_order.retain(|id| !created.iter().any(|(created_id, _)| created_id == id));
         if work.chapter_order.len() != before {
             work.updated_at = now_iso();
-            let _ = library.write_work(&work);
         }
+    });
+    if let Err(error) = removed {
+        log::warn!("import rollback failed: {error}");
     }
     for (_, dir) in created {
         let _ = fs::remove_dir_all(dir);

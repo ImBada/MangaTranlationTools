@@ -49,11 +49,15 @@ pub struct WorkSummary {
     pub chapters: Vec<ChapterSummary>,
 }
 
-/// Clones share the summary cache.
+/// Clones share the summary cache and the metadata lock.
 #[derive(Debug, Clone)]
 pub struct Library {
     root: PathBuf,
     cache: Arc<Mutex<SummaryCache>>,
+    /// Held around every read-modify-write of `work.json` and `index.json`: the save
+    /// writer, an import and the UI change them from different threads, and an unlocked
+    /// write from a stale read would drop the other's change (a new chapter's id, notes).
+    metadata: Arc<Mutex<()>>,
 }
 
 /// What a file looked like when it was read, to tell whether it changed since.
@@ -81,11 +85,15 @@ struct SummaryCache {
 
 impl Library {
     pub fn new(root: impl Into<PathBuf>) -> Self {
-        Self { root: root.into(), cache: Arc::default() }
+        Self { root: root.into(), cache: Arc::default(), metadata: Arc::default() }
     }
 
     fn cache(&self) -> std::sync::MutexGuard<'_, SummaryCache> {
         self.cache.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    fn metadata_lock(&self) -> std::sync::MutexGuard<'_, ()> {
+        self.metadata.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     /// The summary of one chapter: from the cache when its file is unchanged, else read.
@@ -161,8 +169,42 @@ impl Library {
         }))
     }
 
+    /// Replaces `work.json` with `work` as given. To change a field of the stored work, use
+    /// [`Library::update_work`], which can't lose another thread's change.
     pub fn write_work(&self, work: &Work) -> CoreResult<()> {
+        let _lock = self.metadata_lock();
         write_json_atomic(&self.work_file(&work.id), work)
+    }
+
+    /// Reads `work.json`, applies `change` and writes it back, all under the metadata lock.
+    /// `None` (nothing written) when the work doesn't exist.
+    pub fn update_work<R>(&self, work_id: &str, change: impl FnOnce(&mut Work) -> R) -> CoreResult<Option<R>> {
+        let _lock = self.metadata_lock();
+        self.update_work_locked(work_id, true, change)
+    }
+
+    /// [`Library::update_work`] for a caller holding the metadata lock; `sync` flushes the
+    /// file to disk before it replaces the old one.
+    fn update_work_locked<R>(
+        &self,
+        work_id: &str,
+        sync: bool,
+        change: impl FnOnce(&mut Work) -> R,
+    ) -> CoreResult<Option<R>> {
+        let Some(mut work) = self.read_work(work_id)? else { return Ok(None) };
+        let result = change(&mut work);
+        let path = self.work_file(&work.id);
+        if sync { write_json_atomic(&path, &work) } else { write_json_replace(&path, &work) }?;
+        Ok(Some(result))
+    }
+
+    /// Reads `index.json`, applies `change` and writes it back under the metadata lock.
+    fn update_index<R>(&self, change: impl FnOnce(&mut LibraryIndexFile) -> R) -> CoreResult<R> {
+        let _lock = self.metadata_lock();
+        let mut index = self.read_index()?;
+        let result = change(&mut index);
+        self.write_index(&index)?;
+        Ok(result)
     }
 
     /// Like [`Library::read_work`], the location is the chapter's identity.
@@ -182,11 +224,9 @@ impl Library {
     /// bumps the parent work's `updatedAt`.
     pub fn write_chapter(&self, chapter: &Chapter) -> CoreResult<()> {
         self.write_chapter_file(chapter)?;
-        if let Some(mut work) = self.read_work(&chapter.work_id)? {
-            work.updated_at = chapter.updated_at.clone();
-            // Only a timestamp: not worth a second disk flush per save.
-            write_json_replace(&self.work_file(&work.id), &work)?;
-        }
+        let _lock = self.metadata_lock();
+        // Only a timestamp: not worth a second disk flush per save.
+        self.update_work_locked(&chapter.work_id, false, |work| work.updated_at = chapter.updated_at.clone())?;
         Ok(())
     }
 
@@ -276,18 +316,17 @@ impl Library {
             updated_at: now,
             ..Work::default()
         };
-        let mut index = self.read_index()?;
-        index.work_order.push(work.id.clone());
-        self.write_index(&index)?;
+        self.update_index(|index| index.work_order.push(work.id.clone()))?;
         self.write_work(&work)?;
         Ok(work)
     }
 
     pub fn rename_work(&self, work_id: &str, title: &str) -> CoreResult<()> {
-        let mut work = self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
-        work.title = sanitize_title(title, DEFAULT_WORK_TITLE);
-        work.updated_at = now_iso();
-        self.write_work(&work)
+        self.update_work(work_id, |work| {
+            work.title = sanitize_title(title, DEFAULT_WORK_TITLE);
+            work.updated_at = now_iso();
+        })?
+        .ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))
     }
 
     pub fn rename_chapter(&self, chapter_id: &str, title: &str) -> CoreResult<()> {
@@ -307,9 +346,7 @@ impl Library {
         if self.read_work(work_id)?.is_none() {
             return Err(CoreError::NotFound("작품을 찾지 못했습니다.".into()));
         }
-        let mut index = self.read_index()?;
-        index.work_order.retain(|id| id != work_id);
-        self.write_index(&index)?;
+        self.update_index(|index| index.work_order.retain(|id| id != work_id))?;
         remove_dir_if_exists(&self.work_dir(work_id))
     }
 
@@ -320,20 +357,21 @@ impl Library {
         let work_id = self
             .find_chapter_work_id(chapter_id)?
             .ok_or_else(|| CoreError::NotFound("화를 찾지 못했습니다.".into()))?;
-        let mut work =
-            self.read_work(&work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
-        work.chapter_order.retain(|id| id != chapter_id);
-        work.updated_at = now_iso();
-        self.write_work(&work)?;
+        self.update_work(&work_id, |work| {
+            work.chapter_order.retain(|id| id != chapter_id);
+            work.updated_at = now_iso();
+        })?
+        .ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
         remove_dir_if_exists(&self.chapter_dir(&work_id, chapter_id))
     }
 
     /// `reorderChapters`: stores `work.chapterOrder` reordered by `chapter_ids` (see [`reorder_ids`]).
     pub fn reorder_chapters(&self, work_id: &str, chapter_ids: &[String]) -> CoreResult<()> {
-        let mut work = self.read_work(work_id)?.ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))?;
-        work.chapter_order = reorder_ids(&work.chapter_order, chapter_ids);
-        work.updated_at = now_iso();
-        self.write_work(&work)
+        self.update_work(work_id, |work| {
+            work.chapter_order = reorder_ids(&work.chapter_order, chapter_ids);
+            work.updated_at = now_iso();
+        })?
+        .ok_or_else(|| CoreError::NotFound("작품을 찾지 못했습니다.".into()))
     }
 
     /// `reorderPages`: [`reorder_chapter_pages`] on the stored chapter, then saves it.
@@ -761,6 +799,41 @@ mod tests {
         fs::write(&path, text.replace("\"title\": \"1화\"", "\"title\": null")).unwrap();
         assert_eq!(library.open_chapter("c1").unwrap().pages[1].blocks[0].opacity, 1.0);
         assert_eq!(library.list().unwrap()[0].chapters[0].title, "");
+    }
+
+    #[test]
+    fn concurrent_work_updates_are_not_lost() {
+        let dir = tempfile::tempdir().unwrap();
+        let library = Library::new(dir.path());
+        let work = library.create_work("w").unwrap();
+        let chapter = sample_chapter(&library, &work);
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // The save writer bumps `updatedAt` while imports add chapters.
+        let saver = {
+            let (library, stop) = (library.clone(), Arc::clone(&stop));
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    library.write_chapter(&chapter).unwrap();
+                }
+            })
+        };
+        let importers: Vec<_> = (0..4)
+            .map(|thread| {
+                let (library, work_id) = (library.clone(), work.id.clone());
+                std::thread::spawn(move || {
+                    for n in 0..20 {
+                        library
+                            .update_work(&work_id, |work| work.chapter_order.push(format!("t{thread}-{n}")))
+                            .unwrap();
+                    }
+                })
+            })
+            .collect();
+        importers.into_iter().for_each(|thread| thread.join().unwrap());
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        saver.join().unwrap();
+        let order = library.read_work(&work.id).unwrap().unwrap().chapter_order;
+        assert_eq!(order.len(), 1 + 4 * 20, "no chapter id lost");
     }
 
     #[test]
