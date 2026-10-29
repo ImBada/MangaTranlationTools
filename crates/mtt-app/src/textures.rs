@@ -3,6 +3,7 @@
 //! uploaded without keeping a second CPU copy of the page.
 
 use std::ops::Range;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use eframe::egui;
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions};
@@ -11,6 +12,8 @@ pub struct TiledTexture {
     pub width: u32,
     pub height: u32,
     smooth: bool,
+    /// Filtering the tiles were uploaded with.
+    options: TextureOptions,
     tiles: Vec<Tile>,
 }
 
@@ -22,9 +25,23 @@ struct Tile {
     texture: TextureHandle,
 }
 
+/// `AppSettings::zoom_smoothing`, read by textures built on worker threads too.
+static SMOOTH_MAGNIFICATION: AtomicBool = AtomicBool::new(false);
+
+pub fn set_smooth_magnification(smooth: bool) {
+    SMOOTH_MAGNIFICATION.store(smooth, Ordering::Relaxed);
+}
+
+/// Smooth images always filter when zoomed out; zoomed in they show sharp pixels unless
+/// the zoom smoothing setting is on.
 pub fn options(smooth: bool) -> TextureOptions {
     if smooth {
-        TextureOptions { mipmap_mode: Some(egui::TextureFilter::Linear), ..TextureOptions::LINEAR }
+        let magnification = if SMOOTH_MAGNIFICATION.load(Ordering::Relaxed) {
+            egui::TextureFilter::Linear
+        } else {
+            egui::TextureFilter::Nearest
+        };
+        TextureOptions { magnification, mipmap_mode: Some(egui::TextureFilter::Linear), ..TextureOptions::LINEAR }
     } else {
         TextureOptions::NEAREST
     }
@@ -58,16 +75,17 @@ impl TiledTexture {
     pub fn new(ctx: &egui::Context, name: &str, width: u32, height: u32, smooth: bool, fill: impl RowFill) -> Self {
         let (width, height) = (width.max(1), height.max(1));
         let tile_size = (ctx.input(|i| i.max_texture_side) as u32).clamp(512, 4096);
+        let options = options(smooth);
         let mut tiles = Vec::new();
         for y in (0..height).step_by(tile_size as usize) {
             for x in (0..width).step_by(tile_size as usize) {
                 let (tile_width, tile_height) = (tile_size.min(width - x), tile_size.min(height - y));
                 let image = build_image(x, y, tile_width, tile_height, &fill);
-                let texture = ctx.load_texture(format!("{name}-{x}-{y}"), image, options(smooth));
+                let texture = ctx.load_texture(format!("{name}-{x}-{y}"), image, options);
                 tiles.push(Tile { x, y, width: tile_width, height: tile_height, texture });
             }
         }
-        Self { width, height, smooth, tiles }
+        Self { width, height, smooth, options, tiles }
     }
 
     pub fn from_rgba(ctx: &egui::Context, name: &str, image: &image::RgbaImage, smooth: bool) -> Self {
@@ -75,6 +93,11 @@ impl TiledTexture {
         Self::new(ctx, name, width, image.height(), smooth, |y, xs, out| {
             extend_rgba(out, row(image.as_raw(), width, 4, y, &xs))
         })
+    }
+
+    /// Whether the tiles still use the filtering the settings ask for.
+    pub fn filter_current(&self) -> bool {
+        self.options == options(self.smooth)
     }
 
     /// Re-uploads the pixels inside a page-pixel rect (brush strokes).
@@ -90,7 +113,7 @@ impl TiledTexture {
                 continue;
             }
             let patch = build_image(left, top, tile_right - left, tile_bottom - top, &fill);
-            tile.texture.set_partial([(left - tile.x) as usize, (top - tile.y) as usize], patch, options(self.smooth));
+            tile.texture.set_partial([(left - tile.x) as usize, (top - tile.y) as usize], patch, self.options);
         }
     }
 

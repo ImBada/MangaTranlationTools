@@ -78,6 +78,7 @@ impl Services {
             log::warn!("settings load failed: {error}");
             AppSettings::default()
         });
+        crate::textures::set_smooth_magnification(settings.zoom_smoothing);
         let (sender, receiver) = channel();
         let repaint = ctx.clone();
         std::thread::Builder::new()
@@ -169,6 +170,7 @@ impl Services {
     pub fn save_settings(&mut self, settings: AppSettings) -> Result<(), String> {
         match settings.save(&self.paths.settings_path) {
             Ok(saved) => {
+                crate::textures::set_smooth_magnification(saved.zoom_smoothing);
                 self.settings = saved;
                 Ok(())
             }

@@ -912,7 +912,7 @@ impl SettingsView {
                     &[
                         (SettingsTab::Translation, "번역", "번역 엔진과 모델"),
                         (SettingsTab::Inpaint, "인페인트", "LaMa와 글자 분할 모델"),
-                        (SettingsTab::Editing, "편집", "단축키 옵션"),
+                        (SettingsTab::Editing, "편집", "화면과 단축키 옵션"),
                         (SettingsTab::About, "정보", "버전과 데이터 폴더"),
                     ],
                 ) {
@@ -938,6 +938,12 @@ impl SettingsView {
                             theme::hint(
                                 ui,
                                 "편집 화면에서 Q 키를 삭제 키로 씁니다. 텍스트 입력 중에는 적용되지 않습니다.",
+                            );
+                            ui.add_space(14.0);
+                            toggle_row(ui, "확대 시 부드럽게 보정", &mut draft.zoom_smoothing);
+                            theme::hint(
+                                ui,
+                                "켜면 확대한 페이지의 픽셀 사이를 보간해 부드럽지만 흐릿하게 보입니다. 끄면 픽셀을 그대로 보여 줍니다. 축소할 때는 항상 부드럽게 표시합니다.",
                             );
                             ui.add_space(14.0);
                             ui.label(theme::semibold("단축키"));

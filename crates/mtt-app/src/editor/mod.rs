@@ -2325,6 +2325,11 @@ impl Editor {
         worker: &Worker<AppEvent>,
     ) -> Option<EditorAction> {
         let pointer_down = ui.input(|i| i.pointer.any_down());
+        for (page_id, assets) in &mut self.assets {
+            if let PageAssets::Ready(page) = assets {
+                page.refresh_texture_filters(ui.ctx(), page_id);
+            }
+        }
         self.tick(services, worker, pointer_down);
         if std::mem::take(&mut self.block_translation_requested) {
             self.start_block_translation(services, worker);

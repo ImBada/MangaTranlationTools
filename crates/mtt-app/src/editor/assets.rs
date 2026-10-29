@@ -190,6 +190,15 @@ impl LoadedPage {
         self.mask_texture = textures.mask;
     }
 
+    /// Re-uploads every texture after the zoom smoothing setting changed.
+    pub fn refresh_texture_filters(&mut self, ctx: &egui::Context, page_id: &str) {
+        if self.source_texture.filter_current() {
+            return;
+        }
+        self.source_texture = TiledTexture::from_rgba(ctx, &format!("{page_id}-source"), &self.source, true);
+        self.rebuild_layer_textures(ctx, page_id);
+    }
+
     pub fn rebuild_layer_textures(&mut self, ctx: &egui::Context, page_id: &str) {
         self.mask_has_pixels.set(None);
         self.result_has_pixels.set(None);

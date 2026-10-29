@@ -77,6 +77,8 @@ pub struct AppSettings {
     pub translation_parallel: TranslationParallelSettings,
     pub nsfw_mode: bool,
     pub one_hand_mode: bool,
+    /// Interpolate page pixels when zoomed in (off: sharp pixels).
+    pub zoom_smoothing: bool,
     /// Added to every translation prompt (tone, house style).
     pub translation_instructions: String,
     /// Keys written by newer versions of either app.
@@ -105,6 +107,7 @@ impl Default for AppSettings {
             },
             nsfw_mode: false,
             one_hand_mode: false,
+            zoom_smoothing: false,
             translation_instructions: String::new(),
             extra: JsonMap::new(),
         }
@@ -115,7 +118,7 @@ fn field<'a>(map: Option<&'a serde_json::Map<String, Value>>, key: &str) -> Opti
     map.and_then(|map| map.get(key))
 }
 
-const KNOWN_KEYS: [&str; 8] = [
+const KNOWN_KEYS: [&str; 9] = [
     "modelProvider",
     "codex",
     "openAICompatible",
@@ -123,6 +126,7 @@ const KNOWN_KEYS: [&str; 8] = [
     "translationParallel",
     "nsfwMode",
     "oneHandMode",
+    "zoomSmoothing",
     "translationInstructions",
 ];
 
@@ -202,6 +206,7 @@ impl AppSettings {
             },
             nsfw_mode: bool_or(get("nsfwMode"), defaults.nsfw_mode),
             one_hand_mode: bool_or(get("oneHandMode"), defaults.one_hand_mode),
+            zoom_smoothing: bool_or(get("zoomSmoothing"), defaults.zoom_smoothing),
             translation_instructions: get("translationInstructions")
                 .and_then(Value::as_str)
                 .map(|text| text.trim().to_owned())
@@ -338,6 +343,7 @@ mod tests {
         assert_eq!(settings.translation_parallel.max_concurrency, TRANSLATION_PARALLEL_MAX);
         assert!(settings.nsfw_mode);
         assert!(!settings.one_hand_mode);
+        assert!(!settings.zoom_smoothing, "zoomed pages stay sharp by default");
         assert_eq!(settings.extra.get("futureKey"), Some(&json!(1)));
     }
 
