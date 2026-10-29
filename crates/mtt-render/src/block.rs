@@ -366,7 +366,13 @@ impl<'a> BlockPainter<'a> {
         let y_offset = self.font_size * RENDER_Y_OFFSET_RATIO;
         let (left, top) = (layout.inner.left, layout.inner.top + y_offset);
         if self.block.render_direction == RenderTextDirection::Vertical {
-            self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
+            // The original rules place vertical text in the fit area but from the inner
+            // box's corner, off centre by the measuring margin.
+            if self.block.layout_version() >= 2 {
+                self.vertical_items(left, top, layout.inner.width, layout.inner.height)
+            } else {
+                self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
+            }
         } else {
             self.horizontal_items(left, top, layout.inner.width, layout.inner.height, layout.fit_inner_width)
         }
@@ -466,9 +472,13 @@ impl<'a> BlockPainter<'a> {
         let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
-        let column_height = |count: usize| {
-            let count = count as f64;
-            count * line_height + (count - 1.0).max(0.0) * (advance - line_height)
+        // v2 places the characters' em boxes; the original rules a line height per character.
+        let v2 = self.block.layout_version() >= 2;
+        let font_size = self.font_size;
+        let column_height = |count: usize| match count {
+            0 => 0.0,
+            _ if v2 => (count - 1) as f64 * advance + font_size,
+            _ => count as f64 * line_height + (count - 1) as f64 * (advance - line_height),
         };
         let total_height = columns.iter().map(|column| column_height(column.len())).fold(0.0, f64::max);
         let pitch = self.font_size * VERTICAL_COLUMN_ADVANCE;
@@ -946,6 +956,34 @@ mod tests {
         let v2 = block_text(&mut ctx, page, &block).unwrap().lines;
         assert_eq!(v2, ["가", "나다라"]);
         assert_ne!(original, v2);
+    }
+
+    #[test]
+    fn v2_centres_vertical_text_in_its_box() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 60.0, 300.0),
+            translated_text: "가나다".into(),
+            render_direction: RenderTextDirection::Vertical,
+            ..TranslationBlock::default()
+        };
+        let center = |text: &BlockText| {
+            let (rect, area) = (text.text_rect, text.layout.rect);
+            (
+                rect.left + rect.width / 2.0 - (area.left + area.width / 2.0),
+                rect.top + rect.height / 2.0 - (area.top + area.height / 2.0),
+            )
+        };
+        let (dx, dy) = center(&block_text(&mut ctx, page, &block).unwrap());
+        assert!(dx < -9.0 && dy < -8.0, "the original rules stay where they were: {dx}, {dy}");
+        block.layout_version = Some(2);
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        let (dx, dy) = center(&text);
+        // Down by the same baseline nudge as horizontal text.
+        let nudge = text.font_size_px * RENDER_Y_OFFSET_RATIO;
+        assert!(dx.abs() < 1e-9 && (dy - nudge).abs() < 1e-9, "{dx}, {dy}");
     }
 
     #[test]
