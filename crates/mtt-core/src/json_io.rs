@@ -155,12 +155,15 @@ pub fn set_aside_broken(path: &Path) -> CoreResult<PathBuf> {
 }
 
 /// Copies `path` to `<path>.native-backup` the first time the native app overwrites it.
+/// Written like any other file (temp file + rename), so a crash mid-copy can't leave a
+/// truncated backup that would then never be made again.
 pub fn backup_once(path: &Path) -> CoreResult<()> {
     let backup = append_extension(path, "native-backup");
     if backup.exists() || !path.exists() {
         return Ok(());
     }
-    fs::copy(path, &backup).map(|_| ()).map_err(|source| CoreError::io(&backup, source))
+    let bytes = fs::read(path).map_err(|source| CoreError::io(path, source))?;
+    write_bytes_atomic(&backup, &bytes)
 }
 
 fn temp_sibling(path: &Path) -> PathBuf {

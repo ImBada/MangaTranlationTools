@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::error::{CoreError, CoreResult};
-use crate::json_io::write_json_private;
+use crate::json_io::{set_aside_broken, write_json_private};
 use crate::model::JsonMap;
 
 pub const DEFAULT_CODEX_MODEL: &str = "gpt-6.1-sol";
@@ -227,11 +227,35 @@ impl AppSettings {
         Self::from_json(&serde_json::to_value(self).unwrap_or(Value::Null))
     }
 
+    /// Reads `settings.json`. A file that isn't valid JSON is moved aside to
+    /// `settings.json.bad` (it may hold an API key the next save would otherwise overwrite)
+    /// and the defaults are used.
     pub fn load(path: &Path) -> CoreResult<Self> {
         match std::fs::read(path) {
-            Ok(bytes) => Ok(serde_json::from_slice::<Value>(&bytes)
-                .map(|raw| Self::from_json(&raw))
-                .unwrap_or_else(|_| Self::env_defaults())),
+            Ok(bytes) => match serde_json::from_slice::<Value>(&bytes) {
+                Ok(raw) => Ok(Self::from_json(&raw)),
+                Err(error) => {
+                    match set_aside_broken(path) {
+                        Ok(kept) => {
+                            #[cfg(unix)]
+                            {
+                                use std::os::unix::fs::PermissionsExt;
+                                let _ = std::fs::set_permissions(&kept, std::fs::Permissions::from_mode(0o600));
+                            }
+                            log::warn!(
+                                "{} is not valid JSON ({error}); kept it as {} and started with the defaults",
+                                path.display(),
+                                kept.display()
+                            );
+                        }
+                        Err(move_error) => log::warn!(
+                            "{} is not valid JSON ({error}) and could not be moved aside ({move_error}); using the defaults",
+                            path.display()
+                        ),
+                    }
+                    Ok(Self::env_defaults())
+                }
+            },
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Self::env_defaults()),
             Err(source) => Err(CoreError::io(path, source)),
         }
@@ -390,6 +414,17 @@ mod tests {
         let path = dir.path().join("settings.json");
         std::fs::write(&path, "{not json").unwrap();
         assert_eq!(AppSettings::load(&path).unwrap(), AppSettings::default());
+        // Kept for the user instead of being overwritten by the next save.
+        let kept = dir.path().join("settings.json.bad");
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{not json");
+        assert!(!path.exists());
+        AppSettings::default().save(&path).unwrap();
+        assert_eq!(std::fs::read_to_string(&kept).unwrap(), "{not json");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(std::fs::metadata(&kept).unwrap().permissions().mode() & 0o777, 0o600);
+        }
     }
 
     #[test]
