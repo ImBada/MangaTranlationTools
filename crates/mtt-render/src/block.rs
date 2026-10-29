@@ -13,11 +13,12 @@ use crate::effects::{
 };
 use crate::fonts::FontContext;
 use crate::layout::{
-    BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, display_text, font_background_enabled,
-    font_background_opacity, font_background_radius_px, font_background_scale, letter_spacing_px, measure_text_width,
-    resolve_block_text_layout, scaled_rect, screentone_dot_radius_px, screentone_tile_size_px,
-    secondary_outline_enabled, shaped_lines, style_line_height, synthetic_bold_stroke_width_px,
-    synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units, vertical_units, wrap_text_to_width,
+    BlockFonts, BlockTextLayout, PixelRect, Size, VERTICAL_COLUMN_ADVANCE, WrappedLine, display_text,
+    font_background_enabled, font_background_opacity, font_background_radius_px, font_background_scale,
+    letter_spacing_px, measure_text_width, resolve_block_text_layout, scaled_rect, screentone_dot_radius_px,
+    screentone_tile_size_px, secondary_outline_enabled, shaped_lines, style_line_height,
+    synthetic_bold_stroke_width_px, synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units,
+    vertical_columns, wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -164,14 +165,17 @@ fn secondary_outline_width_px(block: &TranslationBlock, font_size: f64) -> f64 {
 #[derive(Debug, Clone, PartialEq)]
 pub struct BlockText {
     pub layout: BlockTextLayout,
-    /// The lines as drawn; vertical text is one column without whitespace.
+    /// The lines as drawn; vertical text has a line per column (right to left) without
+    /// whitespace.
     pub lines: Vec<String>,
     /// Size the glyphs are drawn at, in page pixels.
     pub font_size_px: f64,
     /// Baseline to baseline (the character pitch is this plus letter spacing when vertical).
     pub line_height_px: f64,
+    /// Distance from one line to the next: the line height, or between vertical columns.
+    pub line_advance_px: f64,
     pub letter_spacing_px: f64,
-    /// Em boxes of the drawn text: the lines' column, or the character column.
+    /// Em boxes of the drawn text: the lines' column, or the character columns.
     pub text_rect: PixelRect,
     /// See [`FontContext::post_script_name`].
     pub font_name: String,
@@ -189,8 +193,13 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
     let mut painter = BlockPainter::new(ctx, block, &fonts, &layout, &text);
     let (items, text_rect) = painter.items();
     let font_size_px = painter.font_size;
-    let lines: Vec<String> = if block.render_direction == RenderTextDirection::Vertical {
-        vec![items.into_iter().map(|item| item.text).collect()]
+    let line_height_px = font_size_px * style_line_height(block);
+    let vertical = block.render_direction == RenderTextDirection::Vertical;
+    let lines: Vec<String> = if vertical {
+        vertical_columns(block, &text, layout.font_size_px, layout.fit_inner_height)
+            .into_iter()
+            .map(|column| column.concat())
+            .collect()
     } else {
         items.into_iter().map(|item| item.text).collect()
     };
@@ -199,7 +208,8 @@ pub fn block_text(ctx: &mut FontContext, page: Size, block: &TranslationBlock) -
         font_name: ctx.post_script_name(&lines.concat(), &fonts.base),
         lines,
         font_size_px,
-        line_height_px: font_size_px * style_line_height(block),
+        line_height_px,
+        line_advance_px: if vertical { font_size_px * VERTICAL_COLUMN_ADVANCE } else { line_height_px },
         letter_spacing_px: letter_spacing_px(block, font_size_px),
         text_rect,
         synthetic_bold: fonts.synthetic_bold,
@@ -442,6 +452,8 @@ impl<'a> BlockPainter<'a> {
         (items, PixelRect { left: text_left, top: start_y, width: widest, height: total_height })
     }
 
+    /// Columns of characters from the right, as the fit split them, top-aligned; the
+    /// tallest column and the columns' width are placed by the text position.
     fn vertical_items(
         &mut self,
         left: f64,
@@ -449,26 +461,35 @@ impl<'a> BlockPainter<'a> {
         inner_width: f64,
         inner_height: f64,
     ) -> (Vec<TextItem>, PixelRect) {
-        let chars = vertical_units(self.text, self.fonts.graphemes);
+        let layout = self.layout;
+        let columns = vertical_columns(self.block, self.text, layout.font_size_px, layout.fit_inner_height);
         let line_height = self.font_size * style_line_height(self.block);
         let spacing = letter_spacing_px(self.block, self.font_size);
         let advance = (line_height + spacing).max(1.0);
-        let count = chars.len() as f64;
-        let total_height = count * line_height + (count - 1.0).max(0.0) * (advance - line_height);
+        let column_height = |count: usize| {
+            let count = count as f64;
+            count * line_height + (count - 1.0).max(0.0) * (advance - line_height)
+        };
+        let total_height = columns.iter().map(|column| column_height(column.len())).fold(0.0, f64::max);
+        let pitch = self.font_size * VERTICAL_COLUMN_ADVANCE;
+        let total_width = self.font_size + columns.len().saturating_sub(1) as f64 * pitch;
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy;
-        let x = left + (inner_width - self.font_size) * fx + self.font_size / 2.0;
-        let items = chars
+        let text_left = left + (inner_width - total_width) * fx;
+        let first_x = text_left + total_width - self.font_size / 2.0;
+        let items = columns
             .iter()
             .enumerate()
-            .map(|(index, ch)| TextItem {
-                text: (*ch).to_owned(),
-                x,
-                y: start_y + index as f64 * advance,
-                align: TextAlign::Center,
+            .flat_map(|(column, cells)| {
+                cells.iter().enumerate().map(move |(index, cell)| TextItem {
+                    text: (*cell).to_owned(),
+                    x: first_x - column as f64 * pitch,
+                    y: start_y + index as f64 * advance,
+                    align: TextAlign::Center,
+                })
             })
             .collect();
-        (items, PixelRect { left: x - self.font_size / 2.0, top: start_y, width: self.font_size, height: total_height })
+        (items, PixelRect { left: text_left, top: start_y, width: total_width, height: total_height })
     }
 
     fn draw_font_background(&self, canvas: &mut Canvas, text_rect: PixelRect) {
@@ -865,8 +886,11 @@ mod tests {
 
         block.render_direction = RenderTextDirection::Vertical;
         let text = block_text(&mut ctx, page, &block).unwrap();
-        assert_eq!(text.lines, [block.translated_text.replace(' ', "")]);
-        assert_eq!(text.text_rect.width, text.font_size_px, "one column");
+        assert_eq!(text.lines.concat(), block.translated_text.replace(' ', ""));
+        let pitch = text.font_size_px * VERTICAL_COLUMN_ADVANCE;
+        assert_eq!(text.line_advance_px, pitch);
+        let width = text.font_size_px + (text.lines.len() - 1) as f64 * pitch;
+        assert!((text.text_rect.width - width).abs() < 1e-9, "{} columns: {:?}", text.lines.len(), text.text_rect);
         block.render_direction = RenderTextDirection::Hidden;
         assert!(block_text(&mut ctx, page, &block).is_none());
     }
@@ -887,6 +911,41 @@ mod tests {
         block.translated_text = "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1173}\u{11AF}".into();
         let decomposed = render_block(&mut ctx, page, &block, BlockRenderOptions::default()).unwrap();
         assert!(composed.pixmap.data() == decomposed.pixmap.data(), "jamo are drawn apart");
+    }
+
+    #[test]
+    fn vertical_text_is_drawn_in_the_columns_it_was_fitted_to() {
+        use mtt_core::model::BBox;
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let mut block = TranslationBlock {
+            bbox: BBox::new(100.0, 100.0, 150.0, 200.0),
+            translated_text: "가나다라마바사아자차카타파하".repeat(2),
+            render_direction: RenderTextDirection::Vertical,
+            ..TranslationBlock::default()
+        };
+        let text = block_text(&mut ctx, page, &block).unwrap();
+        let (rect, area) = (text.text_rect, text.layout.rect);
+        assert!(!text.layout.overflow);
+        assert!(text.lines.len() > 1, "{:?}", text.lines);
+        assert_eq!(text.lines.concat(), block.translated_text);
+        assert!(rect.top >= area.top && rect.top + rect.height <= area.top + area.height, "{rect:?} in {area:?}");
+        assert!(rect.left >= area.left && rect.left + rect.width <= area.left + area.width, "{rect:?} in {area:?}");
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        let mut painter = BlockPainter::new(&mut ctx, &block, &fonts, &text.layout, &block.translated_text);
+        let (items, _) = painter.items();
+        let first = &items[0];
+        let next_column = &items[text.lines[0].chars().count()];
+        assert!(next_column.x < first.x && next_column.y == first.y, "the next column starts left of the first");
+
+        // The original rules run the text on across line breaks; v2 starts a column.
+        block.translated_text = "가\n나다라".into();
+        let original = block_text(&mut ctx, page, &block).unwrap().lines;
+        assert_eq!(original.concat(), "가나다라");
+        block.layout_version = Some(2);
+        let v2 = block_text(&mut ctx, page, &block).unwrap().lines;
+        assert_eq!(v2, ["가", "나다라"]);
+        assert_ne!(original, v2);
     }
 
     #[test]

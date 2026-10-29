@@ -29,6 +29,8 @@ const MIN_INNER_SIZE_PX: f64 = 1.0;
 const BLOCK_BORDER_PX: f64 = 1.0;
 const TEXT_FIT_SAFETY_PX: f64 = 6.0;
 const TEXT_MEASURE_GUARD_PX: f64 = TEXT_FIT_SAFETY_PX + 4.0;
+/// Distance between vertical text columns, in font sizes.
+pub(crate) const VERTICAL_COLUMN_ADVANCE: f64 = 1.15;
 const SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT: u16 = 400;
 const SYNTHETIC_BOLD_MIN_STROKE_WIDTH_PX: f64 = 0.35;
 const SYNTHETIC_BOLD_MAX_STROKE_WIDTH_PX: f64 = 8.0;
@@ -674,10 +676,10 @@ fn does_text_fit(
     inner_width: f64,
     inner_height: f64,
 ) -> bool {
-    let line_height = font_size * style_line_height(block);
     if block.render_direction == RenderTextDirection::Vertical {
-        return measure_vertical_text(block, text, font_size, inner_width, inner_height, line_height);
+        return measure_vertical_text(block, text, font_size, inner_width, inner_height);
     }
+    let line_height = font_size * style_line_height(block);
     // Balancing keeps the line count and widths within the limit, so the plain wrap decides.
     let lines = wrap_lines(ctx, fonts, block, text, font_size, inner_width, false);
     let total_height = lines.len() as f64 * line_height;
@@ -691,17 +693,38 @@ fn measure_vertical_text(
     font_size: f64,
     max_width: f64,
     max_height: f64,
-    line_height: f64,
 ) -> bool {
-    let count = vertical_units(text, by_grapheme(block)).len();
-    if count == 0 {
+    let columns = vertical_columns(block, text, font_size, max_height);
+    if columns.iter().all(Vec::is_empty) {
         return true;
     }
+    columns.len() as f64 * font_size * VERTICAL_COLUMN_ADVANCE <= max_width
+}
+
+/// Vertical text in columns, right to left, as the fit counts them: as many characters per
+/// column as fit `max_height` at `font_size`, whitespace dropped. Under v2 each paragraph
+/// starts a column (an empty one when the paragraph is empty); the original rules run the
+/// text on across line breaks.
+pub(crate) fn vertical_columns<'a>(
+    block: &TranslationBlock,
+    text: &'a str,
+    font_size: f64,
+    max_height: f64,
+) -> Vec<Vec<&'a str>> {
+    let line_height = font_size * style_line_height(block);
     let spacing = letter_spacing_px(block, font_size);
     let advance = (font_size.max(line_height) + spacing).max(1.0);
-    let chars_per_column = ((max_height + spacing) / advance.max(1.0)).floor().max(1.0);
-    let columns = (count as f64 / chars_per_column).ceil().max(1.0);
-    columns * font_size * 1.15 <= max_width
+    let per_column = ((max_height + spacing) / advance).floor().max(1.0) as usize;
+    let paragraphs: Vec<&str> = if by_grapheme(block) { text.split('\n').collect() } else { vec![text] };
+    let mut columns = Vec::new();
+    for paragraph in paragraphs {
+        let units = vertical_units(paragraph, by_grapheme(block));
+        if units.is_empty() {
+            columns.push(Vec::new());
+        }
+        columns.extend(units.chunks(per_column).map(<[&str]>::to_vec));
+    }
+    columns
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1318,9 +1341,18 @@ mod tests {
 
     #[test]
     fn vertical_fit_estimate() {
-        let block = TranslationBlock::default();
+        let mut block = TranslationBlock::default();
+        block.style.line_height = Some(1.2);
         // 10 chars, 20px font, 24px advance -> 4 per column in 100px -> 3 columns * 23px = 69px.
-        assert!(measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 70.0, 100.0, 24.0));
-        assert!(!measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 68.0, 100.0, 24.0));
+        assert!(measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 70.0, 100.0));
+        assert!(!measure_vertical_text(&block, "가나다라마바사아자차", 20.0, 68.0, 100.0));
+        let columns = vertical_columns(&block, "가나다라 마바\n사아자차", 20.0, 100.0);
+        assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바", "사", "아"], vec!["자", "차"]]);
+        // v2: a line break starts a column, a blank line leaves one empty.
+        block.layout_version = Some(2);
+        let columns = vertical_columns(&block, "가나다라 마바\n\n사아자차", 20.0, 100.0);
+        assert_eq!(columns, [vec!["가", "나", "다", "라"], vec!["마", "바"], vec![], vec!["사", "아", "자", "차"]]);
+        assert!(!measure_vertical_text(&block, "가나다라 마바\n\n사아자차", 20.0, 90.0, 100.0));
+        assert!(measure_vertical_text(&block, "가나다라 마바\n\n사아자차", 20.0, 92.0, 100.0));
     }
 }

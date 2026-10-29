@@ -384,7 +384,7 @@ fn psd_text_layer(block: &TranslationBlock, text: &BlockText) -> TextLayer {
         font_size,
         faux_bold: text.synthetic_bold,
         faux_italic: synthetic_italic_skew_x(block) != 0.0,
-        leading: text.line_height_px,
+        leading: text.line_advance_px,
         tracking: (spacing / font_size * 1000.0).round() as i32,
         color: [color.red(), color.green(), color.blue(), 255],
         justification,
@@ -464,12 +464,14 @@ mod tests {
         assert!((xx * u + yx * v + tx - cx).abs() < 1e-9 && (xy * u + yy * v + ty - cy).abs() < 1e-9);
         assert!((xy - 30f64.to_radians().sin()).abs() < 1e-12);
 
-        // Vertical: one top-aligned column whose right edge is the box's.
+        // Vertical: top-aligned columns, the first one at the box's right edge.
         let vertical = TranslationBlock { render_direction: RenderTextDirection::Vertical, ..block.clone() };
         let drawn = mtt_render::block_text(&mut fonts, size, &vertical).unwrap();
         let layer = psd_text_layer(&vertical, &drawn);
         assert!(layer.vertical && layer.justification == Justification::Left);
-        assert_eq!(layer.text, "첫줄은조금길고둘째줄");
+        assert_eq!(layer.text.replace('\n', ""), "첫줄은조금길고둘째줄");
+        assert_eq!(layer.text.lines().count(), drawn.lines.len());
+        assert_eq!(layer.leading, drawn.line_advance_px);
         assert!((layer.transform[4] + layer.box_width - (drawn.text_rect.left + drawn.text_rect.width)).abs() < 1e-9);
         let expected = (drawn.line_height_px - drawn.font_size_px) / drawn.font_size_px * 1000.0;
         assert_eq!(layer.tracking, expected.round() as i32);
