@@ -412,6 +412,12 @@ pub struct TranslationBlock {
     /// original rules, so pages typeset before keep their look.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout_version: Option<u32>,
+    /// Where text fits in the render box, row by row: the usable `[left, right]` span of
+    /// evenly spaced rows from its top to its bottom, as fractions of its width (an empty
+    /// span where nothing fits). Set from the balloon around the block, so lines can follow
+    /// its outline; it scales with the box.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text_shape: Option<Vec<[f64; 2]>>,
     #[serde(flatten)]
     pub links: PresetLinks,
     #[serde(flatten)]
@@ -444,6 +450,7 @@ impl Default for TranslationBlock {
             inpainted: None,
             generated_fingerprint: None,
             layout_version: None,
+            text_shape: None,
             links: PresetLinks::default(),
             style: TextStyle::default(),
             extra: JsonMap::new(),

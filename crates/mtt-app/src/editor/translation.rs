@@ -9,7 +9,7 @@ use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block
 use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
 use mtt_core::model::{BBox, BlockType, PageAnalysisStatus, PageRecord, TranslationBlock};
-use mtt_inpaint::bubble::find_balloon;
+use mtt_inpaint::bubble::find_balloons;
 use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
 use mtt_translate::parser::RegionText;
 use mtt_translate::{Region, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
@@ -214,20 +214,33 @@ impl Editor {
                                 .map(|items| {
                                     // The lettering colors come from the page itself.
                                     let source = image::open(path).ok().map(|image| image.to_rgba8());
-                                    items
+                                    let blocks: Vec<TranslationBlock> = items
                                         .iter()
                                         .enumerate()
-                                        .map(|(i, item)| {
-                                            let mut block = overlay_item_to_block(item, page_id, *width, *height, i);
+                                        .map(|(i, item)| overlay_item_to_block(item, page_id, *width, *height, i))
+                                        .collect();
+                                    // Dialogue in a balloon gets the balloon's room, and its lines
+                                    // follow the outline.
+                                    let dialogue: Vec<usize> =
+                                        (0..blocks.len()).filter(|i| blocks[*i].block_type != BlockType::Sfx).collect();
+                                    let mut balloons = vec![None; blocks.len()];
+                                    if let Some(source) = &source {
+                                        let fitted: Vec<TranslationBlock> =
+                                            dialogue.iter().map(|i| blocks[*i].clone()).collect();
+                                        for (i, balloon) in dialogue.iter().zip(find_balloons(source, &fitted)) {
+                                            balloons[*i] = balloon;
+                                        }
+                                    }
+                                    blocks
+                                        .into_iter()
+                                        .zip(balloons)
+                                        .map(|(mut block, balloon)| {
                                             let lettering =
                                                 source.as_ref().and_then(|source| detect_lettering(source, &block));
-                                            // Dialogue in a balloon gets the balloon's room.
-                                            if block.block_type != BlockType::Sfx
-                                                && let Some(balloon) =
-                                                    source.as_ref().and_then(|source| find_balloon(source, &block))
-                                            {
+                                            if let Some(balloon) = balloon {
                                                 block.render_bbox = Some(balloon.text_area);
                                                 block.render_bbox_space = block.bbox_space.clone();
+                                                block.text_shape = Some(balloon.shape);
                                             }
                                             (block, lettering)
                                         })

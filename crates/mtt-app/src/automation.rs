@@ -49,6 +49,8 @@ pub enum Step {
     Sample([f32; 2]),
     /// Moves the pointer to a screen point (tooltips, hover states).
     Hover([f32; 2]),
+    /// Translates the current page.
+    Translate,
     WaitTranslation,
     Window([f32; 2]),
     InpaintAll,
@@ -137,6 +139,7 @@ impl Automation {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Hover([v[0], v[1]]))?
                     }
+                    "translate" => Step::Translate,
                     "translate-wait" => Step::WaitTranslation,
                     "window" => {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
@@ -269,6 +272,12 @@ impl Automation {
             (Step::Sample(pos), Some(editor)) => {
                 editor.sample_screen(crate::editor::color::SampleTarget::ResultBrush, egui::pos2(pos[0], pos[1]));
             }
+            (Step::Translate, Some(editor)) => match worker {
+                Some(worker) => {
+                    editor.start_translation(crate::editor::translation::RunMode::CurrentPage, services, worker)
+                }
+                None => log::warn!("automation: no worker to translate with"),
+            },
             (Step::WaitTranslation, Some(editor)) => {
                 if editor.translation_running() {
                     return None;

@@ -13,11 +13,11 @@ use crate::effects::{
 };
 use crate::fonts::FontContext;
 use crate::layout::{
-    BLOCK_BORDER_PX, BlockFonts, BlockTextLayout, PixelRect, Size, font_background_enabled, font_background_opacity,
+    BlockFonts, BlockTextLayout, PixelRect, Size, WrappedLine, font_background_enabled, font_background_opacity,
     font_background_radius_px, font_background_scale, is_js_whitespace, letter_spacing_px, measure_text_width,
     resolve_block_text_layout, scaled_rect, screentone_dot_radius_px, screentone_tile_size_px,
-    secondary_outline_enabled, synthetic_bold_stroke_width_px, synthetic_italic_skew_x, text_position_factors,
-    wrap_text_to_width,
+    secondary_outline_enabled, shaped_lines, synthetic_bold_stroke_width_px, synthetic_italic_skew_x,
+    text_position_factors, text_shape_strips, wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -232,13 +232,27 @@ pub fn render_block(
     painter.device_scale = scale;
     painter.apply_block_transform(&mut canvas);
     if options.editing_enabled {
-        canvas.fill_rect(
-            layout.rect.left,
-            layout.rect.top,
-            layout.rect.width,
-            layout.rect.height,
-            hex_color(&block.background_color, block.opacity),
-        );
+        let color = hex_color(&block.background_color, block.opacity);
+        // A balloon block's background covers its text shape, one path so rows don't seam.
+        match text_shape_strips(block, layout.rect) {
+            Some(strips) => {
+                let mut path = PathBuilder::new();
+                for strip in strips {
+                    if let Some(rect) = tiny_skia::Rect::from_xywh(
+                        strip.left as f32,
+                        strip.top as f32,
+                        strip.width as f32,
+                        strip.height as f32,
+                    ) {
+                        path.push_rect(rect);
+                    }
+                }
+                if let Some(path) = path.finish() {
+                    canvas.fill_path(&path, solid(color));
+                }
+            }
+            None => canvas.fill_rect(layout.rect.left, layout.rect.top, layout.rect.width, layout.rect.height, color),
+        }
     }
 
     let hard = block.style.font_rendering_mode.unwrap_or_default() == FontRenderingMode::Hard;
@@ -340,12 +354,11 @@ impl<'a> BlockPainter<'a> {
     fn items(&mut self) -> (Vec<TextItem>, PixelRect) {
         let layout = *self.layout;
         let y_offset = self.font_size * RENDER_Y_OFFSET_RATIO;
-        let left = layout.rect.left + BLOCK_BORDER_PX + layout.padding_px;
-        let top = layout.rect.top + BLOCK_BORDER_PX + layout.padding_px + y_offset;
+        let (left, top) = (layout.inner.left, layout.inner.top + y_offset);
         if self.block.render_direction == RenderTextDirection::Vertical {
             self.vertical_items(left, top, layout.fit_inner_width, layout.fit_inner_height)
         } else {
-            self.horizontal_items(left, top, layout.inner_width, layout.inner_height, layout.fit_inner_width)
+            self.horizontal_items(left, top, layout.inner.width, layout.inner.height, layout.fit_inner_width)
         }
     }
 
@@ -392,13 +405,25 @@ impl<'a> BlockPainter<'a> {
         inner_height: f64,
         fit_width: f64,
     ) -> (Vec<TextItem>, PixelRect) {
-        let lines = wrap_text_to_width(self.ctx, self.fonts, self.block, self.text, self.font_size, fit_width);
+        // Lines following the text shape share its axis; others sit by the text position.
+        let shaped = shaped_lines(self.ctx, self.fonts, self.block, self.text, self.layout);
+        let lines = match &shaped {
+            // Laid out at the layout's size, drawn at the painter's.
+            Some(shaped) => {
+                let scale = self.font_size / self.layout.font_size_px.max(f64::EPSILON);
+                shaped.lines.iter().map(|line| WrappedLine { width: line.width * scale, ..line.clone() }).collect()
+            }
+            None => wrap_text_to_width(self.ctx, self.fonts, self.block, self.text, self.font_size, fit_width),
+        };
         let line_height = self.font_size * self.block.line_height();
         let total_height = lines.len() as f64 * line_height;
         let (fx, fy) = text_position_factors(self.block.text_position);
         let start_y = top + (inner_height - total_height) * fy + ((line_height - self.font_size) / 2.0).max(0.0);
         let widest = lines.iter().map(|line| line.width).fold(0.0, f64::max);
-        let text_left = left + (inner_width - widest) * fx;
+        let text_left = match &shaped {
+            Some(shaped) => shaped.center_x - widest / 2.0,
+            None => left + (inner_width - widest) * fx,
+        };
         let x = match self.block.text_align {
             TextAlign::Left => text_left,
             TextAlign::Right => text_left + widest,

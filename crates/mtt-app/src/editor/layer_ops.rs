@@ -11,7 +11,7 @@ use mtt_core::model::{PageRecord, RenderTextDirection, TextAlign, TranslationBlo
 use mtt_core::paths::sanitize_file_basename;
 use mtt_inpaint::psd_text::{Justification, TextLayer};
 use mtt_render::canvas::hex_color;
-use mtt_render::layout::{BLOCK_BORDER_PX, synthetic_italic_skew_x};
+use mtt_render::layout::synthetic_italic_skew_x;
 use mtt_render::{BlockRenderOptions, BlockText, FontContext};
 
 use super::Editor;
@@ -340,8 +340,7 @@ fn text_layer_name(lines: &[String]) -> String {
 /// bottom. Outlines, shadows, screentone and filters are not text properties in PSD.
 fn psd_text_layer(block: &TranslationBlock, text: &BlockText) -> TextLayer {
     let layout = &text.layout;
-    let inset = BLOCK_BORDER_PX + layout.padding_px;
-    let (inner_left, inner_bottom) = (layout.rect.left + inset, layout.rect.top + inset + layout.inner_height);
+    let (inner_left, inner_bottom) = (layout.inner.left, layout.inner.top + layout.inner.height);
     let (lines, font_size) = (text.text_rect, text.font_size_px);
     let vertical = block.render_direction == RenderTextDirection::Vertical;
     let (left, width, justification) = if vertical {
@@ -350,7 +349,7 @@ fn psd_text_layer(block: &TranslationBlock, text: &BlockText) -> TextLayer {
         let left = inner_left.min(right - text.line_height_px);
         (left, right - left, Justification::Left)
     } else {
-        let width = layout.inner_width.max(lines.width + font_size);
+        let width = layout.inner.width.max(lines.width + font_size);
         match block.text_align {
             TextAlign::Left => (lines.left, width, Justification::Left),
             TextAlign::Center => (lines.left + (lines.width - width) / 2.0, width, Justification::Center),

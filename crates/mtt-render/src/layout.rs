@@ -8,15 +8,17 @@ use mtt_core::font_presets::{
     DEFAULT_SCREENTONE_FILL_INTENSITY, MAX_FONT_BACKGROUND_RADIUS_PX, MAX_FONT_BACKGROUND_SCALE,
     MIN_FONT_BACKGROUND_RADIUS_PX, MIN_FONT_BACKGROUND_SCALE,
 };
-use mtt_core::geometry::{bbox_to_pixels, clamp, clamp_text_padding_px, resolve_block_render_bbox};
-use mtt_core::model::{RenderTextDirection, TextFontStyle, TextPosition, TranslationBlock};
+use mtt_core::geometry::{
+    bbox_to_pixels, clamp, clamp_text_padding_px, resolve_block_render_bbox, text_shape_inner_rect, text_shape_span,
+};
+use mtt_core::model::{RenderTextDirection, TextAlign, TextFontStyle, TextPosition, TranslationBlock};
 
 use crate::fonts::{BOLD_WEIGHT_THRESHOLD, FontContext, FontSpec};
 
 const MIN_FONT_SIZE_PX: f64 = 2.0;
 const MAX_BLOCK_PADDING_PX: f64 = 14.0;
 const MIN_INNER_SIZE_PX: f64 = 1.0;
-pub const BLOCK_BORDER_PX: f64 = 1.0;
+const BLOCK_BORDER_PX: f64 = 1.0;
 const TEXT_FIT_SAFETY_PX: f64 = 6.0;
 const TEXT_MEASURE_GUARD_PX: f64 = TEXT_FIT_SAFETY_PX + 4.0;
 const SYNTHETIC_BOLD_FALLBACK_BASE_WEIGHT: u16 = 400;
@@ -64,12 +66,15 @@ pub struct PixelRect {
 pub struct BlockTextLayout {
     pub rect: PixelRect,
     pub padding_px: f64,
-    pub inner_width: f64,
-    pub inner_height: f64,
+    /// Where the text goes: inside the padding, and inside the block's text shape when the
+    /// lines don't follow it.
+    pub inner: PixelRect,
     pub fit_inner_width: f64,
     pub fit_inner_height: f64,
     pub font_size_px: f64,
     pub overflow: bool,
+    /// The lines follow the block's text shape ([`shaped_lines`]).
+    pub shaped: bool,
 }
 
 /// Fonts used to draw one block: the block family (weight adjusted for synthetic bold)
@@ -282,7 +287,9 @@ pub fn render_scale(page: Size, stage: Size) -> f64 {
     (stage.width / page.width.max(1.0)).min(stage.height / page.height.max(1.0))
 }
 
-/// `resolveBlockTextLayout`.
+/// `resolveBlockTextLayout`. With a text shape (typesetting v2), centred horizontal lines
+/// follow it; other text, or text that can't follow it at a readable size, keeps to the
+/// shape's largest rectangle.
 pub fn resolve_block_text_layout(
     ctx: &mut FontContext,
     fonts: &BlockFonts,
@@ -293,11 +300,61 @@ pub fn resolve_block_text_layout(
 ) -> BlockTextLayout {
     let rect = resolve_block_rect_px(block, page, stage);
     let padding_px = resolve_block_padding_px(block, rect, page, stage);
-    let border_inset = BLOCK_BORDER_PX * 2.0;
-    let inner_width = (rect.width - padding_px * 2.0 - border_inset).max(MIN_INNER_SIZE_PX);
-    let inner_height = (rect.height - padding_px * 2.0 - border_inset).max(MIN_INNER_SIZE_PX);
-    let fit_inner_width = (inner_width - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
-    let fit_inner_height = (inner_height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
+    let inset = BLOCK_BORDER_PX + padding_px;
+    let inner = PixelRect {
+        left: rect.left + inset,
+        top: rect.top + inset,
+        width: (rect.width - inset * 2.0).max(MIN_INNER_SIZE_PX),
+        height: (rect.height - inset * 2.0).max(MIN_INNER_SIZE_PX),
+    };
+    let follow = line_shape(block).filter(|_| !text.trim().is_empty());
+    if follow.is_some() {
+        let layout = layout_in(ctx, fonts, block, text, (page, stage), (rect, padding_px, inner), follow);
+        if layout.shaped {
+            return layout;
+        }
+    }
+    let inner = match block.text_shape.as_deref().and_then(text_shape_inner_rect) {
+        Some([left, top, right, bottom]) => {
+            let (x0, y0) = (rect.left + left * rect.width, rect.top + top * rect.height);
+            let (x1, y1) = (rect.left + right * rect.width, rect.top + bottom * rect.height);
+            let (x0, y0) = (x0.max(inner.left), y0.max(inner.top));
+            let (x1, y1) = (x1.min(inner.left + inner.width), y1.min(inner.top + inner.height));
+            PixelRect {
+                left: x0,
+                top: y0,
+                width: (x1 - x0).max(MIN_INNER_SIZE_PX),
+                height: (y1 - y0).max(MIN_INNER_SIZE_PX),
+            }
+        }
+        None => inner,
+    };
+    layout_in(ctx, fonts, block, text, (page, stage), (rect, padding_px, inner), None)
+}
+
+/// The block's text shape when its lines follow it: typesetting v2, horizontal and centred.
+fn line_shape(block: &TranslationBlock) -> Option<&[[f64; 2]]> {
+    block.text_shape.as_deref().filter(|shape| {
+        !shape.is_empty()
+            && block.layout_version() >= 2
+            && block.render_direction == RenderTextDirection::Horizontal
+            && block.text_align == TextAlign::Center
+    })
+}
+
+/// Lays `text` out in `inner`, following `follow` (the block's text shape) when given and
+/// some size from the box's fit down to the readable size fits it.
+fn layout_in(
+    ctx: &mut FontContext,
+    fonts: &BlockFonts,
+    block: &TranslationBlock,
+    text: &str,
+    (page, stage): (Size, Size),
+    (rect, padding_px, inner): (PixelRect, f64, PixelRect),
+    follow: Option<&[[f64; 2]]>,
+) -> BlockTextLayout {
+    let fit_inner_width = (inner.width - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
+    let fit_inner_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
     let scale = render_scale(page, stage);
     let preferred = (block.font_size_px() * scale).floor().max(MIN_FONT_SIZE_PX);
     let auto_fit = block.style.auto_fit_text.unwrap_or(true);
@@ -323,18 +380,186 @@ pub fn resolve_block_text_layout(
         fit_inner_width,
         fit_inner_height,
     );
-    let overflow = !text.trim().is_empty()
+    // Following the shape is harder than fitting its box, so count down from the box's fit.
+    let shaped_size = follow.and_then(|shape| {
+        let paragraphs = Paragraph::measure_all(ctx, fonts, text);
+        let floor = min_font_size.ceil().min(font_size_px);
+        let mut size = font_size_px;
+        loop {
+            if fit_shape(&paragraphs, block, size, shape, rect, inner).is_some() {
+                return Some(size);
+            }
+            if !auto_fit || size - 1.0 < floor {
+                return None;
+            }
+            size -= 1.0;
+        }
+    });
+    let overflow = shaped_size.is_none()
+        && !text.trim().is_empty()
         && !does_text_fit(ctx, fonts, block, text, font_size_px, fit_inner_width, fit_inner_height);
     BlockTextLayout {
         rect,
         padding_px,
-        inner_width,
-        inner_height,
+        inner,
         fit_inner_width,
         fit_inner_height,
-        font_size_px,
+        font_size_px: shaped_size.unwrap_or(font_size_px),
         overflow,
+        shaped: shaped_size.is_some(),
     }
+}
+
+/// Lines laid out along a block's text shape, all centred on `center_x`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ShapedLines {
+    pub lines: Vec<WrappedLine>,
+    pub center_x: f64,
+}
+
+/// The lines of a layout that follows its block's text shape (`layout.shaped`).
+pub fn shaped_lines(
+    ctx: &mut FontContext,
+    fonts: &BlockFonts,
+    block: &TranslationBlock,
+    text: &str,
+    layout: &BlockTextLayout,
+) -> Option<ShapedLines> {
+    let shape = line_shape(block).filter(|_| layout.shaped)?;
+    fit_shape(&Paragraph::measure_all(ctx, fonts, text), block, layout.font_size_px, shape, layout.rect, layout.inner)
+}
+
+/// Lines of `paragraphs` at `font_size` following `shape` (spans of `rect`) in the fit
+/// area of `inner`, placed like the plain layout places lines: the fewest lines that fit,
+/// each within the shape's span across its glyphs, all centred on one axis so the text
+/// doesn't zigzag (koharu's balloon line profiles). `None` when no line count fits.
+fn fit_shape(
+    paragraphs: &[Paragraph],
+    block: &TranslationBlock,
+    font_size: f64,
+    shape: &[[f64; 2]],
+    rect: PixelRect,
+    inner: PixelRect,
+) -> Option<ShapedLines> {
+    let line_height = font_size * block.line_height();
+    let spacing = letter_spacing_px(block, font_size);
+    let (left, right) = (inner.left + TEXT_MEASURE_GUARD_PX, inner.left + inner.width - TEXT_MEASURE_GUARD_PX);
+    let fit_height = (inner.height - TEXT_MEASURE_GUARD_PX * 2.0).max(MIN_INNER_SIZE_PX);
+    let (_, fy) = text_position_factors(block.text_position);
+    let (rect_width, rect_height) = (rect.width.max(1.0), rect.height.max(1.0));
+    let segments: usize = paragraphs.iter().map(|paragraph| paragraph.segments.len().max(1)).sum();
+    let most = ((fit_height / line_height.max(1.0)).floor() as usize).min(segments);
+    for count in paragraphs.len().max(1)..=most {
+        let total = count as f64 * line_height;
+        let start_y = inner.top + (inner.height - total) * fy + ((line_height - font_size) / 2.0).max(0.0);
+        let spans: Option<Vec<(f64, f64)>> = (0..count)
+            .map(|line| {
+                let top = start_y + line as f64 * line_height;
+                let (l, r) =
+                    text_shape_span(shape, (top - rect.top) / rect_height, (top + font_size - rect.top) / rect_height)?;
+                let (l, r) = ((rect.left + l * rect_width).max(left), (rect.left + r * rect_width).min(right));
+                (r > l).then_some((l, r))
+            })
+            .collect();
+        let Some(spans) = spans else { continue };
+        let common_left = spans.iter().map(|span| span.0).fold(f64::NEG_INFINITY, f64::max);
+        let common_right = spans.iter().map(|span| span.1).fold(f64::INFINITY, f64::min);
+        if common_right <= common_left {
+            continue;
+        }
+        let center =
+            (spans.iter().map(|(l, r)| (l + r) / 2.0).sum::<f64>() / count as f64).clamp(common_left, common_right);
+        let widths: Vec<f64> = spans.iter().map(|(l, r)| 2.0 * (center - l).min(r - center)).collect();
+        if let Some(lines) = break_paragraphs(paragraphs, &widths, font_size, spacing) {
+            return Some(ShapedLines { lines, center_x: center });
+        }
+    }
+    None
+}
+
+/// A paragraph's line count and the segment index each of its lines ends before.
+type ParagraphSplit = (usize, Vec<usize>);
+
+/// Breaks the paragraphs into consecutive lines of `widths` (one per line, in order), every
+/// line within its width, at the least [`balanced_breaks`] cost. `None` when none fits.
+fn break_paragraphs(
+    paragraphs: &[Paragraph],
+    widths: &[f64],
+    font_size: f64,
+    spacing: f64,
+) -> Option<Vec<WrappedLine>> {
+    let count = widths.len();
+    // cost[p][l]: best cost of paragraphs ..p in lines ..l; how[p][l]: the last paragraph's
+    // line count and line ends there.
+    let mut cost = vec![vec![f64::INFINITY; count + 1]; paragraphs.len() + 1];
+    let mut how: Vec<Vec<Option<ParagraphSplit>>> = vec![vec![None; count + 1]; paragraphs.len() + 1];
+    cost[0][0] = 0.0;
+    for (index, paragraph) in paragraphs.iter().enumerate() {
+        for first in 0..count {
+            if !cost[index][first].is_finite() {
+                continue;
+            }
+            let most = paragraph.segments.len().max(1).min(count - first);
+            for lines in 1..=most {
+                let split = if paragraph.segments.is_empty() {
+                    Some((Vec::new(), 0.0))
+                } else {
+                    balanced_breaks(
+                        &paragraph.chars,
+                        &paragraph.segments,
+                        &widths[first..first + lines],
+                        true,
+                        font_size,
+                        |start, end| paragraph.width(start, end, font_size, spacing),
+                    )
+                };
+                if let Some((ends, split_cost)) = split
+                    && cost[index][first] + split_cost < cost[index + 1][first + lines]
+                {
+                    cost[index + 1][first + lines] = cost[index][first] + split_cost;
+                    how[index + 1][first + lines] = Some((lines, ends));
+                }
+            }
+        }
+    }
+    let mut ends = Vec::with_capacity(paragraphs.len());
+    let mut line = count;
+    for index in (1..=paragraphs.len()).rev() {
+        let (lines, paragraph_ends) = how[index][line].clone()?;
+        ends.push(paragraph_ends);
+        line -= lines;
+    }
+    let mut out = Vec::with_capacity(count);
+    for (paragraph, ends) in paragraphs.iter().zip(ends.into_iter().rev()) {
+        if paragraph.segments.is_empty() {
+            out.push(WrappedLine { text: String::new(), width: 0.0 });
+        }
+        let mut first = 0;
+        for end in ends {
+            out.push(paragraph.line(first, end, font_size, spacing));
+            first = end;
+        }
+    }
+    Some(out)
+}
+
+/// Rows of the block's text shape inside `rect`, for drawing its background.
+pub fn text_shape_strips(block: &TranslationBlock, rect: PixelRect) -> Option<Vec<PixelRect>> {
+    let shape = block.text_shape.as_deref().filter(|shape| !shape.is_empty())?;
+    let rows = shape.len() as f64;
+    Some(
+        shape
+            .iter()
+            .enumerate()
+            .filter(|(_, [left, right])| right > left)
+            .map(|(row, [left, right])| PixelRect {
+                left: rect.left + left * rect.width,
+                top: rect.top + rect.height * row as f64 / rows,
+                width: (right - left) * rect.width,
+                height: rect.height / rows,
+            })
+            .collect(),
+    )
 }
 
 /// Rough size of the source glyphs in `rect`: the box area shared by the source
@@ -446,25 +671,13 @@ fn wrap_lines(
 ) -> Vec<WrappedLine> {
     let spacing = letter_spacing_px(block, font_size);
     let mut lines = Vec::new();
-    for paragraph in text.replace('\r', "").split('\n') {
-        let normalized = collapse_whitespace(paragraph);
-        if normalized.is_empty() {
+    for paragraph in Paragraph::measure_all(ctx, fonts, text) {
+        let segments = &paragraph.segments;
+        if segments.is_empty() {
             lines.push(WrappedLine { text: String::new(), width: 0.0 });
             continue;
         }
-        let run = ctx.shape(&normalized, &fonts.base, &fonts.spans_for(&normalized));
-        let chars: Vec<char> = normalized.chars().collect();
-        // Advance sums up to each char, so a line's width is one subtraction.
-        let mut prefix = Vec::with_capacity(chars.len() + 1);
-        prefix.push(0.0f64);
-        for advance in &run.char_advances_em[..chars.len()] {
-            prefix.push(prefix.last().copied().unwrap_or_default() + f64::from(*advance));
-        }
-        let width_of = |start: usize, end: usize| -> f64 {
-            let count = (end - start) as f64;
-            (prefix[end] - prefix[start]) * font_size + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
-        };
-        let segments = split_text_wrap_segments(&chars);
+        let width_of = |start: usize, end: usize| paragraph.width(start, end, font_size, spacing);
         // Segment index each line ends before.
         let mut ends = Vec::new();
         let mut start = segments[0].0;
@@ -477,14 +690,14 @@ fn wrap_lines(
         ends.push(segments.len());
         if balance
             && ends.len() > 1
-            && let Some(balanced) = balanced_breaks(&chars, &segments, ends.len(), max_width, font_size, width_of)
+            && let Some((balanced, _)) =
+                balanced_breaks(&paragraph.chars, segments, &vec![max_width; ends.len()], false, font_size, width_of)
         {
             ends = balanced;
         }
         let mut first = 0;
         for end in ends {
-            let (start, end_char) = (segments[first].0, segments[end - 1].1);
-            lines.push(WrappedLine { text: chars[start..end_char].iter().collect(), width: width_of(start, end_char) });
+            lines.push(paragraph.line(first, end, font_size, spacing));
             first = end;
         }
     }
@@ -494,18 +707,66 @@ fn wrap_lines(
     lines
 }
 
-/// Splits `segments` into exactly `line_count` lines no wider than `max_width` (a lone
-/// segment may be wider) with the least cost: even line lengths, breaks after punctuation.
-/// Returns the segment index each line ends before; `None` when no split fits.
+/// A paragraph measured for wrapping: its chars, advance sums up to each char (em), so a
+/// line's width is one subtraction, and its wrap segments (none when it is empty).
+struct Paragraph {
+    chars: Vec<char>,
+    prefix_em: Vec<f64>,
+    segments: Vec<(usize, usize)>,
+}
+
+impl Paragraph {
+    fn measure_all(ctx: &mut FontContext, fonts: &BlockFonts, text: &str) -> Vec<Self> {
+        text.replace('\r', "")
+            .split('\n')
+            .map(|paragraph| {
+                let normalized = collapse_whitespace(paragraph);
+                if normalized.is_empty() {
+                    return Self { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() };
+                }
+                let run = ctx.shape(&normalized, &fonts.base, &fonts.spans_for(&normalized));
+                let chars: Vec<char> = normalized.chars().collect();
+                let mut prefix_em = Vec::with_capacity(chars.len() + 1);
+                prefix_em.push(0.0f64);
+                for advance in &run.char_advances_em[..chars.len()] {
+                    prefix_em.push(prefix_em.last().copied().unwrap_or_default() + f64::from(*advance));
+                }
+                let segments = split_text_wrap_segments(&chars);
+                Self { chars, prefix_em, segments }
+            })
+            .collect()
+    }
+
+    /// Width of chars `start..end` at `font_size`, `spacing` between letters.
+    fn width(&self, start: usize, end: usize, font_size: f64, spacing: f64) -> f64 {
+        let count = (end - start) as f64;
+        (self.prefix_em[end] - self.prefix_em[start]) * font_size
+            + if count > 1.0 { spacing * (count - 1.0) } else { 0.0 }
+    }
+
+    /// The line of segments `first..end`.
+    fn line(&self, first: usize, end: usize, font_size: f64, spacing: f64) -> WrappedLine {
+        let (start, end) = (self.segments[first].0, self.segments[end - 1].1);
+        WrappedLine { text: self.chars[start..end].iter().collect(), width: self.width(start, end, font_size, spacing) }
+    }
+}
+
+/// Splits `segments` into one line per entry of `widths`, each no wider than its width (a
+/// lone segment may be wider unless `strict`), with the least cost: lines filling their
+/// widths, breaks after punctuation. Returns the segment index each line ends before and
+/// the cost; `None` when no split fits.
 fn balanced_breaks(
     chars: &[char],
     segments: &[(usize, usize)],
-    line_count: usize,
-    max_width: f64,
+    widths: &[f64],
+    strict: bool,
     font_size: f64,
     width_of: impl Fn(usize, usize) -> f64,
-) -> Option<Vec<usize>> {
-    let count = segments.len();
+) -> Option<(Vec<usize>, f64)> {
+    let (count, line_count) = (segments.len(), widths.len());
+    if line_count == 0 || line_count > count {
+        return None;
+    }
     let em = font_size.max(1.0);
     let break_cost = |end: usize| -> f64 {
         let next = chars[segments[end].0];
@@ -525,8 +786,8 @@ fn balanced_breaks(
     for lines in 1..=line_count {
         for end in lines..=count {
             for start in (lines - 1..end).rev() {
-                let width = width_of(segments[start].0, segments[end - 1].1);
-                if width > max_width && end - start > 1 {
+                let (width, max_width) = (width_of(segments[start].0, segments[end - 1].1), widths[lines - 1]);
+                if width > max_width && (strict || end - start > 1) {
                     break;
                 }
                 if !cost[lines - 1][start].is_finite() {
@@ -554,7 +815,7 @@ fn balanced_breaks(
         ends.push(end);
     }
     ends.reverse();
-    Some(ends)
+    Some((ends, cost[line_count][count]))
 }
 
 /// Width of `text` with letter spacing (`measureTextWidthWithLetterSpacing`).
@@ -705,7 +966,8 @@ mod tests {
     fn balance(text: &str, line_count: usize, max_width: f64) -> Option<Vec<String>> {
         let chars: Vec<char> = text.chars().collect();
         let segments = split_text_wrap_segments(&chars);
-        let ends = balanced_breaks(&chars, &segments, line_count, max_width, 1.0, |a, b| (b - a) as f64)?;
+        let (ends, _) =
+            balanced_breaks(&chars, &segments, &vec![max_width; line_count], false, 1.0, |a, b| (b - a) as f64)?;
         let mut first = 0;
         Some(
             ends.into_iter()
@@ -780,6 +1042,92 @@ mod tests {
             assert_eq!(v2, READABLE_FONT_SIZE_PX);
             assert!(overflow);
         }
+    }
+
+    /// A 400×300 render box at (300, 250) whose text shape is the ellipse inside it.
+    fn balloon_block(text_align: TextAlign, render_direction: RenderTextDirection) -> TranslationBlock {
+        use mtt_core::model::{BBox, LAYOUT_VERSION};
+        let rows = 40;
+        let shape = (0..rows)
+            .map(|row| {
+                // The narrower edge of the row.
+                let y = [row, row + 1].map(|edge| (edge as f64 / rows as f64 * 2.0 - 1.0).abs());
+                let half = 0.5 * (1.0 - y[0].max(y[1]).powi(2)).max(0.0).sqrt();
+                [0.5 - half, 0.5 + half]
+            })
+            .collect();
+        TranslationBlock {
+            bbox: BBox::new(450.0, 300.0, 100.0, 200.0),
+            render_bbox: Some(BBox::new(300.0, 250.0, 400.0, 300.0)),
+            text_shape: Some(shape),
+            layout_version: Some(LAYOUT_VERSION),
+            text_align,
+            render_direction,
+            ..TranslationBlock::default()
+        }
+    }
+
+    #[test]
+    fn lines_follow_the_text_shape() {
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let text = "Wait for me, I am coming with you to the old harbour tonight no matter what they say";
+        let block = balloon_block(TextAlign::Center, RenderTextDirection::Horizontal);
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        // Only meaningful where some font measures the text.
+        if measure_text_width(&mut ctx, &fonts, &block, text, 20.0) <= 0.0 {
+            return;
+        }
+        let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, text, page, page);
+        assert!(layout.shaped && !layout.overflow, "{layout:?}");
+        let shaped = shaped_lines(&mut ctx, &fonts, &block, text, &layout).unwrap();
+        let widths: Vec<f64> = shaped.lines.iter().map(|line| line.width).collect();
+        assert!(widths.len() >= 3, "{:?}", shaped.lines);
+        let middle = widths[widths.len() / 2];
+        assert!(middle > widths[0] && middle > widths[widths.len() - 1], "wider in the middle: {widths:?}");
+        assert!((shaped.center_x - 500.0).abs() < 1.0, "on the balloon's axis: {}", shaped.center_x);
+
+        // Left-aligned text keeps to the ellipse's largest rectangle, so it must be smaller.
+        let left = balloon_block(TextAlign::Left, RenderTextDirection::Horizontal);
+        let boxed = resolve_block_text_layout(&mut ctx, &fonts, &left, text, page, page);
+        assert!(!boxed.shaped && boxed.inner.width < 300.0, "{boxed:?}");
+        assert!(layout.font_size_px > boxed.font_size_px, "{} vs {}", layout.font_size_px, boxed.font_size_px);
+    }
+
+    #[test]
+    fn vertical_text_keeps_to_the_shape_rectangle() {
+        let mut ctx = FontContext::new();
+        let page = Size::new(1000.0, 1000.0);
+        let block = balloon_block(TextAlign::Center, RenderTextDirection::Vertical);
+        let fonts = BlockFonts::resolve(&ctx, &block);
+        let layout = resolve_block_text_layout(&mut ctx, &fonts, &block, "가나다라", page, page);
+        let inner = layout.inner;
+        assert!(!layout.shaped);
+        assert!(inner.left > 340.0 && inner.left + inner.width < 660.0, "{inner:?}");
+        assert!(inner.top > 280.0 && inner.top + inner.height < 520.0, "{inner:?}");
+        // Without a shape: the whole box inside the padding.
+        let plain = TranslationBlock { text_shape: None, ..block };
+        let layout = resolve_block_text_layout(&mut ctx, &fonts, &plain, "가나다라", page, page);
+        assert_eq!(layout.inner.width, 400.0 - (BLOCK_BORDER_PX + layout.padding_px) * 2.0);
+    }
+
+    #[test]
+    fn paragraphs_break_into_their_own_lines_of_the_shape() {
+        let paragraphs = [
+            Paragraph {
+                chars: "ab cd".chars().collect(),
+                prefix_em: (0..=5).map(f64::from).collect(),
+                segments: vec![(0, 2), (3, 5)],
+            },
+            Paragraph { chars: Vec::new(), prefix_em: vec![0.0], segments: Vec::new() },
+            Paragraph { chars: "ef".chars().collect(), prefix_em: vec![0.0, 1.0, 2.0], segments: vec![(0, 2)] },
+        ];
+        let text = |lines: Vec<WrappedLine>| lines.into_iter().map(|line| line.text).collect::<Vec<_>>();
+        // "ab cd" is 5em: it needs two lines of 4em, then the blank line and "ef".
+        let lines = break_paragraphs(&paragraphs, &[4.0, 4.0, 4.0, 4.0], 1.0, 0.0).unwrap();
+        assert_eq!(text(lines), ["ab", "cd", "", "ef"]);
+        assert_eq!(break_paragraphs(&paragraphs, &[5.0, 5.0, 5.0], 1.0, 0.0).map(text).unwrap(), ["ab cd", "", "ef"]);
+        assert_eq!(break_paragraphs(&paragraphs, &[4.0, 4.0, 1.0], 1.0, 0.0), None, "\"ef\" is too wide");
     }
 
     #[test]

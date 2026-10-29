@@ -222,6 +222,30 @@ fn block_corners(block: &TranslationBlock, page: &PageRecord) -> [Pos2; 4] {
         .map(|p| rotate_around(p, rect.center(), rotation))
 }
 
+/// Rows of the block's text shape in page pixels, rotated like the box; `None` without one.
+fn text_shape_quads(block: &TranslationBlock, page: &PageRecord) -> Option<Vec<[Pos2; 4]>> {
+    let rect = block_rect(block, page);
+    let rotation = resolve_block_rotation_deg(block) as f32;
+    let pixels = mtt_render::layout::PixelRect {
+        left: f64::from(rect.left()),
+        top: f64::from(rect.top()),
+        width: f64::from(rect.width()),
+        height: f64::from(rect.height()),
+    };
+    let strips = mtt_render::layout::text_shape_strips(block, pixels)?;
+    Some(
+        strips
+            .into_iter()
+            .map(|strip| {
+                let min = egui::pos2(strip.left as f32, strip.top as f32);
+                let max = egui::pos2((strip.left + strip.width) as f32, (strip.top + strip.height) as f32);
+                [min, egui::pos2(max.x, min.y), max, egui::pos2(min.x, max.y)]
+                    .map(|p| rotate_around(p, rect.center(), rotation))
+            })
+            .collect(),
+    )
+}
+
 fn block_contains(block: &TranslationBlock, page: &PageRecord, point: Pos2) -> bool {
     let rect = block_rect(block, page);
     let local = rotate_around(point, rect.center(), -(resolve_block_rotation_deg(block) as f32));
@@ -650,14 +674,25 @@ fn paint_overlay(
         for block in
             page.blocks.iter().filter(|block| block.render_direction != mtt_core::model::RenderTextDirection::Hidden)
         {
-            let corners = block_corners(block, page).map(|p| editor.view.to_screen(p));
             let color = mtt_core::geometry::parse_hex_color(&block.background_color).unwrap_or((255, 255, 255));
             let alpha = (block.opacity.clamp(0.0, 1.0) * f64::from(opacity.overlay) * 255.0) as u8;
-            painter.add(egui::Shape::convex_polygon(
-                corners.to_vec(),
-                Color32::from_rgba_unmultiplied(color.0, color.1, color.2, alpha),
-                Stroke::NONE,
-            ));
+            let fill = Color32::from_rgba_unmultiplied(color.0, color.1, color.2, alpha);
+            // A balloon block's background covers its text shape: one mesh, so rows don't seam.
+            if let Some(quads) = text_shape_quads(block, page) {
+                let mut mesh = egui::Mesh::default();
+                for quad in quads {
+                    let first = mesh.vertices.len() as u32;
+                    for corner in quad {
+                        mesh.colored_vertex(editor.view.to_screen(corner), fill);
+                    }
+                    mesh.add_triangle(first, first + 1, first + 2);
+                    mesh.add_triangle(first, first + 2, first + 3);
+                }
+                painter.add(egui::Shape::mesh(mesh));
+                continue;
+            }
+            let corners = block_corners(block, page).map(|p| editor.view.to_screen(p));
+            painter.add(egui::Shape::convex_polygon(corners.to_vec(), fill, Stroke::NONE));
         }
     }
     let uv = Rect::from_min_max(Pos2::ZERO, Pos2::new(1.0, 1.0));
