@@ -153,7 +153,7 @@ pub struct ImportResult {
 }
 
 /// `localeCompare(..., { numeric: true, sensitivity: "base" })` approximation: digit runs
-/// compare by value, everything else case-insensitively.
+/// (ASCII or full-width) compare by value, everything else case-insensitively.
 pub fn natural_cmp(left: &str, right: &str) -> Ordering {
     let (mut a, mut b) = (left.chars().peekable(), right.chars().peekable());
     loop {
@@ -161,10 +161,10 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
             (None, None) => return Ordering::Equal,
             (None, Some(_)) => return Ordering::Less,
             (Some(_), None) => return Ordering::Greater,
-            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+            (Some(x), Some(y)) if ascii_digit(x).is_some() && ascii_digit(y).is_some() => {
                 let take_number = |chars: &mut std::iter::Peekable<std::str::Chars<'_>>| {
                     let mut digits = String::new();
-                    while let Some(c) = chars.peek().copied().filter(char::is_ascii_digit) {
+                    while let Some(c) = chars.peek().copied().and_then(ascii_digit) {
                         digits.push(c);
                         chars.next();
                     }
@@ -178,6 +178,7 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
                 }
             }
             (Some(x), Some(y)) => {
+                let (x, y) = (ascii_digit(x).unwrap_or(x), ascii_digit(y).unwrap_or(y));
                 let ordering = x.to_lowercase().cmp(y.to_lowercase());
                 if ordering != Ordering::Equal {
                     return ordering;
@@ -189,16 +190,32 @@ pub fn natural_cmp(left: &str, right: &str) -> Ordering {
     }
 }
 
+/// `ch` as an ASCII digit when it is one, or a full-width one (`１２` in Japanese names).
+fn ascii_digit(ch: char) -> Option<char> {
+    match ch {
+        '0'..='9' => Some(ch),
+        '\u{ff10}'..='\u{ff19}' => char::from_u32(u32::from(ch) - 0xff10 + u32::from('0')),
+        _ => None,
+    }
+}
+
 fn sort_naturally(paths: &mut [PathBuf]) {
     paths.sort_by(|a, b| natural_cmp(&a.to_string_lossy(), &b.to_string_lossy()));
 }
 
+/// Names become page names and chapter titles in NFC: macOS file names often hold
+/// decomposed Hangul (ㅈ+ㅔ for 제), which would not match the same title typed in.
+fn nfc(text: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    text.nfc().collect()
+}
+
 fn file_name(path: &Path) -> String {
-    path.file_name().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_name().map(|name| nfc(&name.to_string_lossy())).unwrap_or_default()
 }
 
 fn file_stem(path: &Path) -> String {
-    path.file_stem().map(|name| name.to_string_lossy().into_owned()).unwrap_or_default()
+    path.file_stem().map(|name| nfc(&name.to_string_lossy())).unwrap_or_default()
 }
 
 fn list_image_files(folder: &Path) -> CoreResult<Vec<PathBuf>> {
@@ -213,13 +230,42 @@ fn list_image_files(folder: &Path) -> CoreResult<Vec<PathBuf>> {
     Ok(files)
 }
 
-/// Decodes a ZIP entry name: UTF-8 when valid, otherwise Shift_JIS (common for Japanese
-/// archives created on Windows).
+/// Decodes a ZIP (or old RAR) entry name: UTF-8 when valid, otherwise the code page of the
+/// Windows that made the archive: CP949 when the bytes read as Korean (see
+/// [`looks_like_euc_kr`]), else Shift_JIS (common for Japanese archives).
 pub fn decode_zip_name(raw: &[u8]) -> String {
-    match std::str::from_utf8(raw) {
-        Ok(text) => text.replace('\\', "/"),
-        Err(_) => encoding_rs::SHIFT_JIS.decode(raw).0.replace('\\', "/"),
+    let text = match std::str::from_utf8(raw) {
+        Ok(text) => std::borrow::Cow::Borrowed(text),
+        // `EUC_KR` is the WHATWG encoding, which is CP949.
+        Err(_) if looks_like_euc_kr(raw) => encoding_rs::EUC_KR.decode_without_bom_handling(raw).0,
+        Err(_) => encoding_rs::SHIFT_JIS.decode(raw).0,
+    };
+    nfc(&text.replace('\\', "/"))
+}
+
+/// Whether legacy bytes read as Korean: every non-ASCII pair is a KS X 1001 symbol or Hangul
+/// syllable (no Hanja, nothing from CP949's extension rows) and at least one is Hangul.
+/// Shift_JIS kana and kanji start with bytes outside those rows (or would read as Hanja),
+/// so Japanese names stay Shift_JIS; Korean names in Shift_JIS turn into half-width
+/// katakana (`제1화` → `ﾁｦ1ﾈｭ`). A name of nothing but half-width katakana can read both
+/// ways and is taken as Korean.
+fn looks_like_euc_kr(raw: &[u8]) -> bool {
+    let mut hangul = false;
+    let mut bytes = raw.iter().copied();
+    while let Some(lead) = bytes.next() {
+        if lead < 0x80 {
+            continue;
+        }
+        if !bytes.next().is_some_and(|trail| (0xa1..=0xfe).contains(&trail)) {
+            return false;
+        }
+        match lead {
+            0xa1..=0xac => {}
+            0xb0..=0xc8 => hangul = true,
+            _ => return false,
+        }
     }
+    hangul
 }
 
 fn is_ignored_zip_entry(name: &str) -> bool {
@@ -238,7 +284,7 @@ pub fn list_rar_images(archive: &Path) -> CoreResult<Vec<PageDraft>> {
         .map(|(index, member)| {
             // Old archives store names in the creator's code page (Shift_JIS for Japanese ones).
             let name = if member.name_is_unicode() {
-                member.to_owned().meta.name_lossy().replace('\\', "/")
+                nfc(&member.to_owned().meta.name_lossy().replace('\\', "/"))
             } else {
                 decode_zip_name(member.name_bytes())
             };
@@ -375,7 +421,7 @@ pub fn preview_zip_folder(folder: &Path) -> CoreResult<ImportPreview> {
         if images.as_ref().is_ok_and(Vec::is_empty) {
             continue;
         }
-        let relative = current.strip_prefix(folder).unwrap_or(&current).to_string_lossy().replace('\\', "/");
+        let relative = nfc(&current.strip_prefix(folder).unwrap_or(&current).to_string_lossy().replace('\\', "/"));
         let pages = images.map(|images| {
             images
                 .into_iter()
@@ -756,6 +802,34 @@ mod tests {
         let (encoded, _, _) = encoding_rs::SHIFT_JIS.encode("第1話/001.jpg");
         assert_eq!(decode_zip_name(&encoded), "第1話/001.jpg");
         assert_eq!(decode_zip_name("a\\b.png".as_bytes()), "a/b.png");
+    }
+
+    #[test]
+    fn legacy_zip_names_pick_korean_or_japanese() {
+        for name in ["제1화/001.jpg", "원피스 1권/표지.png", "[번역] 「외전」 02.jpg"] {
+            let (encoded, _, _) = encoding_rs::EUC_KR.encode(name);
+            assert!(std::str::from_utf8(&encoded).is_err());
+            assert_eq!(decode_zip_name(&encoded), name, "CP949");
+        }
+        for name in ["第1話/001.jpg", "ひらがな/カタカナ 02.png", "東方 漢字.jpg", "ｶﾀｶﾅ 第2話.jpg"]
+        {
+            let (encoded, _, _) = encoding_rs::SHIFT_JIS.encode(name);
+            assert_eq!(decode_zip_name(&encoded), name, "Shift_JIS");
+        }
+    }
+
+    #[test]
+    fn names_are_stored_composed() {
+        let decomposed = "\u{110c}\u{1166}1\u{1112}\u{116a}"; // 제1화 as macOS writes it
+        assert_eq!(decode_zip_name(format!("{decomposed}/001.jpg").as_bytes()), "제1화/001.jpg");
+        assert_eq!(file_stem(Path::new(&format!("/x/{decomposed}.cbz"))), "제1화");
+    }
+
+    #[test]
+    fn full_width_digits_sort_by_value() {
+        let mut names = vec!["１０.png", "p10.png", "２.png", "1.png", "p２.png"];
+        names.sort_by(|a, b| natural_cmp(a, b));
+        assert_eq!(names, ["1.png", "２.png", "１０.png", "p２.png", "p10.png"]);
     }
 
     #[test]
