@@ -43,6 +43,19 @@ pub enum PageSource {
 /// PDF pages become PNGs at this resolution, enough for fine lettering and line art.
 pub const PDF_DPI: f32 = 300.0;
 
+/// Longest side of a rendered PDF page. A B5 page at [`PDF_DPI`] is about 3000px, but scans
+/// whose page box is in pixels come out 10000px and more: gigabytes to render, and larger
+/// than the editor opens.
+pub const PDF_MAX_SIDE: f32 = 8000.0;
+
+/// Largest page file taken from an archive. Far above any real page; it stops a damaged
+/// or hostile archive from filling the disk.
+const MAX_PAGE_BYTES: u64 = 256 << 20;
+
+fn too_large(name: &str) -> CoreError {
+    CoreError::Invalid(format!("{name}: 페이지 파일이 너무 큽니다 ({}MB 초과).", MAX_PAGE_BYTES >> 20))
+}
+
 /// What a file imports as when it isn't an image.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveKind {
@@ -419,7 +432,7 @@ pub fn create_import(
                 if cancelled() {
                     return Err(CoreError::Invalid("가져오기를 취소했습니다.".into()));
                 }
-                pages.push(materialize_page(page, &pages_dir, index, &mut archive)?);
+                pages.push(materialize_page(page, &pages_dir, index, &mut archive, &draft.pages, &cancelled)?);
                 done += 1;
                 progress(done, total);
             }
@@ -464,8 +477,63 @@ pub fn create_import(
 /// The archive or PDF the last page came from, kept open for the next.
 enum OpenSource {
     Zip(PathBuf, zip::ZipArchive<fs::File>),
-    Rar(PathBuf, rars::Archive),
+    Rar(PathBuf, RarPages),
     Pdf(PathBuf, hayro::hayro_syntax::Pdf),
+}
+
+/// The members of a RAR archive a chapter takes, decoded in one pass into a temporary
+/// folder next to its pages: reading members one at a time decodes every earlier member
+/// of a solid archive again for each page (O(n²)).
+struct RarPages {
+    files: std::collections::HashMap<usize, PathBuf>,
+    _scratch: tempfile::TempDir,
+}
+
+fn extract_rar_pages(
+    path: &Path,
+    wanted: &std::collections::HashSet<usize>,
+    scratch: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> CoreResult<RarPages> {
+    use rars::ExtractionDecision;
+    let rar = rars::ArchiveReader::read_path(path)
+        .map_err(|error| CoreError::Invalid(format!("RAR을 열지 못했습니다: {error}")))?;
+    let dir = tempfile::Builder::new()
+        .prefix(".rar-")
+        .tempdir_in(scratch)
+        .map_err(|source| CoreError::io(scratch, source))?;
+    let last = wanted.iter().max().copied().unwrap_or(0);
+    let solid = rar.is_solid();
+    let mut files = std::collections::HashMap::new();
+    let mut current = 0usize;
+    let options = rars::ArchiveReadOptions::new().with_max_member_output_bytes(MAX_PAGE_BYTES);
+    // Like `Archive::read_members_at`, but into files instead of memory.
+    let extracted = rar.extract_with_control(options, |member| {
+        let index = current;
+        current += 1;
+        if index > last || cancelled() {
+            return Ok(ExtractionDecision::Stop);
+        }
+        if member.meta.is_directory || member.meta.is_redirection {
+            return Ok(ExtractionDecision::Skip);
+        }
+        if wanted.contains(&index) {
+            let file_path = dir.path().join(index.to_string());
+            let file = fs::File::create(&file_path)?;
+            files.insert(index, file_path);
+            return Ok(ExtractionDecision::Extract(Box::new(file)));
+        }
+        // In a solid archive every earlier member has to be decoded.
+        Ok(if solid { ExtractionDecision::Extract(Box::new(std::io::sink())) } else { ExtractionDecision::Skip })
+    });
+    if cancelled() {
+        return Err(CoreError::Invalid("가져오기를 취소했습니다.".into()));
+    }
+    extracted.map_err(|error| match error {
+        rars::Error::MemberOutputLimitExceeded { .. } => too_large(&file_name(path)),
+        error => CoreError::Invalid(format!("RAR 항목을 풀지 못했습니다: {error}")),
+    })?;
+    Ok(RarPages { files, _scratch: dir })
 }
 
 impl OpenSource {
@@ -476,8 +544,16 @@ impl OpenSource {
     }
 }
 
-/// `source` opened (or the one already open when it is the same file).
-fn open_source<'a>(open: &'a mut Option<OpenSource>, path: &Path, kind: ArchiveKind) -> CoreResult<&'a mut OpenSource> {
+/// `source` opened (or the one already open when it is the same file). A RAR archive is
+/// decoded right away for every page of `pages` it holds, into a folder next to `pages_dir`.
+fn open_source<'a>(
+    open: &'a mut Option<OpenSource>,
+    path: &Path,
+    kind: ArchiveKind,
+    pages: &[PageDraft],
+    pages_dir: &Path,
+    cancelled: &dyn Fn() -> bool,
+) -> CoreResult<&'a mut OpenSource> {
     if open.as_ref().is_none_or(|current| current.path() != path) {
         *open = Some(match kind {
             ArchiveKind::Zip => {
@@ -487,9 +563,15 @@ fn open_source<'a>(open: &'a mut Option<OpenSource>, path: &Path, kind: ArchiveK
                 OpenSource::Zip(path.to_path_buf(), zip)
             }
             ArchiveKind::Rar => {
-                let rar = rars::ArchiveReader::read_path(path)
-                    .map_err(|error| CoreError::Invalid(format!("RAR을 열지 못했습니다: {error}")))?;
-                OpenSource::Rar(path.to_path_buf(), rar)
+                let wanted = pages
+                    .iter()
+                    .filter_map(|page| match &page.source {
+                        PageSource::RarEntry { archive, index, .. } if archive == path => Some(*index),
+                        _ => None,
+                    })
+                    .collect();
+                let scratch = pages_dir.parent().unwrap_or(pages_dir);
+                OpenSource::Rar(path.to_path_buf(), extract_rar_pages(path, &wanted, scratch, cancelled)?)
             }
             ArchiveKind::Pdf => OpenSource::Pdf(path.to_path_buf(), open_pdf(path)?),
         });
@@ -501,7 +583,8 @@ fn render_pdf_page(pdf: &hayro::hayro_syntax::Pdf, index: usize) -> CoreResult<V
     let cache = hayro::RenderCache::new();
     let pages = pdf.pages();
     let page = pages.get(index).ok_or_else(|| CoreError::Invalid(format!("PDF {}쪽을 찾지 못했습니다.", index + 1)))?;
-    let scale = PDF_DPI / 72.0;
+    let (width, height) = page.render_dimensions();
+    let scale = pdf_scale(width, height);
     let settings = hayro::PixmapSettings {
         x_scale: scale,
         y_scale: scale,
@@ -518,11 +601,32 @@ fn render_pdf_page(pdf: &hayro::hayro_syntax::Pdf, index: usize) -> CoreResult<V
     .map_err(|error| CoreError::Invalid(format!("PDF {}쪽을 PNG로 만들지 못했습니다: {error:?}", index + 1)))
 }
 
+/// Copies at most `limit` bytes; `None` when the source has more.
+fn copy_capped(
+    source: impl std::io::Read,
+    target: &mut impl std::io::Write,
+    limit: u64,
+) -> std::io::Result<Option<u64>> {
+    let copied = std::io::copy(&mut source.take(limit + 1), target)?;
+    Ok((copied <= limit).then_some(copied))
+}
+
+/// Points to pixels: [`PDF_DPI`], or less when the long side would pass [`PDF_MAX_SIDE`].
+fn pdf_scale(width_pt: f32, height_pt: f32) -> f32 {
+    let long_side = width_pt.max(height_pt);
+    let scale = PDF_DPI / 72.0;
+    if long_side * scale > PDF_MAX_SIDE { PDF_MAX_SIDE / long_side } else { scale }
+}
+
+/// Copies `draft` into `pages_dir` as page `index`. `pages` are all of the chapter's pages
+/// (a RAR archive is decoded for all of them at once).
 fn materialize_page(
     draft: &PageDraft,
     pages_dir: &Path,
     index: usize,
     archive: &mut Option<OpenSource>,
+    pages: &[PageDraft],
+    cancelled: &dyn Fn() -> bool,
 ) -> CoreResult<PageRecord> {
     let page_id = uuid::Uuid::new_v4().to_string();
     let source_name = match &draft.source {
@@ -540,27 +644,39 @@ fn materialize_page(
             fs::copy(path, &output).map_err(|source| CoreError::io(path, source))?;
         }
         PageSource::ZipEntry { archive: archive_path, index: entry_index, name } => {
-            let OpenSource::Zip(_, zip) = open_source(archive, archive_path, ArchiveKind::Zip)? else {
+            let OpenSource::Zip(_, zip) =
+                open_source(archive, archive_path, ArchiveKind::Zip, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as ZIP")
             };
-            let mut entry = zip
+            let entry = zip
                 .by_index(*entry_index)
                 .map_err(|error| CoreError::Invalid(format!("ZIP 항목을 찾지 못했습니다: {name}: {error}")))?;
+            if entry.size() > MAX_PAGE_BYTES {
+                return Err(too_large(name));
+            }
             let mut target = fs::File::create(&output).map_err(|source| CoreError::io(&output, source))?;
-            std::io::copy(&mut entry, &mut target).map_err(|source| CoreError::io(&output, source))?;
+            // The declared size can lie.
+            copy_capped(entry, &mut target, MAX_PAGE_BYTES)
+                .map_err(|source| CoreError::io(&output, source))?
+                .ok_or_else(|| too_large(name))?;
         }
         PageSource::RarEntry { archive: archive_path, index: member, name } => {
-            let OpenSource::Rar(_, rar) = open_source(archive, archive_path, ArchiveKind::Rar)? else {
+            let OpenSource::Rar(_, extracted) =
+                open_source(archive, archive_path, ArchiveKind::Rar, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as RAR")
             };
-            let bytes = rar
-                .read_member_at(*member, None)
-                .map_err(|error| CoreError::Invalid(format!("RAR 항목을 풀지 못했습니다: {name}: {error}")))?
+            let file = extracted
+                .files
+                .remove(member)
                 .ok_or_else(|| CoreError::Invalid(format!("RAR 항목을 찾지 못했습니다: {name}")))?;
-            fs::write(&output, bytes).map_err(|source| CoreError::io(&output, source))?;
+            fs::rename(&file, &output).map_err(|source| CoreError::io(&file, source))?;
         }
         PageSource::PdfPage { document, index: page } => {
-            let OpenSource::Pdf(_, pdf) = open_source(archive, document, ArchiveKind::Pdf)? else {
+            let OpenSource::Pdf(_, pdf) =
+                open_source(archive, document, ArchiveKind::Pdf, pages, pages_dir, cancelled)?
+            else {
                 unreachable!("opened as PDF")
             };
             fs::write(&output, render_pdf_page(pdf, *page)?).map_err(|source| CoreError::io(&output, source))?;
@@ -847,16 +963,22 @@ mod tests {
     }
 
     fn rar_bytes(entries: &[(&str, Vec<u8>)]) -> Vec<u8> {
+        rar_bytes_with(entries, false)
+    }
+
+    fn rar_bytes_with(entries: &[(&str, Vec<u8>)], solid: bool) -> Vec<u8> {
         use rars::rar50::{ArchiveEntry, ArchiveExtras, WriterOptions, write_streaming_archive_to};
         use rars::{EntrySource, WriterResources};
         let entries: Vec<ArchiveEntry> = entries
             .iter()
             .map(|(name, bytes)| ArchiveEntry::new(*name, EntrySource::from_bytes(bytes.clone())))
             .collect();
+        let mut options = WriterOptions::default();
+        options.features.solid = solid;
         let mut bytes = Vec::new();
         write_streaming_archive_to(
             &entries,
-            WriterOptions::default(),
+            options,
             ArchiveExtras::default(),
             &WriterResources::default(),
             &mut bytes,
@@ -910,6 +1032,50 @@ mod tests {
         let result =
             create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
         assert_eq!(result.chapter_ids.len(), 1);
+    }
+
+    #[test]
+    fn solid_rar_pages_are_decoded_in_one_pass() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut entries: Vec<(String, Vec<u8>)> = (1..=12).map(|n| (format!("{n:02}.png"), png(n, 2))).collect();
+        entries.insert(3, ("ComicInfo.xml".into(), b"<ComicInfo />".to_vec()));
+        let entries: Vec<(&str, Vec<u8>)> =
+            entries.iter().map(|(name, bytes)| (name.as_str(), bytes.clone())).collect();
+        let bytes = rar_bytes_with(&entries, true);
+        assert!(rars::ArchiveReader::read(&bytes).unwrap().is_solid());
+        let archive = dir.path().join("1화.cbr");
+        fs::write(&archive, bytes).unwrap();
+        let library = Library::new(dir.path().join("library"));
+        let preview = preview_archive(&archive).unwrap();
+        let result =
+            create_import(&library, &preview, &ImportTarget::NewWork("w".into()), |_, _| {}, || false).unwrap();
+        let chapter = library.open_chapter(&result.chapter_ids[0]).unwrap();
+        let widths: Vec<u32> = chapter.pages.iter().map(|page| page.width).collect();
+        assert_eq!(widths, (1..=12).collect::<Vec<_>>());
+        let leftovers: Vec<_> = fs::read_dir(library.chapter_dir(&chapter.work_id, &chapter.id))
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".rar-"))
+            .collect();
+        assert!(leftovers.is_empty(), "scratch folder removed: {leftovers:?}");
+    }
+
+    #[test]
+    fn pdf_pages_are_capped_on_the_long_side() {
+        assert_eq!(pdf_scale(595.0, 842.0), PDF_DPI / 72.0, "A4 stays at 300 DPI");
+        // A scan whose page box is in pixels.
+        let scale = pdf_scale(2480.0, 3508.0);
+        assert!((3508.0 * scale - PDF_MAX_SIDE).abs() < 0.5, "{}", 3508.0 * scale);
+        assert!(pdf_scale(0.0, 0.0).is_finite());
+    }
+
+    #[test]
+    fn archive_entries_are_copied_up_to_the_cap() {
+        let mut target = Vec::new();
+        assert_eq!(copy_capped(&b"12345"[..], &mut target, 5).unwrap(), Some(5));
+        let mut target = Vec::new();
+        assert_eq!(copy_capped(&b"123456"[..], &mut target, 5).unwrap(), None);
+        assert!(target.len() <= 6, "stops reading after the cap");
     }
 
     #[test]

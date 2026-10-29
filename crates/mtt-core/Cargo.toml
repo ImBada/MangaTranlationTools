@@ -18,9 +18,10 @@ encoding_rs = "0.8.42"
 hayro = "0.8"
 rars = { version = "0.12", default-features = false }
 unicode-normalization = "0.1.26"
+# Scratch folder for RAR members decoded in one pass.
+tempfile.workspace = true
 
 [dev-dependencies]
-tempfile.workspace = true
 # Writes RAR fixtures in tests.
 rars = { version = "0.12", default-features = false, features = ["write"] }
 
