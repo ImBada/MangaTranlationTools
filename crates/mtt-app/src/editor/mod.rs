@@ -2396,7 +2396,16 @@ fn compute_inpaint(
         }
     };
     let mut patch_mask = patch_mask;
-    let (mut patch_result, region) = mtt_inpaint::run_inpaint_in(source, &patch_mask, engine, settings, lama)?;
+    // A partial run sees the page as it shows now, so text already erased next to it
+    // isn't copied back into the fill.
+    let shown = match (scope, mask, result) {
+        (InpaintScope::Range | InpaintScope::SelectedBlocks, Some(mask), Some(result)) => {
+            Some(mtt_inpaint::composite_result(source, result, mask))
+        }
+        _ => None,
+    };
+    let (mut patch_result, region) =
+        mtt_inpaint::run_inpaint_in(shown.as_ref().unwrap_or(source), &patch_mask, engine, settings, lama)?;
     // Outside the engine's region the patch is empty and the masks are binary, so the
     // follow-up steps only look inside it.
     let region = region.unwrap_or(mtt_inpaint::Rect { x: 0, y: 0, width: 0, height: 0 });
@@ -2654,6 +2663,39 @@ mod tests {
             None,
         );
         assert!(empty_range.is_err());
+    }
+
+    #[test]
+    fn partial_inpaint_sees_what_was_already_erased() {
+        // A dark column, erased below row 10 already; re-inpainting the top half must not
+        // pull the dark text back in from below.
+        let source = RgbaImage::from_fn(20, 20, |x, _| {
+            if (8..13).contains(&x) { image::Rgba([0, 0, 0, 255]) } else { image::Rgba([255, 255, 255, 255]) }
+        });
+        let mut mask = GrayImage::new(20, 20);
+        let mut existing = RgbaImage::new(20, 20);
+        for y in 0..20 {
+            for x in 8..13 {
+                mask.put_pixel(x, y, image::Luma([255]));
+                if y >= 10 {
+                    existing.put_pixel(x, y, image::Rgba([255, 255, 255, 255]));
+                }
+            }
+        }
+        let settings = InpaintSettings { artifact_cleanup_px: Some(0.0), ..InpaintSettings::default() };
+        let outcome = compute_inpaint(
+            InpaintScope::Range,
+            &source,
+            Some(Arc::new(mask)),
+            Some(Arc::new(existing)),
+            Some(mtt_inpaint::Rect { x: 0, y: 0, width: 20, height: 10 }),
+            &[],
+            InpaintEngine::LocalFillFallback,
+            &settings,
+            None,
+        )
+        .unwrap();
+        assert_eq!(outcome.result.get_pixel(10, 9).0, [255, 255, 255, 255]);
     }
 
     #[test]

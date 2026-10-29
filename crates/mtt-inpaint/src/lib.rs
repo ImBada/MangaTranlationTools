@@ -163,6 +163,29 @@ pub fn normalize_layers_in(mask: &mut GrayImage, result: &mut RgbaImage, region:
     }
 }
 
+/// The page as it shows: `result` over `source` with its alpha times the mask coverage
+/// (how the editor and the output draw the layers).
+pub fn composite_result(source: &RgbaImage, result: &RgbaImage, mask: &GrayImage) -> RgbaImage {
+    let mut shown = source.clone();
+    if result.dimensions() != source.dimensions() || mask.dimensions() != source.dimensions() {
+        return shown;
+    }
+    let raw: &mut [u8] = &mut shown;
+    let pixels = raw.as_chunks_mut::<4>().0.iter_mut().zip(result.as_raw().as_chunks::<4>().0).zip(mask.as_raw());
+    for ((out, over), coverage) in pixels {
+        const FULL: u32 = 255 * 255;
+        let alpha = u32::from(over[3]) * u32::from(*coverage);
+        if alpha == 0 {
+            continue;
+        }
+        for channel in 0..3 {
+            let blended = u32::from(out[channel]) * (FULL - alpha) + u32::from(over[channel]) * alpha;
+            out[channel] = ((blended + FULL / 2) / FULL) as u8;
+        }
+    }
+    shown
+}
+
 /// `mergePartialInpaintResult`: patch pixels replace the base where the patch mask
 /// covers or the patch has content.
 pub fn merge_partial_result(base: Option<&RgbaImage>, patch: &RgbaImage, patch_mask: &GrayImage) -> RgbaImage {
