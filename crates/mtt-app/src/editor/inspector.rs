@@ -997,7 +997,8 @@ fn psd_card(editor: &mut Editor, ui: &mut egui::Ui, services: &mut Services, wor
                 }
                 let import = ui.add_enabled(!busy, egui::Button::new("가져오기…").min_size(size));
                 if theme::tip(import, "PSD 가져오기", "").clicked()
-                    && let Some(path) = rfd::FileDialog::new().add_filter("PSD", &["psd", "PSD"]).pick_file()
+                    && let Some(path) =
+                        rfd::FileDialog::new().add_filter("PSD", &["psd", "PSD", "psb", "PSB"]).pick_file()
                 {
                     editor.import_psd_file(services, worker, &path);
                 }

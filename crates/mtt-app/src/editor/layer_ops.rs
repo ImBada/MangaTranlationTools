@@ -178,11 +178,12 @@ impl Editor {
         self.psd_files.last_import.clone()
     }
 
-    /// "PSD 내보내기": writes `{page}-inpaint.psd` straight into Downloads (` (n)` when the
-    /// name is taken) and remembers it for quick load. Built and written on the worker.
+    /// "PSD 내보내기": writes `{page}-inpaint.psd` (`.psb` for pages over 30000px) straight
+    /// into Downloads (` (n)` when the name is taken) and remembers it for quick load. Built
+    /// and written on the worker.
     pub fn export_psd_to_downloads(&mut self, services: &mut Services, worker: &Worker<AppEvent>) {
         let Some(page) = self.page().cloned() else { return };
-        let filename = format!("{}-inpaint.psd", sanitize_psd_basename(&page.name, &page.id));
+        let basename = format!("{}-inpaint", sanitize_psd_basename(&page.name, &page.id));
         let job = match self.psd_export_job(services) {
             Ok(job) => job,
             Err(error) => {
@@ -196,7 +197,8 @@ impl Editor {
         let chapter_id = self.chapter.id.clone();
         worker.spawn(move || {
             let result = job().and_then(|bytes| {
-                let path = write_unique_download(&filename, &bytes)?;
+                let extension = if mtt_inpaint::psd::is_psb(&bytes) { "psb" } else { "psd" };
+                let path = write_unique_download(&format!("{basename}.{extension}"), &bytes)?;
                 let meta = ExportedPsdMeta {
                     exported_at: mtt_core::time::now_iso(),
                     filename: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
