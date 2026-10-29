@@ -51,6 +51,10 @@ pub enum Step {
     Hover([f32; 2]),
     /// Clicks the primary button at a screen point.
     Click([f32; 2]),
+    /// Drags the primary button between screen points through real pointer events;
+    /// `drag-hold` keeps the button down (for a mid-stroke screenshot), `release` lets go.
+    PointerDrag([f32; 4], bool),
+    Release,
     /// Translates the current page.
     Translate,
     WaitTranslation,
@@ -66,6 +70,8 @@ pub struct Automation {
     screenshot_done: Option<Arc<AtomicBool>>,
     /// Input fed to egui by `MttApp::raw_input_hook`, one batch per frame.
     injected: VecDeque<Vec<egui::Event>>,
+    /// Where the last injected drag ended, for `release`.
+    last_pointer: egui::Pos2,
 }
 
 pub enum Request {
@@ -145,6 +151,11 @@ impl Automation {
                         let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
                         (v.len() == 2).then(|| Step::Click([v[0], v[1]]))?
                     }
+                    "drag" | "drag-hold" => {
+                        let v: Vec<f32> = arg.split(',').filter_map(|n| n.trim().parse().ok()).collect();
+                        (v.len() == 4).then(|| Step::PointerDrag([v[0], v[1], v[2], v[3]], name == "drag"))?
+                    }
+                    "release" => Step::Release,
                     "translate" => Step::Translate,
                     "translate-wait" => Step::WaitTranslation,
                     "window" => {
@@ -161,7 +172,13 @@ impl Automation {
                 })
             })
             .collect();
-        Some(Self { steps, wait_frames: 2, screenshot_done: None, injected: VecDeque::new() })
+        Some(Self {
+            steps,
+            wait_frames: 2,
+            screenshot_done: None,
+            injected: VecDeque::new(),
+            last_pointer: egui::Pos2::ZERO,
+        })
     }
 
     pub fn take_injected_events(&mut self) -> Vec<egui::Event> {
@@ -331,6 +348,38 @@ impl Automation {
                 };
                 // Move, press and release on separate frames, like a real click.
                 self.injected.extend([vec![egui::Event::PointerMoved(pos)], vec![button(true)], vec![button(false)]]);
+                self.wait_frames = 5;
+            }
+            (Step::PointerDrag(points, release), _) => {
+                let (from, to) = (egui::pos2(points[0], points[1]), egui::pos2(points[2], points[3]));
+                let button = |pos, pressed| egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                };
+                self.injected.extend([vec![egui::Event::PointerMoved(from)], vec![button(from, true)]]);
+                // A few samples per frame, like a real mouse.
+                for frame in 0..12 {
+                    let samples = (1..=3)
+                        .map(|i| egui::Event::PointerMoved(from.lerp(to, (frame * 3 + i) as f32 / 36.0)))
+                        .collect();
+                    self.injected.push_back(samples);
+                }
+                if *release {
+                    self.injected.push_back(vec![button(to, false)]);
+                }
+                self.last_pointer = to;
+                self.wait_frames = self.injected.len() as u32 + 3;
+            }
+            (Step::Release, _) => {
+                let pos = self.last_pointer;
+                self.injected.push_back(vec![egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
                 self.wait_frames = 5;
             }
             (Step::Space(pressed), _) => {

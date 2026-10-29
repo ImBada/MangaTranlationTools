@@ -910,7 +910,7 @@ fn inpaint_tools(editor: &mut Editor, ui: &mut egui::Ui, locked: bool) {
     let active = |tool| editor.tool == Tool::Result && editor.result_tool == tool;
     for (tool, glyph, key, hint) in [
         (ResultTool::Brush, icon::PAINT_BRUSH, "B", "브러시\n브러시 색으로 칠합니다"),
-        (ResultTool::SmartBrush, icon::MAGIC_WAND, "⌥B", "스마트 브러시\n주변 질감으로 메웁니다"),
+        (ResultTool::SmartBrush, icon::FIRST_AID_KIT, "J", "스마트 브러시\n칠한 곳을 손을 떼면 주변 질감으로 메웁니다"),
         (ResultTool::Eraser, icon::ERASER, "E", "지우개\n결과를 지워 원본이 보이게 합니다"),
     ] {
         if theme::icon_tool(ui, paint, active(tool), glyph, key, hint).clicked() {

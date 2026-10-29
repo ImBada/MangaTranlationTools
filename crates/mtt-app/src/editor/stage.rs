@@ -21,6 +21,8 @@ const MAX_FIT_WIDTH: f32 = 1040.0;
 /// `STAGE_ZOOM_STEP`.
 pub const ZOOM_STEP: f32 = 1.2;
 const HANDLE_SIZE: f32 = 8.0;
+/// Screen px the result brush trails the pointer by at 100% smoothing.
+const RESULT_SMOOTHING_REACH: f32 = 48.0;
 const SELECTION_COLOR: Color32 = Color32::from_rgb(56, 140, 255);
 const HOVER_COLOR: Color32 = Color32::from_rgba_premultiplied(56, 140, 255, 120);
 const RANGE_COLOR: Color32 = Color32::from_rgb(255, 196, 0);
@@ -193,12 +195,20 @@ pub enum Drag {
         last: Pos2,
         dirty: Option<(u32, u32, u32, u32)>,
     },
-    ResultPaint {
+    /// Smart brush: collects the area to heal; the fill runs on release.
+    Heal {
         last: Pos2,
+        mask: image::GrayImage,
+        /// Pixels painted so far, for the on-screen preview.
+        bounds: Option<(u32, u32, u32, u32)>,
+    },
+    ResultPaint {
+        /// The latest pointer sample; the brush may trail it (smoothing).
+        last: Pos2,
+        stroke: Box<super::result_tools::Stroke>,
         before_result: StrokeBackup,
         before_mask: StrokeBackup,
         dirty: Option<(u32, u32, u32, u32)>,
-        smudge: Option<image::RgbaImage>,
     },
 }
 
@@ -708,6 +718,9 @@ fn paint_overlay(
 
 fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, page: &PageRecord) {
     let hover = ui.input(|i| i.pointer.hover_pos()).filter(|pos| editor.view.stage_rect.contains(*pos));
+    if let Some(Drag::Heal { mask, bounds: Some(bounds), .. }) = &editor.drag {
+        painter.add(heal_preview(editor, mask, *bounds));
+    }
     // The final preview shows the page as exported: no outlines, handles or overflow marks.
     if editor.layer.edits_blocks() && !editor.final_output_preview() {
         let hovered = hover.and_then(|pos| hit_block(page, editor.view.to_page(pos))).map(|block| block.id.clone());
@@ -811,6 +824,16 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
         let radius = size * editor.view.zoom / 2.0;
         painter.circle_stroke(pos, radius, Stroke::new(1.5, Color32::BLACK));
         painter.circle_stroke(pos, radius, Stroke::new(0.75, Color32::WHITE));
+        // Shift previews the straight line a click would draw.
+        let modifiers = ui.input(|i| i.modifiers);
+        if editor.drag.is_none()
+            && editor.tool != Tool::MaskAutoEraser
+            && let Some(start) = line_start(editor, &page.id, modifiers)
+        {
+            let start = editor.view.to_screen(start);
+            painter.line_segment([start, pos], Stroke::new(1.5, Color32::BLACK));
+            painter.line_segment([start, pos], Stroke::new(0.75, Color32::WHITE));
+        }
     }
 }
 
@@ -855,6 +878,21 @@ fn handle_pointer(editor: &mut Editor, ui: &egui::Ui, response: &egui::Response,
         && editor.drag.is_some()
         && (response.dragged() || response.is_pointer_button_down_on())
     {
+        if matches!(editor.drag, Some(Drag::Paint { .. } | Drag::ResultPaint { .. } | Drag::Heal { .. })) {
+            // Every pointer sample of the frame, not just the last, so fast strokes keep their shape.
+            let samples: Vec<Pos2> = ui.input(|i| {
+                i.events
+                    .iter()
+                    .filter_map(|event| match event {
+                        egui::Event::PointerMoved(position) => Some(*position),
+                        _ => None,
+                    })
+                    .collect()
+            });
+            for sample in samples {
+                update_drag(editor, &ctx, page, sample, modifiers);
+            }
+        }
         update_drag(editor, &ctx, page, screen, modifiers);
     }
 
@@ -903,7 +941,7 @@ fn stage_cursor(
         Some(Drag::Resize { handle, .. }) => return Some(handle.cursor()),
         Some(Drag::Rotate { .. }) => return Some(CursorIcon::Grabbing),
         Some(Drag::Range { .. } | Drag::BlockRange { .. }) => return Some(CursorIcon::Crosshair),
-        Some(Drag::Paint { .. } | Drag::AutoErase { .. } | Drag::ResultPaint { .. }) => {
+        Some(Drag::Paint { .. } | Drag::AutoErase { .. } | Drag::ResultPaint { .. } | Drag::Heal { .. }) => {
             return Some(CursorIcon::Crosshair);
         }
         Some(Drag::Idle) | None => {}
@@ -969,7 +1007,8 @@ fn start_drag(
         Tool::MaskBrush | Tool::MaskEraser if editor.layer == Layer::InpaintMask => {
             if let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(&page.id) {
                 let before = StrokeBackup::new(loaded.width(), loaded.height(), 1);
-                let mut drag = Drag::Paint { last: point, erase: editor.tool == Tool::MaskEraser, before, dirty: None };
+                let start = line_start(editor, &page.id, modifiers).unwrap_or(point);
+                let mut drag = Drag::Paint { last: start, erase: editor.tool == Tool::MaskEraser, before, dirty: None };
                 paint_to(editor, ctx, &page.id, &mut drag, point);
                 return drag;
             }
@@ -995,9 +1034,25 @@ fn start_drag(
                     return Drag::Idle;
                 }
                 let (width, height) = (loaded.width(), loaded.height());
+                if editor.result_tool == super::result_tools::ResultTool::SmartBrush {
+                    let start = line_start(editor, &page.id, modifiers);
+                    let mask = image::GrayImage::new(width, height);
+                    let mut drag = Drag::Heal { last: start.unwrap_or(point), mask, bounds: None };
+                    heal_to(editor, &mut drag, start.unwrap_or(point));
+                    heal_to(editor, &mut drag, point);
+                    return drag;
+                }
                 let before_result = StrokeBackup::new(width, height, 4);
                 let before_mask = StrokeBackup::new(width, height, 1);
-                let mut drag = Drag::ResultPaint { last: point, before_result, before_mask, dirty: None, smudge: None };
+                // The smoothing string is measured on screen, like Photoshop's.
+                let string = editor.result_brush.smoothing.clamp(0.0, 1.0) * RESULT_SMOOTHING_REACH / editor.view.zoom;
+                let stroke = Box::new(super::result_tools::Stroke::new(string, editor.chapter.inpaint_aliased));
+                let start = line_start(editor, &page.id, modifiers);
+                let mut drag =
+                    Drag::ResultPaint { last: start.unwrap_or(point), stroke, before_result, before_mask, dirty: None };
+                if let Some(start) = start {
+                    paint_result_to(editor, ctx, &page.id, &mut drag, start);
+                }
                 paint_result_to(editor, ctx, &page.id, &mut drag, point);
                 return drag;
             }
@@ -1205,8 +1260,56 @@ fn update_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord, scre
             auto_erase_to(editor, ctx, &page_id, &mut drag, point);
             ctx.request_repaint();
         }
+        Drag::Heal { .. } => {
+            heal_to(editor, &mut drag, point);
+            ctx.request_repaint();
+        }
     }
     editor.drag = Some(drag);
+}
+
+/// The area the smart brush will fill, tinted evenly: one quad per run of pixels in a row,
+/// so nothing overlaps and darkens.
+fn heal_preview(editor: &Editor, mask: &image::GrayImage, bounds: (u32, u32, u32, u32)) -> egui::Shape {
+    let fill = Color32::from_rgba_unmultiplied(236, 72, 153, 110);
+    let mut mesh = egui::Mesh::default();
+    let (x0, y0, width, height) = bounds;
+    for y in y0..y0 + height {
+        let mut x = x0;
+        while x < x0 + width {
+            if mask.get_pixel(x, y)[0] == 0 {
+                x += 1;
+                continue;
+            }
+            let start = x;
+            while x < x0 + width && mask.get_pixel(x, y)[0] > 0 {
+                x += 1;
+            }
+            let min = editor.view.to_screen(Pos2::new(start as f32, y as f32));
+            let max = editor.view.to_screen(Pos2::new(x as f32, (y + 1) as f32));
+            mesh.add_colored_rect(Rect::from_min_max(min, max), fill);
+        }
+    }
+    egui::Shape::mesh(mesh)
+}
+
+/// Adds the segment to the smart brush's heal area.
+fn heal_to(editor: &Editor, drag: &mut Drag, point: Pos2) {
+    let Drag::Heal { last, mask, bounds } = drag else { return };
+    if bounds.is_some() && last.distance(point) < 0.5 {
+        return;
+    }
+    let diameter =
+        editor.result_brush.size.clamp(super::result_tools::RESULT_BRUSH_MIN, super::result_tools::RESULT_BRUSH_MAX);
+    let touched = stroke_mask(mask, (last.x, last.y), (point.x, point.y), diameter, 255);
+    *bounds = super::result_tools::union(*bounds, touched);
+    *last = point;
+}
+
+/// Where a Shift+click stroke starts: the end of the last stroke on this page.
+fn line_start(editor: &Editor, page_id: &str, modifiers: Modifiers) -> Option<Pos2> {
+    let (page, end) = editor.last_stroke_end.as_ref()?;
+    (modifiers.shift_only() && page == page_id).then_some(*end)
 }
 
 fn paint_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
@@ -1257,28 +1360,38 @@ fn auto_erase_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: 
     }
 }
 
+/// Feeds a pointer sample to the result stroke, or with `finish` lets the brush catch up
+/// with the pointer at release.
 fn paint_result_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag: &mut Drag, point: Pos2) {
-    let Drag::ResultPaint { last, dirty, smudge, before_result, before_mask } = drag else { return };
-    if last.distance(point) < 0.5 && dirty.is_some() {
+    advance_result_stroke(editor, ctx, page_id, drag, point, false);
+}
+
+fn advance_result_stroke(
+    editor: &mut Editor,
+    ctx: &egui::Context,
+    page_id: &str,
+    drag: &mut Drag,
+    point: Pos2,
+    finish: bool,
+) {
+    let Drag::ResultPaint { last, stroke, dirty, before_result, before_mask } = drag else { return };
+    if !finish && last.distance(point) < 0.25 && dirty.is_some() {
         return;
     }
     let Some(PageAssets::Ready(loaded)) = editor.assets.get_mut(page_id) else { return };
     let (width, height) = (loaded.width(), loaded.height());
     let (result, mask) = loaded.ensure_layers();
-    let segment = ((last.x, last.y), (point.x, point.y));
-    if let Some(rect) = super::result_tools::segment_bounds(segment.0, segment.1, &editor.result_brush, width, height) {
+    let (tool, settings) = (editor.result_tool, &editor.result_brush);
+    let sample = (point.x, point.y);
+    if let Some(rect) = stroke.reach(Some(sample), settings, width, height) {
         before_result.save(result.as_raw(), rect);
         before_mask.save(mask.as_raw(), rect);
     }
-    let touched = super::result_tools::stroke(
-        editor.result_tool,
-        result,
-        mask,
-        segment.0,
-        segment.1,
-        &editor.result_brush,
-        smudge,
-    );
+    let touched = if finish {
+        stroke.finish(tool, result, mask, Some(sample), settings)
+    } else {
+        stroke.add_point(tool, result, mask, sample, settings)
+    };
     *last = point;
     if let Some((x, y, w, h)) = touched {
         *dirty = super::result_tools::union(*dirty, touched);
@@ -1287,7 +1400,22 @@ fn paint_result_to(editor: &mut Editor, ctx: &egui::Context, page_id: &str, drag
 }
 
 fn finish_drag(editor: &mut Editor, ctx: &egui::Context, page: &PageRecord) {
-    let Some(drag) = editor.drag.take() else { return };
+    let Some(mut drag) = editor.drag.take() else { return };
+    if let Drag::ResultPaint { last, .. } = drag {
+        advance_result_stroke(editor, ctx, &page.id, &mut drag, last, true);
+    }
+    if let Drag::Paint { last, .. } | Drag::ResultPaint { last, .. } | Drag::Heal { last, .. } = drag {
+        editor.last_stroke_end = Some((page.id.clone(), last));
+    }
+    if let Drag::Heal { mask, .. } = drag {
+        // `tick` has the worker to start the fill with.
+        if mask.iter().any(|value| *value > 0) {
+            editor.heal_stroke = Some((page.id.clone(), std::sync::Arc::new(mask)));
+            editor.heal_requested = true;
+            ctx.request_repaint();
+        }
+        return;
+    }
     match drag {
         Drag::Range { start, current, additive } => {
             let rect = Rect::from_two_pos(start, current)
@@ -1526,12 +1654,7 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
         if input.consume_key(command, Key::Minus) {
             actions.push(Box::new(|editor, _| editor.zoom_step(false)));
         }
-        // `resolveInpaintToolShortcutAction` (Alt+B smart brush, Alt+E auto eraser).
-        if input.consume_key(Modifiers::ALT, Key::B) {
-            actions.push(Box::new(|editor, _| {
-                inpaint_shortcut(editor, InpaintKey::SmartBrush);
-            }));
-        }
+        // `resolveInpaintToolShortcutAction` (Alt+E auto eraser).
         if input.consume_key(Modifiers::ALT, Key::E) {
             actions.push(Box::new(|editor, _| {
                 inpaint_shortcut(editor, InpaintKey::AutoEraser);
@@ -1556,6 +1679,12 @@ pub fn shortcuts(editor: &mut Editor, ctx: &egui::Context, services: &mut Servic
                 if !editor.page_edit_locked() {
                     editor.select_range_tool()
                 }
+            }));
+        }
+        // J like Photoshop's spot healing brush.
+        if input.consume_key(Modifiers::NONE, Key::J) {
+            actions.push(Box::new(|editor, _| {
+                inpaint_shortcut(editor, InpaintKey::SmartBrush);
             }));
         }
         if input.consume_key(Modifiers::NONE, Key::B) {
@@ -1715,6 +1844,17 @@ mod tests {
             ..PageRecord::default()
         };
         Editor::new(Chapter { id: "c".into(), page_order: vec!["p".into()], pages: vec![page], ..Chapter::default() })
+    }
+
+    #[test]
+    fn shift_click_lines_on_from_the_last_stroke_on_the_page() {
+        let mut editor = editor_with_block();
+        assert_eq!(line_start(&editor, "p", Modifiers::SHIFT), None, "nothing to line on from");
+        editor.last_stroke_end = Some(("p".into(), Pos2::new(10.0, 20.0)));
+        assert_eq!(line_start(&editor, "p", Modifiers::SHIFT), Some(Pos2::new(10.0, 20.0)));
+        assert_eq!(line_start(&editor, "p", Modifiers::NONE), None);
+        assert_eq!(line_start(&editor, "p", Modifiers::SHIFT | Modifiers::ALT), None);
+        assert_eq!(line_start(&editor, "other", Modifiers::SHIFT), None, "only on the same page");
     }
 
     #[test]

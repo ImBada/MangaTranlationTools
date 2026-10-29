@@ -84,7 +84,7 @@ pub mod icon {
     pub const INFO: &str = "\u{E2CE}";
     pub const LINK_SIMPLE: &str = "\u{E2E6}";
     pub const LINK_SIMPLE_BREAK: &str = "\u{E2E8}";
-    pub const MAGIC_WAND: &str = "\u{E6B6}";
+    pub const FIRST_AID_KIT: &str = "\u{E570}";
     pub const MAGNIFYING_GLASS: &str = "\u{E30C}";
     pub const PAINT_BRUSH: &str = "\u{E6F0}";
     pub const BROOM: &str = "\u{EC54}";

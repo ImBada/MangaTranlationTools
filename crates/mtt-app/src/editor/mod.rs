@@ -224,6 +224,9 @@ pub enum InpaintScope {
     /// "전체 블록 인페인트": a fresh mask from every block's text pixels, replacing the
     /// existing mask and result.
     AllBlocks,
+    /// The smart brush's last stroke (`Editor::heal_stroke`), filled from its surroundings
+    /// and merged into the existing result (spot healing).
+    Heal,
 }
 
 /// What the "인페인트 실패" card's 재시도 runs again.
@@ -378,6 +381,13 @@ pub struct Editor {
     pub eyedropper: Option<color::Eyedropper>,
     /// Last colour the result picker sampled and where (for the loupe).
     pub picked_color: Option<(egui::Pos2, [u8; 3])>,
+    /// Page and page-px point where the last mask or result stroke ended (Shift+click
+    /// draws a straight line on from it).
+    pub last_stroke_end: Option<(String, egui::Pos2)>,
+    /// Page and mask of the last smart brush stroke; kept so a failed fill can retry.
+    pub heal_stroke: Option<(String, Arc<GrayImage>)>,
+    /// A smart brush stroke ended and waits for `tick` to start its fill.
+    pub heal_requested: bool,
     pub font_previews: font_picker::FontPreviews,
     /// Anchor of Shift range selection in the block list.
     list_anchor: Option<String>,
@@ -504,6 +514,9 @@ impl Editor {
             app_modal_open: false,
             eyedropper: None,
             picked_color: None,
+            last_stroke_end: None,
+            heal_stroke: None,
+            heal_requested: false,
             font_previews: Default::default(),
             list_anchor: None,
             last_inpaint: None,
@@ -1399,6 +1412,13 @@ impl Editor {
             self.status = "부분 인페인트할 범위를 먼저 선택하세요.".into();
             return;
         }
+        let heal = match &self.heal_stroke {
+            Some((stroke_page, mask)) if stroke_page == page_id => Some(Arc::clone(mask)),
+            _ => None,
+        };
+        if scope == InpaintScope::Heal && heal.is_none() {
+            return;
+        }
         if matches!(scope, InpaintScope::SelectedBlocks | InpaintScope::AllBlocks) && blocks.is_empty() {
             return;
         }
@@ -1443,6 +1463,7 @@ impl Editor {
                 mask,
                 result,
                 range,
+                heal.as_deref(),
                 &blocks,
                 engine,
                 &settings,
@@ -1472,6 +1493,9 @@ impl Editor {
                 let (title, message) = match self.last_inpaint {
                     Some(LastInpaint::AllPages) => {
                         ("모든 페이지 인페인트 실패", "완료된 페이지는 유지됩니다. 실패한 페이지부터 다시 실행하세요.")
+                    }
+                    Some(LastInpaint::Page(InpaintScope::Heal)) => {
+                        ("스팟 복구 실패", "기존 결과 레이어는 유지됩니다. 다시 실행하세요.")
                     }
                     Some(LastInpaint::Page(InpaintScope::Range)) => {
                         ("부분 인페인트 실패", "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요.")
@@ -1929,6 +1953,11 @@ impl Editor {
         }
         self.request_assets(services, worker);
         self.advance_inpaint_queue(worker);
+        if std::mem::take(&mut self.heal_requested)
+            && let Some((page_id, _)) = self.heal_stroke.clone()
+        {
+            self.start_inpaint_on(&page_id, InpaintScope::Heal, worker);
+        }
         let pointer_busy = self.drag.is_some() || pointer_down;
         let text_idle = self.last_text_edit.is_some_and(|at| at.elapsed() > TEXT_COMMIT_DELAY);
         if (!self.text_editing && !pointer_busy) || (self.text_editing && text_idle) {
@@ -2446,6 +2475,7 @@ fn compute_inpaint(
     before_mask: Option<Arc<GrayImage>>,
     before_result: Option<Arc<RgbaImage>>,
     range: Option<mtt_inpaint::Rect>,
+    heal: Option<&GrayImage>,
     blocks: &[TranslationBlock],
     engine: InpaintEngine,
     settings: &InpaintSettings,
@@ -2469,6 +2499,13 @@ fn compute_inpaint(
             mtt_inpaint::mask_for_selection(base, range.ok_or("부분 인페인트할 범위를 먼저 선택하세요.")?)
                 .ok_or("선택 범위 안에 마스크 픽셀이 없습니다.")?
         }
+        InpaintScope::Heal => {
+            let stroke = heal.ok_or("복구할 영역이 없습니다.")?;
+            if !stroke.iter().any(|value| *value > 0) {
+                return Err("복구할 영역이 없습니다.".into());
+            }
+            stroke.clone()
+        }
         InpaintScope::SelectedBlocks | InpaintScope::AllBlocks => {
             let refs: Vec<&TranslationBlock> = blocks.iter().collect();
             let patch = mtt_inpaint::text_segmentation::mask_for_blocks(source, &refs, None, segmentation);
@@ -2482,7 +2519,7 @@ fn compute_inpaint(
     // A partial run sees the page as it shows now, so text already erased next to it
     // isn't copied back into the fill.
     let shown = match (scope, mask, result) {
-        (InpaintScope::Range | InpaintScope::SelectedBlocks, Some(mask), Some(result)) => {
+        (InpaintScope::Range | InpaintScope::SelectedBlocks | InpaintScope::Heal, Some(mask), Some(result)) => {
             Some(mtt_inpaint::composite_result(source, result, mask))
         }
         _ => None,
@@ -2511,6 +2548,8 @@ fn compute_inpaint(
         (InpaintScope::WholeMask | InpaintScope::AllBlocks, true) => "로컬 인페인트 결과를 저장했습니다.",
         (InpaintScope::Range, false) => "선택 범위만 다시 인페인트했습니다.",
         (InpaintScope::Range, true) => "선택 범위 로컬 인페인트 결과를 저장했습니다.",
+        (InpaintScope::Heal, false) => "칠한 곳을 주변으로 메웠습니다.",
+        (InpaintScope::Heal, true) => "칠한 곳을 로컬 채우기로 메웠습니다.",
         (InpaintScope::SelectedBlocks, false) if multi => "선택된 블록만 인페인트했습니다.",
         (InpaintScope::SelectedBlocks, false) => "선택 블록만 인페인트했습니다.",
         (InpaintScope::SelectedBlocks, true) if multi => "선택된 블록 로컬 인페인트 결과를 저장했습니다.",
@@ -2724,6 +2763,7 @@ mod tests {
             Some(Arc::new(mask)),
             Some(Arc::new(existing)),
             Some(mtt_inpaint::Rect { x: 0, y: 0, width: 30, height: 30 }),
+            None,
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,
@@ -2741,6 +2781,7 @@ mod tests {
             Some(Arc::new(GrayImage::new(60, 60))),
             None,
             Some(mtt_inpaint::Rect { x: 0, y: 0, width: 10, height: 10 }),
+            None,
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,
@@ -2748,6 +2789,59 @@ mod tests {
             None,
         );
         assert!(empty_range.is_err());
+    }
+
+    #[test]
+    fn heal_fills_the_stroke_and_keeps_the_rest() {
+        // A dark speck on white paper; the stroke covers only the speck.
+        let source = RgbaImage::from_fn(40, 40, |x, y| {
+            if (18..22).contains(&x) && (18..22).contains(&y) {
+                image::Rgba([0, 0, 0, 255])
+            } else {
+                image::Rgba([255, 255, 255, 255])
+            }
+        });
+        let mut stroke = GrayImage::new(40, 40);
+        crate::editor::assets::stroke_mask(&mut stroke, (20.0, 20.0), (20.0, 20.0), 10.0, 255);
+        let mut mask = GrayImage::new(40, 40);
+        mask.put_pixel(2, 2, image::Luma([255]));
+        let mut existing = RgbaImage::new(40, 40);
+        existing.put_pixel(2, 2, image::Rgba([1, 2, 3, 255]));
+        let settings = InpaintSettings { artifact_cleanup_px: Some(0.0), ..InpaintSettings::default() };
+        let outcome = compute_inpaint(
+            InpaintScope::Heal,
+            &source,
+            Some(Arc::new(mask)),
+            Some(Arc::new(existing)),
+            None,
+            Some(&stroke),
+            &[],
+            InpaintEngine::LocalFillFallback,
+            &settings,
+            None,
+            None,
+        )
+        .unwrap();
+        let healed = outcome.result.get_pixel(20, 20);
+        assert!(healed[3] == 255 && healed[0] > 200, "speck filled with paper: {healed:?}");
+        assert_eq!(outcome.mask.get_pixel(20, 20)[0], 255, "the stroke joins the mask");
+        assert_eq!(outcome.result.get_pixel(2, 2).0, [1, 2, 3, 255], "earlier result kept");
+        assert_eq!(outcome.mask.get_pixel(2, 2)[0], 255, "earlier mask kept");
+
+        let empty = compute_inpaint(
+            InpaintScope::Heal,
+            &source,
+            None,
+            None,
+            None,
+            Some(&GrayImage::new(40, 40)),
+            &[],
+            InpaintEngine::LocalFillFallback,
+            &settings,
+            None,
+            None,
+        );
+        assert!(empty.is_err());
     }
 
     #[test]
@@ -2774,6 +2868,7 @@ mod tests {
             Some(Arc::new(mask)),
             Some(Arc::new(existing)),
             Some(mtt_inpaint::Rect { x: 0, y: 0, width: 20, height: 10 }),
+            None,
             &[],
             InpaintEngine::LocalFillFallback,
             &settings,

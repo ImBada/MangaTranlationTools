@@ -807,13 +807,31 @@ fn brush_card(editor: &mut Editor, ui: &mut egui::Ui) {
         return;
     }
     let tool = editor.result_tool;
+    if tool == ResultTool::SmartBrush {
+        theme::card(ui, "스마트 브러시", |ui| {
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    theme::tip(ui.label("크기"), "브러시 크기", "[ / ]");
+                    ui.add(
+                        egui::Slider::new(
+                            &mut editor.result_brush.size,
+                            super::result_tools::RESULT_BRUSH_MIN..=super::result_tools::RESULT_BRUSH_MAX,
+                        )
+                        .suffix("px"),
+                    );
+                });
+            });
+            theme::hint(ui, "지울 곳을 칠하고 손을 떼면 주변 질감으로 메웁니다. 인페인트 엔진 설정을 따릅니다.");
+        });
+        return;
+    }
     theme::card(ui, "결과 브러시", |ui| {
         ui.add_enabled_ui(!locked, |ui| {
             let current = super::color::to_hex(editor.result_brush.color);
             let mut picked = None;
             egui::Grid::new("result-brush").num_columns(2).spacing([10.0, 6.0]).show(ui, |ui| {
                 ui.label("색상");
-                ui.add_enabled_ui(matches!(tool, ResultTool::Brush | ResultTool::SmartBrush), |ui| {
+                ui.add_enabled_ui(tool == ResultTool::Brush, |ui| {
                     picked = super::color::color_field(editor, ui, "result-brush", &current);
                 });
                 ui.end_row();
@@ -833,12 +851,26 @@ fn brush_card(editor: &mut Editor, ui: &mut egui::Ui) {
                         .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
                 );
                 ui.end_row();
-                ui.label("강도");
-                ui.add_enabled(
-                    !matches!(tool, ResultTool::Brush | ResultTool::SmartBrush | ResultTool::Eraser),
-                    egui::Slider::new(&mut brush.strength, 0.05..=1.0)
-                        .custom_formatter(|v, _| format!("{:.0}%", v * 100.0)),
-                );
+                let paints = matches!(tool, ResultTool::Brush | ResultTool::Eraser);
+                let percent = |v: f64, _| format!("{:.0}%", v * 100.0);
+                if paints {
+                    theme::tip(
+                        ui.label("불투명도"),
+                        "불투명도\n한 획이 아무리 겹쳐도 이 값 이상 진해지지 않습니다",
+                        "",
+                    );
+                    ui.add(egui::Slider::new(&mut brush.opacity, 0.01..=1.0).custom_formatter(percent));
+                    ui.end_row();
+                    theme::tip(ui.label("흐름"), "흐름\n낮을수록 같은 곳을 문지를 때 천천히 쌓입니다", "");
+                    ui.add(egui::Slider::new(&mut brush.flow, 0.01..=1.0).custom_formatter(percent));
+                    ui.end_row();
+                } else {
+                    ui.label("강도");
+                    ui.add(egui::Slider::new(&mut brush.strength, 0.05..=1.0).custom_formatter(percent));
+                    ui.end_row();
+                }
+                theme::tip(ui.label("보정"), "손떨림 보정\n브러시가 커서를 끈처럼 따라와 선이 매끄러워집니다", "");
+                ui.add(egui::Slider::new(&mut brush.smoothing, 0.0..=1.0).custom_formatter(percent));
                 ui.end_row();
             });
             if let Some(rgb) = picked.as_deref().and_then(super::color::parse_hex) {
