@@ -326,3 +326,40 @@ fn tab_in_the_translation_field_moves_to_the_next_blocks_field() {
     assert_eq!(harness.editor.selection, ["b1"]);
     assert_eq!(focused(&harness), None, "the canvas keeps the keyboard");
 }
+
+#[test]
+fn the_size_stepper_stays_pressed_past_the_click_duration() {
+    let ctx = egui::Context::default();
+    crate::theme::install_icon_font(&ctx);
+    let mut button_rect = egui::Rect::NOTHING;
+    let mut run = |time: f64, events: Vec<egui::Event>| {
+        let input = egui::RawInput {
+            time: Some(time),
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SCREEN)),
+            events,
+            ..Default::default()
+        };
+        let mut down = false;
+        let mut output = ctx.run_ui(input, |ui| {
+            let response = ui.add(super::stage::hold_button(crate::theme::icon::PLUS));
+            button_rect = response.rect;
+            down = response.is_pointer_button_down_on();
+        });
+        output.textures_delta.clear();
+        (down, button_rect)
+    };
+    let (_, rect) = run(0.0, Vec::new());
+    let pos = rect.center();
+    run(0.1, vec![egui::Event::PointerMoved(pos)]);
+    let press = egui::Event::PointerButton {
+        pos,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    };
+    assert!(run(0.2, vec![press]).0, "pressed");
+    for step in 1..=20 {
+        let time = 0.2 + 0.1 * f64::from(step);
+        assert!(run(time, Vec::new()).0, "still held after {:.1}s", time - 0.2);
+    }
+}

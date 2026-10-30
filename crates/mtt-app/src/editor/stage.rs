@@ -561,7 +561,7 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                         let minus = ui
                             .add_enabled(
                                 size > super::OVERLAY_FONT_SIZE_MIN,
-                                egui::Button::new(theme::icon(icon::MINUS)),
+                                hold_button(icon::MINUS),
                             )
                             .on_hover_text("글자 작게 (누르고 있으면 계속)");
                         let mut value = size.round();
@@ -578,7 +578,7 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                         let plus = ui
                             .add_enabled(
                                 size < super::OVERLAY_FONT_SIZE_MAX,
-                                egui::Button::new(theme::icon(icon::PLUS)),
+                                hold_button(icon::PLUS),
                             )
                             .on_hover_text("글자 크게 (누르고 있으면 계속)");
                         let held = if plus.is_pointer_button_down_on() {
@@ -601,6 +601,12 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                 });
             });
         });
+}
+
+/// A stepper button that stays pressed for as long as it is held: a click-only button
+/// stops counting as pressed after egui's `max_click_duration` (0.8s).
+pub(super) fn hold_button(glyph: &str) -> egui::Button<'_> {
+    egui::Button::new(theme::icon(glyph)).sense(Sense::click_and_drag())
 }
 
 /// `useRepeatingStepControl`: one step on press, then every 70ms after a 350ms hold.
@@ -819,6 +825,12 @@ fn paint_decorations(editor: &Editor, ui: &egui::Ui, painter: &egui::Painter, pa
             let rect = editor.view.rect_to_screen(Rect::from_two_pos(*start, *current));
             painter.rect_filled(rect, 0.0, RANGE_COLOR.gamma_multiply(0.12));
             painter.rect_stroke(rect, 0.0, Stroke::new(1.0, RANGE_COLOR), StrokeKind::Middle);
+        }
+        // The selected block's new box, in the selection colour so it doesn't read as a range.
+        Some(Drag::BlockRange { start, current, .. }) => {
+            let rect = editor.view.rect_to_screen(Rect::from_two_pos(*start, *current));
+            painter.rect_filled(rect, 0.0, SELECTION_COLOR.gamma_multiply(0.12));
+            painter.rect_stroke(rect, 0.0, Stroke::new(1.5, SELECTION_COLOR), StrokeKind::Middle);
         }
         Some(Drag::RangeMove { original, .. }) if inpaint => {
             if let Some(range) = editor.range {
