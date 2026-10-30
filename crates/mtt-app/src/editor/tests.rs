@@ -778,3 +778,34 @@ fn overlay_selection_is_restored_and_groups_select_together() {
     editor.select_layer_shortcut(2);
     assert_eq!(editor.selection.len(), 2, "the overlay selection comes back");
 }
+
+#[test]
+fn fitting_a_block_to_its_balloon_is_undoable() {
+    let ctx = egui::Context::default();
+    let mut editor = Editor::new(chapter_with_pages(1));
+    // A white balloon with a black outline around b0 (100..300 × 100..200) on gray art.
+    let source = RgbaImage::from_fn(1000, 1000, |x, y| {
+        let (dx, dy) = ((f64::from(x) - 200.0) / 170.0, (f64::from(y) - 150.0) / 110.0);
+        let r = (dx * dx + dy * dy).sqrt();
+        let text = (190..210).contains(&x) && (120..180).contains(&y);
+        let v = if text || (0.98..=1.0).contains(&r) {
+            0
+        } else if r < 1.0 {
+            255
+        } else {
+            128
+        };
+        image::Rgba([v, v, v, 255])
+    });
+    editor.assets.insert("p0".into(), PageAssets::Ready(Box::new(LoadedPage::new(&ctx, "p0", source, None, None))));
+    editor.selection = vec!["b0".into()];
+    editor.fit_selected_to_balloons();
+    editor.commit_checkpoint();
+    let block = &editor.page().unwrap().blocks[0];
+    let area = block.render_bbox.expect("fitted to the balloon");
+    assert!(area.x > 30.0 && area.x + area.w < 370.0 && area.w > 250.0, "{area:?}");
+    assert!(block.text_shape.is_some());
+    editor.undo(&ctx);
+    let block = &editor.page().unwrap().blocks[0];
+    assert_eq!((block.render_bbox, block.text_shape.as_ref()), (None, None));
+}

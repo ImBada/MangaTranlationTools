@@ -208,7 +208,7 @@ pub(crate) fn paint_block_mask(mask: &mut GrayImage, source: &RgbaImage, area: &
 
 /// The candidate components of `found` (`width`×`height`) with a pixel where `glyph` holds
 /// that are strokes or stay off the box's edge.
-fn attached(found: &RectStrokes, width: usize, height: usize, glyph: impl Fn(usize) -> bool) -> Vec<u8> {
+pub(crate) fn attached(found: &RectStrokes, width: usize, height: usize, glyph: impl Fn(usize) -> bool) -> Vec<u8> {
     let candidates = &found.candidates;
     let mut visited = vec![false; candidates.len()];
     let mut kept = vec![0u8; candidates.len()];
@@ -403,7 +403,7 @@ fn luma([r, g, b]: [u8; 3]) -> f32 {
     f32::from(r) * 0.299 + f32::from(g) * 0.587 + f32::from(b) * 0.114
 }
 
-fn median_color(colors: &[[u8; 3]]) -> Option<[u8; 3]> {
+pub(crate) fn median_color(colors: &[[u8; 3]]) -> Option<[u8; 3]> {
     if colors.is_empty() {
         return None;
     }

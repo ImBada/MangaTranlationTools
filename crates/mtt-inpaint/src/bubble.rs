@@ -1,23 +1,37 @@
-//! Speech balloons around blocks, without a model: from the background inside a block's
-//! box, fill outward through pixels of that color and the block's glyphs, stopping at the
-//! balloon outline. A fill that stays inside a window around the box is the balloon. Blocks
-//! sharing it (one balloon with two texts, or balloons joined at a neck) split it at the
-//! narrowest cross-section between them. What's left, minus some air, is where the
-//! translation goes, row by row, so lines can follow the outline. koharu fits text to
-//! detected balloon contours the same way, with a segmentation model.
+//! Speech balloons around blocks, without a model: from the background in the middle of a
+//! block's box, fill outward through pixels of that color and the block's glyphs, stopping
+//! at the balloon outline. A fill that stays inside a window around the box, with no more
+//! than specks left out of it away from the text, is the balloon. Blocks sharing it (one
+//! balloon with two texts, or balloons joined at a neck) split it at the narrowest
+//! cross-section between them. What's left, minus some air, is where the translation goes,
+//! row by row, so lines can follow the outline. koharu fits text to detected balloon
+//! contours the same way, with a segmentation model.
+//!
+//! The boxes come from a translation model and are rough: they may sit off-centre, be
+//! loose enough to cross the outline, or be much smaller than the balloon.
 
 use image::RgbaImage;
 use mtt_core::model::{BBox, TranslationBlock};
 
-use crate::text_mask::{rect_strokes, scan_rect};
+use crate::text_mask::{attached, median_color, rect_strokes, scan_rect};
 use crate::{Rect, erode};
 
-/// The fill may reach this many box sizes past the box on each side; touching that
-/// window's edge means it leaked out of the balloon. The window also covers the windows
+/// The fill may first reach this many box sizes past the box on each side; touching that
+/// window's edge means it leaked out of the balloon or the balloon is bigger (a short line
+/// in a large balloon, a long tail), so the reach grows `REACH_GROWTH` times until it is
+/// [`MAX_REACH_SHARE`] of the page's shorter side. The window also covers the windows
 /// overlapping it, so a balloon shared with nearby boxes fits.
 const WINDOW_REACH: f64 = 1.0;
+const REACH_GROWTH: f64 = 2.0;
+const MAX_REACH_SHARE: f64 = 0.3;
 /// Pixels within this of the background color are inside.
 const BACKGROUND_TOLERANCE: u8 = 48;
+/// The background is plain when this share of the non-text pixels in the middle of the box
+/// is within [`BACKGROUND_TOLERANCE`] of their median.
+const PLAIN_SHARE: f64 = 0.9;
+/// Away from the boxes, pixels the fill goes around (screentone dots, art) may make up at
+/// most this share of the region; more is a toned or drawn area, not a balloon.
+const MAX_SPECK_SHARE: f64 = 0.05;
 /// The balloon must be at least this much bigger than the box to be worth using.
 const MIN_GROWTH: f64 = 1.15;
 /// Air between the text and the balloon outline, as a share of the balloon's shorter side.
@@ -41,14 +55,19 @@ pub struct Balloon {
 /// The balloon around each of `blocks` (all on `source`): `None` where a box isn't on a
 /// plain background or the fill leaks out (text on art, a balloon open to the panel).
 pub fn find_balloons(source: &RgbaImage, blocks: &[TranslationBlock]) -> Vec<Option<Balloon>> {
-    let (width, height) = source.dimensions();
-    let scans: Vec<Option<Rect>> = blocks.iter().map(|block| scan_rect(block, width, height)).collect();
-    (0..blocks.len()).map(|index| balloon_for(source, &scans, index)).collect()
+    (0..blocks.len()).map(|index| find_balloon(source, blocks, index)).collect()
 }
 
-/// `scan` grown by [`WINDOW_REACH`] box sizes on each side.
-fn reach_window(scan: Rect, width: u32, height: u32) -> Option<Rect> {
-    let reach = (f64::from(scan.width.max(scan.height)) * WINDOW_REACH) as f32;
+/// The balloon around `blocks[index]`, the other blocks sharing it taking their part.
+pub fn find_balloon(source: &RgbaImage, blocks: &[TranslationBlock], index: usize) -> Option<Balloon> {
+    let (width, height) = source.dimensions();
+    let scans: Vec<Option<Rect>> = blocks.iter().map(|block| scan_rect(block, width, height)).collect();
+    balloon_for(source, &scans, index)
+}
+
+/// `scan` grown by `factor` box sizes (at most `cap` pixels) on each side.
+fn reach_window(scan: Rect, factor: f64, cap: f64, width: u32, height: u32) -> Option<Rect> {
+    let reach = (f64::from(scan.width.max(scan.height)) * factor).min(cap) as f32;
     Rect::clamped(
         scan.x as f32 - reach,
         scan.y as f32 - reach,
@@ -69,58 +88,73 @@ fn union(a: Rect, b: Rect) -> Rect {
     Rect { x, y, width: right - x, height: bottom - y }
 }
 
+fn near(p: [u8; 4], background: [u8; 3]) -> bool {
+    (0..3).all(|c| p[c].abs_diff(background[c]) <= BACKGROUND_TOLERANCE)
+}
+
 /// A box in window coordinates: `(x, y, width, height)`.
 type LocalBox = (f64, f64, f64, f64);
 /// A pixel box in window coordinates: `(x, y, width, height)`.
 type PixelBox = (usize, usize, usize, usize);
 
+/// The fill from a block's box: the window it stayed in, the seeds (window indices) and
+/// the pixels it reached.
+struct Fill {
+    window: Rect,
+    seeds: Vec<usize>,
+    inside: Vec<bool>,
+}
+
 fn balloon_for(source: &RgbaImage, scans: &[Option<Rect>], index: usize) -> Option<Balloon> {
     let (width, height) = source.dimensions();
     let scan = scans[index]?;
     let found = rect_strokes(source, scan);
-    let (background, plain) = found.edge?;
-    if !plain {
+    let (sw, sh) = (scan.width as usize, scan.height as usize);
+    // The background: the non-text pixels in the middle half of the box, where a rough box
+    // still sits in the balloon (its edge may cross the outline).
+    let middle: Vec<(usize, usize)> =
+        (sh / 4..sh * 3 / 4).flat_map(|y| (sw / 4..sw * 3 / 4).map(move |x| (x, y))).collect();
+    let pixel = |(x, y): (usize, usize)| source.get_pixel(scan.x + x as u32, scan.y + y as u32).0;
+    let colors: Vec<[u8; 3]> = middle
+        .iter()
+        .filter(|(x, y)| found.candidates[y * sw + x] == 0)
+        .map(|at| {
+            let p = pixel(*at);
+            [p[0], p[1], p[2]]
+        })
+        .collect();
+    let background = median_color(&colors)?;
+    let plain = colors.iter().filter(|c| near([c[0], c[1], c[2], 255], background)).count();
+    if (plain as f64) < colors.len() as f64 * PLAIN_SHARE {
         return None;
     }
-    let own = reach_window(scan, width, height)?;
-    let window = scans
-        .iter()
-        .flatten()
-        .filter_map(|other| reach_window(*other, width, height))
-        .filter(|other| overlaps(own, *other))
-        .fold(own, union);
-    let (ww, wh) = (window.width as usize, window.height as usize);
-    // Inside: the background color, or text-colored pixels in the box (its glyphs, kept
-    // as text or not, so a glyph cut by the box edge doesn't wall the fill in).
-    let mut passable = vec![false; ww * wh];
-    for y in 0..wh {
-        for x in 0..ww {
-            let p = source.get_pixel(window.x + x as u32, window.y + y as u32).0;
-            passable[y * ww + x] = (0..3).all(|c| p[c].abs_diff(background[c]) <= BACKGROUND_TOLERANCE);
-        }
-    }
-    let sw = scan.width as usize;
-    for (index, candidate) in found.candidates.iter().enumerate() {
-        if *candidate > 0 {
-            let (x, y) = ((scan.x - window.x) as usize + index % sw, (scan.y - window.y) as usize + index / sw);
-            passable[y * ww + x] = true;
-        }
-    }
+    // Inside: the background color, or the block's glyphs (not the outline or art its edge
+    // crosses), so they don't wall the fill in.
+    let glyphs = attached(&found, sw, sh, |_| true);
     // Seeds: background pixels in the middle half of the box.
-    let (bx, by) = ((scan.x - window.x) as usize, (scan.y - window.y) as usize);
-    let (bw, bh) = (scan.width as usize, scan.height as usize);
-    let seeds: Vec<usize> = (by + bh / 4..by + bh * 3 / 4)
-        .flat_map(|y| (bx + bw / 4..bx + bw * 3 / 4).map(move |x| y * ww + x))
-        .filter(|index| passable[*index])
-        .collect();
-    // Reaching the window's edge (unless it is the page's) means the fill escaped.
-    let escapes = |x: usize, y: usize| {
-        (x == 0 && window.x > 0)
-            || (y == 0 && window.y > 0)
-            || (x == ww - 1 && window.x + window.width < width)
-            || (y == wh - 1 && window.y + window.height < height)
+    let seeds: Vec<(usize, usize)> = middle.into_iter().filter(|at| near(pixel(*at), background)).collect();
+    if seeds.is_empty() {
+        return None;
+    }
+    let cap = f64::from(width.min(height)) * MAX_REACH_SHARE;
+    let mut factor = WINDOW_REACH;
+    let Fill { window, seeds, inside } = loop {
+        let own = reach_window(scan, factor, cap, width, height)?;
+        let window = scans
+            .iter()
+            .flatten()
+            .filter_map(|other| reach_window(*other, factor, cap, width, height))
+            .filter(|other| overlaps(own, *other))
+            .fold(own, union);
+        if let Some(fill) = fill(source, window, scan, background, &glyphs, &seeds) {
+            break fill;
+        }
+        if f64::from(scan.width.max(scan.height)) * factor >= cap {
+            return None;
+        }
+        factor *= REACH_GROWTH;
     };
-    let inside = flood(&passable, ww, wh, &seeds, escapes)?;
+    let (ww, wh) = (window.width as usize, window.height as usize);
     // Holes (glyph edges, dots inside letters, other blocks' text) count as inside.
     let mut region = fill_holes(&inside, ww, wh);
     let local = |rect: Rect| -> LocalBox {
@@ -131,6 +165,21 @@ fn balloon_for(source: &RgbaImage, scans: &[Option<Rect>], index: usize) -> Opti
             f64::from(rect.height),
         )
     };
+    // Away from the boxes, holes are specks; many are a toned or drawn area.
+    let in_a_box = |x: usize, y: usize| {
+        let (x, y) = (window.x + x as u32, window.y + y as u32);
+        scans.iter().flatten().any(|scan| scan.contains(x, y))
+    };
+    let (mut area, mut specks) = (0usize, 0usize);
+    for (at, (filled, reached)) in region.iter().zip(&inside).enumerate() {
+        if *filled && !in_a_box(at % ww, at / ww) {
+            area += 1;
+            specks += usize::from(!*reached);
+        }
+    }
+    if specks as f64 > area as f64 * MAX_SPECK_SHARE {
+        return None;
+    }
     let own_box = local(scan);
     for (other_index, other) in scans.iter().enumerate() {
         let Some(other) = other.filter(|_| other_index != index).map(local) else { continue };
@@ -145,17 +194,21 @@ fn balloon_for(source: &RgbaImage, scans: &[Option<Rect>], index: usize) -> Opti
     let region = flood(&region, ww, wh, &seeds, |_, _| false)?;
     let (min_x, min_y, max_x, max_y) = bounds(&region, ww)?;
     let (fw, fh) = (max_x - min_x + 1, max_y - min_y + 1);
-    if ((fw * fh) as f64) < (bw * bh) as f64 * MIN_GROWTH {
+    if ((fw * fh) as f64) < (sw * sh) as f64 * MIN_GROWTH {
         return None;
     }
     let air = (fw.min(fh) as f64 * AIR_SHARE).round().max(1.0) as usize;
     let mask: Vec<u8> = region.iter().map(|inside| if *inside { 255 } else { 0 }).collect();
     let usable: Vec<bool> = erode(&mask, ww, wh, air).into_iter().map(|value| value > 0).collect();
-    let (text, shape) = text_shape(&usable, ww)?;
+    // The air cuts thin tails off; keep the part around the block.
+    let seeds: Vec<usize> = seeds.into_iter().filter(|index| usable[*index]).collect();
+    let usable = flood(&usable, ww, wh, &seeds, |_, _| false)?;
+    let axis = (own_box.0 + own_box.2 / 2.0) as usize;
+    let (text, shape) = text_shape(&usable, ww, axis)?;
     let shape_area: f64 = shape.iter().map(|[left, right]| (right - left).max(0.0)).sum::<f64>()
         * text.2 as f64
         * (text.3 as f64 / shape.len() as f64);
-    if shape_area < (bw * bh) as f64 * 0.5 {
+    if shape_area < (sw * sh) as f64 * 0.5 {
         return None;
     }
     let to_bbox = |x: usize, y: usize, w: usize, h: usize| {
@@ -168,6 +221,42 @@ fn balloon_for(source: &RgbaImage, scans: &[Option<Rect>], index: usize) -> Opti
         )
     };
     Some(Balloon { bounds: to_bbox(min_x, min_y, fw, fh), text_area: to_bbox(text.0, text.1, text.2, text.3), shape })
+}
+
+/// Fills `window` from `seeds` (in `scan`) through pixels near `background` and the
+/// `glyphs` of `scan`; `None` when the fill reaches the window's edge (unless it is the
+/// page's).
+fn fill(
+    source: &RgbaImage,
+    window: Rect,
+    scan: Rect,
+    background: [u8; 3],
+    glyphs: &[u8],
+    seeds: &[(usize, usize)],
+) -> Option<Fill> {
+    let (width, height) = source.dimensions();
+    let (ww, wh) = (window.width as usize, window.height as usize);
+    let mut passable = vec![false; ww * wh];
+    for y in 0..wh {
+        for x in 0..ww {
+            passable[y * ww + x] = near(source.get_pixel(window.x + x as u32, window.y + y as u32).0, background);
+        }
+    }
+    let (bx, by, sw) = ((scan.x - window.x) as usize, (scan.y - window.y) as usize, scan.width as usize);
+    for (index, glyph) in glyphs.iter().enumerate() {
+        if *glyph > 0 {
+            passable[(by + index / sw) * ww + bx + index % sw] = true;
+        }
+    }
+    let seeds: Vec<usize> = seeds.iter().map(|(x, y)| (by + y) * ww + bx + x).collect();
+    let escapes = |x: usize, y: usize| {
+        (x == 0 && window.x > 0)
+            || (y == 0 && window.y > 0)
+            || (x == ww - 1 && window.x + window.width < width)
+            || (y == wh - 1 && window.y + window.height < height)
+    };
+    let inside = flood(&passable, ww, wh, &seeds, escapes)?;
+    Some(Fill { window, seeds, inside })
 }
 
 /// Pixels of `passable` connected to `seeds`; `None` without seeds or when the fill
@@ -259,12 +348,12 @@ fn cut_towards(region: &mut [bool], width: usize, own: LocalBox, other: LocalBox
 }
 
 /// The box text can use in `usable` and the usable span of each of its rows
-/// ([`SHAPE_ROWS`] rows, as fractions of the box width): each pixel row's run through the
-/// region's middle column, every pixel row in a shape row sharing it. The box is
-/// `(x, y, width, height)`.
-fn text_shape(usable: &[bool], width: usize) -> Option<(PixelBox, Vec<[f64; 2]>)> {
+/// ([`SHAPE_ROWS`] rows, as fractions of the box width): each pixel row's run through
+/// column `axis` (the block's middle, which a tail doesn't pull aside), every pixel row in
+/// a shape row sharing it. The box is `(x, y, width, height)`.
+fn text_shape(usable: &[bool], width: usize, axis: usize) -> Option<(PixelBox, Vec<[f64; 2]>)> {
     let (min_x, min_y, max_x, max_y) = bounds(usable, width)?;
-    let axis = (min_x + max_x) / 2;
+    let axis = axis.clamp(min_x, max_x);
     let runs: Vec<Option<(usize, usize)>> = (min_y..=max_y)
         .map(|y| {
             let row = &usable[y * width..(y + 1) * width];
@@ -444,5 +533,81 @@ mod tests {
         let (a_right, b_left) = (a.bounds.x + a.bounds.w, b.bounds.x);
         assert!((a_right - 500.0).abs() < 6.0 && (b_left - 500.0).abs() < 6.0, "{:?} {:?}", a.bounds, b.bounds);
         assert!((a.bounds.x - 240.0).abs() < 6.0, "the rest of the balloon: {:?}", a.bounds);
+    }
+
+    /// `page` with everything outside the ellipse `(cx, cy, rx, ry)` white, as a balloon
+    /// breaking out of its panel onto the gutter.
+    fn on_white(mut page: RgbaImage, (cx, cy, rx, ry): (f64, f64, f64, f64)) -> RgbaImage {
+        for (x, y, pixel) in page.enumerate_pixels_mut() {
+            let (dx, dy) = ((f64::from(x) - cx) / rx, (f64::from(y) - cy) / ry);
+            if dx * dx + dy * dy > 1.0 {
+                *pixel = image::Rgba([255, 255, 255, 255]);
+            }
+        }
+        page
+    }
+
+    #[test]
+    fn a_short_line_finds_its_large_balloon() {
+        let ellipse = (500.0, 400.0, 220.0, 160.0);
+        let page = page(&[ellipse], &[(493, 370, 430)]);
+        let balloon = find_balloons(&page, &[block(488.0, 365.0, 24.0, 70.0)])[0].clone().unwrap();
+        let b = balloon.bounds;
+        assert!((b.x - 280.0).abs() < 6.0 && (b.w - 440.0).abs() < 12.0, "{b:?}");
+        assert_shape_inside(&balloon, ellipse);
+    }
+
+    #[test]
+    fn an_off_centre_box_finds_its_balloon() {
+        let ellipse = (500.0, 400.0, 120.0, 160.0);
+        let page = page(&[ellipse], &[(395, 330, 470), (430, 330, 470)]);
+        let balloon = find_balloons(&page, &[block(392.0, 325.0, 55.0, 150.0)])[0].clone().unwrap();
+        assert!((balloon.bounds.w - 240.0).abs() < 12.0, "{:?}", balloon.bounds);
+        assert_shape_inside(&balloon, ellipse);
+    }
+
+    #[test]
+    fn a_box_crossing_the_outline_still_finds_it() {
+        let ellipse = (500.0, 400.0, 70.0, 160.0);
+        let toned = page(&[ellipse], &[(470, 300, 500), (505, 300, 500)]);
+        for page in [on_white(toned.clone(), ellipse), toned] {
+            // Wider than the balloon (430..570) on both sides.
+            let balloon = find_balloons(&page, &[block(425.0, 296.0, 150.0, 208.0)])[0].clone().unwrap();
+            let b = balloon.bounds;
+            assert!((b.x - 430.0).abs() < 6.0 && (b.w - 140.0).abs() < 12.0, "{b:?}");
+            assert_shape_inside(&balloon, ellipse);
+        }
+    }
+
+    #[test]
+    fn a_tail_neither_stops_the_fill_nor_shifts_the_lines() {
+        let (body, tail) = ((500.0, 400.0, 160.0, 120.0), (380.0, 560.0, 25.0, 90.0));
+        let page = page(&[body, tail], &[(475, 330, 470), (515, 330, 470)]);
+        let balloon = find_balloons(&page, &[block(468.0, 325.0, 68.0, 150.0)])[0].clone().unwrap();
+        let t = balloon.text_area;
+        assert!(t.y + t.h < 525.0, "the text area stays out of the tail: {t:?}");
+        assert!((t.x + t.w / 2.0 - 500.0).abs() < 10.0, "centred on the body: {t:?}");
+        assert_shape_inside(&balloon, body);
+    }
+
+    #[test]
+    fn text_on_a_toned_panel_has_none() {
+        // Screentone dots on white inside a closed panel border: a plain fill reaches all
+        // of it, but it is full of dots.
+        let mut page = RgbaImage::from_pixel(1000, 1000, image::Rgba([255, 255, 255, 255]));
+        for y in 200..600u32 {
+            for x in 200..700u32 {
+                let border = !(204..696).contains(&x) || !(204..596).contains(&y);
+                if border || (x % 8 < 3 && y % 8 < 3) {
+                    page.put_pixel(x, y, image::Rgba([20, 20, 20, 255]));
+                }
+            }
+        }
+        for y in 380..440u32 {
+            for x in 440..460u32 {
+                page.put_pixel(x, y, image::Rgba([0, 0, 0, 255]));
+            }
+        }
+        assert_eq!(find_balloons(&page, &[block(430.0, 370.0, 40.0, 80.0)])[0], None);
     }
 }

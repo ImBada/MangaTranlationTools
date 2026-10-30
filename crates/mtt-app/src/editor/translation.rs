@@ -9,12 +9,13 @@ use mtt_core::font_presets::{apply_block_type_font_preset_to_block, ensure_block
 use mtt_core::groups::valid_groups;
 use mtt_core::library::{PageLayer, resolve_chapter_status};
 use mtt_core::model::{BBox, BlockType, PageAnalysisStatus, PageRecord, TranslationBlock};
-use mtt_inpaint::bubble::find_balloons;
+use mtt_inpaint::bubble::{Balloon, find_balloon, find_balloons};
 use mtt_inpaint::text_mask::{SourceLettering, detect_lettering};
 use mtt_translate::parser::RegionText;
 use mtt_translate::{Region, Retry, TranslationConfig, overlay_item_to_block, translate_page, translate_regions};
 
 use super::Editor;
+use super::assets::PageAssets;
 use super::history::{BlocksSnapshot, Entry};
 use crate::app::AppEvent;
 use crate::services::Services;
@@ -261,9 +262,7 @@ impl Editor {
                                             let lettering =
                                                 source.as_ref().and_then(|source| detect_lettering(source, &block));
                                             if let Some(balloon) = balloon {
-                                                block.render_bbox = Some(balloon.text_area);
-                                                block.render_bbox_space = block.bbox_space.clone();
-                                                block.text_shape = Some(balloon.shape);
+                                                fit_to_balloon(&mut block, balloon);
                                             }
                                             (block, lettering)
                                         })
@@ -354,6 +353,40 @@ impl Editor {
                 send(TranslationEvent::Finished { cancelled, error });
             })
             .expect("spawn block translation thread");
+    }
+
+    /// Fits the selected dialogue blocks to the balloon around them, as translation does:
+    /// the render box becomes the balloon's inside and lines follow its outline. The page's
+    /// other dialogue blocks keep their part of a balloon they share.
+    pub fn fit_selected_to_balloons(&mut self) {
+        let Some(page) = self.page() else { return };
+        let Some(PageAssets::Ready(loaded)) = self.assets.get(&page.id) else {
+            self.status = "원본 이미지를 아직 불러오는 중입니다.".into();
+            return;
+        };
+        let dialogue: Vec<TranslationBlock> =
+            page.blocks.iter().filter(|block| block.block_type != BlockType::Sfx).cloned().collect();
+        let selected = |block: &TranslationBlock| self.selection.contains(&block.id);
+        let total = page.blocks.iter().filter(|block| selected(block)).count();
+        let mut found: std::collections::HashMap<String, Balloon> = dialogue
+            .iter()
+            .enumerate()
+            .filter(|(_, block)| selected(block))
+            .filter_map(|(index, block)| Some((block.id.clone(), find_balloon(&loaded.source, &dialogue, index)?)))
+            .collect();
+        let fitted = found.len();
+        if fitted > 0 {
+            self.edit_selected(|block| {
+                if let Some(balloon) = found.remove(&block.id) {
+                    fit_to_balloon(block, balloon);
+                }
+            });
+        }
+        self.status = match (fitted, total) {
+            (0, _) => "말풍선을 찾지 못했습니다(효과음이거나 말풍선 밖의 글).".into(),
+            (fitted, total) if fitted == total => format!("블록 {fitted}개를 말풍선에 맞췄습니다."),
+            (fitted, total) => format!("블록 {total}개 중 {fitted}개를 말풍선에 맞췄습니다."),
+        };
     }
 
     /// Request settings plus the general instructions and this work's notes.
@@ -664,6 +697,14 @@ pub fn apply_for_test(
     let mut editor = Editor::new(chapter);
     editor.apply_translated_page(page_id, Ok(blocks.into_iter().map(|block| (block, None)).collect()));
     editor.chapter
+}
+
+/// The block's text goes in `balloon`: its render box is the balloon's inside, its lines
+/// follow the outline; the detection box stays on the source text (for inpainting).
+fn fit_to_balloon(block: &mut TranslationBlock, balloon: Balloon) {
+    block.render_bbox = Some(balloon.text_area);
+    block.render_bbox_space = block.bbox_space.clone();
+    block.text_shape = Some(balloon.shape);
 }
 
 #[cfg(test)]

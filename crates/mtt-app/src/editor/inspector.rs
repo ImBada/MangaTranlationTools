@@ -584,15 +584,22 @@ fn placement_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlo
                 }
                 ui.end_row();
 
-                if block.text_shape.is_some() {
-                    ui.label("말풍선");
-                    let button = ui.button("윤곽 해제");
-                    let hint = "말풍선 윤곽\n번역할 때 찾은 말풍선 모양입니다. 새 규칙으로 가로쓰기·가운데 정렬이면 줄마다 폭을 윤곽에 맞추고, 아니면 윤곽 안의 가장 큰 사각형에 넣습니다.\n해제하면 상자를 그 사각형으로 줄입니다.";
+                ui.label("말풍선");
+                ui.horizontal(|ui| {
+                    let button = ui.button("맞추기");
+                    let hint = "말풍선에 맞추기\n블록이 든 말풍선을 원본에서 다시 찾아, 상자를 그 안쪽으로 넓히고 윤곽을 붙입니다. 블록을 옮기거나 새로 그린 뒤에 씁니다.\n효과음, 말풍선 밖의 글은 맞추지 않습니다.";
                     if theme::tip(button, hint, "").clicked() {
-                        editor.edit_selected(mtt_core::geometry::clear_text_shape);
+                        editor.fit_selected_to_balloons();
                     }
-                    ui.end_row();
-                }
+                    if block.text_shape.is_some() {
+                        let button = ui.button("윤곽 해제");
+                        let hint = "말풍선 윤곽\n번역할 때 찾은 말풍선 모양입니다. 새 규칙으로 가로쓰기·가운데 정렬이면 줄마다 폭을 윤곽에 맞추고, 아니면 윤곽 안의 가장 큰 사각형에 넣습니다.\n해제하면 상자를 그 사각형으로 줄입니다.";
+                        if theme::tip(button, hint, "").clicked() {
+                            editor.edit_selected(mtt_core::geometry::clear_text_shape);
+                        }
+                    }
+                });
+                ui.end_row();
 
                 ui.label("블록 배경");
                 if let Some(hex) = super::color::color_field(editor, ui, "block-background", &block.background_color) {
