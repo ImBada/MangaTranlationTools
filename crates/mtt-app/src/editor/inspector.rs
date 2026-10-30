@@ -646,8 +646,21 @@ fn selection_actions(editor: &mut Editor, ui: &mut egui::Ui, worker: &Worker<App
         };
         let inpaint = theme::icon_button(theme::icon::BANDAIDS, "인페인트").min_size(size);
         if theme::tip(ui.add_enabled(!busy, inpaint), hint, "").clicked() {
-            editor.start_inpaint(InpaintScope::SelectedBlocks, worker);
+            editor.start_inpaint(InpaintScope::SelectedBlocks { grow_px: 0 }, worker);
         }
+    });
+    theme::button_row(ui, 2, |ui, size| {
+        let hint = "넓혀서 다시 인페인트\n글자 마스크를 오른쪽 값만큼 넓혀 블록을 다시 지웁니다. 빗금처럼 촘촘한 배경에서 지운 자리에 검은 줄이나 얼룩이 남을 때 씁니다.\n남으면 값을 더 키워 다시 누르세요.";
+        let grow = theme::icon_button(theme::icon::BANDAIDS, "넓혀서 다시").min_size(size);
+        if theme::tip(ui.add_enabled(!busy, grow), hint, "").clicked() {
+            editor.start_inpaint(InpaintScope::SelectedBlocks { grow_px: editor.inpaint_grow_px }, worker);
+        }
+        let value = egui::DragValue::new(&mut editor.inpaint_grow_px)
+            .range(1..=super::INPAINT_GROW_PX_MAX)
+            .speed(0.2)
+            .prefix("+")
+            .suffix("px");
+        theme::tip(ui.add_sized(size, value), "넓힐 폭\n글자 마스크를 이만큼 바깥으로 넓힙니다", "");
     });
     theme::button_row(ui, 2, |ui, size| {
         let duplicate = theme::icon_button_key(theme::icon::COPY, "복제", "⌘D").min_size(size);

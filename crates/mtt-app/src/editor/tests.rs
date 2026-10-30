@@ -809,3 +809,39 @@ fn fitting_a_block_to_its_balloon_is_undoable() {
     let block = &editor.page().unwrap().blocks[0];
     assert_eq!((block.render_bbox, block.text_shape.as_ref()), (None, None));
 }
+
+#[test]
+fn widened_block_inpaint_erases_past_the_glyphs() {
+    // A dark glyph in the middle of a block on white paper.
+    let source = RgbaImage::from_fn(200, 200, |x, y| {
+        if (95..105).contains(&x) && (90..110).contains(&y) {
+            image::Rgba([10, 10, 10, 255])
+        } else {
+            image::Rgba([255, 255, 255, 255])
+        }
+    });
+    let block = TranslationBlock { bbox: BBox::new(250.0, 250.0, 500.0, 500.0), ..TranslationBlock::default() };
+    let settings = InpaintSettings { artifact_cleanup_px: Some(0.0), ..InpaintSettings::default() };
+    let run = |grow_px| {
+        compute_inpaint(
+            InpaintScope::SelectedBlocks { grow_px },
+            &source,
+            None,
+            None,
+            None,
+            None,
+            std::slice::from_ref(&block),
+            InpaintEngine::LocalFillFallback,
+            &settings,
+            None,
+            None,
+        )
+        .unwrap()
+    };
+    let covered = |outcome: &ComputedInpaint| outcome.mask.pixels().filter(|p| p[0] > 0).count();
+    let (tight, wide) = (run(0), run(6));
+    assert!(covered(&wide) > covered(&tight), "the mask grows: {} vs {}", covered(&wide), covered(&tight));
+    assert_eq!(wide.mask.get_pixel(100, 100)[0], 255);
+    assert_eq!(wide.mask.get_pixel(30, 30)[0], 0, "only around the glyph");
+    assert!(wide.message.contains("6px"));
+}
