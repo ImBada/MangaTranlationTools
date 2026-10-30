@@ -62,9 +62,10 @@ const TEXT_COMMIT_DELAY: Duration = Duration::from_millis(900);
 const PAGE_CACHE_RADIUS: usize = 2;
 pub const MASK_BRUSH_MIN: f32 = 4.0;
 pub const MASK_BRUSH_MAX: f32 = 96.0;
-/// `OVERLAY_FONT_SIZE_MIN_PX` / `OVERLAY_FONT_SIZE_MAX_PX`.
-pub const OVERLAY_FONT_SIZE_MIN: f64 = 8.0;
-pub const OVERLAY_FONT_SIZE_MAX: f64 = 240.0;
+/// The canvas size stepper only stops where the renderer does: below 1px nothing draws,
+/// and `mtt-render` clamps sizes to 10,000px.
+pub const OVERLAY_FONT_SIZE_MIN: f64 = 1.0;
+pub const OVERLAY_FONT_SIZE_MAX: f64 = 10_000.0;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Layer {
