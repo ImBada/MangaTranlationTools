@@ -14,6 +14,7 @@ use crate::worker::Worker;
 pub enum AppEvent {
     PageLoaded(Box<PageLoad>),
     Thumbnail(Box<crate::editor::thumbnails::ThumbLoad>),
+    Cover(Box<crate::covers::CoverLoad>),
     /// `skipped`: a synchronous flush wrote the data instead (see `WriteGeneration`).
     ChapterSaved {
         chapter_id: String,
@@ -156,6 +157,7 @@ impl MttApp {
         for event in self.worker.drain() {
             match (event, &mut self.screen) {
                 (AppEvent::PageLoaded(load), Screen::Editor(editor)) => editor.on_page_loaded(*load),
+                (AppEvent::Cover(load), _) => self.library.covers.on_loaded(ctx, *load),
                 (AppEvent::Thumbnail(load), Screen::Editor(editor)) => {
                     let chapter_id = editor.chapter.id.clone();
                     editor.thumbnails.on_loaded(ctx, &chapter_id, *load);
@@ -416,7 +418,7 @@ impl eframe::App for MttApp {
         self.handle_events(&ctx);
         self.handle_close_request(&ctx);
         match &mut self.screen {
-            Screen::Library => match self.library.ui(ui, &mut self.services, &mut |ui, services| {
+            Screen::Library => match self.library.ui(ui, &mut self.services, &self.worker, &mut |ui, services| {
                 self.settings.lama_empty_card(ui, services, &self.worker)
             }) {
                 Some(LibraryAction::Open(chapter_id)) => {

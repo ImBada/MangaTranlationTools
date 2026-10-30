@@ -50,7 +50,7 @@ const KEY_HINT_ON_FILL: Color32 = Color32::from_rgb(184, 198, 224);
 
 /// Font family holding only the icon font (its codepoints are in the Private Use Area,
 /// where egui's emoji font has glyphs of its own, so icons never share a family).
-const ICON_FAMILY: &str = "phosphor";
+pub const ICON_FAMILY: &str = "phosphor";
 /// Semibold UI face for titles, installed by `main.rs` when the system has one.
 pub const SEMIBOLD_FAMILY: &str = "ui-semibold";
 static SEMIBOLD_READY: AtomicBool = AtomicBool::new(false);

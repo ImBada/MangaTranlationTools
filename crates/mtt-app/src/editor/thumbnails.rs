@@ -53,7 +53,7 @@ impl Thumbnails {
         worker.spawn(move || {
             let image = path
                 .ok_or_else(|| "원본 이미지 없음".to_owned())
-                .and_then(|path| crate::worker::catch_panic(|| decode(&path)).and_then(|image| image));
+                .and_then(|path| crate::worker::catch_panic(|| decode(&path, THUMB_PIXELS)).and_then(|image| image));
             AppEvent::Thumbnail(Box::new(ThumbLoad { chapter_id, page_id, image }))
         });
     }
@@ -74,14 +74,15 @@ impl Thumbnails {
     }
 }
 
-fn decode(path: &std::path::Path) -> Result<egui::ColorImage, String> {
+/// Decodes `path` scaled down to fit `max_side` pixels.
+pub(crate) fn decode(path: &std::path::Path, max_side: u32) -> Result<egui::ColorImage, String> {
     let mut image = mtt_core::image_io::open_image(path).map_err(|error| error.to_string())?;
     // Long strips (webtoons) show their top instead of a sliver of the whole page.
     let tallest = image.width().saturating_mul(8) / 5;
     if image.height() > tallest && tallest > 0 {
         image = image.crop_imm(0, 0, image.width(), tallest);
     }
-    let small = image.thumbnail(THUMB_PIXELS, THUMB_PIXELS).to_rgba8();
+    let small = image.thumbnail(max_side, max_side).to_rgba8();
     let size = [small.width() as usize, small.height() as usize];
     Ok(egui::ColorImage::from_rgba_unmultiplied(size, small.as_raw()))
 }

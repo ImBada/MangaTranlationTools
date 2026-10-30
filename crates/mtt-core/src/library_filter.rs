@@ -84,6 +84,7 @@ mod tests {
                 status: ChapterStatus::Idle,
                 page_count: 0,
                 completed_page_count: 0,
+                cover_image: String::new(),
                 created_at: String::new(),
                 updated_at: String::new(),
             })

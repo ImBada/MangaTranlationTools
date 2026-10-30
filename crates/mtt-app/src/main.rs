@@ -3,6 +3,7 @@
 
 mod app;
 mod automation;
+mod covers;
 mod dnd;
 mod library_view;
 mod logging;
