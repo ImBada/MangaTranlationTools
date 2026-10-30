@@ -114,7 +114,8 @@ impl Automation {
                     }
                     "inpaint" => Step::Inpaint(match arg {
                         "range" => crate::editor::InpaintScope::Range,
-                        "blocks" => crate::editor::InpaintScope::SelectedBlocks,
+                        "blocks" => crate::editor::InpaintScope::SelectedBlocks { grow_px: 0 },
+                        "blocks-wide" => crate::editor::InpaintScope::SelectedBlocks { grow_px: 6 },
                         _ => crate::editor::InpaintScope::WholeMask,
                     }),
                     "inpaint-wait" => Step::WaitInpaint,

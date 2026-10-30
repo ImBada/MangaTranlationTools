@@ -23,8 +23,10 @@ pub enum InpaintScope {
     WholeMask,
     /// The mask inside the range selection, merged into the existing result.
     Range,
-    /// Text pixels detected inside the selected blocks.
-    SelectedBlocks,
+    /// Text pixels detected inside the selected blocks, the mask grown by `grow_px` (0: as
+    /// detected). "넓혀서 다시": the model draws streaks into some textures (dense hatching)
+    /// when the mask hugs the glyphs, and fills them cleanly once it reaches past them.
+    SelectedBlocks { grow_px: u32 },
     /// "전체 블록 인페인트": a fresh mask from every block's text pixels, replacing the
     /// existing mask and result.
     AllBlocks,
@@ -153,7 +155,7 @@ impl Editor {
         if scope == InpaintScope::Heal && heal.is_none() {
             return;
         }
-        if matches!(scope, InpaintScope::SelectedBlocks | InpaintScope::AllBlocks) && blocks.is_empty() {
+        if matches!(scope, InpaintScope::SelectedBlocks { .. } | InpaintScope::AllBlocks) && blocks.is_empty() {
             return;
         }
         let engine = if self.inpaint_engine == InpaintEngine::Lama && self.lama.is_none() {
@@ -237,7 +239,7 @@ impl Editor {
                     Some(LastInpaint::Page(InpaintScope::Range)) => {
                         ("부분 인페인트 실패", "기존 결과 레이어와 선택 범위는 유지됩니다. 다시 실행하세요.")
                     }
-                    Some(LastInpaint::Page(InpaintScope::SelectedBlocks)) => {
+                    Some(LastInpaint::Page(InpaintScope::SelectedBlocks { .. })) => {
                         ("선택 블록 인페인트 실패", "기존 결과 레이어와 마스크는 유지됩니다. 다시 실행하세요.")
                     }
                     _ => ("인페인트 실패", "마스크와 편집 상태는 유지됩니다. 설정을 확인한 뒤 다시 실행하세요."),
@@ -380,6 +382,15 @@ pub(super) fn compute_inpaint(
     segmentation: Option<&TextSegmentation>,
 ) -> Result<ComputedInpaint, String> {
     let started = Instant::now();
+    // "넓혀서 다시" grows this run's mask only; the page keeps its own padding.
+    let grown;
+    let settings = match scope {
+        InpaintScope::SelectedBlocks { grow_px } if grow_px > 0 => {
+            grown = InpaintSettings { padding_px: settings.padding_px + f64::from(grow_px), ..settings.clone() };
+            &grown
+        }
+        _ => settings,
+    };
     let (width, height) = source.dimensions();
     let (mask, result) = (before_mask.as_deref(), before_result.as_deref());
     let has_layers = mask.is_some_and(|m| m.iter().any(|value| *value > 0)) || result.is_some();
@@ -403,7 +414,7 @@ pub(super) fn compute_inpaint(
             }
             (**stroke).clone()
         }
-        InpaintScope::SelectedBlocks | InpaintScope::AllBlocks => {
+        InpaintScope::SelectedBlocks { .. } | InpaintScope::AllBlocks => {
             let refs: Vec<&TranslationBlock> = blocks.iter().collect();
             let patch = mtt_inpaint::text_segmentation::mask_for_blocks(source, &refs, None, segmentation);
             if !patch.pixels().any(|p| p[0] > 0) {
@@ -416,7 +427,7 @@ pub(super) fn compute_inpaint(
     // A partial run sees the page as it shows now, so text already erased next to it
     // isn't copied back into the fill.
     let shown = match (scope, mask, result) {
-        (InpaintScope::Range | InpaintScope::SelectedBlocks | InpaintScope::Heal, Some(mask), Some(result)) => {
+        (InpaintScope::Range | InpaintScope::SelectedBlocks { .. } | InpaintScope::Heal, Some(mask), Some(result)) => {
             Some(mtt_inpaint::composite_result(source, result, mask))
         }
         _ => None,
@@ -446,18 +457,21 @@ pub(super) fn compute_inpaint(
     let multi = blocks.len() > 1;
     // `useInpaintRunActions` status messages.
     let message = match (scope, local) {
-        (InpaintScope::WholeMask, false) => "현재 마스크 기준으로 인페인트 결과를 다시 저장했습니다.",
-        (InpaintScope::AllBlocks, false) => "전체 블록 인페인트 결과를 저장했습니다.",
-        (InpaintScope::WholeMask | InpaintScope::AllBlocks, true) => "로컬 인페인트 결과를 저장했습니다.",
-        (InpaintScope::Range, false) => "선택 범위만 다시 인페인트했습니다.",
-        (InpaintScope::Range, true) => "선택 범위 로컬 인페인트 결과를 저장했습니다.",
-        (InpaintScope::Heal, false) => "칠한 곳을 주변으로 메웠습니다.",
-        (InpaintScope::Heal, true) => "칠한 곳을 로컬 채우기로 메웠습니다.",
-        (InpaintScope::SelectedBlocks, false) if multi => "선택된 블록만 인페인트했습니다.",
-        (InpaintScope::SelectedBlocks, false) => "선택 블록만 인페인트했습니다.",
-        (InpaintScope::SelectedBlocks, true) if multi => "선택된 블록 로컬 인페인트 결과를 저장했습니다.",
-        (InpaintScope::SelectedBlocks, true) => "선택 블록 로컬 인페인트 결과를 저장했습니다.",
+        (InpaintScope::SelectedBlocks { grow_px }, _) if grow_px > 0 => {
+            format!("선택 블록을 {grow_px}px 넓혀 다시 인페인트했습니다.")
+        }
+        (InpaintScope::WholeMask, false) => "현재 마스크 기준으로 인페인트 결과를 다시 저장했습니다.".into(),
+        (InpaintScope::AllBlocks, false) => "전체 블록 인페인트 결과를 저장했습니다.".into(),
+        (InpaintScope::WholeMask | InpaintScope::AllBlocks, true) => "로컬 인페인트 결과를 저장했습니다.".into(),
+        (InpaintScope::Range, false) => "선택 범위만 다시 인페인트했습니다.".into(),
+        (InpaintScope::Range, true) => "선택 범위 로컬 인페인트 결과를 저장했습니다.".into(),
+        (InpaintScope::Heal, false) => "칠한 곳을 주변으로 메웠습니다.".into(),
+        (InpaintScope::Heal, true) => "칠한 곳을 로컬 채우기로 메웠습니다.".into(),
+        (InpaintScope::SelectedBlocks { .. }, false) if multi => "선택된 블록만 인페인트했습니다.".into(),
+        (InpaintScope::SelectedBlocks { .. }, false) => "선택 블록만 인페인트했습니다.".into(),
+        (InpaintScope::SelectedBlocks { .. }, true) if multi => "선택된 블록 로컬 인페인트 결과를 저장했습니다.".into(),
+        (InpaintScope::SelectedBlocks { .. }, true) => "선택 블록 로컬 인페인트 결과를 저장했습니다.".into(),
     };
     log::info!("inpaint {scope:?} done with {} in {:.1}s", engine_label(engine), started.elapsed().as_secs_f32());
-    Ok(ComputedInpaint { before_mask, before_result, mask, result, engine, message: message.into() })
+    Ok(ComputedInpaint { before_mask, before_result, mask, result, engine, message })
 }

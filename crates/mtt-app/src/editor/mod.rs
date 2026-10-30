@@ -64,6 +64,9 @@ pub const MASK_BRUSH_MIN: f32 = 4.0;
 pub const MASK_BRUSH_MAX: f32 = 96.0;
 /// The canvas size stepper only stops where the renderer does: below 1px nothing draws,
 /// and `mtt-render` clamps sizes to 10,000px.
+/// "넓혀서 다시": how far the selected blocks' mask grows, by default and at most.
+pub const INPAINT_GROW_PX_DEFAULT: u32 = 6;
+pub const INPAINT_GROW_PX_MAX: u32 = 40;
 pub const OVERLAY_FONT_SIZE_MIN: f64 = 1.0;
 pub const OVERLAY_FONT_SIZE_MAX: f64 = 10_000.0;
 
@@ -294,6 +297,8 @@ pub struct Editor {
     /// Canvas size stepper hold state `(pressed at, last step)`.
     pub size_repeat: Option<(Instant, Instant)>,
     last_inpaint: Option<LastInpaint>,
+    /// How far "넓혀서 다시" grows the selected blocks' mask, in px.
+    pub inpaint_grow_px: u32,
     last_run_mode: Option<translation::RunMode>,
     /// Consecutive failed writes of layers still in `layer_dirty` (retry backoff; the
     /// failure card's 재시도 resets it).
@@ -421,6 +426,7 @@ impl Editor {
             font_previews: Default::default(),
             list_anchor: None,
             last_inpaint: None,
+            inpaint_grow_px: INPAINT_GROW_PX_DEFAULT,
             last_run_mode: None,
             layer_failures: HashMap::new(),
             psd_files: Default::default(),
