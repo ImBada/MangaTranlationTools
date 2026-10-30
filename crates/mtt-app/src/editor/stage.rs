@@ -559,10 +559,7 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                     } else {
                         let size = block.font_size_px();
                         let minus = ui
-                            .add_enabled(
-                                size > super::OVERLAY_FONT_SIZE_MIN,
-                                hold_button(icon::MINUS),
-                            )
+                            .add_enabled(size > super::OVERLAY_FONT_SIZE_MIN, hold_button(icon::MINUS))
                             .on_hover_text("글자 작게 (누르고 있으면 계속)");
                         let mut value = size.round();
                         if ui
@@ -576,10 +573,7 @@ fn block_quick_controls(editor: &mut Editor, ui: &mut egui::Ui, page: &PageRecor
                             editor.set_individual_font_size(value);
                         }
                         let plus = ui
-                            .add_enabled(
-                                size < super::OVERLAY_FONT_SIZE_MAX,
-                                hold_button(icon::PLUS),
-                            )
+                            .add_enabled(size < super::OVERLAY_FONT_SIZE_MAX, hold_button(icon::PLUS))
                             .on_hover_text("글자 크게 (누르고 있으면 계속)");
                         let held = if plus.is_pointer_button_down_on() {
                             Some(1.0)
