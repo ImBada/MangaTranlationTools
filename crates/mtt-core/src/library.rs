@@ -1434,6 +1434,7 @@ mod tests {
         let files = [
             touch(&chapter_dir, "inpaint/p1-mask.png"),
             touch(&chapter_dir, "runs/r1/pages/p1/blocks.json"),
+            #[cfg(not(windows))]
             touch(&chapter_dir, "runs/r1/pages/C:/blocks.json"),
         ];
         for page_id in ["", ".", "..", "../pages", "a\\b", "C:", "c:p1", "p1\0"] {
