@@ -370,8 +370,7 @@ impl FontContext {
         // Layers are blended over transparent black, so they come out premultiplied;
         // embedded bitmaps are decoded PNGs with straight alpha.
         let premultiplied = matches!(image.source, Source::ColorOutline(_));
-        for (pixel, rgba) in pixmap.pixels_mut().iter_mut().zip(image.data.chunks_exact(4)) {
-            let [r, g, b, a] = [rgba[0], rgba[1], rgba[2], rgba[3]];
+        for (pixel, &[r, g, b, a]) in pixmap.pixels_mut().iter_mut().zip(image.data.as_chunks::<4>().0) {
             *pixel = if premultiplied {
                 PremultipliedColorU8::from_rgba(r.min(a), g.min(a), b.min(a), a)
                     .unwrap_or(PremultipliedColorU8::TRANSPARENT)
