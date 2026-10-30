@@ -39,6 +39,8 @@ pub struct ChapterSummary {
     pub status: ChapterStatus,
     pub page_count: usize,
     pub completed_page_count: usize,
+    /// The first page's stored image path (empty without pages); see [`Library::cover_path`].
+    pub cover_image: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -135,6 +137,7 @@ impl Library {
             status: header.status,
             page_count: header.pages.len(),
             completed_page_count: header.pages.iter().filter(|page| page.progress_completed == Some(true)).count(),
+            cover_image: header.pages.first().map(|page| page.image_path.clone()).unwrap_or_default(),
             created_at: header.created_at,
             updated_at: header.updated_at,
         };
@@ -266,6 +269,7 @@ impl Library {
                 status: chapter.status,
                 page_count: chapter.pages.len(),
                 completed_page_count: chapter.pages.iter().filter(|page| page.progress_completed == Some(true)).count(),
+                cover_image: chapter.pages.first().map(|page| page.image_path.clone()).unwrap_or_default(),
                 created_at: chapter.created_at.clone(),
                 updated_at: chapter.updated_at.clone(),
             };
@@ -654,43 +658,38 @@ impl Library {
         Ok(used)
     }
 
+    /// The image of a chapter's first page, for the library's covers.
+    pub fn cover_path(&self, summary: &ChapterSummary) -> Option<PathBuf> {
+        self.source_path(&summary.work_id, &summary.id, &summary.cover_image)
+    }
+
+    /// A page's source image: where it was stored, else by file name in `pages/` (the stored
+    /// path may come from another OS, `C:\…\pages\x.png`).
+    fn source_path(&self, work_id: &str, chapter_id: &str, image_path: &str) -> Option<PathBuf> {
+        if let Some(path) = non_empty_path(image_path).filter(|path| path.is_file()) {
+            return Some(path);
+        }
+        stored_file_name(image_path)
+            .filter(|name| is_safe_id(name))
+            .map(|name| self.chapter_dir(work_id, chapter_id).join("pages").join(name))
+            .filter(|path| path.is_file())
+    }
+
     /// Path of a page layer image, tolerating a moved data directory: stored absolute paths
     /// are tried first, then the conventional location inside the chapter directory.
     pub fn resolve_page_layer_path(&self, chapter: &Chapter, page: &PageRecord, layer: PageLayer) -> Option<PathBuf> {
-        let chapter_dir = self.chapter_dir(&chapter.work_id, &chapter.id);
-        let (stored, fallback) = match layer {
-            PageLayer::Source => {
-                let stored = non_empty_path(&page.image_path);
-                // By file name: the stored path may come from another OS (`C:\…\pages\x.png`).
-                let fallback = stored_file_name(&page.image_path)
-                    .filter(|name| is_safe_id(name))
-                    .map(|name| chapter_dir.join("pages").join(name));
-                (stored, fallback)
-            }
-            PageLayer::InpaintMask => (
-                page.inpaint_mask_path.as_deref().and_then(non_empty_path),
-                Some(self.inpaint_layer_path(chapter, &page.id, PageLayer::InpaintMask)),
-            ),
-            PageLayer::InpaintResult => (
-                page.inpaint_result_path.as_deref().and_then(non_empty_path),
-                Some(self.inpaint_layer_path(chapter, &page.id, PageLayer::InpaintResult)),
-            ),
+        let stored = match layer {
+            PageLayer::Source => return self.source_path(&chapter.work_id, &chapter.id, &page.image_path),
+            PageLayer::InpaintMask => page.inpaint_mask_path.as_deref(),
+            PageLayer::InpaintResult => page.inpaint_result_path.as_deref(),
         };
-        if let Some(path) = stored.filter(|path| path.is_file()) {
+        // Only fall back for inpaint layers the page claims to have; otherwise a stale file
+        // left behind by a cleared layer would reappear.
+        let stored = stored?;
+        if let Some(path) = non_empty_path(stored).filter(|path| path.is_file()) {
             return Some(path);
         }
-        if layer == PageLayer::InpaintMask || layer == PageLayer::InpaintResult {
-            // Only fall back for inpaint layers the page claims to have; otherwise a stale file
-            // left behind by a cleared layer would reappear.
-            let claimed = match layer {
-                PageLayer::InpaintMask => page.inpaint_mask_path.is_some(),
-                _ => page.inpaint_result_path.is_some(),
-            };
-            if !claimed {
-                return None;
-            }
-        }
-        fallback.filter(|path| path.is_file())
+        Some(self.inpaint_layer_path(chapter, &page.id, layer)).filter(|path| path.is_file())
     }
 
     /// Conventional `inpaint/<pageId>-mask.png` / `-result.png` location.
@@ -934,6 +933,8 @@ struct ChapterHeader {
 struct PageHeader {
     #[serde(default)]
     progress_completed: Option<bool>,
+    #[serde(default, deserialize_with = "de_string_lenient")]
+    image_path: String,
 }
 
 /// Ids are folder names and must stay one plain path component on every OS: non-empty,

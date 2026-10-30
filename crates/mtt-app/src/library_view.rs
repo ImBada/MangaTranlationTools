@@ -10,7 +10,7 @@ use mtt_core::import::{
     ImportPreview, ImportResult, ImportTarget, create_import, preview_archive, preview_folder, preview_images,
     preview_zip_folder,
 };
-use mtt_core::library::{ChapterSummary, UnreadableEntry, WorkSummary};
+use mtt_core::library::{ChapterSummary, Library, UnreadableEntry, WorkSummary};
 use mtt_core::model::ChapterStatus;
 
 use crate::app::AppEvent;
@@ -86,6 +86,7 @@ pub struct LibraryView {
     /// A picked or dropped selection waiting to be listed on a worker.
     queued_preview: Option<PreviewJob>,
     previewing: bool,
+    pub covers: crate::covers::Covers,
 }
 
 type PreviewJob = Box<dyn FnOnce() -> Result<ImportPreview, String> + Send>;
@@ -440,6 +441,7 @@ impl LibraryView {
         &mut self,
         ui: &mut egui::Ui,
         services: &mut Services,
+        worker: &Worker<AppEvent>,
         lama_card: &mut dyn FnMut(&mut egui::Ui, &Services) -> bool,
     ) -> Option<LibraryAction> {
         let mut action = None;
@@ -526,7 +528,15 @@ impl LibraryView {
                     }
                     for work in filtered.iter() {
                         let selected = Some(&work.work.id) == self.selected_work.as_ref();
-                        let response = work_row(ui, work, selected);
+                        let next =
+                            Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), WORK_ROW_HEIGHT));
+                        let cover = work
+                            .chapters
+                            .first()
+                            .filter(|_| ui.is_rect_visible(next))
+                            .and_then(|chapter| self.covers.get(&services.library, chapter, 96, worker))
+                            .cloned();
+                        let response = work_row(ui, work, selected, cover.as_ref());
                         if response.clicked() {
                             self.selected_work = Some(work.work.id.clone());
                         }
@@ -569,21 +579,32 @@ impl LibraryView {
                         });
                 }
                 egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
-                    ui.set_max_width(ui.available_width().min(960.0));
-                    // `WorkspaceEmptyState`: the LaMa setup card until it is ready.
-                    if lama_card(ui, services) {
-                        ui.add_space(12.0);
-                    }
-                    let selected = filtered.iter().find(|work| Some(&work.work.id) == self.selected_work.as_ref());
-                    match selected {
-                        Some(work) => {
-                            if let Some(next) = self.chapter_list(ui, work, search_active) {
-                                action = Some(next);
-                            }
+                    // The whole width, but centered rather than stretched on very wide windows.
+                    let width = ui.available_width().min(MAX_CONTENT_WIDTH);
+                    let left = ((ui.available_width() - width) / 2.0).max(0.0);
+                    let rect = Rect::from_min_size(
+                        ui.cursor().min + egui::vec2(left, 0.0),
+                        egui::vec2(width, ui.available_height()),
+                    );
+                    ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                        ui.set_max_width(width);
+                        // `WorkspaceEmptyState`: the LaMa setup card until it is ready.
+                        if lama_card(ui, services) {
+                            ui.add_space(12.0);
                         }
-                        None if self.works.is_empty() => welcome(ui, self),
-                        None => theme::hint(ui, "검색 결과가 없습니다."),
-                    }
+                        let selected = filtered.iter().find(|work| Some(&work.work.id) == self.selected_work.as_ref());
+                        match selected {
+                            Some(work) => {
+                                if let Some(next) =
+                                    self.chapter_list(ui, work, search_active, &services.library, worker)
+                                {
+                                    action = Some(next);
+                                }
+                            }
+                            None if self.works.is_empty() => welcome(ui, self),
+                            None => theme::hint(ui, "검색 결과가 없습니다."),
+                        }
+                    });
                 });
                 self.apply_reorder(ui, services);
             });
@@ -592,43 +613,89 @@ impl LibraryView {
     }
 
     /// The selected work: header with rename, then its chapters in reading order.
-    fn chapter_list(&mut self, ui: &mut egui::Ui, work: &WorkSummary, search_active: bool) -> Option<LibraryAction> {
+    fn chapter_list(
+        &mut self,
+        ui: &mut egui::Ui,
+        work: &WorkSummary,
+        search_active: bool,
+        library: &Library,
+        worker: &Worker<AppEvent>,
+    ) -> Option<LibraryAction> {
         let mut action = None;
-        ui.horizontal(|ui| {
-            // A long title is cut short so the ⋯ menu stays on screen.
-            ui.scope(|ui| {
-                ui.set_max_width((ui.available_width() - 40.0).max(80.0));
-                ui.add(egui::Label::new(theme::semibold(&work.work.title).size(20.0)).truncate())
-                    .on_hover_text(&work.work.title);
+        // Where the work left off: the first chapter, in reading order, not fully reviewed.
+        let resume = work.chapters.iter().find(|chapter| chapter.completed_page_count < chapter.page_count);
+        let cover = work.chapters.first().and_then(|chapter| self.covers.get(library, chapter, 360, worker)).cloned();
+        ui.horizontal_top(|ui| {
+            let (rect, _) = ui.allocate_exact_size(egui::vec2(120.0, 170.0), Sense::hover());
+            crate::covers::paint(ui.painter(), rect, 6.0, cover.as_ref());
+            ui.add_space(20.0);
+            ui.vertical(|ui| {
+                ui.add_space(4.0);
+                ui.horizontal(|ui| {
+                    // A long title is cut short so the ⋯ menu stays on screen.
+                    ui.scope(|ui| {
+                        ui.set_max_width((ui.available_width() - 40.0).max(80.0));
+                        ui.add(egui::Label::new(theme::semibold(&work.work.title).size(22.0)).truncate())
+                            .on_hover_text(&work.work.title);
+                    });
+                    let more =
+                        egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
+                            .frame_when_inactive(false);
+                    egui::containers::menu::MenuButton::from_button(more)
+                        .ui(ui, |ui| {
+                            if ui.button("이름 변경 · 삭제…").clicked() {
+                                self.pending = Some(Pending {
+                                    work: true,
+                                    id: work.work.id.clone(),
+                                    original: work.work.title.clone(),
+                                    title: work.work.title.clone(),
+                                });
+                                ui.close();
+                            }
+                        })
+                        .0
+                        .on_hover_text("작품 이름 변경 · 삭제");
+                });
+                let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
+                let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
+                theme::hint(ui, &format!("{}화 · {pages}페이지 · 검수 완료 {done}페이지", work.chapters.len()));
+                if pages > 0 {
+                    ui.add_space(8.0);
+                    let ratio = done as f32 / pages as f32;
+                    ui.horizontal(|ui| {
+                        let color = if done >= pages { theme::SUCCESS } else { theme::ACCENT };
+                        theme::progress(ui, ratio, (ui.available_width() - 48.0).max(40.0), color);
+                        ui.label(
+                            RichText::new(format!("{}%", (ratio * 100.0).floor())).small().color(theme::TEXT_WEAK),
+                        );
+                    });
+                }
+                if let Some(chapter) = resume {
+                    ui.add_space(14.0);
+                    ui.horizontal(|ui| {
+                        let button = theme::primary_icon(theme::icon::CARET_RIGHT, "이어서 작업");
+                        if ui.add(button).on_hover_text(format!("{} 열기", chapter.title)).clicked() {
+                            action = Some(LibraryAction::Open(chapter.id.clone()));
+                        }
+                        ui.add_space(4.0);
+                        let next =
+                            format!("{} · 검수 {}/{}", chapter.title, chapter.completed_page_count, chapter.page_count);
+                        ui.add(egui::Label::new(RichText::new(next).small().color(theme::TEXT_WEAK)).truncate());
+                    });
+                }
             });
-            let more = egui::Button::new(theme::icon(theme::icon::DOTS_THREE).size(17.0).color(theme::TEXT_WEAK))
-                .frame_when_inactive(false);
-            egui::containers::menu::MenuButton::from_button(more)
-                .ui(ui, |ui| {
-                    if ui.button("이름 변경 · 삭제…").clicked() {
-                        self.pending = Some(Pending {
-                            work: true,
-                            id: work.work.id.clone(),
-                            original: work.work.title.clone(),
-                            title: work.work.title.clone(),
-                        });
-                        ui.close();
-                    }
-                })
-                .0
-                .on_hover_text("작품 이름 변경 · 삭제");
         });
-        let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
-        let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
-        theme::hint(ui, &format!("{}화 · {pages}페이지 · 검수 완료 {done}페이지", work.chapters.len()));
         ui.add_space(16.0);
         if work.chapters.is_empty() {
             theme::hint(ui, "이 작품에는 아직 화가 없습니다.");
         } else {
             chapter_header(ui);
         }
-        for chapter in &work.chapters {
-            let response = chapter_row(ui, chapter);
+        for (index, chapter) in work.chapters.iter().enumerate() {
+            let next = Rect::from_min_size(ui.cursor().min, egui::vec2(ui.available_width(), CHAPTER_ROW_HEIGHT));
+            let thumb =
+                if ui.is_rect_visible(next) { self.covers.get(library, chapter, 96, worker).cloned() } else { None };
+            let response = chapter_row(ui, index + 1, chapter, thumb.as_ref());
             let response = if search_active {
                 response
             } else {
@@ -945,20 +1012,45 @@ fn truncated(
     ui.painter().layout_job(job)
 }
 
-fn work_row(ui: &mut egui::Ui, work: &WorkSummary, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 46.0), Sense::click());
+/// Beyond this the library content stays centered instead of stretching further.
+const MAX_CONTENT_WIDTH: f32 = 1600.0;
+const WORK_ROW_HEIGHT: f32 = 60.0;
+const CHAPTER_ROW_HEIGHT: f32 = 60.0;
+
+fn work_row(
+    ui: &mut egui::Ui,
+    work: &WorkSummary,
+    selected: bool,
+    cover: Option<&egui::TextureHandle>,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), WORK_ROW_HEIGHT), Sense::click());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         painter.rect_filled(rect, 6.0, row_fill(&response, selected));
-        let inner = rect.shrink2(egui::vec2(10.0, 6.0));
+        let thumb = Rect::from_min_size(rect.min + egui::vec2(8.0, 7.0), egui::vec2(32.0, 46.0));
+        crate::covers::paint(painter, thumb, 3.0, cover);
+        let inner =
+            rect.with_min_x(thumb.right() + 10.0).shrink2(egui::vec2(0.0, 12.0)).with_max_x(rect.right() - 10.0);
         let color = if selected { Color32::WHITE } else { theme::TEXT };
         let title = truncated(ui, &work.work.title, egui::FontId::proportional(13.5), color, inner.width());
         painter.galley(inner.min, title, color);
         let pages: usize = work.chapters.iter().map(|chapter| chapter.page_count).sum();
         let done: usize = work.chapters.iter().map(|chapter| chapter.completed_page_count).sum();
         let meta = format!("{}화 · 검수 {done}/{pages}", work.chapters.len());
-        let meta = truncated(ui, &meta, egui::FontId::proportional(11.5), theme::TEXT_WEAK, inner.width());
-        painter.galley(inner.left_bottom() - egui::vec2(0.0, meta.size().y), meta, theme::TEXT_WEAK);
+        let bar_width = 44.0;
+        let meta =
+            truncated(ui, &meta, egui::FontId::proportional(11.5), theme::TEXT_WEAK, inner.width() - bar_width - 8.0);
+        let meta_pos = inner.left_bottom() - egui::vec2(0.0, meta.size().y);
+        let meta_center = meta_pos.y + meta.size().y / 2.0;
+        painter.galley(meta_pos, meta, theme::TEXT_WEAK);
+        if pages > 0 {
+            let bar = Rect::from_min_size(
+                egui::pos2(inner.right() - bar_width, meta_center - 1.5),
+                egui::vec2(bar_width, 3.0),
+            );
+            let color = if done >= pages { theme::SUCCESS } else { theme::ACCENT };
+            theme::paint_progress(painter, bar, done as f32 / pages as f32, color);
+        }
     }
     response.on_hover_text(&work.work.title)
 }
@@ -993,8 +1085,14 @@ fn chapter_header(ui: &mut egui::Ui) {
     painter.hline(rect.x_range(), rect.bottom(), Stroke::new(1.0, theme::BORDER));
 }
 
-fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 44.0), Sense::click_and_drag());
+fn chapter_row(
+    ui: &mut egui::Ui,
+    number: usize,
+    chapter: &ChapterSummary,
+    thumb: Option<&egui::TextureHandle>,
+) -> egui::Response {
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), CHAPTER_ROW_HEIGHT), Sense::click_and_drag());
     if ui.is_rect_visible(rect) {
         let painter = ui.painter();
         if response.hovered() {
@@ -1004,6 +1102,11 @@ fn chapter_row(ui: &mut egui::Ui, chapter: &ChapterSummary) -> egui::Response {
         let [title, pages, status, review, updated] = chapter_columns(rect);
         let center = rect.center().y;
 
+        let number = painter.layout_no_wrap(number.to_string(), egui::FontId::monospace(12.0), theme::TEXT_FAINT);
+        painter.galley(egui::pos2(title.left(), center - number.size().y / 2.0), number, theme::TEXT_FAINT);
+        let cover = Rect::from_min_size(egui::pos2(title.left() + 28.0, center - 22.0), egui::vec2(31.0, 44.0));
+        crate::covers::paint(painter, cover, 3.0, thumb);
+        let title = title.with_min_x(cover.right() + 14.0);
         let galley = truncated(ui, &chapter.title, theme::semibold_font(13.5), theme::TEXT, title.width());
         painter.galley(egui::pos2(title.left(), center - galley.size().y / 2.0), galley, theme::TEXT);
 
@@ -1087,8 +1190,9 @@ mod tests {
         // The rebuild is reported once by the library; the view keeps showing it.
         view.refresh(&mut services);
         assert_eq!(view.unreadable.len(), 2);
+        let worker: Worker<AppEvent> = Worker::new(&ctx, 1);
         let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            view.ui(ui, &mut services, &mut |_, _| false);
+            view.ui(ui, &mut services, &worker, &mut |_, _| false);
         });
         output.textures_delta.clear();
     }
@@ -1158,12 +1262,26 @@ mod tests {
     #[test]
     fn a_long_work_title_keeps_its_menu_on_screen() {
         let title = "아주 긴 작품 제목 ".repeat(12);
+        // An unfinished chapter, so the resume button shares the header row too.
+        let chapter = ChapterSummary {
+            id: "c".into(),
+            work_id: "w".into(),
+            title: "1화".into(),
+            status: ChapterStatus::Partial,
+            page_count: 3,
+            completed_page_count: 1,
+            cover_image: String::new(),
+            created_at: String::new(),
+            updated_at: String::new(),
+        };
         let work = WorkSummary {
             work: mtt_core::model::Work { id: "w".into(), title: title.clone(), ..Default::default() },
-            chapters: Vec::new(),
+            chapters: vec![chapter],
         };
         let mut view = LibraryView::default();
         let ctx = egui::Context::default();
+        let worker: Worker<AppEvent> = Worker::new(&ctx, 1);
+        let library = Library::new(std::env::temp_dir().join("mtt-no-library"));
         let mut width = 0.0;
         for _ in 0..3 {
             let input = egui::RawInput {
@@ -1173,7 +1291,7 @@ mod tests {
             let mut output = ctx.run_ui(input, |ui| {
                 let max_rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 700.0));
                 let response = ui.scope_builder(egui::UiBuilder::new().max_rect(max_rect), |ui| {
-                    view.chapter_list(ui, &work, false);
+                    view.chapter_list(ui, &work, false, &library, &worker);
                 });
                 width = response.response.rect.width();
             });
