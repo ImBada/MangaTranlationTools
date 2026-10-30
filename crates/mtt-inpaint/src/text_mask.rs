@@ -1,12 +1,12 @@
 //! Automatic text masks for selected blocks (`drawBlocksOnInpaintMask`): dark source pixels
-//! inside each block's detection box (light ones for text on a dark box), minus connected
+//! inside each block's box as drawn (light ones for text on a dark box), minus connected
 //! components that look like balloon outlines or panel borders, grown so anti-aliased
 //! edges and thin light outlines go too. The same strokes give the source lettering's
 //! colors ([`detect_lettering`]). With the text segmentation model, its glyph pixels take
 //! the strokes' place (`text_segmentation.rs`).
 
 use image::{GrayImage, RgbaImage};
-use mtt_core::geometry::{bbox_to_pixels, parse_hex_color};
+use mtt_core::geometry::{bbox_to_pixels, parse_hex_color, resolve_block_render_bbox};
 use mtt_core::model::{StyleKey, TranslationBlock};
 
 use crate::{Rect, close, dilate, erode};
@@ -422,9 +422,11 @@ fn share_near(colors: &[[u8; 3]], target: [u8; 3]) -> f32 {
     colors.iter().filter(|color| near(**color, target)).count() as f32 / colors.len().max(1) as f32
 }
 
-/// Detection box plus a small padding (`textMaskScanRect`).
+/// The block's box as drawn (the render box when it has one) plus a small padding
+/// (`textMaskScanRect`). Not the detection box underneath: the editor doesn't show it, and
+/// it drifts off the text as the block is moved, redrawn or fitted to its balloon.
 pub(crate) fn scan_rect(block: &TranslationBlock, width: u32, height: u32) -> Option<Rect> {
-    let px = bbox_to_pixels(block.bbox, f64::from(width), f64::from(height));
+    let px = bbox_to_pixels(resolve_block_render_bbox(block), f64::from(width), f64::from(height));
     let block_short = px.w.min(px.h).max(1.0);
     let page_short = f64::from(width.min(height));
     let padding = (block_short * 0.08).min(page_short * 0.004).round().clamp(2.0, 10.0);
@@ -579,6 +581,23 @@ mod tests {
         assert_eq!(mask.get_pixel(94, 100)[0], 0);
         assert_eq!(mask.get_pixel(100, 48)[0], 0, "outline dropped");
         assert_eq!(mask.get_pixel(20, 20)[0], 0);
+    }
+
+    #[test]
+    fn masks_the_drawn_box_not_the_detection_box_under_it() {
+        // Glyphs at 30..40 and 160..170; the detection box sits on the second, the render
+        // box (the one drawn) on the first.
+        let mut source = RgbaImage::from_pixel(200, 200, image::Rgba([255, 255, 255, 255]));
+        paint(&mut source, 30, 95, 10, 10, 10);
+        paint(&mut source, 160, 95, 10, 10, 10);
+        let block = TranslationBlock {
+            bbox: BBox::new(700.0, 400.0, 250.0, 200.0),
+            render_bbox: Some(BBox::new(50.0, 400.0, 250.0, 200.0)),
+            ..TranslationBlock::default()
+        };
+        let mask = mask_for_blocks(&source, &[&block], None);
+        assert_eq!(mask.get_pixel(35, 100)[0], 255, "text under the drawn box erased");
+        assert_eq!(mask.get_pixel(165, 100)[0], 0, "detection box left alone");
     }
 
     #[test]

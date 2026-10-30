@@ -700,7 +700,7 @@ pub fn apply_for_test(
 }
 
 /// The block's text goes in `balloon`: its render box is the balloon's inside, its lines
-/// follow the outline; the detection box stays on the source text (for inpainting).
+/// follow the outline. Inpainting reads the text inside it, as it does any drawn box.
 fn fit_to_balloon(block: &mut TranslationBlock, balloon: Balloon) {
     block.render_bbox = Some(balloon.text_area);
     block.render_bbox_space = block.bbox_space.clone();
