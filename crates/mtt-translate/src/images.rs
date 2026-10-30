@@ -185,7 +185,14 @@ mod tests {
     }
 
     fn tempfile_dir() -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("mtt-translate-test-{}", std::process::id()));
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        static NEXT_DIR: AtomicUsize = AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "mtt-translate-test-{}-{}",
+            std::process::id(),
+            NEXT_DIR.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&dir).unwrap();
         dir
     }
