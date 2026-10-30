@@ -618,25 +618,6 @@ fn break_paragraphs(
     Some(out)
 }
 
-/// Rows of the block's text shape inside `rect`, for drawing its background.
-pub fn text_shape_strips(block: &TranslationBlock, rect: PixelRect) -> Option<Vec<PixelRect>> {
-    let shape = block.text_shape.as_deref().filter(|shape| !shape.is_empty())?;
-    let rows = shape.len() as f64;
-    Some(
-        shape
-            .iter()
-            .enumerate()
-            .filter(|(_, [left, right])| right > left)
-            .map(|(row, [left, right])| PixelRect {
-                left: rect.left + left * rect.width,
-                top: rect.top + rect.height * row as f64 / rows,
-                width: (right - left) * rect.width,
-                height: rect.height / rows,
-            })
-            .collect(),
-    )
-}
-
 /// Rough size of the source glyphs in `rect`: the box area shared by the source
 /// characters, at most the box's shorter side. `None` without source text.
 fn source_glyph_size_px(block: &TranslationBlock, rect: PixelRect) -> Option<f64> {

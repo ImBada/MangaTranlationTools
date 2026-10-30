@@ -19,8 +19,7 @@ use crate::layout::{
     font_background_enabled, font_background_opacity, font_background_radius_px, font_background_scale,
     letter_spacing_px, measure_text_width, resolve_block_text_layout, scaled_rect, screentone_dot_radius_px,
     screentone_tile_size_px, secondary_outline_enabled, style_line_height, synthetic_bold_stroke_width_px,
-    synthetic_italic_skew_x, text_position_factors, text_shape_strips, text_units, vertical_columns,
-    wrap_text_to_width,
+    synthetic_italic_skew_x, text_position_factors, text_units, vertical_columns, wrap_text_to_width,
 };
 
 const RENDER_FONT_SIZE_RATIO: f64 = 0.985;
@@ -245,26 +244,7 @@ pub fn render_block(
     painter.apply_block_transform(&mut canvas);
     if options.editing_enabled {
         let color = hex_color(&block.background_color, block.opacity);
-        // A balloon block's background covers its text shape, one path so rows don't seam.
-        match text_shape_strips(block, layout.rect) {
-            Some(strips) => {
-                let mut path = PathBuilder::new();
-                for strip in strips {
-                    if let Some(rect) = tiny_skia::Rect::from_xywh(
-                        strip.left as f32,
-                        strip.top as f32,
-                        strip.width as f32,
-                        strip.height as f32,
-                    ) {
-                        path.push_rect(rect);
-                    }
-                }
-                if let Some(path) = path.finish() {
-                    canvas.fill_path(&path, solid(color));
-                }
-            }
-            None => canvas.fill_rect(layout.rect.left, layout.rect.top, layout.rect.width, layout.rect.height, color),
-        }
+        canvas.fill_rect(layout.rect.left, layout.rect.top, layout.rect.width, layout.rect.height, color);
     }
 
     let hard = block.style.font_rendering_mode.unwrap_or_default() == FontRenderingMode::Hard;

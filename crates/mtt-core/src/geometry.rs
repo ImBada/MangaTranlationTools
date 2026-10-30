@@ -64,8 +64,13 @@ pub fn editable_block_bbox(block: &TranslationBlock) -> BBox {
     resolve_block_render_bbox(block)
 }
 
+/// Sets the box editing changes (see [`editable_block_bbox`]). A changed box drops the
+/// text shape: it outlines the balloon where it was found, not where the box goes.
 pub fn apply_editable_block_bbox(block: &mut TranslationBlock, next: BBox) {
     let clamped = clamp_editable_bbox(next);
+    if clamped != editable_block_bbox(block) {
+        block.text_shape = None;
+    }
     if block.render_bbox.is_some() {
         block.render_bbox = Some(clamped);
     } else {
@@ -73,7 +78,11 @@ pub fn apply_editable_block_bbox(block: &mut TranslationBlock, next: BBox) {
     }
 }
 
+/// Moves both boxes by `(dx, dy)`; moving drops the text shape, as resizing does.
 pub fn offset_block_bboxes(block: &mut TranslationBlock, dx: f64, dy: f64) {
+    if dx != 0.0 || dy != 0.0 {
+        block.text_shape = None;
+    }
     block.bbox = clamp_editable_bbox(BBox { x: block.bbox.x + dx, y: block.bbox.y + dy, ..block.bbox });
     if let Some(render) = block.render_bbox {
         block.render_bbox = Some(clamp_editable_bbox(BBox { x: render.x + dx, y: render.y + dy, ..render }));
@@ -197,6 +206,25 @@ mod tests {
         apply_editable_block_bbox(&mut block, BBox::new(7.0, 7.0, 3.0, 3.0));
         assert_eq!(block.render_bbox, Some(BBox::new(7.0, 7.0, 3.0, 3.0)));
         assert_eq!(block.bbox, BBox::new(5.0, 5.0, 20.0, 20.0));
+    }
+
+    #[test]
+    fn moving_or_resizing_drops_the_text_shape() {
+        let shaped = TranslationBlock {
+            bbox: BBox::new(0.0, 0.0, 10.0, 10.0),
+            render_bbox: Some(BBox::new(1.0, 1.0, 20.0, 20.0)),
+            text_shape: Some(vec![[0.0, 1.0]]),
+            ..TranslationBlock::default()
+        };
+        let mut block = shaped.clone();
+        offset_block_bboxes(&mut block, 0.0, 0.0);
+        apply_editable_block_bbox(&mut block, BBox::new(1.0, 1.0, 20.0, 20.0));
+        assert!(block.text_shape.is_some(), "unchanged boxes keep it");
+        offset_block_bboxes(&mut block, 5.0, 0.0);
+        assert_eq!(block.text_shape, None, "moved");
+        let mut block = shaped;
+        apply_editable_block_bbox(&mut block, BBox::new(1.0, 1.0, 30.0, 20.0));
+        assert_eq!(block.text_shape, None, "resized");
     }
 
     #[test]

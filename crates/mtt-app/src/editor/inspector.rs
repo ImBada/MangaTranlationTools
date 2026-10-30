@@ -593,7 +593,7 @@ fn placement_card(editor: &mut Editor, ui: &mut egui::Ui, block: &TranslationBlo
                     }
                     if block.text_shape.is_some() {
                         let button = ui.button("윤곽 해제");
-                        let hint = "말풍선 윤곽\n번역할 때 찾은 말풍선 모양입니다. 새 규칙으로 가로쓰기·가운데 정렬이면 줄마다 폭을 윤곽에 맞추고, 아니면 윤곽 안의 가장 큰 사각형에 넣습니다.\n해제하면 상자를 그 사각형으로 줄입니다.";
+                        let hint = "말풍선 윤곽\n번역할 때 찾은 말풍선 모양입니다. 새 규칙으로 가로쓰기·가운데 정렬이면 줄마다 폭을 윤곽에 맞추고, 아니면 윤곽 안의 가장 큰 사각형에 넣습니다. 상자를 옮기거나 크기를 바꾸면 떨어집니다.\n해제하면 상자를 그 사각형으로 줄입니다.";
                         if theme::tip(button, hint, "").clicked() {
                             editor.edit_selected(mtt_core::geometry::clear_text_shape);
                         }
